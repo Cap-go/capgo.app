@@ -61,7 +61,7 @@ export function resetCapacitorReleaseCache() {
 export function parseVersion(range: string | undefined): [number, number, number] | null {
   if (!range)
     return null
-  const match = /^\s*(?:[\^~>=v]|>=)*\s*(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?/.exec(range)
+  const match = /^\s*[\^~>=v]*\s*(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?/.exec(range)
   if (!match)
     return null
   const part = (value: string | undefined) => (value && /^\d+$/.test(value) ? Number(value) : 0)
@@ -415,6 +415,11 @@ function createViteCommand(pm: PackageManager, directory: string, template: stri
     default:
       return `npm create vite@latest ${directory} -- ${flags}`
   }
+}
+
+/** POSIX single-quote a shell argument so names like `Shop $HOME` stay literal. */
+export function shellQuote(value: string): string {
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll('\'', `'\\''`)}'`
 }
 
 function installCommand(pm: PackageManager): string {
@@ -2070,8 +2075,12 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
 
   const projectDir = input.projectName ? slug(input.projectName) : slug(appName)
   const webDir = framework.webDir
-  const buildRun = framework.buildCommand ? runScript(pm, 'build') : null
+  // Existing apps get a build:mobile script running the framework's static build (e.g. nuxt generate),
+  // because their build script may do a server build. New Vite apps and unknown stacks keep build.
+  const mobileScript = input.source !== 'new_app' && framework.id !== 'unknown' && framework.buildCommand ? 'build:mobile' : null
+  const buildRun = mobileScript ? runScript(pm, mobileScript) : framework.buildCommand ? runScript(pm, 'build') : null
   const syncCommand = buildRun ? `${buildRun} && npx cap sync` : 'npx cap sync'
+  const webDirArg = shellQuote(webDir)
   const capacitorPackages = ['@capacitor/core@latest', ...platforms.map(platform => `@capacitor/${platform}@latest`)]
   // The Capgo phase installs the updater (ideally through npx @capgo/cli@latest init), so the plugin step leaves it out.
   const plugins = recommendPlugins({ features: [...features, 'live_updates'], platforms, packageManager: pm, installed: input.packages })
@@ -2149,17 +2158,27 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
     })
   }
   else {
-    const staticSteps: PlanStep[] = [
+    const staticSteps: PlanStep[] = []
+    if (mobileScript) {
+      staticSteps.push(step({
+        id: 'mobile_build_script',
+        title: 'Add a build:mobile script',
+        detail: `Every later step runs this script, so it must write ${webDir}/index.html. Start from the framework's static build command and keep any steps the existing build script needs (code generation, env files); do not reuse a build script that produces a server build.`,
+        files: [{ path: 'package.json', change: `"scripts": { "build:mobile": "${framework.buildCommand}" }` }],
+        verify: [`${buildRun} writes ${webDir}/index.html.`],
+      }))
+    }
+    staticSteps.push(
       step({
         id: 'static_output',
         title: framework.staticByDefault ? `Confirm the ${framework.name} static output` : `Switch ${framework.name} to a static build`,
         detail: framework.steps.join(' '),
-        commands: shell && buildRun ? [buildRun, `test -f ${webDir}/index.html && echo "index.html OK"`] : [],
+        commands: shell && buildRun ? [buildRun, `test -f ${webDirArg}/index.html && echo "index.html OK"`] : [],
         verify: [`${webDir}/index.html exists after the build.`, 'No page depends on SSR, API routes or server actions at runtime.'],
         skill: 'framework-to-capacitor',
         checklist_ids: ['native.static_build'],
       }),
-    ]
+    )
     if (framework.serverFeatures.length) {
       staticSteps.push(step({
         id: 'move_server_code',
@@ -2169,12 +2188,6 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
         skill: 'framework-to-capacitor',
       }))
     }
-    staticSteps.push(step({
-      id: 'mobile_build_script',
-      title: 'Add one script that builds and syncs',
-      detail: 'A single script avoids syncing stale assets.',
-      files: [{ path: 'package.json', change: `"scripts": { "build:mobile": "${framework.buildCommand ? `${framework.buildCommand} && ` : ''}cap sync" }` }],
-    }))
     phases.push({ id: 'static_build', title: 'Static web build', goal: `The web app builds to ${webDir}/index.html with no server at runtime.`, steps: staticSteps })
   }
 
@@ -2199,13 +2212,30 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
       verify: ['package.json lists @capacitor/core, @capacitor/cli and one package per platform on the same major.'],
     }))
   }
+  if (capacitorAction !== 'install') {
+    // Upgrades and current installs can still lack a platform package (an iOS-only app adding Android).
+    const missingPackages = platforms.filter(platform => !input.packages?.[`@capacitor/${platform}`]).map(platform => `@capacitor/${platform}@latest`)
+    const missingCli = capacitorAction === 'keep' && !input.packages?.['@capacitor/cli']
+    if (missingPackages.length || missingCli) {
+      capacitorSteps.push(step({
+        id: 'install_platform_packages',
+        title: 'Install the missing Capacitor packages',
+        detail: 'npx cap add needs the platform package installed first, on the same major as @capacitor/core.',
+        commands: [
+          ...(missingPackages.length ? [addCommand(pm, missingPackages)] : []),
+          ...(missingCli ? [addCommand(pm, ['@capacitor/cli@latest'], true)] : []),
+        ],
+        verify: ['All @capacitor/* packages share the same major.'],
+      }))
+    }
+  }
   if (!existing.capacitorConfig) {
     capacitorSteps.push(step({
       id: 'cap_init',
       title: 'Create capacitor.config.ts',
       detail: `Sets the app name, app ID and webDir. Run it only after the user confirmed the app ID. ${framework.id === 'angular' ? 'Replace <project> with the angular.json project name.' : ''}`.trim(),
-      commands: [`npx cap init "${appName.replaceAll('"', '')}" ${identity.app_id} --web-dir ${webDir}`],
-      files: [{ path: 'capacitor.config.ts', change: `import type { CapacitorConfig } from '@capacitor/cli'\n\nconst config: CapacitorConfig = {\n  appId: '${identity.app_id}',\n  appName: '${appName.replaceAll('\'', '')}',\n  webDir: '${webDir}',\n}\n\nexport default config` }],
+      commands: [`npx cap init ${shellQuote(appName)} ${identity.app_id} --web-dir ${webDirArg}`],
+      files: [{ path: 'capacitor.config.ts', change: `import type { CapacitorConfig } from '@capacitor/cli'\n\nconst config: CapacitorConfig = {\n  appId: '${identity.app_id}',\n  appName: ${JSON.stringify(appName)},\n  webDir: '${webDir}',\n}\n\nexport default config` }],
       verify: ['capacitor.config.ts has the confirmed appId and the webDir of the build output, and no server.url.'],
       checklist_ids: ['native.bundled_assets'],
     }))

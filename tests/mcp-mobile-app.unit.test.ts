@@ -86,7 +86,14 @@ describe('latest Capacitor release', () => {
 })
 
 describe('project facts', () => {
+  it('parses hostile version ranges in linear time', () => {
+    const started = performance.now()
+    expect(parseVersion(`${'>='.repeat(50_000)}x`)).toBeNull()
+    expect(performance.now() - started).toBeLessThan(200)
+  })
+
   it.each([
+    ['>=8.1', [8, 1, 0]],
     ['^8.4.0', [8, 4, 0]],
     ['~7.1', [7, 1, 0]],
     ['>=6.0.0', [6, 0, 0]],
@@ -345,7 +352,7 @@ describe('mobile app plan', () => {
       packageManager: 'pnpm',
       environment: { shell: true, os: 'linux', nodeVersion: 'v20.11.0' },
     }, release)
-    expect(plan.framework).toMatchObject({ id: 'nextjs', detected_from: 'packages', web_dir: 'out', build_command: 'pnpm run build', static_export_required: true })
+    expect(plan.framework).toMatchObject({ id: 'nextjs', detected_from: 'packages', web_dir: 'out', build_command: 'pnpm run build:mobile', static_export_required: true })
     expect(plan.capacitor).toMatchObject({ action: 'upgrade', latest_version: '8.6.2', installed_version: '^7.2.0', node_requirement: '>=22' })
     expect(plan.app).toEqual({ name: 'Acme Shop', app_id: 'com.acmeshop.app', app_id_source: 'website' })
     expect(plan.warnings.join(' ')).toMatch(/Node v20\.11\.0 is too old/)
@@ -379,7 +386,7 @@ describe('mobile app plan', () => {
       'npm install @capacitor/core@latest @capacitor/ios@latest @capacitor/android@latest',
       'npm install -D @capacitor/cli@latest',
     ])
-    expect(steps.find(item => item.id === 'cap_init')?.commands).toEqual(['npx cap init "Trail Buddy" app.trailbuddy.mobile --web-dir dist'])
+    expect(steps.find(item => item.id === 'cap_init')?.commands).toEqual(['npx cap init \'Trail Buddy\' app.trailbuddy.mobile --web-dir dist'])
     // npx cap add copies webDir, so the build runs before the first platform is added.
     const order = steps.map(item => item.id)
     expect(order.indexOf('build_web')).toBeLessThan(order.indexOf('add_ios'))
@@ -387,6 +394,44 @@ describe('mobile app plan', () => {
     expect(plan.run_options.find(option => option.id === 'ios_simulator')?.available).toBe('yes')
     expect(plan.run_options.find(option => option.id === 'android_emulator')?.available).toBe('no')
     expect(plan.run_options.find(option => option.id === 'capgo_cloud_simulator')?.mcp_tools).toContain('capgo_start_simulator')
+  })
+
+  it('runs the framework static build through build:mobile in every step', () => {
+    const plan = buildPlan({ source: 'existing_web_app', packages: { nuxt: '^4.0.0', vue: '^3.5.0' }, appId: 'com.acme.shop', appName: 'Acme' }, release)
+    expect(plan.framework).toMatchObject({ id: 'nuxt', build_command: 'npm run build:mobile', web_dir: '.output/public' })
+    const steps = plan.phases.flatMap(phase => phase.steps)
+    expect(steps[steps.findIndex(item => item.id === 'mobile_build_script')].files[0].change).toContain('"build:mobile": "nuxt generate"')
+    expect(steps.findIndex(item => item.id === 'mobile_build_script')).toBeLessThan(steps.findIndex(item => item.id === 'static_output'))
+    const commands = steps.flatMap(item => item.commands)
+    expect(commands).toContain('npm run build:mobile && npx cap sync')
+    expect(commands).not.toContain('npm run build')
+    expect(commands.filter(command => command.startsWith('npm run build:mobile')).length).toBeGreaterThanOrEqual(3)
+  })
+
+  it.each([
+    ['current', '^8.6.2', ['npm install @capacitor/android@latest']],
+    ['older', '^7.4.0', ['npm install @capacitor/android@latest']],
+  ])('installs a missing platform package on a %s Capacitor app before adding the platform', (_label, version, commands) => {
+    const plan = buildPlan({
+      source: 'existing_web_app',
+      packages: { 'vite': '^7.0.0', '@capacitor/core': version, '@capacitor/cli': version, '@capacitor/ios': version },
+      appId: 'com.acme.shop',
+      appName: 'Acme',
+    }, release)
+    const steps = plan.phases.flatMap(phase => phase.steps)
+    const order = steps.map(item => item.id)
+    expect(steps.find(item => item.id === 'install_platform_packages')?.commands).toEqual(commands)
+    expect(order.indexOf('install_platform_packages')).toBeLessThan(order.indexOf('add_android'))
+    expect(order).not.toContain('add_ios')
+  })
+
+  it('keeps app names and placeholder folders literal in shell commands', () => {
+    const plan = buildPlan({ source: 'existing_web_app', packages: { '@angular/core': '^20.0.0' }, appName: 'Shop $HOME\'s `id`', appId: 'com.acme.shop' }, release)
+    const steps = plan.phases.flatMap(phase => phase.steps)
+    const init = steps.find(item => item.id === 'cap_init')!
+    expect(init.commands).toEqual(['npx cap init \'Shop $HOME\'\\\'\'s `id`\' com.acme.shop --web-dir \'dist/<project>/browser\''])
+    expect(init.files[0].change).toContain('appName: "Shop $HOME\'s `id`"')
+    expect(steps.find(item => item.id === 'static_output')?.commands[1]).toBe('test -f \'dist/<project>/browser\'/index.html && echo "index.html OK"')
   })
 
   it('warns that a website URL alone cannot be packaged and switches to a handoff without a shell', () => {
