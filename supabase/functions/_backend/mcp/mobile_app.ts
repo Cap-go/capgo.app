@@ -157,9 +157,15 @@ const APP_ID_PATTERN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/i
 const PLACEHOLDER_APP_IDS = new Set(['com.example.app', 'io.ionic.starter', 'com.company.app', 'com.capacitorjs.app'])
 const JAVA_KEYWORDS = new Set(['abstract', 'boolean', 'break', 'byte', 'case', 'catch', 'char', 'class', 'const', 'continue', 'default', 'do', 'double', 'else', 'enum', 'extends', 'final', 'finally', 'float', 'for', 'goto', 'if', 'implements', 'import', 'instanceof', 'int', 'interface', 'long', 'native', 'new', 'package', 'private', 'protected', 'public', 'return', 'short', 'static', 'super', 'switch', 'synchronized', 'this', 'throw', 'throws', 'transient', 'try', 'void', 'volatile', 'while', 'true', 'false', 'null'])
 
-export function appIdProblem(appId: string): string | null {
+/**
+ * Capacitor (and Android) need Java package segments, so no hyphens. Apple bundle identifiers allow
+ * only letters, digits, hyphens and periods, so underscores only work for Android-only apps.
+ */
+export function appIdProblem(appId: string, platforms: readonly Platform[] = PLATFORMS): string | null {
   if (!APP_ID_PATTERN.test(appId))
-    return 'Use reverse-domain segments of letters, digits and underscores, each starting with a letter, such as com.yourcompany.yourapp. Android rejects hyphens.'
+    return 'Use reverse-domain segments of letters and digits, each starting with a letter, such as com.yourcompany.yourapp. Capacitor and Android reject hyphens.'
+  if (platforms.includes('ios') && appId.includes('_'))
+    return 'iOS bundle identifiers allow only letters, digits, hyphens and periods: remove the underscores (Capacitor rejects hyphens, so use letters and digits only).'
   const keyword = appId.split('.').find(segment => JAVA_KEYWORDS.has(segment.toLowerCase()))
   if (keyword)
     return `The segment "${keyword}" is a Java keyword, which Android does not allow in an applicationId.`
@@ -175,10 +181,11 @@ function slug(value: string): string {
   return /^\d/.test(cleaned) ? `app${cleaned}` : cleaned
 }
 
-export function suggestAppId(input: { appId?: string, websiteUrl?: string, appName?: string }) {
+export function suggestAppId(input: { appId?: string, websiteUrl?: string, appName?: string, platforms?: readonly Platform[] }) {
+  const platforms = input.platforms?.length ? input.platforms : PLATFORMS
   const warnings: string[] = []
   if (input.appId) {
-    const problem = appIdProblem(input.appId)
+    const problem = appIdProblem(input.appId, platforms)
     if (!problem)
       return { app_id: input.appId, source: 'input' as const, warnings }
     warnings.push(`appId ${input.appId}: ${problem}`)
@@ -191,7 +198,7 @@ export function suggestAppId(input: { appId?: string, websiteUrl?: string, appNa
         const reversed = [...labels].reverse()
         const segments = reversed.length === 2 ? [...reversed, input.appName ? slug(input.appName) : 'app'] : reversed
         const candidate = segments.map(segment => (JAVA_KEYWORDS.has(segment) ? `${segment}app` : segment)).join('.')
-        if (!appIdProblem(candidate)) {
+        if (!appIdProblem(candidate, platforms)) {
           warnings.push(`Suggested ${candidate} from the website domain. Confirm it with the user: the app ID is permanent once published.`)
           return { app_id: candidate, source: 'website' as const, warnings }
         }
@@ -531,7 +538,7 @@ function configChecks(report: ReadinessReport, input: ReadinessInput, platforms:
     report.add({ id: 'config.present', status: 'unknown', severity: 'blocker', title: 'capacitor.config is valid', detail: 'Pass capacitorConfig (appId, appName, webDir, server, ios, android, plugins from capacitor.config.*).', fix: null, how_to_check: 'Read capacitor.config.ts/json, or run npx cap config --json when available.' })
     return
   }
-  const problem = config.appId ? appIdProblem(config.appId) : 'appId is missing.'
+  const problem = config.appId ? appIdProblem(config.appId, platforms) : 'appId is missing.'
   report.fact({ id: 'config.app_id', severity: 'blocker', title: 'App ID is a permanent reverse domain', value: problem === null, pass: true, ok: `appId ${config.appId}.`, bad: problem ?? '', fix: 'Choose the final reverse-domain app ID with the user and set appId (and the native bundle identifiers) before the first store upload.' })
   report.fact({ id: 'config.app_name', severity: 'required', title: 'App name is set', value: Boolean(config.appName), pass: true, ok: `appName ${config.appName}.`, bad: 'appName is missing.', fix: 'Set appName (the name under the icon).' })
   webDirCheck(report, config.webDir, input.packages)
@@ -842,7 +849,7 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
   if (input.framework && detected && input.framework !== detected)
     warnings.push(`framework ${input.framework} was given but the packages look like ${frameworkInfo(detected).name}. Using ${framework.name}.`)
 
-  const identity = suggestAppId({ appId: input.appId, websiteUrl: input.websiteUrl, appName: input.appName })
+  const identity = suggestAppId({ appId: input.appId, websiteUrl: input.websiteUrl, appName: input.appName, platforms })
   const appName = input.appName ?? nameFromWebsite(input.websiteUrl) ?? 'My App'
   if (!input.appName)
     warnings.push(`appName defaulted to "${appName}". Confirm the name shown under the icon with the user.`)

@@ -136,12 +136,22 @@ describe('project facts', () => {
     ['com.new.app', /Java keyword/],
     ['com.example.app', /placeholder/],
     ['com.1acme.app', /reverse-domain/],
+    ['com.acme.my_app', /iOS bundle identifiers/],
   ])('validates app ID %s', (appId, problem) => {
     const result = appIdProblem(appId)
     if (problem)
       expect(result).toMatch(problem)
     else
       expect(result).toBeNull()
+  })
+
+  it('allows underscores only when iOS is not a target', () => {
+    expect(appIdProblem('com.acme.my_app', ['android'])).toBeNull()
+    expect(appIdProblem('com.acme.my_app', ['ios'])).toMatch(/remove the underscores/)
+    expect(suggestAppId({ appId: 'com.acme.my_app', platforms: ['android'] })).toMatchObject({ app_id: 'com.acme.my_app', source: 'input' })
+    expect(suggestAppId({ appId: 'com.acme.my_app', appName: 'My App' })).toMatchObject({ source: 'placeholder' })
+    const result = checkReadiness({ platforms: ['ios'], capacitorConfig: { appId: 'com.acme.my_app', appName: 'Acme', webDir: 'dist' } }, release)
+    expect(result.checks.find(check => check.id === 'config.app_id')).toMatchObject({ status: 'fail' })
   })
 
   it('suggests an app ID from the website domain and flags placeholders', () => {
