@@ -13,6 +13,7 @@ import { buildChannelInsertOrExistingSql, resolveChannelInsert } from './channel
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
 import { CREATE_DEFAULT_API_KEYS_SQL } from './default_apikeys.ts'
 import { getDirectOfferStatus } from './direct_offer.ts'
+import { gotrueAdmin } from './gotrue_admin.ts'
 import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
@@ -1117,7 +1118,7 @@ export async function customerToSegmentOrg(
   // Direct-offer (paid ads) orgs never had a trial: tag offer=direct and strip trial tags.
   // Callers already loaded the org, so reuse its created_by instead of re-reading it.
   // An unknown offer (lookup failed) only withholds trial tags until a later sync.
-  const directOffer = await getDirectOfferStatus(c, supabaseAdmin(c), org.created_by)
+  const directOffer = await getDirectOfferStatus(c, gotrueAdmin(c), org.created_by)
   return applyDirectOfferBentoTags(await customerToSegmentOrgBase(c, org.id, price_id, plan, trialPlanNamesToRemove), directOffer, trialPlanNamesToRemove)
 }
 

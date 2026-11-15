@@ -51,13 +51,12 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
       signUp: signUpMock,
     },
   }),
-  supabaseAdmin: () => ({
-    auth: {
-      admin: {
-        deleteUser: deleteUserMock,
-        updateUserById: updateUserByIdMock,
-      },
-    },
+}))
+
+vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
+  gotrueAdmin: () => ({
+    deleteUser: deleteUserMock,
+    updateUserById: updateUserByIdMock,
   }),
 }))
 

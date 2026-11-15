@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import type { GotrueAdmin } from './gotrue_admin.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 
 /**
@@ -14,14 +15,8 @@ export const DEFAULT_TRIAL_DAYS = 15
 /** Bento tag for direct-offer users. They never get trial tags. */
 export const DIRECT_OFFER_BENTO_TAG = 'offer=direct'
 
-/**
- * Minimal admin client shape used for lookups. Callers pass supabaseAdmin(c);
- * taking it as a parameter keeps this module free of an import cycle with
- * supabase.ts.
- */
-interface DirectOfferAdminClient {
-  auth: { admin: { getUserById: (id: string) => PromiseLike<{ data: { user: { app_metadata?: Record<string, unknown> } | null }, error: unknown }> } }
-}
+/** Admin client used for lookups. Callers pass gotrueAdmin(c); tests pass a stub. */
+type DirectOfferAdminClient = Pick<GotrueAdmin, 'getUserById'>
 
 /** `null` means the lookup failed and the offer is unknown. */
 export type DirectOfferStatus = boolean | null
@@ -36,10 +31,10 @@ export function isDirectOfferMetadata(metadata: Record<string, unknown> | null |
  * sees it. GoTrue merges app_metadata keys, so provider data is kept.
  */
 export async function persistDirectOffer(
-  admin: { auth: { admin: { updateUserById: (id: string, attributes: { app_metadata: Record<string, unknown> }) => PromiseLike<{ error: unknown }> } } },
+  admin: Pick<GotrueAdmin, 'updateUserById'>,
   userId: string,
 ): Promise<void> {
-  const { error } = await admin.auth.admin.updateUserById(userId, { app_metadata: { offer: DIRECT_OFFER } })
+  const { error } = await admin.updateUserById(userId, { app_metadata: { offer: DIRECT_OFFER } })
   if (error)
     throw error
 }
@@ -67,7 +62,7 @@ export async function getDirectOfferStatus(
   if (!userId)
     return false
   try {
-    const { data, error } = await admin.auth.admin.getUserById(userId)
+    const { data, error } = await admin.getUserById(userId)
     if (error)
       throw error
     return isDirectOfferMetadata(data.user?.app_metadata)

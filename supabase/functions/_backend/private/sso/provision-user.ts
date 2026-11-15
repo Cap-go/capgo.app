@@ -7,7 +7,7 @@ import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient, withPgTransaction } from '../../utils/pg.ts'
 import { getRequestCountry } from '../../utils/request_country.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
+import { gotrueAdmin } from '../../utils/gotrue_admin.ts'
 import { version } from '../../utils/version.ts'
 import { mappedAttributes, parseStoredRoleMapping, readAttributeValues, resolveSsoAccess } from './role-mapping.ts'
 
@@ -757,7 +757,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
     return quickError(401, 'not_authorized', 'User ID not found in auth context')
   }
 
-  const admin = supabaseAdmin(c)
+  const admin = gotrueAdmin(c)
   let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   const getSharedPgClient = async () => {
     pgClient ??= await getPgClient(c)
@@ -766,7 +766,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
 
   try {
     // Verify the user actually authenticated via SSO (not email/password)
-    const { data: userAuth, error: userAuthError } = await admin.auth.admin.getUserById(userId)
+    const { data: userAuth, error: userAuthError } = await admin.getUserById(userId)
 
     if (userAuthError || !userAuth?.user) {
       cloudlogErr({ requestId, message: 'Failed to retrieve user auth data for SSO verification', userId, error: userAuthError })
@@ -894,7 +894,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
       }
 
       // Step 3: Delete the duplicate auth user (cascades to public.users, orgs, org_users)
-      const { error: deleteError } = await admin.auth.admin.deleteUser(userId)
+      const { error: deleteError } = await admin.deleteUser(userId)
       if (deleteError) {
         cloudlogErr({ requestId, message: 'Failed to delete duplicate SSO user after identity transfer', userId, originalUserId, error: deleteError })
         // Identity already transferred — log but still return merged so frontend redirects to login

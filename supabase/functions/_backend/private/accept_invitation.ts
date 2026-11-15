@@ -12,7 +12,8 @@ import { closeClient, getPgClient } from '../utils/pg.ts'
 import { queryJsonOne } from '../utils/pg_rls.ts'
 import { getRequestCountry } from '../utils/request_country.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { emptySupabase, supabaseAdmin } from '../utils/supabase.ts'
+import { gotrueAdmin } from '../utils/gotrue_admin.ts'
+import { emptySupabase } from '../utils/supabase.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -92,7 +93,7 @@ async function rollbackCreatedUser(c: Context, pg: PgClient, userId: string) {
   }
   catch {}
   try {
-    await supabaseAdmin(c).auth.admin.deleteUser(userId)
+    await gotrueAdmin(c).deleteUser(userId)
   }
   catch {}
 }
@@ -370,7 +371,7 @@ app.post('/', async (c) => {
     cloudlog({ requestId: c.get('requestId'), context: 'accept_invitation validated body', body: bodyWithoutSecrets })
 
     // here the real magic happens
-    const { data: user, error: userError } = await supabaseAdmin(c).auth.admin.createUser({
+    const { data: user, error: userError } = await gotrueAdmin(c).createUser({
       email: invitation.email,
       password: body.password,
       email_confirm: true,
