@@ -94,9 +94,10 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => ({
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   createApiKey: createApiKeyMock,
-  supabaseAdmin: vi.fn(() => ({
-    auth: { admin: { getUserById: getUserByIdMock } },
-  })),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
+  gotrueAdmin: vi.fn(() => ({ getUserById: getUserByIdMock })),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({

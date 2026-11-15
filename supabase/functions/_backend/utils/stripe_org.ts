@@ -2,12 +2,13 @@ import type { Context } from 'hono'
 import type { BillingAccount } from './stripe.ts'
 import type { Database } from './supabase.types.ts'
 import { resolveNewOrgTrialEnd } from './direct_offer.ts'
+import { gotrueAdmin } from './gotrue_admin.ts'
 import type { PgQueryClient } from './pg.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import { createCustomer, getPlanProductId, normalizeBillingAccount, planProductIdOrFilter } from './stripe.ts'
 import { queryPlanByProductId } from './stripe_billing.ts'
-import { getDefaultPlan, getStripeCustomer, supabaseAdmin } from './supabase.ts'
+import { getDefaultPlan, getStripeCustomer } from './supabase.ts'
 
 type OrgRow = Database['public']['Tables']['orgs']['Row']
 type OrgWithCreatorCountry = OrgRow & { creator_country: string | null }
@@ -173,7 +174,7 @@ export async function createStripeCustomer(c: Context, org: OrgRow) {
 
   // Direct-offer (paid ads) creators get no trial; everyone else gets the standard trial.
   // Resolve before creating the Stripe customer so a failed lookup retries cleanly.
-  const trial_at = await resolveNewOrgTrialEnd(c, supabaseAdmin(c), current.created_by)
+  const trial_at = await resolveNewOrgTrialEnd(c, gotrueAdmin(c), current.created_by)
   // This runs in a queue: its request location belongs to the worker, not the user.
   const customer = await createCustomer(c, current.management_email, current.created_by, current.id, current.name, billingAccount, current.creator_country ?? null)
   cloudlog({ requestId: c.get('requestId'), message: 'createInfo', plan: selectedPlan, customer, billingAccount })
