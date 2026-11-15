@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { WeeklyInstallStatsInput } from '../utils/cron_email_stats.ts'
 import type { DeployReportState } from '../utils/deploy_report.ts'
 import type { PgClient } from '../utils/pg.ts'
 import { Hono } from 'hono/tiny'
@@ -7,8 +8,10 @@ import {
   buildWeeklyEmailMetadata,
   computeWeeklyInstallStats,
   getPreviousMonthUtcRange,
+  getWeeklyReportRange,
   shouldSendDeployInstallStatsEmail,
   sumVersionInstalls,
+  WEEKLY_REPORT_SQL,
 } from '../utils/cron_email_stats.ts'
 import { DEPLOY_REPORT_CONSUME_SQL, DEPLOY_REPORT_RELEASE_SQL, DEPLOY_REPORT_SELECT_SQL } from '../utils/deploy_report.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
@@ -142,13 +145,14 @@ async function handleWeeklyInstallStats(c: Context, appId: string) {
 }
 
 async function sendWeeklyInstallStats(c: Context, pg: PgClient, appId: string) {
-  let weeklyStats: { all_updates: number, failed_updates: number, open_app: number } | null = null
+  const range = getWeeklyReportRange()
+  let weeklyStats: WeeklyInstallStatsInput | null = null
   let generateStatsError: unknown = null
   try {
-    const rows = await queryJson<{ all_updates: number, failed_updates: number, open_app: number }>(
+    const rows = await queryJson<WeeklyInstallStatsInput>(
       pg,
-      'SELECT * FROM public.get_weekly_stats(app_id => $1)',
-      [appId],
+      WEEKLY_REPORT_SQL,
+      [appId, range.start, range.end],
     )
     if (rows.length === 1)
       weeklyStats = rows[0]
@@ -163,15 +167,13 @@ async function sendWeeklyInstallStats(c: Context, pg: PgClient, appId: string) {
     throw simpleError('cannot_generate_stats', 'Cannot generate stats', { error: generateStatsError })
   }
 
-  // get_weekly_stats.all_updates is SUM(install); failed_updates is SUM(fail).
-  // Those are independent counters, so rates use install / (install + fail).
   const stats = computeWeeklyInstallStats(weeklyStats)
 
-  if (stats.totalUpdates === 0) {
+  if (stats.successfulInstalls === 0 && stats.failedUpdates === 0) {
     return c.json({ status: 'No updates this week' }, 200)
   }
 
-  const metadata = buildWeeklyEmailMetadata(appId, stats)
+  const metadata = buildWeeklyEmailMetadata(appId, stats, range)
 
   await sendEmailToOrgMembers(c, 'user:weekly_stats', 'weekly_stats', metadata, await getOrgIdForApp(c, appId, pg))
 
