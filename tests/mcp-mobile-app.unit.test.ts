@@ -408,6 +408,13 @@ describe('mobile app plan', () => {
     ])
     expect(order.indexOf('signing_credentials')).toBeLessThan(order.indexOf('cloud_build'))
     expect(steps.find(item => item.id === 'cloud_build')).toMatchObject({ run_by: 'agent', mcp_tools: expect.arrayContaining(['capgo_request_build', 'capgo_start_build']) })
+    // build zip archives the native folders as they are, so the updater wiring must be built and synced first.
+    expect(steps.find(item => item.id === 'live_updates')?.commands).toEqual(['npm install @capgo/capacitor-updater@latest', 'npm run build && npx cap sync'])
+    expect(steps.find(item => item.id === 'cloud_build')?.commands).toEqual([
+      'npm run build && npx cap sync',
+      'npx @capgo/cli@latest build zip app.trailbuddy.mobile --platform ios --json',
+      'npx @capgo/cli@latest build zip app.trailbuddy.mobile --platform android --json',
+    ])
   })
 
   it('runs the framework static build through build:mobile in every step', () => {

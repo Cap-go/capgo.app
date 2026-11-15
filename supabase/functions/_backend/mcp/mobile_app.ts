@@ -1186,8 +1186,8 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
       step({
         id: 'live_updates',
         title: 'Add Capgo live updates before the first store build',
-        detail: 'Recommended: the user runs npx @capgo/cli@latest init in the app folder (interactive: installs the updater, adds notifyAppReady, creates the channel and uploads the first bundle). Manual alternative below. Live updates change web assets only.',
-        commands: [addCommand(pm, ['@capgo/capacitor-updater@latest']), 'npx cap sync'],
+        detail: 'Recommended: the user runs npx @capgo/cli@latest init in the app folder (interactive: installs the updater, adds notifyAppReady, creates the channel and uploads the first bundle). Manual alternative: install the plugin, make the file changes below, then build and sync so the native projects carry the updater wiring. Live updates change web assets only.',
+        commands: [addCommand(pm, ['@capgo/capacitor-updater@latest']), syncCommand],
         files: [
           { path: 'entry file (main.ts / main.tsx / app root)', change: 'import { CapacitorUpdater } from \'@capgo/capacitor-updater\'\n\nCapacitorUpdater.notifyAppReady()' },
           { path: 'capacitor.config.ts', change: 'plugins: { CapacitorUpdater: { autoUpdate: \'atBackground\' } }' },
@@ -1221,8 +1221,8 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
       step({
         id: 'cloud_build',
         title: 'Native builds with Capgo Cloud Build',
-        detail: 'Package the native project, then capgo_request_build returns a job and a signed URL: PUT the archive there and call capgo_start_build. Ask the user before starting: builds use build minutes and can upload to the stores. iOS builds run on the current Xcode.',
-        commands: platforms.map(platform => `npx @capgo/cli@latest build zip ${identity.app_id} --platform ${platform} --json`),
+        detail: 'build zip archives the native folders as they are, so build and sync first: the store binary must carry the current web bundle, including notifyAppReady. Then capgo_request_build returns a job and a signed URL: PUT the archive there and call capgo_start_build. Ask the user before starting: builds use build minutes and can upload to the stores. iOS builds run on the current Xcode.',
+        commands: [syncCommand, ...platforms.map(platform => `npx @capgo/cli@latest build zip ${identity.app_id} --platform ${platform} --json`)],
         verify: ['capgo_get_build_status reports succeeded for each platform; read capgo_get_build_logs on failure.'],
         mcp_tools: ['capgo_request_build', 'capgo_start_build', 'capgo_get_build_status', 'capgo_get_build_logs'],
         skill: 'capgo-native-builds',
