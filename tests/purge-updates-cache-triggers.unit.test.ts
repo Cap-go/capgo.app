@@ -1,9 +1,10 @@
+import type { QueryResult } from 'pg'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   purgeUpdatesCache: vi.fn(async () => ({ nudged: true, purgedApps: ['com.mock.app'], purged: true, enqueued: true })),
   purgeOnPremCache: vi.fn(async () => undefined),
-  pgQuery: vi.fn(async () => ({ rows: [], rowCount: 0 })),
+  pgQuery: vi.fn(async (): Promise<Pick<QueryResult<{ size: number }>, 'rows' | 'rowCount'>> => ({ rows: [], rowCount: 0 })),
   getPgClient: vi.fn(async () => ({ query: vi.fn() })),
   closeClient: vi.fn(),
   getDrizzleClient: vi.fn(() => ({})),
@@ -156,7 +157,7 @@ describe('purgeUpdatesCache on change paths', () => {
     mocks.pgQuery.mockImplementation(async (...args: unknown[]) => {
       const sql = String(args[0] ?? '')
       if (sql.includes('SELECT size FROM public.app_versions_meta'))
-        return { rows: [{ size: 0 }] }
+        return { rows: [{ size: 0 }], rowCount: 1 }
       if (sql.startsWith('UPDATE public.channels'))
         return { rowCount: 0, rows: [] }
       return { rows: [], rowCount: 0 }

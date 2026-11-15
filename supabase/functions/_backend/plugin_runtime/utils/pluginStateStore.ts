@@ -8,10 +8,24 @@ import { parsePluginStatePointer } from './pluginStateValidation.ts'
 export const R2_POINTER_TIMEOUT_MS = 50
 export const KV_VALUE_TIMEOUT_MS = 50
 
+type R2PointerFailure = 'none' | 'headers_timeout' | 'body_timeout' | 'headers_error' | 'body_error' | 'invalid_pointer'
+type R2PointerPhase = { kind: 'headers' } | { kind: 'body' | 'validation', startedAt: number, headersMs: number }
+
+const pointerFailureByPhase = {
+  headers: 'headers_error',
+  body: 'body_error',
+  validation: 'invalid_pointer',
+} satisfies Record<R2PointerPhase['kind'], R2PointerFailure>
+
 interface PluginStateReadMetrics {
   r2_pointer_reads: number
   r2_pointer_ms: number
   r2_pointer_timeouts: number
+  r2_pointer_headers_ms: number
+  r2_pointer_body_ms: number
+  r2_pointer_headers_timeouts: number
+  r2_pointer_body_timeouts: number
+  r2_pointer_first_failure: R2PointerFailure
   kv_value_reads: number
   kv_value_ms: number
   kv_value_timeouts: number
@@ -21,7 +35,19 @@ const readMetrics = new WeakMap<Request, PluginStateReadMetrics>()
 
 /** Allocate provider counters only for requests selected by the timing sample. */
 export function startPluginStateReadMetrics(c: Context): PluginStateReadMetrics {
-  const metrics = { r2_pointer_reads: 0, r2_pointer_ms: 0, r2_pointer_timeouts: 0, kv_value_reads: 0, kv_value_ms: 0, kv_value_timeouts: 0 }
+  const metrics: PluginStateReadMetrics = {
+    r2_pointer_reads: 0,
+    r2_pointer_ms: 0,
+    r2_pointer_timeouts: 0,
+    r2_pointer_headers_ms: 0,
+    r2_pointer_body_ms: 0,
+    r2_pointer_headers_timeouts: 0,
+    r2_pointer_body_timeouts: 0,
+    r2_pointer_first_failure: 'none',
+    kv_value_reads: 0,
+    kv_value_ms: 0,
+    kv_value_timeouts: 0,
+  }
   readMetrics.set(c.req.raw, metrics)
   return metrics
 }
@@ -32,6 +58,9 @@ async function readPointer(pointers: R2Bucket, logicalKey: string, metrics: Plug
   let timedOut = false
   let current: R2ObjectBody | null = null
   const startedAt = metrics ? performance.now() : 0
+  const observation: { phase: R2PointerPhase, failure: R2PointerFailure, finished: boolean } | undefined = metrics
+    ? { phase: { kind: 'headers' }, failure: 'none', finished: false }
+    : undefined
   if (metrics)
     metrics.r2_pointer_reads++
   const discard = (object: R2ObjectBody | null) => { void object?.body?.cancel().catch(() => undefined) }
@@ -43,23 +72,62 @@ async function readPointer(pointers: R2Bucket, logicalKey: string, metrics: Plug
           discard(object)
           return null
         }
-        return object ? parsePluginStatePointer(await object.json<unknown>()) : null
+        if (!object)
+          return null
+        if (observation && !observation.finished) {
+          const bodyStartedAt = performance.now()
+          observation.phase = { kind: 'body', headersMs: bodyStartedAt - startedAt, startedAt: bodyStartedAt }
+        }
+        const pointer = await object.json<unknown>()
+        if (observation?.phase.kind === 'body' && !observation.finished)
+          observation.phase = { ...observation.phase, kind: 'validation' }
+        return parsePluginStatePointer(pointer)
       }),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           timedOut = true
-          if (metrics)
+          if (metrics) {
             metrics.r2_pointer_timeouts++
+            if (observation?.phase.kind === 'headers') {
+              metrics.r2_pointer_headers_timeouts++
+              observation.failure = 'headers_timeout'
+            }
+            else if (observation) {
+              metrics.r2_pointer_body_timeouts++
+              observation.failure = 'body_timeout'
+            }
+          }
           discard(current)
           reject(new PluginStateMiss('publication index timed out'))
         }, R2_POINTER_TIMEOUT_MS)
       }),
     ])
   }
+  catch (error) {
+    if (observation && observation.failure === 'none')
+      observation.failure = pointerFailureByPhase[observation.phase.kind]
+    throw error
+  }
   finally {
+    // Freeze this operation before late headers or a late body can finish.
+    if (observation)
+      observation.finished = true
     clearTimeout(timer)
-    if (metrics)
-      metrics.r2_pointer_ms += performance.now() - startedAt
+    if (metrics && observation) {
+      const phase = observation.phase
+      const endedAt = performance.now()
+      metrics.r2_pointer_ms += endedAt - startedAt
+      if (phase.kind === 'headers') {
+        metrics.r2_pointer_headers_ms += endedAt - startedAt
+      }
+      else {
+        metrics.r2_pointer_headers_ms += phase.headersMs
+        // Body time includes JSON decoding and pointer validation.
+        metrics.r2_pointer_body_ms += endedAt - phase.startedAt
+      }
+      if (metrics.r2_pointer_first_failure === 'none')
+        metrics.r2_pointer_first_failure = observation.failure
+    }
   }
 }
 
@@ -74,8 +142,11 @@ export async function readPublishedPluginState(c: Context, store: KVNamespace, l
     return { value: null, revision: null }
   if (pointer.kvKey === null)
     return { value: null, revision: pointer.generation }
-  if (pointer.kvKey !== await pluginStateImmutableKey(logicalKey, pointer.generation))
+  if (pointer.kvKey !== await pluginStateImmutableKey(logicalKey, pointer.generation)) {
+    if (metrics?.r2_pointer_first_failure === 'none')
+      metrics.r2_pointer_first_failure = 'invalid_pointer'
     throw new PluginStateMiss('publication pointer identity mismatch')
+  }
   const startedAt = metrics ? performance.now() : 0
   if (metrics)
     metrics.kv_value_reads++
