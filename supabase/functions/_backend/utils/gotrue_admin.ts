@@ -82,24 +82,25 @@ async function request(c: Context, method: string, path: string, body?: unknown)
   const goTrue = (c.env as Partial<Bindings> | undefined)?.GOTRUE
 
   let response: Response
+  let text: string
   try {
     response = goTrue
       ? await goTrue.fetch(`https://gotrue/${path}`, init)
       : await fetch(`${trimTrailingSlashes(getEnv(c, 'SUPABASE_URL'))}/auth/v1/${path}`, init)
+    text = await response.text()
   }
   catch (error) {
     return { data: null, error: new GotrueAdminError(error instanceof Error ? error.message : String(error), 0) }
   }
 
-  const text = await response.text().catch(() => '')
   let payload: unknown = null
   try {
     payload = text ? JSON.parse(text) : null
   }
-  catch {
-    if (response.ok)
-      return { data: null, error: new GotrueAdminError('Invalid JSON from auth server', 0) }
-  }
+  catch {}
+  // Like supabase-js, a 2xx answer must be a JSON object.
+  if (response.ok && (!payload || typeof payload !== 'object'))
+    return { data: null, error: new GotrueAdminError('Invalid JSON from auth server', 0) }
   if (!response.ok)
     return { data: null, error: new GotrueAdminError(errorMessage(payload, text || response.statusText), response.status, errorCode(payload)) }
   return { data: payload, error: null }

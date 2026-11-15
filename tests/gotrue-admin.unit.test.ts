@@ -132,6 +132,18 @@ describe('gotrueAdmin errors', () => {
     expect((await gotrueAdmin(context()).getUserById(USER_ID)).error).toMatchObject({ status: 503, message: 'upstream down' })
   })
 
+  it('returns a failed response stream or a non-object 2xx body as an error', async () => {
+    const broken = new Response(new ReadableStream({ pull: controller => controller.error(new Error('stream reset')) }), { status: 200 })
+    fetchMock.mockResolvedValueOnce(broken)
+    expect(await gotrueAdmin(context()).generateLink({ type: 'magiclink', email: 'a@b.co' })).toMatchObject({ data: { properties: null, user: null }, error: { status: 0, message: 'stream reset' } })
+
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 200 }))
+    expect(await gotrueAdmin(context()).generateLink({ type: 'magiclink', email: 'a@b.co' })).toMatchObject({ data: { properties: null, user: null }, error: { status: 0 } })
+
+    fetchMock.mockResolvedValueOnce(new Response('ok', { status: 200 }))
+    expect((await gotrueAdmin(context()).deleteUser(USER_ID)).error).toMatchObject({ status: 0, message: 'Invalid JSON from auth server' })
+  })
+
   it('returns a failed fetch as status 0 instead of throwing', async () => {
     fetchMock.mockRejectedValueOnce(new TypeError('network down'))
     const { data, error } = await gotrueAdmin(context()).generateLink({ type: 'magiclink', email: 'a@b.co' })
