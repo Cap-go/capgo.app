@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { app as devicesApp } from '../supabase/functions/_backend/private/devices.ts'
 import { app as statsApp } from '../supabase/functions/_backend/private/stats.ts'
+import { MAX_DEVICE_ID_FILTER } from '../supabase/functions/_backend/utils/privateAnalyticsValidation.ts'
 
 const checkPermissionMock = vi.fn()
 const countDevicesMock = vi.fn()
@@ -24,6 +25,10 @@ vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({
   readStats: (...args: unknown[]) => readStatsMock(...args),
   readStatsInsights: (...args: unknown[]) => readStatsInsightsMock(...args),
 }))
+
+function deviceIdList(length: number) {
+  return Array.from({ length }, (_, i) => `00000000-0000-4000-8000-${i.toString(16).padStart(12, '0')}`)
+}
 
 function postJson(url: string, body: unknown) {
   return new Request(url, {
@@ -102,6 +107,7 @@ describe('private analytics route validation', () => {
     ['boolean limits', { limit: true }],
     ['control characters in search', { search: 'bad\u0000query' }],
     ['invalid rangeStart dates', { rangeStart: 'not-a-date' }],
+    ['more deviceIds than the filter cap', { devicesId: deviceIdList(MAX_DEVICE_ID_FILTER + 1) }],
   ])('rejects %s on /private/stats', async (_label, body) => {
     await expectRejectedStatsBody(body)
   })
@@ -146,8 +152,21 @@ describe('private analytics route validation', () => {
     ['invalid platform', { platform: 'windows' }],
     ['multiple versionNames for numeric bundle operators', { versionNames: ['1.0.0', '2.0.0'], versionNameOp: 'gte' }],
     ['non-numeric osVersion', { osVersion: 'not-a-version', osVersionOp: 'gte' }],
+    ['more devicesId than the filter cap', { devicesId: deviceIdList(MAX_DEVICE_ID_FILTER + 1) }],
+    ['more legacy deviceIds than the filter cap', { deviceIds: deviceIdList(MAX_DEVICE_ID_FILTER + 1) }],
+    ['too many installSources', { installSources: Array.from({ length: 51 }, (_, i) => `source-${i}`) }],
   ])('rejects %s on /private/devices', async (_label, body) => {
     await expectRejectedDevicesBody(body)
+  })
+
+  it('accepts a device id filter at the cap on /private/stats', async () => {
+    const response = await statsApp.request(postJson('http://local/', {
+      appId: 'com.example.app',
+      devicesId: deviceIdList(MAX_DEVICE_ID_FILTER),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(readStatsMock).toHaveBeenCalledTimes(1)
   })
 
   it('accepts versionName on /private/stats/insights', async () => {
