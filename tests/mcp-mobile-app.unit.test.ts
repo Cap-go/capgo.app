@@ -75,10 +75,13 @@ describe('latest Capacitor release', () => {
     ['a network failure', vi.fn(async () => {
       throw new TypeError('fetch failed')
     }) as unknown as typeof fetch],
-  ])('falls back to the pinned release on %s without caching it', async (_label, fetcher) => {
+  ])('falls back to the pinned release on %s and retries after a minute', async (_label, fetcher) => {
     await expect(latestCapacitorRelease(fetcher, 1)).resolves.toMatchObject({ source: 'fallback', latest: expect.stringMatching(/^\d+\.\d+\.\d+$/) })
     const healthy = npmFetch({ latest: '8.7.0' })
-    await expect(latestCapacitorRelease(healthy, 2)).resolves.toMatchObject({ source: 'npm', latest: '8.7.0' })
+    // During an outage later calls answer from the cached fallback instead of waiting for the timeout again.
+    await expect(latestCapacitorRelease(healthy, 59_000)).resolves.toMatchObject({ source: 'fallback' })
+    expect(healthy).not.toHaveBeenCalled()
+    await expect(latestCapacitorRelease(healthy, 60_002)).resolves.toMatchObject({ source: 'npm', latest: '8.7.0' })
   })
 })
 

@@ -30,11 +30,16 @@ export interface CapacitorRelease {
   source: 'npm' | 'fallback'
 }
 
-let releaseCache: { at: number, value: CapacitorRelease } | undefined
+// A failed lookup is remembered briefly so an npm outage does not add the timeout to every call.
+const FALLBACK_CACHE_MS = 60_000
+
+// Only settled values are cached. An in-flight fetch is not shared: on Workers a promise whose I/O
+// belongs to another request never settles for the waiter (see utils/invalids_ip.ts).
+let releaseCache: { at: number, ttl: number, value: CapacitorRelease } | undefined
 
 /** Latest @capacitor/core from npm, cached per isolate. Never throws: falls back to the pinned release. */
 export async function latestCapacitorRelease(fetcher: typeof fetch = fetch, now = Date.now()): Promise<CapacitorRelease> {
-  if (releaseCache && now - releaseCache.at < RELEASE_CACHE_MS)
+  if (releaseCache && now - releaseCache.at < releaseCache.ttl)
     return releaseCache.value
   try {
     const response = await fetcher(CAPACITOR_DIST_TAGS_URL, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(RELEASE_TIMEOUT_MS) })
@@ -44,11 +49,13 @@ export async function latestCapacitorRelease(fetcher: typeof fetch = fetch, now 
     if (parseVersion(tags.latest) === null)
       throw new Error('npm registry returned an invalid version')
     const value: CapacitorRelease = { latest: tags.latest, next: tags.next ?? null, source: 'npm' }
-    releaseCache = { at: now, value }
+    releaseCache = { at: now, ttl: RELEASE_CACHE_MS, value }
     return value
   }
   catch {
-    return { latest: CAPACITOR_FALLBACK_RELEASE.latest, next: CAPACITOR_FALLBACK_RELEASE.next, source: 'fallback' }
+    const value: CapacitorRelease = { latest: CAPACITOR_FALLBACK_RELEASE.latest, next: CAPACITOR_FALLBACK_RELEASE.next, source: 'fallback' }
+    releaseCache = { at: now, ttl: FALLBACK_CACHE_MS, value }
+    return value
   }
 }
 
