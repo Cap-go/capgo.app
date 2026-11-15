@@ -963,7 +963,7 @@ async function executeGoogleSql(
         `--database=${database}`,
         `--sql=${sql}`,
         '--format=json',
-        '--partial_result_mode=FAIL_PARTIAL_RESULT',
+        GCLOUD_PARTIAL_RESULT_FLAG,
         '--quiet',
       ],
       { stdout: 'pipe', stderr: 'pipe', env: process.env },
@@ -1114,8 +1114,14 @@ function remainingBudgetMs(deadline: number, operation: string): number {
   return remainingMs
 }
 
-function dataApiCommandError(value: string): Error {
+// gcloud spells flags with hyphens; it rejects the underscore form.
+export const GCLOUD_PARTIAL_RESULT_FLAG = '--partial-result-mode=FAIL_PARTIAL_RESULT'
+
+export function dataApiCommandError(value: string): Error {
   const output = commandOutput(value)
+  // Checked first: the rejected flag name itself matches the size patterns below.
+  if (/unrecognized arguments|invalid choice|argument .+: (?:expected|invalid)/i.test(output))
+    return new Error(`gcloud rejected the Cloud SQL Data API command arguments: ${output}`)
   if (
     /0\.5\s*mb|request.*(?:size|limit)|payload.*(?:size|limit)/i.test(output)
   ) {
