@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from '../supabase/functions/_backend/triggers/cron_email.ts'
+import { WEEKLY_REPORT_SQL } from '../supabase/functions/_backend/utils/cron_email_stats.ts'
 import { DEPLOY_REPORT_CONSUME_SQL, DEPLOY_REPORT_RELEASE_SQL, DEPLOY_REPORT_SELECT_SQL } from '../supabase/functions/_backend/utils/deploy_report.ts'
 
 const mocks = vi.hoisted(() => ({
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   prepare: vi.fn(),
   send: vi.fn(),
   close: vi.fn(),
+  sendWeekly: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/hono.ts', () => ({
@@ -20,7 +22,7 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', () => ({
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: async () => ({ query: mocks.query }), closeClient: mocks.close }))
 vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({ queryJson: mocks.queryJson }))
 vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({ readStatsVersion: mocks.stats }))
-vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () => ({ prepareEmailToOrgMembers: mocks.prepare, sendEmailToOrgMembers: vi.fn() }))
+vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () => ({ prepareEmailToOrgMembers: mocks.prepare, sendEmailToOrgMembers: mocks.sendWeekly }))
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({ cloudlog: vi.fn(), cloudlogErr: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/plans.ts', () => ({ findBestPlan: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ getCurrentPlanNameOrg: vi.fn(), getOrgExtraMau: vi.fn() }))
@@ -144,5 +146,39 @@ describe('24h report sending safeguards', () => {
     expect(await (await run()).json()).toEqual({ status: 'skipped', reason: 'no_eligible_recipients' })
     expect(mocks.queryJson).toHaveBeenCalledTimes(1)
     expect(mocks.send).not.toHaveBeenCalled()
+  })
+})
+
+describe('weekly report delivery', () => {
+  it('sends explicit event counts and the same completed-day range used by SQL', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-03T12:30:00Z'))
+    try {
+      mocks.queryJson.mockResolvedValue([{ all_updates: '20', failed_updates: '2', update_checks: '1500000' }])
+      mocks.query.mockResolvedValue({ rows: [{ owner_org: deploy.owner_org }] })
+      expect((await run({ type: 'weekly_install_stats' })).status).toBe(200)
+      expect(mocks.queryJson).toHaveBeenCalledWith(expect.anything(), WEEKLY_REPORT_SQL, [deploy.app_id, '2025-12-27', '2026-01-03'])
+      expect(mocks.sendWeekly).toHaveBeenCalledWith(expect.anything(), 'user:weekly_stats', 'weekly_stats', expect.objectContaining({
+        window_start: '2025-12-27', window_end: '2026-01-03', weekly_install: '20', weekly_fail: '2', weekly_update_checks: '1500000',
+      }), deploy.owner_org)
+      expect(mocks.sendWeekly.mock.calls[0][3]).not.toHaveProperty('weekly_open')
+      expect(mocks.close).toHaveBeenCalledOnce()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not send malformed analytics as zero activity', async () => {
+    mocks.queryJson.mockResolvedValue([{ all_updates: null, failed_updates: 1, update_checks: 100 }])
+    expect((await run({ type: 'weekly_install_stats' })).status).toBe(500)
+    expect(mocks.sendWeekly).not.toHaveBeenCalled()
+    expect(mocks.close).toHaveBeenCalledOnce()
+  })
+
+  it('does not send a report when only update checks were recorded', async () => {
+    mocks.queryJson.mockResolvedValue([{ all_updates: 0, failed_updates: 0, update_checks: 1500000 }])
+    expect((await run({ type: 'weekly_install_stats' })).status).toBe(200)
+    expect(mocks.sendWeekly).not.toHaveBeenCalled()
   })
 })
