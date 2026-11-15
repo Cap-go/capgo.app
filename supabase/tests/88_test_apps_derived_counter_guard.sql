@@ -4,6 +4,15 @@ BEGIN;
 
 SELECT plan(11);
 
+-- seed.sql enqueues channel_device_counts deltas that only a pg_cron tick
+-- drains; without this the processor call below can pick them up too.
+-- Drain first; the ROLLBACK at the end undoes it.
+DO $$
+BEGIN
+  PERFORM public.process_channel_device_counts_queue(1000);
+END
+$$;
+
 CREATE TEMP TABLE tmp_apps_counter_guard_base AS
 SELECT channel_device_count, manifest_bundle_count
 FROM public.apps
