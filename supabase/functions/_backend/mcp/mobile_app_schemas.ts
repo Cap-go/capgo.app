@@ -1,17 +1,6 @@
 import { z } from 'zod'
-import {
-  APP_TRAITS,
-  CHECK_STATUSES,
-  CHECKLIST_TOPICS,
-  FRAMEWORK_IDS,
-  HOST_OS,
-  MOBILE_FEATURES,
-  NEW_APP_TEMPLATES,
-  PACKAGE_MANAGERS,
-  PLAN_SOURCES,
-  PLATFORMS,
-  SEVERITIES,
-} from './mobile_app.ts'
+import { CHECK_STATUSES, HOST_OS, PACKAGE_MANAGERS, PLAN_SOURCES } from './mobile_app.ts'
+import { APP_TRAITS, CHECKLIST_TOPICS, FRAMEWORK_IDS, MOBILE_FEATURES, NEW_APP_TEMPLATES, PLATFORMS, SEVERITIES } from './mobile_app_catalog.ts'
 
 // ---------------------------------------------------------------------------
 // Inputs

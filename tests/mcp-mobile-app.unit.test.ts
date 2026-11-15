@@ -5,19 +5,16 @@ import {
   appIdProblem,
   buildChecklist,
   buildPlan,
-  CHECKLIST,
   checkReadiness,
   detectFramework,
-  FRAMEWORK_IDS,
   frameworkInfo,
   latestCapacitorRelease,
-  MOBILE_FEATURES,
   parseVersion,
   recommendPlugins,
   resetCapacitorReleaseCache,
-  SKILL_PURPOSES,
   suggestAppId,
 } from '../supabase/functions/_backend/mcp/mobile_app.ts'
+import { CHECKLIST, FRAMEWORK_IDS, MOBILE_FEATURES, SKILL_PURPOSES } from '../supabase/functions/_backend/mcp/mobile_app_catalog.ts'
 import { handleJsonRpcMessage } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS_BY_NAME } from '../supabase/functions/_backend/mcp/tools.ts'
 
