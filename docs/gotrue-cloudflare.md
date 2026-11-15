@@ -45,6 +45,10 @@ then push it with `bun run deploy:cloudflare_env:gotrue:prod`.
   (`service_key.ts`). ES256 because, once `GOTRUE_JWT_KEYS` is set, GoTrue accepts only
   its algorithms. GoTrue itself never receives this secret. Without it, nothing is swapped.
 
+After changing `GOTRUE_JWT_KEYS`, make sure the GoTrue container restarted before relying
+on admin calls: the Worker signs with the new key at once, but the container reads its
+environment only when it starts and refuses a `kid` it doesn't hold.
+
 Before GoTrue first connects, change the `gotrue_cf` password from the Supabase
 SQL editor with a SCRAM verifier, never the plaintext (statements are logged):
 `ALTER ROLE gotrue_cf PASSWORD 'SCRAM-SHA-256$...';`
