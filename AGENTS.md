@@ -165,6 +165,7 @@ For work that only needs the database (SQL tests, checking that a migration appl
 
 - `bun run db:up` - Start this worktree's Postgres (`supabase/local-db.compose.yml`, the same `supabase/postgres` image `supabase start` uses)
 - `bun run db:provision` - Run `supabase/bootstrap.sql`, apply pending migrations (recorded in `supabase_migrations.schema_migrations`), and run `seed.sql` on a fresh database. Safe to re-run.
+- `bun run db:test` - Run the pgTAP tests in `supabase/tests` against it (after `db:provision`). CI runs this next to `supabase test db`.
 - `bun run db:url` - Print the connection URL
 - `bun run db:down` - Stop it and delete its data (`db:down && db:up && db:provision` gives a fresh database)
 
