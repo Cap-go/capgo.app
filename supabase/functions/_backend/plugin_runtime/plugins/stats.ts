@@ -28,9 +28,45 @@ import { isRunningVersionAction } from './stats_actions.ts'
 const PLAN_ERROR = 'Cannot send stats, upgrade plan to continue to update'
 const DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION = parse('7.17.0')
 const DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION_V6 = parse('6.14.25')
+/**
+ * Largest /stats batch accepted. The updater plugins send at most 200 queued
+ * events per flush (MAX_PENDING_STATS); the headroom covers older plugins.
+ * Without a cap one request (one rate-limit hit) could hold a database
+ * connection for as long as its batch is long.
+ */
+export const MAX_STATS_BATCH_SIZE = 500
 
 type AppStatusResult = Awaited<ReturnType<typeof getAppStatus>>
 type OwnerLookup = Awaited<ReturnType<typeof getAppOwnerWithEdgeCache>>
+type AppOwner = Awaited<ReturnType<typeof getAppOwnerPostgres>>
+type AppVersionLookup = Awaited<ReturnType<typeof getAppVersionPostgres>>
+type EffectiveChannel = Awaited<ReturnType<typeof getEffectiveDeviceChannelNamePostgres>>
+
+/**
+ * Reads shared by the events of one processStatsEvents run, so a batch costs
+ * one owner read, one read per distinct bundle and one channel read per
+ * distinct device instead of about three reads per event. Scoped to one run
+ * (one database client): a plugin-state miss reruns the batch on Postgres
+ * with fresh reads.
+ */
+interface StatsBatchReads {
+  owners: Map<string, Promise<AppOwner>>
+  versions: Map<string, Promise<AppVersionLookup>>
+  channels: Map<string, Promise<EffectiveChannel>>
+}
+
+function createStatsBatchReads(): StatsBatchReads {
+  return { owners: new Map(), versions: new Map(), channels: new Map() }
+}
+
+function memoizeRead<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> {
+  let pending = cache.get(key)
+  if (!pending) {
+    pending = read()
+    cache.set(key, pending)
+  }
+  return pending
+}
 
 const ownerLookups = new WeakMap<Request, Map<string, Promise<OwnerLookup>>>()
 
@@ -154,7 +190,7 @@ function shouldRecordStatsAction(action: string, pluginVersion: string) {
     || (pluginVersion.startsWith('6.') && greaterOrEqual(parsedPluginVersion, DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION_V6))
 }
 
-async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: AppStats, appStatus?: AppStatusResult, edgeCache = false): Promise<PostResult> {
+async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: AppStats, appStatus: AppStatusResult | undefined, edgeCache: boolean, reads: StatsBatchReads): Promise<PostResult> {
   const { app_id, action, version_name, old_version_name, plugin_version, metadata } = body
 
   const planActions: Array<'mau' | 'bandwidth'> = ['mau', 'bandwidth']
@@ -190,7 +226,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   const appOwner = ownerLookup
     ? ownerLookup.value
     // Snippet fills must not outlive a trial: they need its end date.
-    : await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, planActions, { includeTrialAt: getSnippetEdgeAnswerBps(c) > 0 })
+    : await memoizeRead(reads.owners, app_id, () => getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, planActions, { includeTrialAt: getSnippetEdgeAnswerBps(c) > 0 }))
   const allowDeviceCustomId = appOwner?.allow_device_custom_id
   const device = makeDevice(body, allowDeviceCustomId)
   const deviceDataCollection = parseDeviceDataCollection(appOwner?.device_data_collection ?? cachedAppStatus.device_data_collection)
@@ -243,14 +279,20 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   // server-side overrides (channel_devices / channel_self store) may attribute installs.
   let effectiveStatsChannelPromise: ReturnType<typeof getEffectiveDeviceChannelNamePostgres> | undefined
   const getEffectiveStatsChannel = () => {
-    effectiveStatsChannelPromise ??= getEffectiveDeviceChannelNamePostgres(c, app_id, device.device_id, normalizeStatsChannelName(device.default_channel), device.platform ?? '', appOwner.channel_device_count > 0, drizzleClient as ReturnType<typeof getDrizzleClient>, { edgeCache })
+    const defaultChannel = normalizeStatsChannelName(device.default_channel)
+    const platform = device.platform ?? ''
+    effectiveStatsChannelPromise ??= memoizeRead(
+      reads.channels,
+      JSON.stringify([app_id, device.device_id, defaultChannel, platform]),
+      () => getEffectiveDeviceChannelNamePostgres(c, app_id, device.device_id, defaultChannel, platform, appOwner.channel_device_count > 0, drizzleClient as ReturnType<typeof getDrizzleClient>, { edgeCache }),
+    )
     return effectiveStatsChannelPromise
   }
 
   let failureChannel: Awaited<ReturnType<typeof getEffectiveDeviceChannelNamePostgres>> = null
-  const getVersionByName = (versionName: string) => edgeCache
+  const getVersionByName = (versionName: string) => memoizeRead(reads.versions, JSON.stringify([app_id, versionName]), () => edgeCache
     ? getAppVersionWithEdgeCache(c, app_id, versionName, drizzleClient)
-    : getAppVersionPostgres(c, app_id, versionName, undefined, drizzleClient as ReturnType<typeof getDrizzleClient>)
+    : getAppVersionPostgres(c, app_id, versionName, undefined, drizzleClient as ReturnType<typeof getDrizzleClient>))
 
   // Extract version from composite format if present (e.g., "1.2.3:main.js" -> "1.2.3")
   // Composite format is used for file-specific failure stats
@@ -338,6 +380,13 @@ app.post('/', async (c) => {
   // Handle empty batch early - no need to acquire DB connection
   if (isBatch && events.length === 0) {
     return c.json({ status: 'ok', results: [] })
+  }
+  if (isBatch && events.length > MAX_STATS_BATCH_SIZE) {
+    return c.json({
+      error: 'stats_batch_too_large',
+      message: `A stats batch can hold at most ${MAX_STATS_BATCH_SIZE} events`,
+      moreInfo: { max: MAX_STATS_BATCH_SIZE, received: events.length },
+    }, 413)
   }
 
   // Early validation of first event's app_id before using it in checks
@@ -528,10 +577,11 @@ async function processStatsEvents(
   requestIp: string,
   edgeCache: boolean,
 ): Promise<Response> {
+  const reads = createStatsBatchReads()
   // For single event, process directly and let errors propagate for proper status codes
   if (!isBatch) {
     const bodyParsed = parsePluginBody<AppStats>(c, events[0], statsRequestSchema)
-    const result = await post(c, drizzleClient, bodyParsed, appStatus, edgeCache)
+    const result = await post(c, drizzleClient, bodyParsed, appStatus, edgeCache, reads)
     if (result.response) {
       return result.response
     }
@@ -567,7 +617,7 @@ async function processStatsEvents(
             return blocked
         }
       }
-      const result = await post(c, drizzleClient, bodyParsed, eventAppStatus, edgeCache)
+      const result = await post(c, drizzleClient, bodyParsed, eventAppStatus, edgeCache, reads)
       if (result.response) {
         return result.response
       }
