@@ -38,6 +38,12 @@ then push it with `bun run deploy:cloudflare_env:gotrue:prod`.
 - `GOTRUE_SAML_PRIVATE_KEY`: base64 DER RSA private key.
 - `GOTRUE_SECURITY_CAPTCHA_SECRET`: the Turnstile secret, same value as
   `CAPTCHA_SECRET_KEY` on `capgo_api-prod` (the console's widget issues the tokens).
+- `SUPABASE_SERVICE_ROLE_KEY`: the same `sb_secret_` key as `capgo_api-prod`. It is not a
+  JWT, so GoTrue would refuse it. When a request carries it (`apikey` or `Authorization`),
+  the Worker drops it and sends a 60-second `service_role` token signed with the
+  `GOTRUE_JWT_KEYS` signing key instead, like Supabase's gateway does for hosted Auth
+  (`service_key.ts`). ES256 because, once `GOTRUE_JWT_KEYS` is set, GoTrue accepts only
+  its algorithms. GoTrue itself never receives this secret. Without it, nothing is swapped.
 
 Before GoTrue first connects, change the `gotrue_cf` password from the Supabase
 SQL editor with a SCRAM verifier, never the plaintext (statements are logged):
@@ -56,6 +62,9 @@ Needs Docker and a running local Supabase (`bun run supabase:start`).
    GOTRUE_SECURITY_CAPTCHA_ENABLED=false
    GOTRUE_RATE_LIMIT_EMAIL_SENT=100
    GOTRUE_SAML_PRIVATE_KEY=<openssl genrsa 2048 | openssl rsa -traditional -outform DER | base64>
+   # Optional, for admin calls with the service key: a local P-256 JWK with "kid" and key_ops ["sign","verify"].
+   GOTRUE_JWT_KEYS=[{"kty":"EC","crv":"P-256","x":"...","y":"...","d":"...","kid":"local","alg":"ES256","key_ops":["sign","verify"]}]
+   SUPABASE_SERVICE_ROLE_KEY=sb_secret_local-only
    ```
 3. `cd cloudflare_workers/gotrue && bunx wrangler dev --port 8790`
 4. `cd cloudflare_workers/api && bunx wrangler dev --env=local_gotrue --local --port 8787`

@@ -1,14 +1,11 @@
 import { Container } from '@cloudflare/containers'
+import { goTrueStringEnv } from './container_env.ts'
+import { swapServiceKey } from './service_key.ts'
 
 interface Env {
   GOTRUE: DurableObjectNamespace<GoTrue>
+  SUPABASE_SERVICE_ROLE_KEY?: string
   [key: string]: unknown
-}
-
-// Every string var and secret of this Worker is GoTrue configuration (vars in
-// wrangler.jsonc, secrets from internal/cloudflare_gotrue_auth/.env.prod).
-function goTrueStringEnv(env: Env): Record<string, string> {
-  return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
 }
 
 export class GoTrue extends Container<Env> {
@@ -23,10 +20,10 @@ export class GoTrue extends Container<Env> {
 }
 
 // No route and no workers.dev URL: only the API Worker's service binding
-// (console auth relay) reaches this handler.
+// (console auth relay, admin calls with the service key) reaches this handler.
 export default {
-  fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const id = env.GOTRUE.idFromName('gotrue')
-    return env.GOTRUE.get(id, { locationHint: 'weur' }).fetch(request)
+    return env.GOTRUE.get(id, { locationHint: 'weur' }).fetch(await swapServiceKey(request, env))
   },
 }
