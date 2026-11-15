@@ -40,7 +40,7 @@ then push it with `bun run deploy:cloudflare_env:gotrue:prod`.
   `CAPTCHA_SECRET_KEY` on `capgo_api-prod` (the console's widget issues the tokens).
 - `SUPABASE_SERVICE_ROLE_KEY`: the same `sb_secret_` key as `capgo_api-prod`. It is not a
   JWT, so GoTrue would refuse it. When a request carries it (`apikey` or `Authorization`),
-  the Worker drops it and sends a 60-second `service_role` token signed with the
+  the Worker drops it and sends a 5-minute `service_role` token signed with the
   `GOTRUE_JWT_KEYS` signing key instead, like Supabase's gateway does for hosted Auth
   (`service_key.ts`). ES256 because, once `GOTRUE_JWT_KEYS` is set, GoTrue accepts only
   its algorithms. GoTrue itself never receives this secret. Without it, nothing is swapped.

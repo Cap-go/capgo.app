@@ -4,7 +4,9 @@ import { timingSafeEqual } from 'hono/utils/buffer'
 // Supabase's gateway in front of hosted Auth, this Worker swaps it for a short-lived
 // service_role token. It is signed with GoTrue's own signing key (the P-256 JWK
 // marked "sign" in GOTRUE_JWT_KEYS): once that key is set, GoTrue accepts ES256 only.
-const TOKEN_TTL_SECONDS = 60
+// Minted before the Durable Object, which may first wait for a cold container
+// (GoTrue migrates on start); 5 minutes outlasts that and stays short-lived.
+const TOKEN_TTL_SECONDS = 300
 const BEARER = /^Bearer (\S+)$/i
 
 export interface ServiceKeyEnv {
@@ -39,6 +41,11 @@ function importSigningKey(source: string, jwk: SigningJwk): Promise<CryptoKey> {
   if (cachedKey?.source !== source) {
     const { kty, crv, x, y, d } = jwk
     const key = crypto.subtle.importKey('jwk', { kty, crv, x, y, d }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
+    // Don't keep a failed import: the next request retries.
+    key.catch(() => {
+      if (cachedKey?.key === key)
+        cachedKey = undefined
+    })
     cachedKey = { source, key }
   }
   return cachedKey.key

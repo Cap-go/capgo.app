@@ -53,7 +53,7 @@ describe('gotrue service key swap', () => {
     expect(header).toEqual({ alg: 'ES256', kid: KID, typ: 'JWT' })
     expect(payload.role).toBe('service_role')
     expect(payload.iss).toBe(ISSUER)
-    expect(payload.exp - payload.iat).toBe(60)
+    expect(payload.exp - payload.iat).toBe(300)
     expect(Math.abs(payload.iat - Date.now() / 1000)).toBeLessThan(5)
     expect([...swapped.headers.values()].join(' ')).not.toContain(SERVICE_KEY)
   })
@@ -65,6 +65,22 @@ describe('gotrue service key swap', () => {
 
     const onlyBearer = await swapServiceKey(adminRequest({ authorization: `Bearer ${SERVICE_KEY}` }), env)
     expect((await verifiedClaims(onlyBearer.headers.get('authorization'))).payload.role).toBe('service_role')
+  })
+
+  it('keeps method, URL, body and other headers of an admin call', async () => {
+    const body = JSON.stringify({ email: 'user@example.com', email_confirm: true })
+    const request = new Request('https://gotrue/admin/users?page=2', {
+      method: 'POST',
+      body,
+      headers: { 'apikey': SERVICE_KEY, 'authorization': `bearer ${SERVICE_KEY}`, 'content-type': 'application/json' },
+    })
+    const swapped = await swapServiceKey(request, { ...env, GOTRUE_JWT_ISSUER: '' })
+    expect(swapped.method).toBe('POST')
+    expect(swapped.url).toBe('https://gotrue/admin/users?page=2')
+    expect(swapped.headers.get('content-type')).toBe('application/json')
+    expect(await swapped.text()).toBe(body)
+    const { payload } = await verifiedClaims(swapped.headers.get('authorization'))
+    expect(payload).not.toHaveProperty('iss')
   })
 
   it('keeps a user session sent next to the service key', async () => {
