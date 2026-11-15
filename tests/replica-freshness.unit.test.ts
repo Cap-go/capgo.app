@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CacheHelper } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
 import { getDatabaseURL, getPgClient, getReadReplicaBinding, refreshReplicationLag } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
-import { edgeCacheTtlForReplicaLag, isReadReplicaSource, getFreshReplicationLagMemoryEntry, READ_REPLICA_FALLBACK_LAG_SECONDS, REPLICA_LAG_QUERY, replicationLagCacheRequest, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
+import { combineReplicaLagSeconds, edgeCacheTtlForReplicaLag, isReadReplicaSource, getFreshReplicationLagMemoryEntry, READ_REPLICA_FALLBACK_LAG_SECONDS, REPLICA_LAG_QUERY, replicationLagSecondsFromQueryRow, replicationLagCacheRequest, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
 
 function contextFrom(source: string | undefined) {
   return {
@@ -167,7 +167,7 @@ describe('replica freshness', () => {
       vi.setSystemTime(new Date('2026-10-28T12:00:02Z'))
 
       // The regional client is probed after the request context moved to EU.
-      ;(regional as any).query = vi.fn().mockResolvedValue({ rows: [{ lag_seconds: '1200' }] })
+      ;(regional as any).query = vi.fn().mockResolvedValue({ rows: [{ upstream_lag_seconds: '1200', primary_commit_lag_seconds: null }] })
       await refreshReplicationLag(c, regional)
       expect(getFreshReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF')?.max_lag_seconds).toBe(1200)
       expect(getFreshReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_EU')).toBeNull()
@@ -214,7 +214,19 @@ describe('replica freshness', () => {
     expect(REPLICA_LAG_QUERY).toContain('pg_is_in_recovery()')
     expect(REPLICA_LAG_QUERY).toContain('pg_last_xact_replay_timestamp()')
     expect(REPLICA_LAG_QUERY).toContain('pg_stat_subscription')
+    expect(REPLICA_LAG_QUERY).toContain('read_replica_commit_marker')
+    expect(REPLICA_LAG_QUERY).toContain('upstream_lag_seconds')
+    expect(REPLICA_LAG_QUERY).toContain('primary_commit_lag_seconds')
     // Readable without pg_read_all_stats (status is NULL then).
     expect(REPLICA_LAG_QUERY).toContain('status IS NULL')
+  })
+
+  it('reports stale when the subscriber reconnect loop still shows zero upstream lag', () => {
+    expect(combineReplicaLagSeconds(0, 2400)).toBe(2400)
+    expect(combineReplicaLagSeconds(0, 61)).toBe(61)
+    expect(combineReplicaLagSeconds(120, 61)).toBe(120)
+    expect(combineReplicaLagSeconds(null, 90)).toBe(90)
+    expect(combineReplicaLagSeconds(45, null)).toBe(45)
+    expect(replicationLagSecondsFromQueryRow({ upstream_lag_seconds: 0, primary_commit_lag_seconds: 2400 })).toBe(2400)
   })
 })

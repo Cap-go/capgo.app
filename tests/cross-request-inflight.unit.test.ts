@@ -67,7 +67,7 @@ describe('cross-request in-flight dedup', () => {
     const pendingQueries: Array<() => void> = []
     const pool = {
       query: vi.fn(() => new Promise((resolve) => {
-        pendingQueries.push(() => resolve({ rows: [{ lag_seconds: '1' }] }))
+        pendingQueries.push(() => resolve({ rows: [{ upstream_lag_seconds: '1', primary_commit_lag_seconds: null }] }))
       })),
     }
 

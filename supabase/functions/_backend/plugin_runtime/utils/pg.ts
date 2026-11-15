@@ -21,7 +21,7 @@ import { activeChannelVersionJoin, getAlias, getAppOwnerSelect, getOwnerOrgAlias
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness.ts'
-import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isReplicaTooFarBehind, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
+import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isReplicaTooFarBehind, REPLICA_LAG_QUERY, replicationLagSecondsFromQueryRow, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
 import type { VersionManifestRow } from './version_manifest_sql.ts'
@@ -219,13 +219,6 @@ function fixSupabaseHost(host: string): string {
   return host
 }
 
-function toReplicationLagSeconds(value: unknown): number | null {
-  if (value === null || value === undefined)
-    return null
-  const lagSeconds = Number(value)
-  return Number.isFinite(lagSeconds) ? lagSeconds : null
-}
-
 /**
  * Query replication lag from the REPLICA database (see REPLICA_LAG_QUERY).
  * Uses the existing pool - no new connections.
@@ -233,7 +226,7 @@ function toReplicationLagSeconds(value: unknown): number | null {
 async function queryReplicaLag(c: Context, pool: PluginPgClient): Promise<ReplicationLagStatus> {
   try {
     const result = await pool.query(REPLICA_LAG_QUERY)
-    const lagSeconds = toReplicationLagSeconds(result.rows[0]?.lag_seconds)
+    const lagSeconds = replicationLagSecondsFromQueryRow(result.rows[0])
 
     let status: ReplicationStatus = 'unknown'
     if (lagSeconds !== null) {

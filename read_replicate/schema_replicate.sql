@@ -1,6 +1,6 @@
 BEGIN;
 
-DROP TABLE IF EXISTS public.version_files, public.delta_files, public.delta_sessions, public.channel_devices, public.manifest, public.onboarding_demo_data, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
+DROP TABLE IF EXISTS public.version_files, public.delta_files, public.delta_sessions, public.channel_devices, public.manifest, public.onboarding_demo_data, public.read_replica_commit_marker, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
 DROP SEQUENCE IF EXISTS public.app_versions_id_seq, public.channel_devices_id_seq, public.channel_id_seq, public.manifest_id_seq, public.org_users_id_seq, public.stripe_info_id_seq CASCADE;
 DROP FUNCTION IF EXISTS public.one_month_ahead();
 DROP TYPE IF EXISTS public.channel_update_package, public.manifest_entry, public.disable_update, public.stripe_status;
@@ -457,6 +457,17 @@ ALTER TABLE ONLY public.orgs REPLICA IDENTITY FULL;
 
 
 --
+-- Name: read_replica_commit_marker; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.read_replica_commit_marker (
+    id smallint NOT NULL,
+    committed_at timestamp with time zone NOT NULL,
+    CONSTRAINT read_replica_commit_marker_singleton CHECK ((id = 1))
+);
+
+
+--
 -- Name: stripe_info; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -664,6 +675,14 @@ ALTER TABLE public.orgs
 
 ALTER TABLE ONLY public.orgs
     ADD CONSTRAINT orgs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: read_replica_commit_marker read_replica_commit_marker_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.read_replica_commit_marker
+    ADD CONSTRAINT read_replica_commit_marker_pkey PRIMARY KEY (id);
 
 
 --

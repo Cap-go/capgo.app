@@ -27,6 +27,7 @@ REPLICA_TABLES=(
   "delta_sessions"
   "notifications"
   "onboarding_demo_data"
+  "read_replica_commit_marker"
   "version_files"
 )
 
