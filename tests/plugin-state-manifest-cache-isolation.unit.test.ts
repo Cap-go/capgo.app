@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { afterEach, expect, it, vi } from 'vitest'
-import { getManifestDownloadSize } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
+import { getManifestDownloadSize, MAX_MANIFEST_SIZE_VERSIONS } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
 import { pluginStateAppKey, pluginStateManifestKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { pluginStateBucket } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
 
@@ -80,9 +80,16 @@ it('keeps KV canary size maps separate from the unchanged DB/control cache', asy
 
   // A public request spanning many version ids uses one batched replica query
   // before reading any per-version KV documents, without truncating its files.
-  const large = await app.request(`/?device=${canary}&versions=100`, undefined, env)
+  const large = await app.request(`/?device=${canary}&versions=${MAX_MANIFEST_SIZE_VERSIONS}`, undefined, env)
   expect(large.headers.get('X-Plugin-State')).toBe('fallback')
-  expect(await large.json()).toMatchObject({ totalSize: 100, knownFiles: 1, unknownFiles: 99, files: expect.any(Array) })
+  expect(await large.json()).toMatchObject({ totalSize: 100, knownFiles: 1, unknownFiles: MAX_MANIFEST_SIZE_VERSIONS - 1, files: expect.any(Array) })
+  expect(database.query).toHaveBeenCalledTimes(2)
+  expect(get).toHaveBeenCalledTimes(2)
+
+  // Past the version cap the request is refused before any read: each version
+  // id would load that bundle's whole manifest from the replica.
+  const tooMany = await app.request(`/?device=${canary}&versions=${MAX_MANIFEST_SIZE_VERSIONS + 1}`, undefined, env)
+  expect(tooMany.status).toBe(400)
   expect(database.query).toHaveBeenCalledTimes(2)
   expect(get).toHaveBeenCalledTimes(2)
 })
