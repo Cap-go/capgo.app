@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "22.52.0",
+  "version": "22.52.1",
   "private": true,
   "workspaces": [
     "cli",
