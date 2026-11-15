@@ -166,10 +166,11 @@ For work that only needs the database (SQL tests, checking that a migration appl
 - `bun run db:up` - Start this worktree's Postgres (`supabase/local-db.compose.yml`, the same `supabase/postgres` image `supabase start` uses)
 - `bun run db:provision` - Run `supabase/bootstrap.sql`, apply pending migrations (recorded in `supabase_migrations.schema_migrations`), and run `seed.sql` on a fresh database. Safe to re-run.
 - `bun run db:test` - Run the pgTAP tests in `supabase/tests` against it (after `db:provision`). CI runs this next to `supabase test db`.
+- `bun run test:db:sql` - Run the vitest files listed in `tests/local-db-sql-tests.txt` against it (after `db:provision`), with no Supabase API: any HTTP call fails. CI runs them here and excludes them from the Supabase shards. Add a file to that list only if it passes this way with no skipped tests.
 - `bun run db:url` - Print the connection URL
 - `bun run db:down` - Stop it and delete its data (`db:down && db:up && db:provision` gives a fresh database)
 
-It is a separate database from `supabase start`'s, with no GoTrue, Storage, PostgREST or edge functions, so the app and the vitest integration suites still need `bun run supabase:start`. `supabase/bootstrap.sql` adds only the `auth`/`storage` objects GoTrue and storage-api would create; if a new migration or seed needs another one, add it there.
+It is a separate database from `supabase start`'s, with no GoTrue, Storage, PostgREST or edge functions, so the app and the other vitest integration suites still need `bun run supabase:start`. `supabase/bootstrap.sql` adds only the `auth`/`storage` objects GoTrue and storage-api would create; if a new migration or seed needs another one, add it there.
 
 ## Architecture Overview
 
