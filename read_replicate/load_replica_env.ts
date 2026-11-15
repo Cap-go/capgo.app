@@ -116,20 +116,20 @@ export function assertReadReplicaSubscriberUrlConfigured(context: string): void 
   if (readReplicaDatabaseUrlFromEnv())
     return
 
-  if (process.env.GITHUB_ACTIONS === 'true') {
-    throw new Error(
-      `Missing GitHub Actions secret READ_REPLICATE_GOOGLE_EU1 (${context}). `
-      + 'Add the direct Google Cloud SQL eu-2 subscriber PostgreSQL URL as a repository secret before merge. '
-      + 'GOOGLE_SERVICE_ACCOUNT only authenticates gcloud for Cloud SQL import and execute-sql; '
-      + 'it does not provide the libpq URL required to read the live subscriber schema catalog.',
-    )
-  }
-
   throw new Error(
     `Read-replica subscriber URL is not configured (${context}). `
     + 'Set READ_REPLICATE_GOOGLE_EU1, READ_REPLICA_DB_URL, READ_REPLICATE_DB_URL, or GOOGLE_READ_REPLICA_DB_URL, '
     + 'or point READ_REPLICA_ENV_FILE at internal/cloudflare/.env.prod.',
   )
+}
+
+/** Loads internal/cloudflare/.env.prod for local runs; CI uses gcloud when no URL is set. */
+export function loadLocalReadReplicaEnvIfNeeded(): void {
+  if (readReplicaDatabaseUrlFromEnv())
+    return
+  if (process.env.GITHUB_ACTIONS === 'true')
+    return
+  ensureReadReplicaEnvLoaded()
 }
 
 export function readReplicaDatabaseUrlFromEnv(): string | undefined {

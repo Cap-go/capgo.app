@@ -41,9 +41,10 @@ describe('production read-replica release gate', () => {
       expect(workflow).toContain('base64 --decode')
       expect(workflow).toContain('gcloud auth activate-service-account')
       expect(workflow).not.toContain('vars.GOOGLE_')
-      expect(workflow).toContain('READ_REPLICATE_GOOGLE_EU1')
-      expect(workflow).toContain('Missing READ_REPLICATE_GOOGLE_EU1')
-      expect(workflow).toContain('GOOGLE_SERVICE_ACCOUNT only authenticates gcloud')
+      expect(workflow).not.toContain('secrets.READ_REPLICATE_GOOGLE_EU1')
+      expect(workflow).not.toContain('Missing READ_REPLICATE_GOOGLE_EU1')
+      expect(workflow).toContain('gcloud config set project capgo-394818')
+      expect(workflow).not.toContain('preload_replica_env')
       expect(workflow).not.toContain('check-read-replica-hyperdrive-schema')
       expect(workflow).toContain('sync-read-replica-schema.ts --apply --allow-drop')
       expect(workflow).toContain('read_replica_subscription:')
@@ -72,6 +73,8 @@ describe('production read-replica release gate', () => {
         syncScript.indexOf('await applyPlan(plan)'),
       )
       expect(syncScript).toContain('readReplicaSchemaCatalogFromMigrations')
+      expect(syncScript).toContain('gcloud sql execute-sql (GOOGLE_SERVICE_ACCOUNT)')
+      expect(syncScript).toContain('loadLocalReadReplicaEnvIfNeeded')
     },
   )
 
