@@ -417,6 +417,9 @@ describe('mobile app plan', () => {
       'npx @capgo/cli@latest build credentials push app.trailbuddy.mobile --platform android',
     ])
     expect(order.indexOf('signing_credentials')).toBeLessThan(order.indexOf('cloud_build'))
+    // New apps upload to a dev channel devices do not read; a public channel must exist before the upload.
+    expect(steps.find(item => item.id === 'device_channel')?.mcp_tools).toEqual(['capgo_list_channels', 'capgo_add_channel', 'capgo_update_app'])
+    expect(order.indexOf('device_channel')).toBeLessThan(order.indexOf('upload_bundle'))
     expect(steps.find(item => item.id === 'cloud_build')).toMatchObject({ run_by: 'agent', mcp_tools: expect.arrayContaining(['capgo_request_build', 'capgo_start_build']) })
     // build zip archives the native folders as they are, so the updater wiring must be built and synced first.
     expect(steps.find(item => item.id === 'live_updates')?.commands).toEqual(['npm install @capgo/capacitor-updater@latest', 'npm run build && npx cap sync'])
