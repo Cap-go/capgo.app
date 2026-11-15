@@ -35,7 +35,7 @@ vi.mock('../supabase/functions/_backend/utils/pg_files.ts', () => ({
   getUserIdFromApikey: vi.fn(),
 }))
 
-async function requestFile(init?: RequestInit) {
+async function requestFile(init?: RequestInit, routeId = OBJECT_PATH) {
   const { app: files } = await import('../supabase/functions/_backend/files/files.ts')
   const { createAllCatch, createHono } = await import('../supabase/functions/_backend/utils/hono.ts')
   const { version } = await import('../supabase/functions/_backend/utils/version.ts')
@@ -45,7 +45,7 @@ async function requestFile(init?: RequestInit) {
   createAllCatch(appGlobal, 'files')
 
   return appGlobal.fetch(
-    new Request(`http://localhost/read/attachments/${OBJECT_PATH}`, init),
+    new Request(`http://localhost/read/attachments/${routeId}`, init),
     {},
     { waitUntil: () => { } } as any,
   )
@@ -142,6 +142,17 @@ describe('files local read proxy', () => {
     const response = await requestFile()
 
     expect(response.status).toBe(404)
+  })
+
+  it('refuses keys with dot segments instead of fetching outside the bucket', async () => {
+    const fetchMock = mockStorage(() => new Response('other bucket bytes'))
+    // A TUS-style upload ID decodes to a key that climbs out of the capgo bucket.
+    const tusId = btoa('capgo/orgs/test-org/apps/test-app/../../../../images/private/icon.png/upload-uuid')
+
+    const response = await requestFile(undefined, tusId)
+
+    expect(response.status).toBe(404)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('returns 503 when Storage fails', async () => {

@@ -388,6 +388,9 @@ async function saveBandwidthUsage(c: Context, fileSize: number | null | undefine
 
 async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<Response> {
   const method = c.req.raw.method === 'HEAD' ? 'HEAD' : 'GET'
+  // fetch() resolves `..` segments, which would let the service key read outside the bucket.
+  if (!isSafeAttachmentKey(fileId))
+    return notFoundAttachmentResponse(c, method === 'HEAD')
   const rangeHeader = c.req.header('range')
   const range: Record<string, string> = method === 'GET' && rangeHeader ? { Range: rangeHeader } : {}
 
