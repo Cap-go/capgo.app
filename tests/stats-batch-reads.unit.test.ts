@@ -42,7 +42,7 @@ const onPremStatsMock = vi.fn(() => Promise.resolve())
 const sendStatsAndDeviceMock = vi.fn(() => Promise.resolve())
 const createStatsMauMock = vi.fn(() => Promise.resolve())
 const createStatsVersionMock = vi.fn(() => Promise.resolve())
-const getAppVersionPostgresMock = vi.fn(async () => ({ id: 1, owner_org: 'org-1' }))
+const lookupAppVersionPostgresMock = vi.fn(async (): Promise<{ value: { id: number, owner_org: string } | null, failed: boolean }> => ({ value: { id: 1, owner_org: 'org-1' }, failed: false }))
 const getEffectiveDeviceChannelNamePostgresMock = vi.fn(async () => null)
 
 ;(globalThis as any).EdgeRuntime = undefined
@@ -73,11 +73,11 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/notifications.ts', 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   closeClient: vi.fn(() => Promise.resolve()),
   getAppOwnerPostgres: getAppOwnerPostgresMock,
-  getAppVersionPostgres: getAppVersionPostgresMock,
   getDrizzleClient: getDrizzleClientMock,
   getEffectiveDeviceChannelNamePostgres: getEffectiveDeviceChannelNamePostgresMock,
   getPgClient: getPgClientMock,
   getReadReplicaBinding: vi.fn(() => null),
+  lookupAppVersionPostgres: lookupAppVersionPostgresMock,
 }))
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts', () => ({
@@ -142,7 +142,7 @@ describe('stats batch reads', () => {
     expect(body.results.every(result => result.status === 'ok')).toBe(true)
     expect(getAppOwnerPostgresMock).toHaveBeenCalledTimes(1)
     // 5.5.6 and 5.5.5: one read per distinct bundle name.
-    expect(getAppVersionPostgresMock).toHaveBeenCalledTimes(2)
+    expect(lookupAppVersionPostgresMock).toHaveBeenCalledTimes(2)
     expect(getEffectiveDeviceChannelNamePostgresMock).toHaveBeenCalledTimes(1)
     expect(getPgClientMock).toHaveBeenCalledTimes(1)
   })
@@ -157,6 +157,35 @@ describe('stats batch reads', () => {
     expect(response.status).toBe(200)
     expect(getAppOwnerPostgresMock).toHaveBeenCalledTimes(1)
     expect(getEffectiveDeviceChannelNamePostgresMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries a failed bundle read on the next event instead of keeping it', async () => {
+    lookupAppVersionPostgresMock.mockResolvedValueOnce({ value: null, failed: true })
+    const response = await postStats([statsEvent(), statsEvent(), statsEvent()])
+
+    expect(response.status).toBe(200)
+    // First read failed: the second event reads again, the third reuses it.
+    expect(lookupAppVersionPostgresMock).toHaveBeenCalledTimes(2)
+    expect(createStatsVersionMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a missing bundle for the rest of the batch', async () => {
+    lookupAppVersionPostgresMock.mockResolvedValueOnce({ value: null, failed: false })
+    const response = await postStats([statsEvent(), statsEvent(), statsEvent()])
+
+    expect(response.status).toBe(200)
+    expect(lookupAppVersionPostgresMock).toHaveBeenCalledTimes(1)
+    expect(createStatsVersionMock).not.toHaveBeenCalled()
+  })
+
+  it('retries a rejected owner read on the next event', async () => {
+    getAppOwnerPostgresMock.mockRejectedValueOnce(new Error('connection lost'))
+    const response = await postStats([statsEvent(), statsEvent()])
+    const body = await response.json() as { results: Array<{ status: string }> }
+
+    expect(response.status).toBe(200)
+    expect(body.results.map(result => result.status)).toEqual(['error', 'ok'])
+    expect(getAppOwnerPostgresMock).toHaveBeenCalledTimes(2)
   })
 
   it('refuses a batch over the cap before any database read', async () => {

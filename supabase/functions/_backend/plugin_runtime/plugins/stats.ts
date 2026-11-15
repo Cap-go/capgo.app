@@ -10,12 +10,12 @@ import { BRES, simpleError, simpleError200, simpleRateLimit } from '../utils/hon
 import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
-import { closeClient, createLazyPgClient, getAppOwnerPostgres, getAppVersionPostgres, getDrizzleClient, getEffectiveDeviceChannelNamePostgres, getLazyPgQueryCount, getPgClient, getReadReplicaBinding, queryAppOwnerPostgres } from '../utils/pg.ts'
+import { closeClient, createLazyPgClient, getAppOwnerPostgres, getDrizzleClient, getEffectiveDeviceChannelNamePostgres, getLazyPgQueryCount, getPgClient, getReadReplicaBinding, lookupAppVersionPostgres, queryAppOwnerPostgres } from '../utils/pg.ts'
 import { makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { statsRequestSchema } from '../utils/plugin_validation.ts'
 import { countsAsBundleFailure } from '../utils/legacyDownloadFail.ts'
-import { getAppOwnerWithEdgeCache, getAppVersionWithEdgeCache } from '../utils/pluginEdgeCacheReads.ts'
+import { getAppOwnerWithEdgeCache, lookupAppVersionWithEdgeCache } from '../utils/pluginEdgeCacheReads.ts'
 import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss, PluginStateMiss, markPluginStateResponse, startPluginStateRequest } from '../utils/pluginState.ts'
 import { MAX_PLUGIN_STATE_DOCUMENTS } from '../utils/pluginStateReadBudget.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
@@ -39,7 +39,7 @@ export const MAX_STATS_BATCH_SIZE = 500
 type AppStatusResult = Awaited<ReturnType<typeof getAppStatus>>
 type OwnerLookup = Awaited<ReturnType<typeof getAppOwnerWithEdgeCache>>
 type AppOwner = Awaited<ReturnType<typeof getAppOwnerPostgres>>
-type AppVersionLookup = Awaited<ReturnType<typeof getAppVersionPostgres>>
+type AppVersionLookup = Awaited<ReturnType<typeof lookupAppVersionPostgres>>
 type EffectiveChannel = Awaited<ReturnType<typeof getEffectiveDeviceChannelNamePostgres>>
 
 /**
@@ -47,7 +47,7 @@ type EffectiveChannel = Awaited<ReturnType<typeof getEffectiveDeviceChannelNameP
  * one owner read, one read per distinct bundle and one channel read per
  * distinct device instead of about three reads per event. Scoped to one run
  * (one database client): a plugin-state miss reruns the batch on Postgres
- * with fresh reads.
+ * with fresh reads. A failed read is never kept, so the next event retries it.
  */
 interface StatsBatchReads {
   owners: Map<string, Promise<AppOwner>>
@@ -59,12 +59,17 @@ function createStatsBatchReads(): StatsBatchReads {
   return { owners: new Map(), versions: new Map(), channels: new Map() }
 }
 
-function memoizeRead<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> {
-  let pending = cache.get(key)
-  if (!pending) {
-    pending = read()
-    cache.set(key, pending)
+function memoizeRead<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promise<T>, keep: (value: T) => boolean = () => true): Promise<T> {
+  const cached = cache.get(key)
+  if (cached)
+    return cached
+  const pending = read()
+  cache.set(key, pending)
+  const evict = () => {
+    if (cache.get(key) === pending)
+      cache.delete(key)
   }
+  pending.then(value => keep(value) || evict(), evict)
   return pending
 }
 
@@ -290,9 +295,14 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   }
 
   let failureChannel: Awaited<ReturnType<typeof getEffectiveDeviceChannelNamePostgres>> = null
-  const getVersionByName = (versionName: string) => memoizeRead(reads.versions, JSON.stringify([app_id, versionName]), () => edgeCache
-    ? getAppVersionWithEdgeCache(c, app_id, versionName, drizzleClient)
-    : getAppVersionPostgres(c, app_id, versionName, undefined, drizzleClient as ReturnType<typeof getDrizzleClient>))
+  const getVersionByName = async (versionName: string) => (await memoizeRead(
+    reads.versions,
+    JSON.stringify([app_id, versionName]),
+    () => edgeCache
+      ? lookupAppVersionWithEdgeCache(c, app_id, versionName, drizzleClient)
+      : lookupAppVersionPostgres(c, app_id, versionName, undefined, drizzleClient as ReturnType<typeof getDrizzleClient>),
+    lookup => !lookup.failed,
+  )).value
 
   // Extract version from composite format if present (e.g., "1.2.3:main.js" -> "1.2.3")
   // Composite format is used for file-specific failure stats
