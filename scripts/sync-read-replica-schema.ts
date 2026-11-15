@@ -963,7 +963,7 @@ async function executeGoogleSql(
         `--database=${database}`,
         `--sql=${sql}`,
         '--format=json',
-        '--partial_result_mode=FAIL_PARTIAL_RESULT',
+        '--partial-result-mode=FAIL_PARTIAL_RESULT',
         '--quiet',
       ],
       { stdout: 'pipe', stderr: 'pipe', env: process.env },
