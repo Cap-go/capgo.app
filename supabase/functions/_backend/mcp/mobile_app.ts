@@ -1019,7 +1019,17 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
       }))
     }
   }
-  if (!existing.capacitorConfig) {
+  if (existing.capacitorConfig) {
+    capacitorSteps.push(step({
+      id: 'align_config',
+      title: 'Point the existing capacitor.config at the mobile build',
+      detail: `Edit only these keys and keep every other setting: webDir must be the folder the mobile build writes (${webDir}), otherwise npx cap sync copies a missing or stale folder. Remove server.url and server.cleartext from the release config. Keep the appId the app already ships with; changing it creates a different app in the stores.`,
+      files: [{ path: 'capacitor.config.ts (or .json)', change: `webDir: '${webDir}'` }],
+      verify: [`webDir in capacitor.config is ${webDir} and ${webDir}/index.html exists after the build.`, 'No server.url in the release config.'],
+      checklist_ids: ['native.static_build', 'native.bundled_assets'],
+    }))
+  }
+  else {
     capacitorSteps.push(step({
       id: 'cap_init',
       title: 'Create capacitor.config.ts',

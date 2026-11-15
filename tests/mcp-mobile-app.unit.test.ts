@@ -412,6 +412,8 @@ describe('mobile app plan', () => {
     expect(steps.findIndex(item => item.id === 'mobile_build_script')).toBeLessThan(steps.findIndex(item => item.id === 'static_output'))
     const commands = steps.flatMap(item => item.commands)
     expect(commands).toContain('npm run build:mobile && npx cap sync')
+    expect(steps.map(item => item.id)).toContain('cap_init')
+    expect(steps.map(item => item.id)).not.toContain('align_config')
     expect(commands).not.toContain('npm run build')
     expect(commands.filter(command => command.startsWith('npm run build:mobile')).length).toBeGreaterThanOrEqual(3)
   })
@@ -431,6 +433,22 @@ describe('mobile app plan', () => {
     expect(steps.find(item => item.id === 'install_platform_packages')?.commands).toEqual(commands)
     expect(order.indexOf('install_platform_packages')).toBeLessThan(order.indexOf('add_android'))
     expect(order).not.toContain('add_ios')
+  })
+
+  it('aligns an existing config webDir with the mobile build before syncing', () => {
+    const plan = buildPlan({
+      source: 'existing_web_app',
+      packages: { 'nuxt': '^4.0.0', '@capacitor/core': '^8.6.2', '@capacitor/cli': '^8.6.2', '@capacitor/ios': '^8.6.2', '@capacitor/android': '^8.6.2' },
+      appId: 'com.acme.shop',
+      appName: 'Acme',
+    }, release)
+    const steps = plan.phases.flatMap(phase => phase.steps)
+    const order = steps.map(item => item.id)
+    expect(order).not.toContain('cap_init')
+    const align = steps.find(item => item.id === 'align_config')!
+    expect(align.files).toEqual([{ path: 'capacitor.config.ts (or .json)', change: 'webDir: \'.output/public\'' }])
+    expect(align.detail).toContain('keep every other setting')
+    expect(order.indexOf('align_config')).toBeLessThan(order.indexOf('sync'))
   })
 
   it('keeps app names and placeholder folders literal in shell commands', () => {
