@@ -50,7 +50,8 @@ but the container reads its environment only when it starts and refuses a `kid` 
 doesn't hold, so it must know the new key before the Worker signs with it:
 
 1. Add the new JWK with `key_ops: ["verify"]` (the old key keeps `sign`), push, and
-   confirm the container restarted with it (it verifies both `kid`s).
+   confirm the container restarted with it (it verifies both `kid`s). Also confirm the new
+   `kid` is in the hosted JWKS, or the API will refuse tokens GoTrue signs after step 2.
 2. Move `sign` to the new key (the old one becomes `verify`), push, and restart again.
 
 Before GoTrue first connects, change the `gotrue_cf` password from the Supabase
