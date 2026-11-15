@@ -80,10 +80,21 @@ describe('gotrueAdmin requests', () => {
     expect(call.body).toEqual({ should_soft_delete: false })
   })
 
-  it('encodes the user id in the path', async () => {
-    fetchMock.mockResolvedValue(json({ id: 'x', app_metadata: {}, user_metadata: {} }))
-    await gotrueAdmin(context()).getUserById('../settings')
-    expect(lastCall().url).toBe('https://project.supabase.co/auth/v1/admin/users/..%2Fsettings')
+  it('throws on a non-UUID user id before any request, like supabase-js', async () => {
+    const admin = gotrueAdmin(context())
+    for (const id of ['.', '..', '../settings', 'not-a-uuid']) {
+      await expect(admin.getUserById(id)).rejects.toThrow('Expected parameter to be UUID')
+      await expect(admin.updateUserById(id, {})).rejects.toThrow('Expected parameter to be UUID')
+      await expect(admin.deleteUser(id)).rejects.toThrow('Expected parameter to be UUID')
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('returns an error instead of a user when a 200 body has no user', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 200 }))
+    expect(await gotrueAdmin(context()).getUserById(USER_ID)).toMatchObject({ data: { user: null }, error: { status: 0 } })
+    fetchMock.mockResolvedValueOnce(json({ users: [] }))
+    expect(await gotrueAdmin(context()).getUserById(USER_ID)).toMatchObject({ data: { user: null }, error: { status: 0 } })
   })
 
   it('splits generateLink into properties and user like supabase-js', async () => {

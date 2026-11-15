@@ -109,12 +109,21 @@ function userResponse(result: RawResponse): UserResponse {
   if (result.error)
     return { data: { user: null }, error: result.error }
   // Admin endpoints answer with the user itself; supabase-js also accepts `{ user }`.
-  const data = (result.data ?? {}) as { user?: GotrueUser } & GotrueUser
-  return { data: { user: data.user ?? data }, error: null }
+  const data = result.data as ({ user?: GotrueUser } & GotrueUser) | null
+  const user = data?.user ?? data
+  if (typeof user?.id !== 'string')
+    return { data: { user: null }, error: new GotrueAdminError('Auth server returned no user', 0) }
+  return { data: { user }, error: null }
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// Like supabase-js, a non-UUID id throws before any request (it would otherwise
+// reach other admin paths, e.g. `.` lists every user).
 function userPath(id: string) {
-  return `admin/users/${encodeURIComponent(id)}`
+  if (!UUID_REGEX.test(id))
+    throw new Error('Expected parameter to be UUID but is not')
+  return `admin/users/${id}`
 }
 
 export function gotrueAdmin(c: Context) {
