@@ -29,11 +29,13 @@ const MANIFEST_SIZES_MAX_CACHED_VERSIONS = 1
 // Request bounds for this unauthenticated endpoint. Every distinct version id
 // reads that bundle's whole manifest, and the file list goes into one jsonb
 // parameter, so neither may grow with the request. A device asks for the files
-// of the one bundle it downloads: uploads cap a delta manifest at 10k files
-// (manifest_limits.ts), and older bundles can be larger, hence the headroom.
+// of the one bundle it downloads, and uploads cap a bundle manifest at
+// MAX_MANIFEST_ENTRIES files (utils/manifest_limits.ts): the same limit here.
+// The plugin runtime does not import utils/, so the value is repeated and a
+// unit test keeps the two equal.
 // The version cap stays above the KV document budget so such requests keep
 // their batched replica fallback.
-export const MAX_MANIFEST_SIZE_FILES = 50_000
+export const MAX_MANIFEST_SIZE_FILES = 10_000
 export const MAX_MANIFEST_SIZE_VERSIONS = 32
 
 interface ManifestSizeRow {

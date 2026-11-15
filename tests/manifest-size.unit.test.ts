@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildCompleteManifestVersionSizes, buildManifestVersionSizesQuery, buildManifestSizeLookupQuery as buildPluginManifestSizeLookupQuery, getManifestDownloadSize as getPluginManifestDownloadSize, MAX_MANIFEST_SIZE_FILES, MAX_MANIFEST_SIZE_VERSIONS } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
+import { MAX_MANIFEST_ENTRIES } from '../supabase/functions/_backend/utils/manifest_limits.ts'
 import { buildManifestDownloadSizeResult, buildManifestSizeLookupQuery, normalizeManifestSizeFiles, parseManifestSizeVersionId } from '../supabase/functions/_backend/utils/manifest_size.ts'
 
 describe('manifest download size helpers', () => {
@@ -291,6 +292,10 @@ describe('plugin manifest size request bounds', () => {
       throw new Error(`postgres context was read: ${key}`)
     },
   } as never
+
+  it('caps a file list at the bundle upload limit', () => {
+    expect(MAX_MANIFEST_SIZE_FILES).toBe(MAX_MANIFEST_ENTRIES)
+  })
 
   it('refuses a file list over the cap before any lookup', async () => {
     vi.stubGlobal('caches', {
