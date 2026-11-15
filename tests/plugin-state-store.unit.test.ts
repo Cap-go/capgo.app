@@ -161,14 +161,16 @@ describe('published plugin state reader', () => {
   })
 
   it('falls back on a stalled R2 read and discards an object arriving after the deadline', async () => {
-    vi.useFakeTimers()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const pendingObject = Promise.withResolvers<{ json: ReturnType<typeof vi.fn>, body: { cancel: ReturnType<typeof vi.fn> } }>()
+    const observedMetrics = Promise.withResolvers<ReturnType<typeof startPluginStateReadMetrics>>()
     const get = vi.fn()
     const json = vi.fn()
     const cancel = vi.fn(async () => undefined)
     const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
     app.get('/', async (c) => {
       const metrics = startPluginStateReadMetrics(c)
+      observedMetrics.resolve(metrics)
       await expect(readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)).rejects.toBeInstanceOf(PluginStateMiss)
       return c.json(metrics)
     })
@@ -177,28 +179,56 @@ describe('published plugin state reader', () => {
       PLUGIN_STATE_POINTERS: { get: () => pendingObject.promise },
     })
     await vi.advanceTimersByTimeAsync(R2_POINTER_TIMEOUT_MS + 1)
-    expect(await (await request).json()).toMatchObject({ r2_pointer_reads: 1, r2_pointer_timeouts: 1, kv_value_reads: 0 })
+    expect(await (await request).json()).toMatchObject({
+      r2_pointer_reads: 1, r2_pointer_timeouts: 1, kv_value_reads: 0,
+      r2_pointer_headers_timeouts: 1, r2_pointer_body_timeouts: 0,
+      r2_pointer_headers_ms: R2_POINTER_TIMEOUT_MS, r2_pointer_body_ms: 0,
+      r2_pointer_first_failure: 'headers_timeout',
+    })
+    const metrics = await observedMetrics.promise
+    const frozen = structuredClone(metrics)
     pendingObject.resolve({ json, body: { cancel } })
     await vi.advanceTimersByTimeAsync(0)
     expect(cancel).toHaveBeenCalledOnce()
     expect(json).not.toHaveBeenCalled()
+    expect(metrics).toEqual(frozen)
     expect(get).not.toHaveBeenCalled()
   })
 
-  it('also bounds an R2 body that stalls after the headers arrive', async () => {
-    vi.useFakeTimers()
+  it('shares the original deadline with body decoding and freezes late-body diagnostics', async () => {
+    const key = await pluginStateImmutableKey(KEY, '2')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const pendingBody = Promise.withResolvers<unknown>()
+    const observedMetrics = Promise.withResolvers<ReturnType<typeof startPluginStateReadMetrics>>()
     const get = vi.fn()
+    const cancel = vi.fn(async () => undefined)
     const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
     app.get('/', async (c) => {
+      const metrics = startPluginStateReadMetrics(c)
+      observedMetrics.resolve(metrics)
       await expect(readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)).rejects.toBeInstanceOf(PluginStateMiss)
-      return c.json({ fallback: true })
+      return c.json(metrics)
     })
     const request = app.request('/', undefined, {
       PLUGIN_STATE: { get },
-      PLUGIN_STATE_POINTERS: { get: async () => ({ json: () => new Promise(() => {}) }) },
+      PLUGIN_STATE_POINTERS: { get: async () => {
+        await new Promise(resolve => setTimeout(resolve, 15))
+        return { json: () => pendingBody.promise, body: { cancel } }
+      } },
     })
     await vi.advanceTimersByTimeAsync(R2_POINTER_TIMEOUT_MS + 1)
-    expect(await (await request).json()).toEqual({ fallback: true })
+    expect(await (await request).json()).toMatchObject({
+      r2_pointer_reads: 1, r2_pointer_timeouts: 1, kv_value_reads: 0,
+      r2_pointer_headers_timeouts: 0, r2_pointer_body_timeouts: 1,
+      r2_pointer_headers_ms: 15, r2_pointer_body_ms: R2_POINTER_TIMEOUT_MS - 15,
+      r2_pointer_ms: R2_POINTER_TIMEOUT_MS, r2_pointer_first_failure: 'body_timeout',
+    })
+    const metrics = await observedMetrics.promise
+    const frozen = structuredClone(metrics)
+    pendingBody.resolve({ f: 1, generation: '2', kvKey: key })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(metrics).toEqual(frozen)
+    expect(cancel).toHaveBeenCalledOnce()
     expect(get).not.toHaveBeenCalled()
   })
 
@@ -331,14 +361,133 @@ describe('published plugin state reader', () => {
     const get = vi.fn()
     const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
     app.get('/', async (c) => {
+      const metrics = startPluginStateReadMetrics(c)
       await expect(readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)).rejects.toBeInstanceOf(PluginStateMiss)
-      return c.json({ done: true })
+      return c.json(metrics)
     })
     const response = await app.request('/', undefined, {
       PLUGIN_STATE: { get },
       PLUGIN_STATE_POINTERS: { get: async () => ({ json: async () => ({ f: 1, generation: '2', kvKey: other }) }) },
     })
     expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ r2_pointer_first_failure: 'invalid_pointer', kv_value_reads: 0 })
     expect(get).not.toHaveBeenCalled()
+  })
+})
+
+describe('sampled pointer phase diagnostics', () => {
+  it('measures successful headers and body separately without changing the value', async () => {
+    const key = await pluginStateImmutableKey(KEY, '2')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const get = vi.fn(async () => ({ value: 'new' }))
+    const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
+    app.get('/', async (c) => {
+      const metrics = startPluginStateReadMetrics(c)
+      const result = await readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)
+      return c.json({ value: result.value, metrics })
+    })
+    const request = app.request('/', undefined, {
+      PLUGIN_STATE: { get },
+      PLUGIN_STATE_POINTERS: { get: async () => {
+        await new Promise(resolve => setTimeout(resolve, 7))
+        return { json: async () => {
+          await new Promise(resolve => setTimeout(resolve, 9))
+          return { f: 1, generation: '2', kvKey: key }
+        } }
+      } },
+    })
+    await vi.advanceTimersByTimeAsync(16)
+    expect(await (await request).json()).toMatchObject({ value: { value: 'new' }, metrics: {
+      r2_pointer_reads: 1, r2_pointer_headers_ms: 7, r2_pointer_body_ms: 9, r2_pointer_ms: 16,
+      r2_pointer_headers_timeouts: 0, r2_pointer_body_timeouts: 0, r2_pointer_first_failure: 'none', kv_value_reads: 1,
+    } })
+    expect(get).toHaveBeenCalledExactlyOnceWith(key, { type: 'json', cacheTtl: 30 })
+  })
+
+  it.each(['headers', 'body'])('preserves a %s error while emitting only a bounded category', async (stage) => {
+    const failure = new Error('private-error-message-sentinel')
+    const get = vi.fn()
+    const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
+    app.get('/', async (c) => {
+      const metrics = startPluginStateReadMetrics(c)
+      await expect(readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)).rejects.toBe(failure)
+      return c.json(metrics)
+    })
+    const response = await app.request('/', undefined, {
+      PLUGIN_STATE: { get },
+      PLUGIN_STATE_POINTERS: { get: async () => {
+        if (stage === 'headers')
+          throw failure
+        return { json: async () => { throw failure } }
+      } },
+    })
+    const metrics = await response.json()
+    expect(metrics).toMatchObject({ r2_pointer_reads: 1, r2_pointer_timeouts: 0, kv_value_reads: 0, r2_pointer_first_failure: stage === 'headers' ? 'headers_error' : 'body_error' })
+    expect(JSON.stringify(metrics)).not.toContain('private-error-message-sentinel')
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('classifies invalid pointer data without logging its contents', async () => {
+    const get = vi.fn()
+    const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
+    app.get('/', async (c) => {
+      const metrics = startPluginStateReadMetrics(c)
+      await expect(readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)).rejects.toThrow('Invalid plugin state publication pointer')
+      return c.json(metrics)
+    })
+    const response = await app.request('/', undefined, {
+      PLUGIN_STATE: { get },
+      PLUGIN_STATE_POINTERS: { get: async () => ({ json: async () => ({ f: 0, kvKey: 'private-pointer-key-sentinel' }) }) },
+    })
+    const metrics = await response.json()
+    expect(metrics).toMatchObject({ r2_pointer_first_failure: 'invalid_pointer', kv_value_reads: 0 })
+    expect(JSON.stringify(metrics)).not.toContain('private-pointer-key-sentinel')
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('aggregates operations while retaining the first failure category', async () => {
+    let reads = 0
+    const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
+    app.get('/', async (c) => {
+      const metrics = startPluginStateReadMetrics(c)
+      for (let i = 0; i < 2; i++)
+        await expect(readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)).rejects.toBeInstanceOf(Error)
+      return c.json(metrics)
+    })
+    const response = await app.request('/', undefined, {
+      PLUGIN_STATE: { get: vi.fn() },
+      PLUGIN_STATE_POINTERS: { get: async () => {
+        if (reads++ === 0)
+          throw new Error('first-private-error-sentinel')
+        return { json: async () => { throw new Error('second-private-error-sentinel') } }
+      } },
+    })
+    const metrics = await response.json()
+    expect(metrics).toMatchObject({ r2_pointer_reads: 2, kv_value_reads: 0, r2_pointer_first_failure: 'headers_error' })
+    expect(JSON.stringify(metrics)).not.toContain('private-error-sentinel')
+    expect(metrics).toEqual({
+      r2_pointer_reads: 2, r2_pointer_ms: expect.any(Number), r2_pointer_timeouts: 0,
+      r2_pointer_headers_ms: expect.any(Number), r2_pointer_body_ms: expect.any(Number),
+      r2_pointer_headers_timeouts: 0, r2_pointer_body_timeouts: 0, r2_pointer_first_failure: 'headers_error',
+      kv_value_reads: 0, kv_value_ms: 0, kv_value_timeouts: 0,
+    })
+  })
+
+  it('does not read the timing clock for an unsampled request', async () => {
+    const key = await pluginStateImmutableKey(KEY, '2')
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => { throw new Error('unsampled timing clock called') })
+    try {
+      const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
+      app.get('/', async c => c.json(await readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)))
+      const response = await app.request('/', undefined, {
+        PLUGIN_STATE: { get: async () => ({ value: 'new' }) },
+        PLUGIN_STATE_POINTERS: { get: async () => ({ json: async () => ({ f: 1, generation: '2', kvKey: key }) }) },
+      })
+      expect(await response.json()).toEqual({ value: { value: 'new' }, revision: '2' })
+      expect(clock).not.toHaveBeenCalled()
+    }
+    finally {
+      clock.mockRestore()
+    }
   })
 })
