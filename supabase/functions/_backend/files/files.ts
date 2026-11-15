@@ -405,8 +405,9 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
   }
 
   if (!response.ok) {
-    // Supabase Storage answers a missing object with 400 and an "Object not found" body.
+    // Supabase Storage answers a missing object with 400 and an "Object not found" body (no body on HEAD).
     const responseBody = await response.text().catch(() => '')
+    const isMissing = response.status === 404 || (response.status === 400 && (method === 'HEAD' || /object not found/i.test(responseBody)))
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'getHandler files storage response failed',
@@ -414,7 +415,7 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
       status: response.status,
       responseBody,
     })
-    if (response.status === 404 || responseBody.toLowerCase().includes('not found')) {
+    if (isMissing) {
       return notFoundAttachmentResponse(c, method === 'HEAD')
     }
     throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId, status: response.status }, responseBody, { alert: false })

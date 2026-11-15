@@ -144,6 +144,34 @@ describe('files local read proxy', () => {
     expect(response.status).toBe(404)
   })
 
+  it('returns 404 on HEAD when Storage reports a missing object without a body', async () => {
+    const fetchMock = mockStorage(() => new Response(null, { status: 400 }))
+
+    const response = await requestFile({ method: 'HEAD' })
+
+    expect(response.status).toBe(404)
+    expect(storageCall(fetchMock).init.method).toBe('HEAD')
+  })
+
+  it('returns 503 when the Storage bucket is missing', async () => {
+    mockStorage(() => new Response(JSON.stringify({ statusCode: '404', error: 'Bucket not found', message: 'Bucket not found' }), { status: 400 }))
+
+    const response = await requestFile()
+
+    expect(response.status).toBe(503)
+  })
+
+  it('keeps reserved characters in the key encoded in the Storage URL', async () => {
+    const fetchMock = mockStorage(() => new Response('bytes', { headers: storedHeaders }))
+
+    const response = await requestFile(undefined, 'orgs/test-org/apps/test-app/main%3Fcopy.js')
+
+    expect(response.status).toBe(200)
+    const url = new URL(storageCall(fetchMock).url)
+    expect(url.pathname).toBe('/storage/v1/object/authenticated/capgo/orgs/test-org/apps/test-app/main%3Fcopy.js')
+    expect(url.search).toBe('')
+  })
+
   it('refuses keys with dot segments instead of fetching outside the bucket', async () => {
     const fetchMock = mockStorage(() => new Response('other bucket bytes'))
     // A TUS-style upload ID decodes to a key that climbs out of the capgo bucket.
