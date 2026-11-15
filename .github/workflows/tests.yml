@@ -760,8 +760,7 @@ jobs:
           PG_DUMP_BIN: /usr/lib/postgresql/17/bin/pg_dump
           PG_RESTORE_BIN: /usr/lib/postgresql/17/bin/pg_restore
         run: bun run readreplicate:check-schema
-      - name: Run Supabase Test DB
-        run: bun scripts/supabase-worktree.ts test db
+      # pgTAP (supabase/tests) runs in test_local_db, on the local Postgres container.
       - name: Lint SQL
         run: bun scripts/supabase-worktree.ts db lint -s public --fail-on warning
       # Catalog test runs last on the same stack: it needs the Edge server, the SQL checks do not.
