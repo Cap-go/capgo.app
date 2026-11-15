@@ -7,6 +7,7 @@ import { Hono } from 'hono/tiny'
 import { app as download_link } from '../private/download_link.ts'
 import { app as upload_link } from '../private/upload_link.ts'
 import { app as ok } from '../public/ok.ts'
+import { serviceHeaders, storageObjectUrl } from '../utils/bundle_storage.ts'
 import { sendDiscordAlert } from '../utils/discord.ts'
 import { quickError, simpleError, simpleRateLimit } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
@@ -21,7 +22,6 @@ import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { checkPermissionPgFreshRetry } from '../utils/rbac.ts'
 import { createStatsBandwidth } from '../utils/stats.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
 import { buildFileReadCacheRequest, getFileReadCache, isAttachmentVersionDeleted } from './file_read_cache.ts'
 import { app as files_config } from './files_config.ts'
@@ -388,45 +388,25 @@ async function saveBandwidthUsage(c: Context, fileSize: number | null | undefine
 
 async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<Response> {
   const method = c.req.raw.method === 'HEAD' ? 'HEAD' : 'GET'
-  const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin(c).storage.from('capgo').createSignedUrl(fileId, 60)
-
-  if (signedUrlError || !signedUrlData?.signedUrl) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'getHandler files signed URL creation failed',
-      fileId,
-      error: signedUrlError,
-    })
-    if (signedUrlError?.status === 404) {
-      return notFoundAttachmentResponse(c, method === 'HEAD')
-    }
-    throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId }, signedUrlError, { alert: false })
-  }
-
-  const requestHeaders = new Headers()
   const rangeHeader = c.req.header('range')
-  if (method === 'GET' && rangeHeader) {
-    requestHeaders.set('range', rangeHeader)
-  }
+  const range: Record<string, string> = method === 'GET' && rangeHeader ? { Range: rangeHeader } : {}
 
   let response: Response
   try {
-    const fetchInit: RequestInit = { method }
-    if (rangeHeader) {
-      fetchInit.headers = requestHeaders
-    }
-    response = await fetch(signedUrlData.signedUrl, fetchInit)
+    // Same bucket as the TUS upload proxy (supabaseTusProxy.ts), not S3_BUCKET.
+    response = await fetch(storageObjectUrl(c, fileId, true, 'capgo'), { method, headers: serviceHeaders(c, range) })
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'getHandler files signed URL fetch failed', fileId, error })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getHandler files storage fetch failed', fileId, error })
     throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId }, error, { alert: false })
   }
 
   if (!response.ok) {
+    // Supabase Storage answers a missing object with 400 and an "Object not found" body.
     const responseBody = await response.text().catch(() => '')
     cloudlogErr({
       requestId: c.get('requestId'),
-      message: 'getHandler files signed URL response failed',
+      message: 'getHandler files storage response failed',
       fileId,
       status: response.status,
       responseBody,

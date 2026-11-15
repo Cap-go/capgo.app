@@ -1,11 +1,12 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const createSignedUrlMock = vi.fn()
 const getAppPlanStatePgMock = vi.fn()
 const getPgClientMock = vi.fn(() => ({}))
-const storageFromMock = vi.fn(() => ({
-  createSignedUrl: createSignedUrlMock,
-}))
+
+const STORAGE_URL = 'http://storage.test'
+const SERVICE_KEY = 'service-role-test-key'
+const OBJECT_PATH = 'orgs/test-org/apps/test-app/local.txt'
+const OBJECT_URL = `${STORAGE_URL}/storage/v1/object/authenticated/capgo/${OBJECT_PATH}`
 
 vi.mock('hono/adapter', async (importOriginal) => {
   const actual = await importOriginal<typeof import('hono/adapter')>()
@@ -34,13 +35,39 @@ vi.mock('../supabase/functions/_backend/utils/pg_files.ts', () => ({
   getUserIdFromApikey: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: vi.fn(() => ({
-    storage: {
-      from: storageFromMock,
-    },
-  })),
-}))
+async function requestFile(init?: RequestInit) {
+  const { app: files } = await import('../supabase/functions/_backend/files/files.ts')
+  const { createAllCatch, createHono } = await import('../supabase/functions/_backend/utils/hono.ts')
+  const { version } = await import('../supabase/functions/_backend/utils/version.ts')
+
+  const appGlobal = createHono('files', version)
+  appGlobal.route('/', files)
+  createAllCatch(appGlobal, 'files')
+
+  return appGlobal.fetch(
+    new Request(`http://localhost/read/attachments/${OBJECT_PATH}`, init),
+    {},
+    { waitUntil: () => { } } as any,
+  )
+}
+
+function mockStorage(response: () => Response) {
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response())
+  globalThis.fetch = fetchMock as typeof fetch
+  return fetchMock
+}
+
+function storageCall(fetchMock: ReturnType<typeof mockStorage>) {
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  const [input, init] = fetchMock.mock.calls[0]
+  return { url: String(input), init: init!, headers: new Headers(init?.headers) }
+}
+
+const storedHeaders = {
+  'cache-control': 'public, max-age=60',
+  'content-disposition': 'inline; filename="stored.txt"',
+  'content-type': 'text/plain',
+}
 
 describe('files local read proxy', () => {
   const originalFetch = globalThis.fetch
@@ -48,93 +75,80 @@ describe('files local read proxy', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
+    vi.stubEnv('SUPABASE_URL', STORAGE_URL)
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', SERVICE_KEY)
     globalThis.fetch = originalFetch
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
   })
 
   afterAll(() => {
     globalThis.fetch = originalFetch
   })
 
-  it.concurrent('proxies local storage reads without checking the app in the database', async () => {
+  it('reads the object from the Storage REST API with the service key', async () => {
     getAppPlanStatePgMock.mockResolvedValue({ kind: 'ok', value: { owner_org: 'test-org', plan_valid: true } })
-    createSignedUrlMock.mockResolvedValue({
-      data: { signedUrl: 'https://storage.example/object?token=test' },
-      error: null,
-    })
+    const fetchMock = mockStorage(() => new Response('proxied local bytes', { headers: storedHeaders }))
 
-    globalThis.fetch = vi.fn(async (input, init) => {
-      expect(String(input)).toBe('https://storage.example/object?token=test')
-      expect(init?.method).toBe('GET')
-      expect(init?.headers).toBeUndefined()
-      return new Response('proxied local bytes', {
-        headers: {
-          'cache-control': 'public, max-age=60',
-          'content-disposition': 'inline; filename="stored.txt"',
-          'content-type': 'text/plain',
-        },
-      })
-    }) as typeof fetch
-
-    const { app: files } = await import('../supabase/functions/_backend/files/files.ts')
-    const { createAllCatch, createHono } = await import('../supabase/functions/_backend/utils/hono.ts')
-    const { version } = await import('../supabase/functions/_backend/utils/version.ts')
-
-    const appGlobal = createHono('files', version)
-    appGlobal.route('/', files)
-    createAllCatch(appGlobal, 'files')
-
-    const response = await appGlobal.fetch(
-      new Request('http://localhost/read/attachments/orgs/test-org/apps/test-app/local.txt'),
-      {},
-      { waitUntil: () => { } } as any,
-    )
+    const response = await requestFile()
 
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('proxied local bytes')
     expect(response.headers.get('cache-control')).toBe('public, max-age=60, no-transform')
-    expect(response.headers.get('content-disposition')).toBe('attachment; filename="orgs/test-org/apps/test-app/local.txt"')
+    expect(response.headers.get('content-disposition')).toBe(`attachment; filename="${OBJECT_PATH}"`)
+    const { url, init, headers } = storageCall(fetchMock)
+    expect(url).toBe(OBJECT_URL)
+    expect(init.method).toBe('GET')
+    expect(headers.get('authorization')).toBe(`Bearer ${SERVICE_KEY}`)
+    expect(headers.get('apikey')).toBe(SERVICE_KEY)
+    expect(headers.get('range')).toBeNull()
     expect(getPgClientMock).not.toHaveBeenCalled()
     expect(getAppPlanStatePgMock).not.toHaveBeenCalled()
-    expect(storageFromMock).toHaveBeenCalledWith('capgo')
-    expect(createSignedUrlMock).toHaveBeenCalledWith('orgs/test-org/apps/test-app/local.txt', 60)
   })
 
-  it('preserves HEAD requests without downloading bytes from the signed URL proxy', async () => {
-    createSignedUrlMock.mockResolvedValue({
-      data: { signedUrl: 'https://storage.example/object?token=test' },
-      error: null,
-    })
+  it('forwards Range on GET and passes the partial response through', async () => {
+    const fetchMock = mockStorage(() => new Response('pro', {
+      status: 206,
+      headers: { ...storedHeaders, 'content-range': 'bytes 0-2/19', 'content-length': '3' },
+    }))
 
-    globalThis.fetch = vi.fn(async (_input, init) => {
-      expect(init?.method).toBe('HEAD')
-      expect(init?.headers).toBeUndefined()
-      return new Response(null, {
-        headers: {
-          'cache-control': 'public, max-age=60',
-          'content-disposition': 'inline; filename="stored.txt"',
-          'content-type': 'text/plain',
-        },
-      })
-    }) as typeof fetch
+    const response = await requestFile({ headers: { range: 'bytes=0-2' } })
 
-    const { app: files } = await import('../supabase/functions/_backend/files/files.ts')
-    const { createAllCatch, createHono } = await import('../supabase/functions/_backend/utils/hono.ts')
-    const { version } = await import('../supabase/functions/_backend/utils/version.ts')
+    expect(response.status).toBe(206)
+    expect(await response.text()).toBe('pro')
+    expect(response.headers.get('content-range')).toBe('bytes 0-2/19')
+    expect(storageCall(fetchMock).headers.get('range')).toBe('bytes=0-2')
+  })
 
-    const appGlobal = createHono('files', version)
-    appGlobal.route('/', files)
-    createAllCatch(appGlobal, 'files')
+  it('preserves HEAD requests without forwarding Range', async () => {
+    const fetchMock = mockStorage(() => new Response(null, { headers: storedHeaders }))
 
-    const response = await appGlobal.fetch(
-      new Request('http://localhost/read/attachments/orgs/test-org/apps/test-app/local.txt', { method: 'HEAD' }),
-      {},
-      { waitUntil: () => { } } as any,
-    )
+    const response = await requestFile({ method: 'HEAD', headers: { range: 'bytes=0-2' } })
 
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('public, max-age=60, no-transform')
-    expect(response.headers.get('content-disposition')).toBe('attachment; filename="orgs/test-org/apps/test-app/local.txt"')
+    expect(response.headers.get('content-disposition')).toBe(`attachment; filename="${OBJECT_PATH}"`)
+    const { init, headers } = storageCall(fetchMock)
+    expect(init.method).toBe('HEAD')
+    expect(headers.get('range')).toBeNull()
     expect(getPgClientMock).not.toHaveBeenCalled()
-    expect(getAppPlanStatePgMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when Storage reports a missing object', async () => {
+    mockStorage(() => new Response(JSON.stringify({ statusCode: '404', error: 'not_found', message: 'Object not found' }), { status: 400 }))
+
+    const response = await requestFile()
+
+    expect(response.status).toBe(404)
+  })
+
+  it('returns 503 when Storage fails', async () => {
+    mockStorage(() => new Response('internal error', { status: 500 }))
+
+    const response = await requestFile()
+
+    expect(response.status).toBe(503)
   })
 })
