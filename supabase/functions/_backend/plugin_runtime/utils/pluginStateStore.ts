@@ -104,7 +104,7 @@ async function readPointer(pointers: R2Bucket, logicalKey: string, metrics: Plug
     ])
   }
   catch (error) {
-    if (observation && observation.failure === 'none')
+    if (observation?.failure === 'none')
       observation.failure = pointerFailureByPhase[observation.phase.kind]
     throw error
   }
