@@ -51,8 +51,8 @@ async function requestFile(init?: RequestInit, routeId = OBJECT_PATH) {
   )
 }
 
-function mockStorage(response: () => Response) {
-  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response())
+function mockStorage(response: (url: string) => Response) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => response(String(input)))
   globalThis.fetch = fetchMock as typeof fetch
   return fetchMock
 }
@@ -144,13 +144,22 @@ describe('files local read proxy', () => {
     expect(response.status).toBe(404)
   })
 
-  it('returns 404 on HEAD when Storage reports a missing object without a body', async () => {
-    const fetchMock = mockStorage(() => new Response(null, { status: 400 }))
+  const INFO_URL = `${STORAGE_URL}/storage/v1/object/info/authenticated/capgo/${OBJECT_PATH}`
+  const storageError = (message: string) => new Response(JSON.stringify({ statusCode: '404', error: 'not_found', message }), { status: 400 })
+
+  it.each([
+    ['Object not found', 404],
+    ['Bucket not found', 503],
+  ])('classifies a bodiless HEAD 400 through the metadata route (%s -> %i)', async (message, status) => {
+    const fetchMock = mockStorage(url => url === INFO_URL ? storageError(message) : new Response(null, { status: 400 }))
 
     const response = await requestFile({ method: 'HEAD' })
 
-    expect(response.status).toBe(404)
-    expect(storageCall(fetchMock).init.method).toBe('HEAD')
+    expect(response.status).toBe(status)
+    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method ?? 'GET'])).toEqual([
+      [OBJECT_URL, 'HEAD'],
+      [INFO_URL, 'GET'],
+    ])
   })
 
   it('returns 503 when the Storage bucket is missing', async () => {

@@ -386,6 +386,23 @@ async function saveBandwidthUsage(c: Context, fileSize: number | null | undefine
   }
 }
 
+/** A HEAD error has no body; the metadata route says which 400 it was without downloading the object. */
+async function getStorageInfoErrorBody(c: Context, fileId: string): Promise<string> {
+  const infoUrl = storageObjectUrl(c, fileId, true, 'capgo').replace('/storage/v1/object/', '/storage/v1/object/info/')
+  try {
+    const info = await fetch(infoUrl, { headers: serviceHeaders(c) })
+    if (info.ok) {
+      await info.body?.cancel()
+      return ''
+    }
+    return await info.text()
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getHandler files storage info fetch failed', fileId, error })
+    return ''
+  }
+}
+
 async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<Response> {
   const method = c.req.raw.method === 'HEAD' ? 'HEAD' : 'GET'
   // fetch() resolves `..` segments, which would let the service key read outside the bucket.
@@ -405,9 +422,11 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
   }
 
   if (!response.ok) {
-    // Supabase Storage answers a missing object with 400 and an "Object not found" body (no body on HEAD).
-    const responseBody = await response.text().catch(() => '')
-    const isMissing = response.status === 404 || (response.status === 400 && (method === 'HEAD' || /object not found/i.test(responseBody)))
+    // Supabase Storage answers a missing object, and a missing bucket, with 400 and a message body.
+    let responseBody = await response.text().catch(() => '')
+    if (method === 'HEAD' && response.status === 400 && !responseBody)
+      responseBody = await getStorageInfoErrorBody(c, fileId)
+    const isMissing = response.status === 404 || (response.status === 400 && /object not found/i.test(responseBody))
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'getHandler files storage response failed',
