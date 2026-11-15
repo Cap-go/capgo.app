@@ -391,6 +391,17 @@ describe('mobile app plan', () => {
     expect(plan.run_options.find(option => option.id === 'ios_simulator')?.available).toBe('yes')
     expect(plan.run_options.find(option => option.id === 'android_emulator')?.available).toBe('no')
     expect(plan.run_options.find(option => option.id === 'capgo_cloud_simulator')?.mcp_tools).toContain('capgo_start_simulator')
+    // Hosted builds use credentials stored on Capgo, so the user pushes them before the agent builds.
+    const signing = steps.find(item => item.id === 'signing_credentials')!
+    expect(signing).toMatchObject({ run_by: 'user' })
+    expect(signing.commands).toEqual([
+      'npx @capgo/cli@latest build init --platform ios',
+      'npx @capgo/cli@latest build credentials push app.trailbuddy.mobile --platform ios',
+      'npx @capgo/cli@latest build init --platform android',
+      'npx @capgo/cli@latest build credentials push app.trailbuddy.mobile --platform android',
+    ])
+    expect(order.indexOf('signing_credentials')).toBeLessThan(order.indexOf('cloud_build'))
+    expect(steps.find(item => item.id === 'cloud_build')).toMatchObject({ run_by: 'agent', mcp_tools: expect.arrayContaining(['capgo_request_build', 'capgo_start_build']) })
   })
 
   it('runs the framework static build through build:mobile in every step', () => {

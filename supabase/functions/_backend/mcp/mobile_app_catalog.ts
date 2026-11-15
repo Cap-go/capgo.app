@@ -1285,7 +1285,7 @@ export const CHECKLIST: readonly ChecklistSpec[] = [
     title: 'Native builds without a local Mac',
     rule: 'Capgo Cloud Build signs and builds iOS and Android from any machine or CI and can submit to TestFlight and Google Play. Signing secrets stay out of the chat.',
     check: ['capgo_get_build_credentials shows saved credentials for each platform.'],
-    fix: 'The user runs npx @capgo/cli@latest build init once; then package with build zip and call capgo_request_build and capgo_start_build.',
+    fix: 'The user runs npx @capgo/cli@latest build init once per platform and stores the credentials on Capgo with npx @capgo/cli@latest build credentials push; then package with build zip and call capgo_request_build and capgo_start_build.',
     skill: 'capgo-native-builds',
     docsUrl: 'https://capgo.app/docs/builder/',
   },
