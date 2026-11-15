@@ -426,7 +426,7 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
     let responseBody = await response.text().catch(() => '')
     if (method === 'HEAD' && response.status === 400 && !responseBody)
       responseBody = await getStorageInfoErrorBody(c, fileId)
-    const isMissing = response.status === 404 || (response.status === 400 && /object not found/i.test(responseBody))
+    const isMissing = response.status === 404 || (response.status === 400 && /object not found|resource was not found/i.test(responseBody))
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'getHandler files storage response failed',
@@ -443,8 +443,12 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
   if (method !== 'HEAD') {
     await saveBandwidthUsage(c, getTransferredBytesFromResponse(response))
   }
-  const attachmentResponse = withAttachmentResponseHeaders(response, fileId, method !== 'HEAD')
-  return attachmentResponse
+  // Signed URLs sent no Cache-Control, so the file read policy applied; the authenticated
+  // route sends the object's stored value (often no-cache), so drop it to keep that policy.
+  const headers = new Headers(response.headers)
+  headers.delete('cache-control')
+  const storageResponse = new Response(response.body, { headers, status: response.status, statusText: response.statusText })
+  return withAttachmentResponseHeaders(storageResponse, fileId, method !== 'HEAD')
 }
 
 async function getHandler(c: Context): Promise<Response> {

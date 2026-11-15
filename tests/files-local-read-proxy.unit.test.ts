@@ -6,6 +6,8 @@ const getPgClientMock = vi.fn(() => ({}))
 const STORAGE_URL = 'http://storage.test'
 const SERVICE_KEY = 'service-role-test-key'
 const OBJECT_PATH = 'orgs/test-org/apps/test-app/local.txt'
+// Signed URLs carried no Cache-Control, so reads always got the file read policy.
+const FILE_READ_CACHE_CONTROL = 'public, max-age=31536000, immutable, no-transform'
 const OBJECT_URL = `${STORAGE_URL}/storage/v1/object/authenticated/capgo/${OBJECT_PATH}`
 
 vi.mock('hono/adapter', async (importOriginal) => {
@@ -64,7 +66,7 @@ function storageCall(fetchMock: ReturnType<typeof mockStorage>) {
 }
 
 const storedHeaders = {
-  'cache-control': 'public, max-age=60',
+  'cache-control': 'no-cache',
   'content-disposition': 'inline; filename="stored.txt"',
   'content-type': 'text/plain',
 }
@@ -96,7 +98,7 @@ describe('files local read proxy', () => {
 
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('proxied local bytes')
-    expect(response.headers.get('cache-control')).toBe('public, max-age=60, no-transform')
+    expect(response.headers.get('cache-control')).toBe(FILE_READ_CACHE_CONTROL)
     expect(response.headers.get('content-disposition')).toBe(`attachment; filename="${OBJECT_PATH}"`)
     const { url, init, headers } = storageCall(fetchMock)
     expect(url).toBe(OBJECT_URL)
@@ -128,7 +130,7 @@ describe('files local read proxy', () => {
     const response = await requestFile({ method: 'HEAD', headers: { range: 'bytes=0-2' } })
 
     expect(response.status).toBe(200)
-    expect(response.headers.get('cache-control')).toBe('public, max-age=60, no-transform')
+    expect(response.headers.get('cache-control')).toBe(FILE_READ_CACHE_CONTROL)
     expect(response.headers.get('content-disposition')).toBe(`attachment; filename="${OBJECT_PATH}"`)
     const { init, headers } = storageCall(fetchMock)
     expect(init.method).toBe('HEAD')
@@ -136,8 +138,8 @@ describe('files local read proxy', () => {
     expect(getPgClientMock).not.toHaveBeenCalled()
   })
 
-  it('returns 404 when Storage reports a missing object', async () => {
-    mockStorage(() => new Response(JSON.stringify({ statusCode: '404', error: 'not_found', message: 'Object not found' }), { status: 400 }))
+  it.each(['Object not found', 'The resource was not found'])('returns 404 when Storage reports a missing object (%s)', async (message) => {
+    mockStorage(() => new Response(JSON.stringify({ statusCode: '404', error: 'not_found', message }), { status: 400 }))
 
     const response = await requestFile()
 
