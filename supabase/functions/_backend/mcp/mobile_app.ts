@@ -1136,7 +1136,8 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
         id: 'install_plugins',
         title: 'Install the recommended plugins',
         detail: `Official @capacitor plugins first, Capgo @capgo plugins where they cover more. See plugins in this result (${featurePlugins.plugins.length} packages here; the updater is set up in the Capgo phase). Call capgo_recommend_plugins again when a new feature comes up.`,
-        commands: featurePlugins.install_command ? [featurePlugins.install_command, 'npx cap sync', 'npx cap ls'] : ['npx cap sync', 'npx cap ls'],
+        // Rebuild so the design and feature edits made since the Capacitor phase reach the native projects.
+        commands: [...(featurePlugins.install_command ? [featurePlugins.install_command] : []), syncCommand, 'npx cap ls'],
         files: featurePlugins.ios_usage_keys.length && platforms.includes('ios') ? [{ path: 'ios/App/App/Info.plist', change: `Add ${featurePlugins.ios_usage_keys.join(', ')} with specific purpose strings.` }] : [],
         verify: ['npx cap ls lists every plugin for each platform.', 'Each permission prompt appears only when the user starts the matching feature, and denial is handled.'],
         mcp_tools: ['capgo_recommend_plugins'],
@@ -1155,8 +1156,8 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
       step({
         id: 'run_locally',
         title: 'Start a simulator or emulator',
-        detail: 'Pick the first available run option from run_options. Inspect the WebView with Safari Web Inspector (iOS) or chrome://inspect (Android) for console errors, CORS failures and 404s.',
-        commands: platforms.map(platform => `npx cap run ${platform} --list`),
+        detail: 'Rebuild and sync first: npx cap run only syncs the last web build, so skipping the build shows stale code. Then pick the first available run option from run_options. Inspect the WebView with Safari Web Inspector (iOS) or chrome://inspect (Android) for console errors, CORS failures and 404s.',
+        commands: [syncCommand, ...platforms.map(platform => `npx cap run ${platform} --list`)],
         verify: ['The app opens on the first screen without a white screen.', 'Navigate to a nested route, background and resume, then kill and relaunch.'],
         skill: 'debugging-capacitor',
       }),

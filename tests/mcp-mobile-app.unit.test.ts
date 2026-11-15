@@ -358,7 +358,13 @@ describe('mobile app plan', () => {
     expect(steps.find(item => item.id === 'static_output')?.detail).toContain('output: \'export\'')
     expect(steps.find(item => item.id === 'upgrade_capacitor')?.commands).toEqual(['pnpm add -D @capacitor/cli@latest', 'npx cap migrate'])
     expect(steps.map(item => item.id)).not.toContain('cap_init')
-    expect(steps.find(item => item.id === 'install_plugins')?.commands[0]).toBe('pnpm add @capacitor/app@latest @capacitor/splash-screen@latest @capacitor/keyboard@latest @capgo/capacitor-notifications@latest @capacitor/camera@latest')
+    expect(steps.find(item => item.id === 'install_plugins')?.commands).toEqual([
+      'pnpm add @capacitor/app@latest @capacitor/splash-screen@latest @capacitor/keyboard@latest @capgo/capacitor-notifications@latest @capacitor/camera@latest',
+      'pnpm run build:mobile && npx cap sync',
+      'npx cap ls',
+    ])
+    // The design and plugin edits come after the Capacitor phase build, so running rebuilds first.
+    expect(steps.find(item => item.id === 'run_locally')?.commands[0]).toBe('pnpm run build:mobile && npx cap sync')
     expect(plan.plugins.map(plugin => plugin.package)).toContain('@capgo/capacitor-updater')
     expect(plan.run_options.find(option => option.id === 'ios_simulator')?.available).toBe('no')
     expect(steps.find(item => item.id === 'check_tooling')?.commands).not.toContain('xcodebuild -version')
