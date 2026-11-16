@@ -106,8 +106,11 @@ export function completedDeploymentKeys(jobs: DeploymentJob[], environment: Envi
     ))) {
     keys.push('supabase')
   }
+  if (succeeded('deploy_api', 'Deploy CF Worker API')
+    && (environment === 'alpha' || succeeded('deploy_api', 'Retire removed CF Workers'))) {
+    keys.push('api')
+  }
   for (const [key, name, step] of [
-    ['api', 'deploy_api', 'Deploy CF Worker API'],
     ['translation', 'deploy_translation_worker', 'Deploy CF Worker Translation'],
     ['files', 'deploy_files', 'Deploy CF Worker Files'],
     ['gotrue', 'deploy_gotrue_worker', 'Deploy CF Worker GoTrue'],

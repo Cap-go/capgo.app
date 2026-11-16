@@ -51,7 +51,7 @@ function job(name: string, steps: string[], conclusion = 'success'): DeploymentJ
     steps: steps.map(name => ({ name, conclusion: 'success', completed_at: '2026-01-01T00:00:00Z' })),
   }
 }
-const apiJob = () => job('deploy_api', ['Deploy CF Worker API'])
+const apiJob = () => job('deploy_api', ['Deploy CF Worker API', 'Retire removed CF Workers'])
 const supabaseJob = () => job('Build code and deploy to Supabase', ['Apply Supabase Migrations', 'Update functions'])
 const schemaJob = () => job('Reconcile production read-replica schema', ['Reconcile the Google subscriber through server-side Cloud SQL import'])
 const refreshJob = () => job('Refresh read-replica subscription', ['Refresh subscription for newly published tables'])
@@ -140,6 +140,30 @@ describe('operation evidence and attempt identity', () => {
     failed.steps[0].conclusion = 'failure'
     expect(completedDeploymentKeys([failed], 'stable')).toEqual([])
     expect(completedDeploymentKeys([apiJob(), apiJob()], 'stable')).toEqual([])
+  })
+
+  it('keeps a failed production API retirement pending for the next full retry', () => {
+    const repo = repository()
+    const target = repo.commit('cloudflare_workers/api/index.ts', 'api change')
+    const attempt = evidence(target, 'capgo-1.1.0')
+    const pending = beginDeployment(ready(repo.sha), attempt, ['api'], () => true)
+    const failedCleanup = apiJob()
+    failedCleanup.conclusion = 'failure'
+    failedCleanup.steps[1].conclusion = 'failure'
+
+    const next = completeDeployment(pending, attempt, completedDeploymentKeys([failedCleanup], 'stable'))
+
+    expect(next.entries.api.success?.sha).toBe(repo.sha)
+    expect(next.entries.api.pending).toEqual(attempt)
+    expect(resolveDeployScopeFromGit(target, next, repo.git).scope.api).toBe(true)
+    expect(completedDeploymentKeys([apiJob()], 'stable')).toEqual(['api'])
+  })
+
+  it('requires production API retirement while accepting the alpha publish without that production-only step', () => {
+    const publishOnly = job('deploy_api', ['Deploy CF Worker API'])
+
+    expect(completedDeploymentKeys([publishOnly], 'stable')).toEqual([])
+    expect(completedDeploymentKeys([publishOnly], 'alpha')).toEqual(['api'])
   })
 
   it('requires stable schema reconciliation, deployment and subscription refresh together; alpha only its applicable operations', () => {
