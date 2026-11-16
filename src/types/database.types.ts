@@ -2901,6 +2901,7 @@ export type Database = {
           name: string
           native_build_concurrency: number
           native_build_queue_priority: number
+          observe_events: number
           price_m: number
           price_m_id: string
           price_y: number
@@ -2928,6 +2929,7 @@ export type Database = {
           name?: string
           native_build_concurrency?: number
           native_build_queue_priority?: number
+          observe_events?: number
           price_m?: number
           price_m_id: string
           price_y?: number
@@ -2955,6 +2957,7 @@ export type Database = {
           name?: string
           native_build_concurrency?: number
           native_build_queue_priority?: number
+          observe_events?: number
           price_m?: number
           price_m_id?: string
           price_y?: number
