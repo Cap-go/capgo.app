@@ -134,6 +134,8 @@ function handlePermissionCheckError(
   scope: PermissionScope,
   error: unknown,
   source: 'checkPermission' | 'checkPermissionPg' | 'checkPermissionInMemberOrgs' | 'checkPermissionsBatch',
+  // The key actually bound into the failed query; it can differ from the request's capgkey.
+  boundApikey?: string | null,
 ): false {
   if (error instanceof HTTPException)
     throw error
@@ -143,7 +145,7 @@ function handlePermissionCheckError(
   cloudlogErr({
     requestId: c.get('requestId'),
     message: `${source} error`,
-    error: sanitizePermissionCheckError(error, [c.get('capgkey') as string | undefined]),
+    error: sanitizePermissionCheckError(error, [boundApikey, c.get('capgkey') as string | undefined]),
     permission,
     scope,
     transient,
@@ -288,7 +290,7 @@ export async function checkPermission(
     return allowed
   }
   catch (e) {
-    return handlePermissionCheckError(c, permission, scope, e, 'checkPermission')
+    return handlePermissionCheckError(c, permission, scope, e, 'checkPermission', apikeyString)
   }
   finally {
     if (pgClient) {
@@ -368,7 +370,7 @@ export async function checkPermissionsBatchPg(
   }
   catch (e) {
     const first = checks[0]
-    handlePermissionCheckError(c, first.permission, first.scope, e, 'checkPermissionsBatch')
+    handlePermissionCheckError(c, first.permission, first.scope, e, 'checkPermissionsBatch', apikeyString)
     return checks.map(() => false)
   }
 
@@ -412,7 +414,7 @@ export async function checkPermissionsBatch(
   }
   catch (e) {
     const first = checks[0]
-    handlePermissionCheckError(c, first.permission, first.scope, e, 'checkPermissionsBatch')
+    handlePermissionCheckError(c, first.permission, first.scope, e, 'checkPermissionsBatch', apikeyString)
     return checks.map(() => false)
   }
   finally {
@@ -458,7 +460,7 @@ export async function checkPermissionInMemberOrgs(
     return (result.rows[0] as any)?.allowed === true
   }
   catch (e) {
-    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionInMemberOrgs')
+    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionInMemberOrgs', apikeyString)
   }
   finally {
     if (pgClient)
@@ -542,7 +544,7 @@ export async function getDeniedChannelIdsForPermission(
     return new Set((result.rows as Array<{ id: number | string }>).map(row => Number(row.id)))
   }
   catch (e) {
-    handlePermissionCheckError(c, permission, { appId }, e, 'checkPermission')
+    handlePermissionCheckError(c, permission, { appId }, e, 'checkPermission', apikeyString)
     return quickError(403, 'permission_denied', `Permission denied: ${permission}`, { permission, appId })
   }
   finally {
@@ -693,7 +695,7 @@ export async function checkPermissionPg(
     return allowed
   }
   catch (e) {
-    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionPg')
+    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionPg', apikeyString)
   }
 }
 
@@ -726,7 +728,7 @@ export async function checkPermissionPgFreshRetry(
       // Pool acquisition failures that are not transient are infra/config faults, not ACL denials.
       if (!pgClient && !isTransientPgError(error))
         throw error
-      return handlePermissionCheckError(c, permission, scope, error, 'checkPermissionPg')
+      return handlePermissionCheckError(c, permission, scope, error, 'checkPermissionPg', apikeyString)
     }
     finally {
       if (pgClient)
