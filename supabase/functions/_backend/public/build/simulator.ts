@@ -221,18 +221,57 @@ export function simulatorBillableSecondsWithIdle(
   return simulatorBillableSeconds(startedAt, end, maxDurationMinutes)
 }
 
-async function touchSimulatorActivity(c: Context, sessionId: string) {
+async function finalizeExpiredSimulatorSession(
+  c: Context,
+  input: { orgId: string, userId: string, appId: string, row: SimulatorRow },
+) {
+  const now = Date.now()
+  const maxMinutes = Number(input.row.max_duration_minutes) || SIMULATOR_MAX_DURATION_MINUTES
+  const billEnd = simulatorBillingEndInstant(input.row.started_at, input.row.last_activity_at, now, maxMinutes)
+  const seconds = simulatorBillableSeconds(input.row.started_at, billEnd, maxMinutes)
+  const platform = input.row.platform === 'android' ? 'android' : 'ios'
+  if (seconds > 0) {
+    await recordBuildTime(c, input.orgId, input.row.requested_by || input.userId, input.row.id, platform, seconds, billEnd, input.appId)
+  }
+  await markSession(c, input.row.id, 'stopped')
+}
+
+async function touchSimulatorActivity(
+  c: Context,
+  sessionId: string,
+  context?: { orgId: string, userId: string, appId: string, row: SimulatorRow },
+): Promise<'bumped' | 'expired' | 'skipped'> {
   try {
-    await queryWrite(c, `
-      UPDATE public.simulator_sessions
-      SET last_activity_at = now(),
-          updated_at = now()
-      WHERE id = $1::uuid
-        AND status = 'in-progress'
-    `, [sessionId])
+  const rows = context
+    ? await queryWrite<{ id: string }>(c, `
+        UPDATE public.simulator_sessions
+        SET last_activity_at = now(),
+            updated_at = now()
+        WHERE id = $1::uuid
+          AND status = 'in-progress'
+          AND started_at IS NOT NULL
+          AND started_at > now() - make_interval(mins => max_duration_minutes)
+          AND COALESCE(last_activity_at, started_at) > now() - make_interval(mins => ${SIMULATOR_IDLE_TIMEOUT_MINUTES})
+        RETURNING id
+      `, [sessionId])
+    : await queryWrite<{ id: string }>(c, `
+        UPDATE public.simulator_sessions
+        SET last_activity_at = now(),
+            updated_at = now()
+        WHERE id = $1::uuid
+          AND status = 'in-progress'
+        RETURNING id
+      `, [sessionId])
+    if (rows.length === 1)
+      return 'bumped'
+    if (!context || context.row.status !== 'in-progress' || !simulatorSessionPastExpiry(context.row))
+      return 'skipped'
+    await finalizeExpiredSimulatorSession(c, context)
+    return 'expired'
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to record simulator activity', sessionId, error })
+    return 'skipped'
   }
 }
 
@@ -325,9 +364,29 @@ interface SimulatorRow {
   url: string | null
   emulator_id: string | null
   started_at: string | null
+  last_activity_at: string | null
   device_stopped_at: string | null
   requested_by: string
   max_duration_minutes: number
+}
+
+function simulatorSessionPastExpiry(
+  row: Pick<SimulatorRow, 'started_at' | 'last_activity_at' | 'max_duration_minutes'>,
+  now = Date.now(),
+): boolean {
+  if (!row.started_at)
+    return false
+  const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_DURATION_MINUTES
+  const opened = Date.parse(row.started_at)
+  if (!Number.isFinite(opened))
+    return false
+  if (now >= opened + maxMinutes * 60_000)
+    return true
+  const activitySource = row.last_activity_at ?? row.started_at
+  const activity = Date.parse(activitySource)
+  if (!Number.isFinite(activity))
+    return false
+  return now >= activity + SIMULATOR_IDLE_TIMEOUT_MINUTES * 60_000
 }
 
 async function markSession(c: Context, id: string, status: 'in-progress' | 'stopped' | 'errored', extra?: { url?: string, emulatorId?: string }) {
@@ -445,7 +504,7 @@ async function ownedSession(c: Context, principal: RlsPrincipal, userId: string,
   await ensureBuildPermission(c, appId, userId)
   const orgId = await getBuildOwnerOrg(c, principal, appId)
   const rows = await queryRead<SimulatorRow>(c, `
-    SELECT id, app_id, platform, status, url, emulator_id, started_at, device_stopped_at, requested_by, max_duration_minutes
+    SELECT id, app_id, platform, status, url, emulator_id, started_at, last_activity_at, device_stopped_at, requested_by, max_duration_minutes
     FROM public.simulator_sessions
     WHERE id = $1::uuid AND owner_org = $2 AND app_id = $3
   `, [sessionId, orgId, appId])
@@ -562,8 +621,19 @@ async function recordStartupFailure(c: Context, slotId: string, emulatorId: stri
 
 export async function readSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const appId = requireAppId(body.app_id)
-  const { row } = await ownedSession(c, principal, userId, appId, sessionId)
-  await touchSimulatorActivity(c, sessionId)
+  const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
+  const touch = await touchSimulatorActivity(c, sessionId, { orgId, userId, appId, row })
+  if (touch === 'expired') {
+    return c.json({
+      data: {
+        id: row.id,
+        url: row.url,
+        status: 'stopped',
+        platform: row.platform,
+        kind: 'simulator',
+      },
+    })
+  }
   const remoteConfig = await simulatorRemoteConfig(c, row)
   return c.json({
     data: {
@@ -605,10 +675,10 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
     y: body.y,
     bundleId: typeof body.bundle_id === 'string' ? body.bundle_id.trim() : undefined,
   })
-  const { row } = await ownedSession(c, principal, userId, appId, sessionId)
-  if (row.status !== 'in-progress' || !row.url)
+  const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
+  const touch = await touchSimulatorActivity(c, sessionId, { orgId, userId, appId, row })
+  if (touch === 'expired' || row.status !== 'in-progress' || !row.url)
     throw simpleError('invalid_request', 'This simulator is not running.')
-  await touchSimulatorActivity(c, sessionId)
   const { accessKey } = simulatorConfig(c)
   const response = await fetch(simulatorDeviceUrl(row.url, 'agent-device/rpc'), {
     method: 'POST',
@@ -626,7 +696,7 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
   let image: string | undefined
   if (rpc.params.command === 'screenshot') {
     image = await simulatorScreenshot(row.url, accessKey, appId)
-    await touchSimulatorActivity(c, sessionId)
+    await touchSimulatorActivity(c, sessionId, { orgId, userId, appId, row })
   }
   return c.json({
     data: {
@@ -697,15 +767,14 @@ async function rememberDeviceStop(c: Context, id: string, stoppedAt: string) {
 export async function stopSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const appId = requireAppId(body.app_id)
   const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
-  await touchSimulatorActivity(c, sessionId)
   if (row.status === 'stopped' || row.status === 'errored') {
     return c.json({ data: { id: row.id, url: row.url, status: row.status, platform: row.platform, kind: 'simulator' } })
   }
   const { remoteStatus, stoppedAt } = await confirmDeviceStopped(c, row, sessionId)
   const usageEnd = simulatorUsageEnd(stoppedAt)
   const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_DURATION_MINUTES
-  const seconds = simulatorBillableSeconds(row.started_at, usageEnd, maxMinutes)
-  const billedAt = simulatorBillingInstant(row.started_at, usageEnd, maxMinutes)
+  const billedAt = simulatorBillingEndInstant(row.started_at, row.last_activity_at, usageEnd, maxMinutes)
+  const seconds = simulatorBillableSeconds(row.started_at, billedAt, maxMinutes)
   const platform = row.platform === 'android' ? 'android' : 'ios'
   let billingRecorded = seconds === 0
   if (seconds > 0) {

@@ -45,6 +45,9 @@ describe('simulator sessions', () => {
     expect(simulatorBillableSecondsWithIdle(startedAt, lastActivityAt, idleStop)).toBe(300)
     const activeUntil = '2026-10-29T12:35:00.000Z'
     expect(simulatorBillableSecondsWithIdle(startedAt, activeUntil, Date.parse('2026-10-29T13:00:00.000Z'))).toBe(2400)
+    const manualStopAt = Date.parse('2026-10-29T12:10:00.000Z')
+    const manualBillEnd = simulatorBillingEndInstant(startedAt, lastActivityAt, manualStopAt)
+    expect(simulatorBillableSeconds(startedAt, manualBillEnd)).toBe(300)
   })
 
   it('builds an agent-device command against the session URL', () => {

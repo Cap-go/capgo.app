@@ -32,31 +32,38 @@ BEGIN
       )
     FOR UPDATE
   LOOP
-  opened_at := COALESCE(session_row.started_at, session_row.created_at);
-  activity_at := COALESCE(session_row.last_activity_at, session_row.started_at, session_row.created_at);
-  effective_stop := LEAST(
-    COALESCE(session_row.device_stopped_at, now()),
-    opened_at + make_interval(mins => session_row.max_duration_minutes),
-    activity_at + interval '5 minutes'
-  );
-  elapsed := LEAST(
-    session_row.max_duration_minutes * 60,
-    GREATEST(1, round(extract(epoch FROM (effective_stop - opened_at)))::bigint)
-  );
-    INSERT INTO public.build_logs (
-      org_id, user_id, build_id, platform, build_time_unit, billable_seconds, app_id, created_at
-    )
-    VALUES (
-      p_org_id,
-      (SELECT id FROM auth.users WHERE id = session_row.requested_by),
-      session_row.id::varchar,
-      session_row.platform,
-      elapsed,
-      elapsed * CASE session_row.platform WHEN 'ios' THEN 2 ELSE 1 END,
-      session_row.app_id,
-      effective_stop
-    )
-    ON CONFLICT (build_id, org_id) DO NOTHING;
+  IF session_row.started_at IS NULL THEN
+    elapsed := 0;
+    effective_stop := COALESCE(session_row.device_stopped_at, now());
+  ELSE
+    opened_at := session_row.started_at;
+    activity_at := COALESCE(session_row.last_activity_at, session_row.started_at);
+    effective_stop := LEAST(
+      COALESCE(session_row.device_stopped_at, now()),
+      opened_at + make_interval(mins => session_row.max_duration_minutes),
+      activity_at + interval '5 minutes'
+    );
+    elapsed := LEAST(
+      session_row.max_duration_minutes * 60,
+      GREATEST(1, round(extract(epoch FROM (effective_stop - opened_at)))::bigint)
+    );
+  END IF;
+    IF elapsed > 0 THEN
+      INSERT INTO public.build_logs (
+        org_id, user_id, build_id, platform, build_time_unit, billable_seconds, app_id, created_at
+      )
+      VALUES (
+        p_org_id,
+        (SELECT id FROM auth.users WHERE id = session_row.requested_by),
+        session_row.id::varchar,
+        session_row.platform,
+        elapsed,
+        elapsed * CASE session_row.platform WHEN 'ios' THEN 2 ELSE 1 END,
+        session_row.app_id,
+        effective_stop
+      )
+      ON CONFLICT (build_id, org_id) DO NOTHING;
+    END IF;
     UPDATE public.simulator_sessions
     SET status = 'stopped',
         finished_at = effective_stop,
@@ -99,17 +106,22 @@ BEGIN
       AND status IN ('new', 'queued', 'starting', 'in-progress')
     FOR UPDATE
   LOOP
-  opened_at := COALESCE(session_row.started_at, session_row.created_at);
-  activity_at := COALESCE(session_row.last_activity_at, session_row.started_at, session_row.created_at);
-  effective_stop := LEAST(
-    COALESCE(session_row.device_stopped_at, now()),
-    opened_at + make_interval(mins => session_row.max_duration_minutes),
-    activity_at + interval '5 minutes'
-  );
-  elapsed := LEAST(
-    session_row.max_duration_minutes * 60,
-    GREATEST(0, round(extract(epoch FROM (effective_stop - opened_at)))::bigint)
-  );
+  IF session_row.started_at IS NULL THEN
+    elapsed := 0;
+    effective_stop := COALESCE(session_row.device_stopped_at, now());
+  ELSE
+    opened_at := session_row.started_at;
+    activity_at := COALESCE(session_row.last_activity_at, session_row.started_at);
+    effective_stop := LEAST(
+      COALESCE(session_row.device_stopped_at, now()),
+      opened_at + make_interval(mins => session_row.max_duration_minutes),
+      activity_at + interval '5 minutes'
+    );
+    elapsed := LEAST(
+      session_row.max_duration_minutes * 60,
+      GREATEST(0, round(extract(epoch FROM (effective_stop - opened_at)))::bigint)
+    );
+  END IF;
     IF elapsed > 0 THEN
       INSERT INTO public.build_logs (
         org_id, user_id, build_id, platform, build_time_unit, billable_seconds, app_id, created_at
