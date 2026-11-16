@@ -56,6 +56,9 @@ extend-exclude = [
   "cli/test/prescan/checks-android-manifest.test.ts",
   "cli/test/prescan/manifest.test.ts",
 
+  # Stripe tax ID enums and ISO billing country codes are identifiers, not prose.
+  "supabase/functions/shared/billing-profile.ts",
+
   # ISO 3166 country code table (BA, FO, PN... are country codes, not typos)
   "supabase/functions/_backend/utils/country_currency.ts",
   "supabase/functions/_backend/utils/country_price_tier.ts",

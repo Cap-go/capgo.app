@@ -25,6 +25,7 @@ import {
   scheduleSubscriptionCancel,
 } from '../utils/stripe_in_app.ts'
 import { addBillingTaxId, getBillingProfile, removeBillingTaxId, updateBillingDetails } from '../utils/stripe_billing_profile.ts'
+import { applyBillingPromotionCode, getBillingDiscounts } from '../utils/stripe_promotion_codes.ts'
 import { cancelTrialPlan, getTrialPlanSummary, listSchedulableTrialPlans, scheduleTrialPlan, startTrialPlanNow } from '../utils/stripe_trial_plan.ts'
 import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 
@@ -136,6 +137,18 @@ app.post('/tax-id/remove', middlewareAuth, async (c) => {
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
   await removeBillingTaxId(ctx, body.taxIdId)
   return c.json({ status: 'ok' })
+})
+
+app.post('/discounts', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.read_billing')
+  return c.json(await getBillingDiscounts(c, ctx))
+})
+
+app.post('/promotion-code', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { code?: unknown, replaceExisting?: unknown, redemptionId?: unknown }>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  return c.json(await applyBillingPromotionCode(c, ctx, body.code, body.replaceExisting, body.redemptionId))
 })
 
 // Trial card prompt: card on file and the onboarding plan that starts when the trial ends.

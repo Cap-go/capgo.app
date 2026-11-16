@@ -440,3 +440,26 @@ export function addBillingTaxId(orgId: string, taxId: { type: string, value: str
 export function removeBillingTaxId(orgId: string, taxIdId: string) {
   return callBilling<{ status: 'ok' }>('tax-id/remove', { orgId, taxIdId })
 }
+
+export interface BillingDiscount {
+  name: string | null
+  code: string | null
+  percentOff: number | null
+  amountOff: number | null
+  currency: string | null
+  endsAt: string | null
+}
+
+export interface BillingDiscounts {
+  hasSubscription: boolean
+  canApply: boolean
+  discounts: BillingDiscount[]
+}
+
+export function getBillingDiscounts(orgId: string) {
+  return callBilling<BillingDiscounts>('discounts', { orgId })
+}
+
+export function applyBillingPromotionCode(orgId: string, code: string, replaceExisting: boolean, redemptionId: string) {
+  return callBilling<{ discounts: BillingDiscount[] }>('promotion-code', { orgId, code, replaceExisting, redemptionId })
+}

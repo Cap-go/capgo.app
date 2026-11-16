@@ -9,6 +9,7 @@ import IconDownload from '~icons/heroicons/arrow-down-tray'
 import IconCard from '~icons/heroicons/credit-card'
 import IconExclamationTriangle from '~icons/heroicons/exclamation-triangle'
 import IconShieldCheck from '~icons/heroicons/shield-check'
+import BillingDiscountSection from '~/components/billing/BillingDiscountSection.vue'
 import BillingProfileSection from '~/components/billing/BillingProfileSection.vue'
 import CancelPlanModal from '~/components/billing/CancelPlanModal.vue'
 import CardFormModal from '~/components/billing/CardFormModal.vue'
@@ -549,6 +550,8 @@ onMounted(async () => {
             </div>
           </section>
         </div>
+
+        <BillingDiscountSection :key="`discounts-${orgId}`" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
 
         <BillingProfileSection :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
 
