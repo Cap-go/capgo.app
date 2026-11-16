@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { PgClient } from './pg.ts'
 import type { Database } from './supabase.types.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getPgClient, withPgTransaction } from './pg.ts'
 import { queryJson } from './pg_rls.ts'
 import { getPublicHostnameValidationError, getPublicUrlSyntaxValidationError } from './publicUrl.ts'
 import { getEnv } from './utils.ts'
@@ -834,7 +834,7 @@ export interface WebhookDeliveryTarget {
 /**
  * Creates one pending delivery per target with a single multi-row INSERT, then queues them all with
  * one pgmq.send_batch, both on one pg client. Returns the queued delivery rows ({ id, webhook_id }).
- * Like createDeliveryRecord + queueWebhookDelivery, a queue failure leaves the rows pending and is logged.
+ * Both statements run in one transaction, so a queue failure rolls the rows back and is logged.
  */
 export async function createAndQueueWebhookDeliveries(
   c: Context,
@@ -849,45 +849,45 @@ export async function createAndQueueWebhookDeliveries(
   let pg: PgClient | undefined
   try {
     pg = await getPgClient(c)
-    const deliveries = await queryJson<{ id: string, webhook_id: string }>(
-      pg,
-      `INSERT INTO public.webhook_deliveries (webhook_id, org_id, audit_log_id, event_type, request_payload, delivery_version, status)
-       SELECT target.webhook_id, target.org_id, NULL, $3, $4::jsonb, $5, 'pending'
-       FROM unnest($1::uuid[], $2::uuid[]) AS target(webhook_id, org_id)
-       -- Skip subscriptions deleted since dispatch read them, so one deletion cannot fail
-       -- the foreign key for the whole batch.
-       JOIN public.webhooks AS webhook ON webhook.id = target.webhook_id
-       RETURNING id, webhook_id`,
-      [targets.map(target => target.webhookId), targets.map(target => target.orgId), eventType, JSON.stringify(requestPayload), deliveryVersion],
-    )
-    if (deliveries.length === 0)
-      return []
     const urlByWebhook = new Map(targets.map(target => [target.webhookId, target.url]))
-    const messages = deliveries.map(delivery => ({
-      function_name: 'webhook_delivery',
-      function_type: 'cloudflare',
-      payload: {
-        delivery_id: delivery.id,
-        webhook_id: delivery.webhook_id,
-        url: urlByWebhook.get(delivery.webhook_id),
-        payload,
-      },
-    }))
-    try {
-      await pg.query(
+    // Insert and send_batch commit together: a failed send rolls the rows back instead of
+    // leaving every target in the batch pending with no queue message.
+    const deliveries = await withPgTransaction(pg, async (client) => {
+      const inserted = await queryJson<{ id: string, webhook_id: string }>(
+        client,
+        `INSERT INTO public.webhook_deliveries (webhook_id, org_id, audit_log_id, event_type, request_payload, delivery_version, status)
+         SELECT target.webhook_id, target.org_id, NULL, $3, $4::jsonb, $5, 'pending'
+         FROM unnest($1::uuid[], $2::uuid[]) AS target(webhook_id, org_id)
+         -- Skip subscriptions deleted since dispatch read them, so one deletion cannot fail
+         -- the foreign key for the whole batch.
+         JOIN public.webhooks AS webhook ON webhook.id = target.webhook_id
+         RETURNING id, webhook_id`,
+        [targets.map(target => target.webhookId), targets.map(target => target.orgId), eventType, JSON.stringify(requestPayload), deliveryVersion],
+      )
+      if (inserted.length === 0)
+        return inserted
+      const messages = inserted.map(delivery => ({
+        function_name: 'webhook_delivery',
+        function_type: 'cloudflare',
+        payload: {
+          delivery_id: delivery.id,
+          webhook_id: delivery.webhook_id,
+          url: urlByWebhook.get(delivery.webhook_id),
+          payload,
+        },
+      }))
+      await client.query(
         'SELECT pgmq.send_batch($1::text, ARRAY(SELECT jsonb_array_elements($2::jsonb)))',
         ['webhook_delivery', JSON.stringify(messages)],
       )
-    }
-    catch (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Error queuing webhook deliveries', error: serializeError(error) })
-      return []
-    }
-    cloudlog({ requestId: c.get('requestId'), message: 'Queued webhook deliveries', count: deliveries.length })
+      return inserted
+    })
+    if (deliveries.length > 0)
+      cloudlog({ requestId: c.get('requestId'), message: 'Queued webhook deliveries', count: deliveries.length })
     return deliveries
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error creating delivery records', error: serializeError(error) })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error creating and queuing webhook deliveries', error: serializeError(error) })
     return []
   }
   finally {

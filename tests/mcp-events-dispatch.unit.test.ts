@@ -14,6 +14,19 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', async original => ({
   ...await original<typeof import('../supabase/functions/_backend/utils/pg.ts')>(),
   getPgClient: mocks.getPgClient,
   closeClient: () => {},
+  // Same contract as the real helper, on the mocked client.
+  withPgTransaction: async (pg: { query: (text: string) => Promise<unknown> }, run: (client: unknown) => Promise<unknown>) => {
+    await pg.query('BEGIN READ WRITE')
+    try {
+      const result = await run(pg)
+      await pg.query('COMMIT')
+      return result
+    }
+    catch (error) {
+      await pg.query('ROLLBACK')
+      throw error
+    }
+  },
 }))
 vi.mock('../supabase/functions/_backend/utils/webhook.ts', async original => ({
   ...await original<typeof import('../supabase/functions/_backend/utils/webhook.ts')>(),
@@ -32,7 +45,7 @@ function setup(webhooks: ReturnType<typeof webhook>[]) {
       const ids = values[0] as string[]
       return { rows: ids.map(webhookId => ({ row: { id: `delivery-${webhookId}`, webhook_id: webhookId } })) }
     }
-    if (text.includes('pgmq.send_batch'))
+    if (text.includes('pgmq.send_batch') || /^(?:BEGIN|COMMIT|ROLLBACK)/.test(text))
       return { rows: [] }
     throw new Error(`unexpected query: ${text}`)
   })
@@ -102,7 +115,7 @@ describe('dispatchMcpEvent', () => {
     expect(mocks.urlError).toHaveBeenCalledTimes(1)
   })
 
-  it('swallows a queue failure like the single-delivery path did', async () => {
+  it('rolls the delivery rows back and swallows a queue failure', async () => {
     setup([webhook('w1', 'https://a.example.com/hook')])
     const base = mocks.query.getMockImplementation()!
     mocks.query.mockImplementation(async (text: string, values: unknown[]) => {
@@ -112,5 +125,7 @@ describe('dispatchMcpEvent', () => {
     })
     await expect(dispatchMcpEvent(c, ORG, 'bundle.uploaded', { org_id: ORG, app_id: 'com.demo.app' })).resolves.toBeUndefined()
     expect(queriesMatching('INSERT INTO public.webhook_deliveries')).toHaveLength(1)
+    expect(queriesMatching('ROLLBACK')).toHaveLength(1)
+    expect(queriesMatching('COMMIT')).toHaveLength(0)
   })
 })
