@@ -106,14 +106,14 @@ describe('snippet release deployment', () => {
   })
 
   it.concurrent.each([
-    [],
-    [{ name: 'one', code: '' }],
-    [{ name: '../other', code: 'export {}' }],
-    [{ name: 'one', code: 'é'.repeat(MAX_SNIPPET_BYTES) }],
-    [snippets[0], snippets[0]],
-  ])('rejects invalid build input before network access (%#)', async (invalid) => {
+    { label: 'empty catalog', invalid: [], error: 'nonempty with unique names' },
+    { label: 'empty module', invalid: [{ name: 'one', code: '' }], error: 'must contain 1–' },
+    { label: 'invalid name', invalid: [{ name: '../other', code: 'export {}' }], error: 'Invalid snippet name' },
+    { label: 'oversized module', invalid: [{ name: 'one', code: 'é'.repeat(MAX_SNIPPET_BYTES) }], error: 'must contain 1–' },
+    { label: 'duplicate names', invalid: [snippets[0], snippets[0]], error: 'nonempty with unique names' },
+  ])('rejects $label before network access', async ({ invalid, error }) => {
     const f = fixture()
-    await expect(deploySnippets({ token: 'test', snippets: invalid, fetcher: f.fetcher })).rejects.toThrow()
+    await expect(deploySnippets({ token: 'test', snippets: invalid, fetcher: f.fetcher })).rejects.toThrow(error)
     expect(f.fetcher).not.toHaveBeenCalled()
   })
 

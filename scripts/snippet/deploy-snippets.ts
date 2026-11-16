@@ -1,7 +1,5 @@
 import type { BuiltSnippet } from './catalog.ts'
 import { createHash } from 'node:crypto'
-import process from 'node:process'
-import { buildSnippets } from './build-snippets.ts'
 import { SNIPPET_ZONE_ID, validateSnippets } from './catalog.ts'
 
 type Fetcher = (url: string, init?: RequestInit) => Promise<Response>
@@ -99,17 +97,4 @@ export async function deploySnippets({ token, snippets, apply = false, fetcher =
   if (await rules() !== beforeRules)
     throw new Error('Snippet routing rules changed during deployment; inspect the concurrent change')
   log(`${apply ? 'Deployed' : 'Dry run checked'} ${snippets.length} snippets; routing rules unchanged`)
-}
-
-if (import.meta.main) {
-  try {
-    const args = process.argv.slice(2)
-    if (args.some(arg => arg !== '--apply'))
-      throw new Error('Usage: bun scripts/snippet/deploy-snippets.ts [--apply] (read-only by default)')
-    await deploySnippets({ token: process.env.CLOUDFLARE_API_TOKEN ?? '', snippets: await buildSnippets(), apply: args.includes('--apply') })
-  }
-  catch (error) {
-    console.error(error instanceof Error ? error.message : 'Snippet deployment failed')
-    process.exitCode = 1
-  }
 }
