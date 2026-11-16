@@ -13,14 +13,13 @@ function useSupabaseStorage(c: Context) {
   return getRuntimeKey() !== 'workerd' && getEnv(c, 'S3_ENDPOINT').includes('/storage/v1/s3')
 }
 
-function storageObjectUrl(c: Context, path: string, authenticated: boolean) {
+export function storageObjectUrl(c: Context, path: string, authenticated: boolean, bucket = getEnv(c, 'S3_BUCKET') || 'capgo') {
   const base = getEnv(c, 'SUPABASE_URL').replace(/\/+$/, '')
-  const bucket = getEnv(c, 'S3_BUCKET') || 'capgo'
   const encodedPath = path.split('/').map(encodeURIComponent).join('/')
   return `${base}/storage/v1/object/${authenticated ? 'authenticated/' : ''}${bucket}/${encodedPath}`
 }
 
-function serviceHeaders(c: Context, extra: Record<string, string> = {}) {
+export function serviceHeaders(c: Context, extra: Record<string, string> = {}) {
   const key = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
   return { Authorization: `Bearer ${key}`, apikey: key, ...extra }
 }
