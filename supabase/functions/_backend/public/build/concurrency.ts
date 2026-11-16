@@ -195,15 +195,38 @@ export function occupiedBuilderSlotsSql(excludeBuildRequestId?: string): string 
   `
 }
 
+const SIMULATOR_SESSIONS_DUE_FOR_EXPIRY_SQL = `
+  SELECT id, emulator_id, device_stopped_at
+  FROM public.simulator_sessions
+  WHERE owner_org = $1::uuid
+    AND status IN ('new', 'queued', 'starting', 'in-progress')
+    AND emulator_id IS NOT NULL
+    AND device_stopped_at IS NULL
+    AND (
+      COALESCE(started_at, created_at) <= now() - make_interval(mins => max_duration_minutes)
+      OR COALESCE(last_activity_at, started_at, created_at) <= now() - make_interval(mins => ${SIMULATOR_IDLE_TIMEOUT_MINUTES})
+    )
+`
+
 export async function expireSimulatorSessions(c: Context, orgId: string): Promise<void> {
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   let client: PgClient | null = null
+  let dueForDeviceStop: Array<{ id: string, emulator_id: string | null, device_stopped_at: string | null }> = []
   try {
     pgPool = await getPgClient(c)
     client = await checkoutPgClient(pgPool) as PgClient
     await beginWriteTransaction(client)
+    const dueResult = await client.query<{ id: string, emulator_id: string | null, device_stopped_at: string | null }>(
+      SIMULATOR_SESSIONS_DUE_FOR_EXPIRY_SQL,
+      [orgId],
+    )
+    dueForDeviceStop = dueResult.rows
     await client.query('SELECT public.expire_simulator_sessions($1::uuid)', [orgId])
     await client.query('COMMIT')
+    if (dueForDeviceStop.length > 0) {
+      const { stopDevicesForDueSimulatorExpiry } = await import('./simulator.ts')
+      await stopDevicesForDueSimulatorExpiry(c, dueForDeviceStop)
+    }
   }
   catch (error) {
     if (client) {

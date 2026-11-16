@@ -221,19 +221,50 @@ export function simulatorBillableSecondsWithIdle(
   return simulatorBillableSeconds(startedAt, end, maxDurationMinutes)
 }
 
+async function bestEffortStopSimulatorDevice(c: Context, row: Pick<SimulatorRow, 'id' | 'emulator_id' | 'device_stopped_at'>): Promise<string | null> {
+  if (row.device_stopped_at)
+    return row.device_stopped_at
+  if (!row.emulator_id)
+    return null
+  try {
+    await stopRemoteDevice(c, row.emulator_id, row.id, row.id)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Idle expiry could not stop the simulator device', sessionId: row.id, error })
+  }
+  return rememberDeviceStop(c, row.id, new Date().toISOString())
+}
+
 async function finalizeExpiredSimulatorSession(
   c: Context,
   input: { orgId: string, userId: string, appId: string, row: SimulatorRow },
 ) {
   const now = Date.now()
+  const deviceStoppedAt = await bestEffortStopSimulatorDevice(c, input.row)
+  const usageEnd = simulatorUsageEnd(deviceStoppedAt, now)
   const maxMinutes = Number(input.row.max_duration_minutes) || SIMULATOR_MAX_DURATION_MINUTES
-  const billEnd = simulatorBillingEndInstant(input.row.started_at, input.row.last_activity_at, now, maxMinutes)
+  const billEnd = simulatorBillingEndInstant(input.row.started_at, input.row.last_activity_at, usageEnd, maxMinutes)
   const seconds = simulatorBillableSeconds(input.row.started_at, billEnd, maxMinutes)
   const platform = input.row.platform === 'android' ? 'android' : 'ios'
+  let billingRecorded = seconds === 0
   if (seconds > 0) {
-    await recordBuildTime(c, input.orgId, input.row.requested_by || input.userId, input.row.id, platform, seconds, billEnd, input.appId)
+    const billingId = await recordBuildTime(c, input.orgId, input.row.requested_by || input.userId, input.row.id, platform, seconds, billEnd, input.appId)
+    billingRecorded = billingId !== null
   }
+  if (!billingRecorded)
+    return
   await markSession(c, input.row.id, 'stopped')
+}
+
+export async function stopDevicesForDueSimulatorExpiry(
+  c: Context,
+  sessions: Array<Pick<SimulatorRow, 'id' | 'emulator_id' | 'device_stopped_at'>>,
+): Promise<void> {
+  for (const row of sessions) {
+    if (!row.emulator_id || row.device_stopped_at)
+      continue
+    await bestEffortStopSimulatorDevice(c, row)
+  }
 }
 
 async function touchSimulatorActivity(

@@ -48,6 +48,10 @@ describe('simulator sessions', () => {
     const manualStopAt = Date.parse('2026-10-29T12:10:00.000Z')
     const manualBillEnd = simulatorBillingEndInstant(startedAt, lastActivityAt, manualStopAt)
     expect(simulatorBillableSeconds(startedAt, manualBillEnd)).toBe(300)
+    const deviceStoppedAt = '2026-10-29T12:01:00.000Z'
+    const lateFinalizeAt = simulatorUsageEnd(deviceStoppedAt, Date.parse('2026-10-29T12:10:00.000Z'))
+    const finalizeBillEnd = simulatorBillingEndInstant(startedAt, lastActivityAt, lateFinalizeAt)
+    expect(simulatorBillableSeconds(startedAt, finalizeBillEnd)).toBe(60)
   })
 
   it('builds an agent-device command against the session URL', () => {
