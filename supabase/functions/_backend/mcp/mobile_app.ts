@@ -1229,10 +1229,10 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
       step({
         id: 'signing_credentials',
         title: 'Save signing credentials and store them on Capgo',
-        detail: 'Interactive and secret: the user runs build init once per platform (it saves the credentials on their machine), then stores them on Capgo, which builds requested through the hosted MCP use. An agent with file access may instead upload the saved credentials file to the single-use URL from capgo_prepare_build_credentials_upload after the user confirms the app, platform and mode. Never paste credential contents into the chat or tool arguments.',
+        detail: 'Interactive and secret: the user runs build init once per platform (it saves the credentials on their machine), then stores them on Capgo, which builds requested through the hosted MCP use. --mode merge keeps keys already stored on Capgo; the default replace overwrites them. An agent with file access may instead upload the saved credentials file to the single-use URL from capgo_prepare_build_credentials_upload after the user confirms the app, platform and mode, but it can then read the credentials; when the agent must not see them, the user runs the push command. Never paste credential contents into the chat or tool arguments.',
         commands: platforms.flatMap(platform => [
           `npx @capgo/cli@latest build init --platform ${platform}`,
-          `npx @capgo/cli@latest build credentials push ${identity.app_id} --platform ${platform}`,
+          `npx @capgo/cli@latest build credentials push ${identity.app_id} --platform ${platform} --mode merge`,
         ]),
         verify: ['capgo_get_build_credentials lists stored credentials for each platform.'],
         mcp_tools: ['capgo_get_build_credentials', 'capgo_prepare_build_credentials_upload'],

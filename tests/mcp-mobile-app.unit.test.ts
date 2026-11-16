@@ -415,9 +415,9 @@ describe('mobile app plan', () => {
     expect(signing).toMatchObject({ run_by: 'user' })
     expect(signing.commands).toEqual([
       'npx @capgo/cli@latest build init --platform ios',
-      'npx @capgo/cli@latest build credentials push app.trailbuddy.mobile --platform ios',
+      'npx @capgo/cli@latest build credentials push app.trailbuddy.mobile --platform ios --mode merge',
       'npx @capgo/cli@latest build init --platform android',
-      'npx @capgo/cli@latest build credentials push app.trailbuddy.mobile --platform android',
+      'npx @capgo/cli@latest build credentials push app.trailbuddy.mobile --platform android --mode merge',
     ])
     expect(order.indexOf('signing_credentials')).toBeLessThan(order.indexOf('cloud_build'))
     // New apps upload to a dev channel devices do not read; a public channel must exist before the upload.
