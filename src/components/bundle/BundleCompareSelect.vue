@@ -46,6 +46,10 @@ const preferredCompareVersions = ref<VersionRow[]>([])
 const compareSearchResults = ref<VersionRow[]>([])
 const compareSearch = ref('')
 const compareSearchLoading = ref(false)
+const compareSearchError = ref(false)
+const compareVersionsLoading = ref(false)
+const compareVersionsError = ref(false)
+let compareVersionsRequestId = 0
 const compareSearchRequestId = ref(0)
 const latestCompareRequestId = ref(0)
 let preferredCompareRequestId = 0
@@ -77,6 +81,7 @@ function resetSearchState() {
   compareSearchRequestId.value += 1
   compareSearchResults.value = []
   compareSearchLoading.value = false
+  compareSearchError.value = false
 }
 
 function selectCompareVersion(option: VersionRow | null) {
@@ -118,6 +123,7 @@ async function loadLatestCompareVersions() {
   if (requestId !== latestCompareRequestId.value)
     return
 
+  compareVersionsError.value = Boolean(error)
   if (error) {
     console.error('Failed to load latest compare versions', error)
     latestCompareVersions.value = []
@@ -343,6 +349,7 @@ async function searchCompareVersions(term: string) {
 
   const requestId = ++compareSearchRequestId.value
   compareSearchLoading.value = true
+  compareSearchError.value = false
 
   // Each chain must start from its own builder: the console query builder is
   // mutable and returns `this`, so reusing one instance across concurrent
@@ -396,6 +403,7 @@ async function searchCompareVersions(term: string) {
     }).slice(0, COMPARE_SEARCH_LIMIT)
   }
 
+  compareSearchError.value = Boolean(error)
   if (error) {
     console.error('Failed to search compare versions', error)
     compareSearchResults.value = []
@@ -421,16 +429,22 @@ watch(compareSearch, (term) => {
 })
 
 watch(
-  () => [props.appId, props.currentVersionId],
+  () => [props.appId, props.currentVersionId, props.compareMode],
   async () => {
+    const requestId = ++compareVersionsRequestId
     resetSearchState()
+    compareVersionsError.value = false
+    compareVersionsLoading.value = false
     if (!props.appId || !props.currentVersionId) {
       latestCompareVersions.value = []
       preferredCompareVersions.value = []
       liveChannelsByVersion.value = new Map()
       return
     }
+    compareVersionsLoading.value = true
     await Promise.all([loadLatestCompareVersions(), loadPreferredCompareVersions(), loadLiveChannels()])
+    if (requestId === compareVersionsRequestId)
+      compareVersionsLoading.value = false
   },
   { immediate: true },
 )
@@ -504,11 +518,14 @@ watch(
               </span>
               <span class="ml-2 shrink-0 text-xs text-slate-400">{{ option.created_at ? formatLocalDate(option.created_at) : t('unknown') }}</span>
             </button>
-            <div v-if="compareSearchLoading" class="px-3 py-2 text-xs text-slate-400">
+            <div v-if="compareSearch.trim() ? compareSearchLoading : compareVersionsLoading" class="px-3 py-2 text-xs text-slate-400">
               {{ t('loading') }}
             </div>
-            <div v-else-if="compareSearch && compareOptions.length === 0" class="px-3 py-2 text-xs text-slate-400">
-              {{ noResultsLabel }}
+            <div v-else-if="compareSearch.trim() ? compareSearchError : compareVersionsError" role="status" class="px-3 py-2 text-xs text-slate-400">
+              {{ t('bundle-compare-load-error') }}
+            </div>
+            <div v-else-if="compareOptions.length === 0" role="status" class="px-3 py-2 text-xs text-slate-400">
+              {{ compareSearch.trim() ? noResultsLabel : t(compareMode === 'dependencies' ? 'bundle-compare-empty-dependencies' : 'bundle-compare-empty-manifest') }}
             </div>
           </div>
         </div>
