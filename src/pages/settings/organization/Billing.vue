@@ -74,6 +74,8 @@ const subscriptionLine = computed(() => {
   if (!sub)
     return t('billing-no-subscription')
   const endDate = formatLocalDate(sub.cancelAt ?? sub.currentPeriodEnd)
+  if (sub.pendingCurrency)
+    return t('billing-currency-renews-in', { currency: sub.pendingCurrency.toUpperCase(), date: endDate })
   if (sub.cancelAtPeriodEnd || sub.cancelAt)
     return t('billing-subscription-ends', { date: endDate })
   if (sub.status === 'past_due' || sub.status === 'unpaid')

@@ -100,6 +100,7 @@ describe('scheduleSubscriptionCancel', () => {
 
     expect(stripe.subscriptions.update).toHaveBeenCalledWith('sub_123', {
       cancel_at_period_end: true,
+      metadata: { capgo_currency_transition: '', capgo_currency_transition_end: '' },
       cancellation_details: { feedback: 'missing_features', comment: 'Need SSO' },
     })
     expect(mocks.syncSubscriptionData).toHaveBeenCalledWith(expect.anything(), 'cus_123', 'sub_123')
@@ -125,6 +126,7 @@ describe('resumeSubscription', () => {
     expect(stripe.subscriptions.update).toHaveBeenCalledWith('sub_123', {
       cancel_at: '',
       cancel_at_period_end: false,
+      metadata: { capgo_currency_transition: '', capgo_currency_transition_end: '' },
       cancellation_details: { feedback: '', comment: '' },
     })
   })

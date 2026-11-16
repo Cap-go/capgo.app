@@ -1,3 +1,4 @@
+import { clearCurrencyTransition, CURRENCY_TRANSITION_KEY } from './billing_currency_transition.ts'
 import { BILLING_CURRENCY_KEY } from './billing_currency.ts'
 import { syncBillingProfile } from './stripe_billing_profile_sync.ts'
 import type { Context } from 'hono'
@@ -43,6 +44,7 @@ export interface CardSummary {
 }
 
 export interface SubscriptionSummary {
+  pendingCurrency?: string
   status: Stripe.Subscription.Status
   cancelAtPeriodEnd: boolean
   cancelAt: string | null
@@ -210,6 +212,7 @@ export async function getSubscriptionSummary(c: Context, ctx: InAppBillingContex
     const subscription = await ctx.stripe.subscriptions.retrieve(subscriptionId)
     const periodEnd = Math.max(0, ...subscription.items.data.map(item => item.current_period_end ?? 0))
     return {
+      ...(subscription.cancel_at_period_end && subscription.metadata?.[CURRENCY_TRANSITION_KEY] ? { pendingCurrency: subscription.metadata[CURRENCY_TRANSITION_KEY] } : {}),
       status: subscription.status,
       cancelAtPeriodEnd: subscription.cancel_at_period_end,
       cancelAt: toIso(subscription.cancel_at),
@@ -429,6 +432,7 @@ export async function scheduleSubscriptionCancel(c: Context, ctx: InAppBillingCo
   await releaseTrialPlanSchedule(c, ctx.stripe, subscriptionId)
   await ctx.stripe.subscriptions.update(subscriptionId, {
     cancel_at_period_end: true,
+    metadata: clearCurrencyTransition,
     cancellation_details: { feedback, ...(comment ? { comment } : {}) },
   })
   cloudlog({ requestId: c.get('requestId'), message: 'in-app subscription cancel scheduled', customerId: ctx.customerId, subscriptionId, feedback })
@@ -443,6 +447,7 @@ export async function resumeSubscription(c: Context, ctx: InAppBillingContext) {
   await ctx.stripe.subscriptions.update(subscriptionId, {
     cancel_at: '',
     cancel_at_period_end: false,
+    metadata: clearCurrencyTransition,
     cancellation_details: { feedback: '', comment: '' },
   })
   // Keeping the current plan also abandons a pending currency change.

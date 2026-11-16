@@ -18,12 +18,12 @@ const currentDiscount = { name: 'Example offer', code: 'EXAMPLE10', percentOff: 
 
 type Call = { path: string, body: Record<string, unknown>, authorization: string | undefined }
 
-async function openBilling(page: Page, options: { discounted?: boolean, rejectUpdate?: boolean, noSubscription?: boolean, rejectCurrency?: boolean } = {}) {
+async function openBilling(page: Page, options: { discounted?: boolean, rejectUpdate?: boolean, noSubscription?: boolean, rejectCurrency?: boolean, regionalDiscountEligible?: boolean } = {}) {
   if (process.env.CAPGO_PR_SCREENSHOTS)
     await page.setViewportSize({ width: 1440, height: 1100 })
   const calls: Call[] = []
   let profile = { ...structuredClone(details), currency: 'eur', taxIds: [] as { id: string, type: string, value: string, status: string }[] }
-  let currencyState = { currency: 'eur', currencies: ['eur', 'usd'], subscriptionId: options.noSubscription ? null : 'sub_example', endsAt: options.noSubscription ? null : '2030-01-01T00:00:00Z', pendingCurrency: null as string | null }
+  let currencyState = { regionalDiscountEligible: options.regionalDiscountEligible ?? false, currency: 'eur', currencies: ['eur', 'usd'], subscriptionId: options.noSubscription ? null : 'sub_example', endsAt: options.noSubscription ? null : '2030-01-01T00:00:00Z', pendingCurrency: null as string | null }
   const discounts = options.discounted ? [currentDiscount] : []
   let orgId = ''
   function capture(route: Route, path: string) {
@@ -39,11 +39,12 @@ async function openBilling(page: Page, options: { discounted?: boolean, rejectUp
     orgId = route.request().postDataJSON().orgId
     return route.fulfill(json({
       publishableKey: '', card: null, backupCard: null, invoices: [], openInvoice: null, trialPlan: null,
-      subscription: options.noSubscription ? null : { status: 'active', cancelAtPeriodEnd: !!currencyState.pendingCurrency, cancelAt: null, currentPeriodEnd: '2030-01-01T00:00:00Z' },
+      subscription: options.noSubscription ? null : { pendingCurrency: currencyState.pendingCurrency, status: 'active', cancelAtPeriodEnd: !!currencyState.pendingCurrency, cancelAt: null, currentPeriodEnd: '2030-01-01T00:00:00Z' },
     }))
   })
   await page.route('**/private/stripe_billing/profile', route => route.fulfill(json(profile)))
   await page.route('**/private/stripe_billing/currency', route => route.fulfill(json(currencyState)))
+  await page.route('**/private/stripe_billing/currency/preview', route => route.fulfill(json({ currency: route.request().postDataJSON().currency, amount: 1400, interval: 'month', subscriptionId: 'sub_example', quoteId: 'quote_example' })))
   await page.route('**/private/stripe_billing/currency/update', (route) => {
     const body = capture(route, 'currency/update')
     if (options.rejectCurrency)
@@ -256,14 +257,16 @@ test('changes currency immediately without a subscription', async ({ page }) => 
   await expect(page.locator('[data-test="billing-currency"]').getByRole('link', { name: 'Choose a plan', exact: true })).toHaveAttribute('href', '/settings/organization/plans')
 })
 
-test('confirms the paid-period cancellation before changing a subscribed currency', async ({ page }) => {
+test('confirms the automatic currency replacement and renewal price', async ({ page }) => {
   const { calls } = await openBilling(page)
   await page.getByRole('button', { name: 'Change currency', exact: true }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('combobox').selectOption('usd')
-  const submit = dialog.getByRole('button', { name: 'Confirm cancellation and currency' })
+  const submit = dialog.getByRole('button', { name: 'Confirm automatic currency change' })
   await expect(submit).toBeDisabled()
-  await expect(dialog).toContainText('It will not restart automatically')
+  await expect(dialog).toContainText('You do not need to restart it yourself')
+  await expect(dialog.locator('[data-test="billing-currency-renewal"]')).toContainText('$14.00')
+  await expect(dialog.locator('[data-test="billing-currency-regional-note"]')).toHaveCount(0)
   await dialog.getByRole('checkbox').check()
   await expect(submit).toBeEnabled()
   if (process.env.CAPGO_PR_SCREENSHOTS)
@@ -272,7 +275,9 @@ test('confirms the paid-period cancellation before changing a subscribed currenc
   await expect(dialog).not.toBeVisible()
   await expect(page.locator('[data-test="billing-currency-pending"]')).toContainText('USD')
   await expect(page.locator('[data-test="billing-currency"]')).toContainText('EUR')
-  expect(calls.find(call => call.path === 'currency/update')?.body).toMatchObject({ currency: 'usd', confirmedSubscription: 'sub_example' })
+  expect(calls.find(call => call.path === 'currency/update')?.body).toMatchObject({ currency: 'usd', confirmedSubscription: 'sub_example', quoteId: 'quote_example' })
+  await expect(page.locator('[data-test="billing-subscription"]')).toContainText('Automatically renews in USD')
+  await expect(page.locator('[data-test="billing-currency-pending"]')).toContainText('No restart is needed')
   if (process.env.CAPGO_PR_SCREENSHOTS)
     await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/pending-currency.png' })
 })
@@ -287,3 +292,14 @@ test('retains the current currency and offers a retry after a failed change', as
   await expect(dialog.getByRole('button', { name: 'Save currency' })).toBeEnabled()
   await expect(page.locator('[data-test="billing-currency"] > p').first()).toHaveText('EUR')
 })
+
+for (const scenario of ['trial', 'Solo']) {
+  test(`currency editor explains the matching card country requirement for ${scenario}`, async ({ page }) => {
+    await openBilling(page, { noSubscription: scenario === 'trial', regionalDiscountEligible: true })
+    await page.getByRole('button', { name: 'Change currency', exact: true }).click()
+    const note = page.getByRole('dialog').locator('[data-test="billing-currency-regional-note"]')
+    await expect(note).toContainText('credit card issued in the same eligible country as your billing address')
+    if (process.env.CAPGO_PR_SCREENSHOTS && scenario === 'trial')
+      await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/currency-trial-discount.png' })
+  })
+}

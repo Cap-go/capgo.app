@@ -1,4 +1,4 @@
-import { changeBillingCurrency, getBillingCurrencyState } from '../utils/stripe_billing_currency.ts'
+import { changeBillingCurrency, getBillingCurrencyState, getCurrencyTransitionPreview } from '../utils/stripe_billing_currency.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
@@ -278,7 +278,13 @@ app.post('/currency', middlewareAuth, async (c) => {
 })
 
 app.post('/currency/update', middlewareAuth, async (c) => {
-  const body = await parseBody<OrgBody & { currency?: unknown, confirmedSubscription?: unknown }>(c)
+  const body = await parseBody<OrgBody & { currency?: unknown, confirmedSubscription?: unknown, quoteId?: unknown }>(c)
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
-  return c.json(await changeBillingCurrency(c, ctx, body.currency, body.confirmedSubscription))
+  return c.json(await changeBillingCurrency(c, ctx, body.currency, body.confirmedSubscription, body.quoteId))
+})
+
+app.post('/currency/preview', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { currency?: unknown }>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  return c.json(await getCurrencyTransitionPreview(c, ctx, body.currency))
 })

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { BillingCurrencyState } from '../../../supabase/functions/shared/billing-profile'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import type { BillingCurrencyPreview, BillingCurrencyState } from '../../../supabase/functions/shared/billing-profile'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { checkPermissions } from '~/services/permissions'
-import { changeBillingCurrency, getBillingCurrencyState } from '~/services/stripe'
+import { changeBillingCurrency, formatStripeAmount, getBillingCurrencyState, previewBillingCurrency } from '~/services/stripe'
 import BillingModal from './BillingModal.vue'
 
 const props = defineProps<{ orgId: string }>()
@@ -13,6 +13,9 @@ const state = ref<BillingCurrencyState | null>(null)
 const editing = ref(false)
 const selected = ref('')
 const confirmed = ref(false)
+const preview = ref<BillingCurrencyPreview | null>(null)
+const previewBusy = ref(false)
+let previewRun = 0
 const busy = ref(false)
 const failed = ref(false)
 const error = ref('')
@@ -53,13 +56,38 @@ async function edit() {
   error.value = ''
   editing.value = true
 }
+async function loadPreview() {
+  const run = ++previewRun
+  preview.value = null
+  confirmed.value = false
+  previewBusy.value = false
+  if (!editing.value || !state.value?.subscriptionId || selected.value === state.value.currency)
+    return
+  previewBusy.value = true
+  error.value = ''
+  try {
+    const result = await previewBillingCurrency(props.orgId, selected.value)
+    if (!disposed && run === previewRun)
+      preview.value = result
+  }
+  catch {
+    if (!disposed && run === previewRun)
+      error.value = t('billing-currency-preview-error')
+  }
+  finally {
+    if (run === previewRun)
+      previewBusy.value = false
+  }
+}
+watch([selected, editing], loadPreview)
+
 async function save() {
-  if (busy.value || !state.value || (state.value.subscriptionId && !confirmed.value))
+  if (busy.value || !state.value || (state.value.subscriptionId && (!confirmed.value || !preview.value)))
     return
   busy.value = true
   error.value = ''
   try {
-    const result = await changeBillingCurrency(props.orgId, selected.value, state.value.subscriptionId)
+    const result = await changeBillingCurrency(props.orgId, selected.value, state.value.subscriptionId, preview.value?.quoteId)
     if (!disposed) {
       state.value = result
       editing.value = false
@@ -111,12 +139,21 @@ async function save() {
         <p class="text-sm">
           {{ t('billing-currency-price-review') }}
         </p>
+        <p v-if="state.regionalDiscountEligible" class="text-sm" data-test="billing-currency-regional-note">
+          {{ t('billing-currency-regional-requirement') }}
+        </p>
         <template v-if="state.subscriptionId">
+          <p v-if="previewBusy" role="status" class="text-sm">
+            {{ t('loading') }}
+          </p>
+          <p v-else-if="preview" class="text-base font-semibold" data-test="billing-currency-renewal">
+            {{ t('billing-currency-renewal-estimate', { amount: formatStripeAmount(preview.amount, preview.currency), interval: t(preview.interval === 'year' ? 'billing-currency-year' : 'billing-currency-month') }) }}
+          </p>
           <p class="rounded-lg bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950 dark:text-amber-100">
             {{ t('billing-currency-transition', { date: date(state.endsAt), currency: selected.toUpperCase() }) }}
           </p>
           <label class="flex items-start gap-3 text-sm">
-            <input v-model="confirmed" type="checkbox" class="d-checkbox d-checkbox-sm" :disabled="busy">
+            <input v-model="confirmed" type="checkbox" class="d-checkbox d-checkbox-sm" :disabled="busy || previewBusy || !preview">
             {{ t('billing-currency-confirm-cancel') }}
           </label>
         </template>
@@ -126,11 +163,14 @@ async function save() {
         <p v-if="error" role="alert" class="text-sm text-red-600 dark:text-red-300">
           {{ error }}
         </p>
+        <button v-if="state.subscriptionId && selected !== state.currency && !preview && !previewBusy" type="button" class="d-btn d-btn-sm" @click="loadPreview">
+          {{ t('retry') }}
+        </button>
         <div class="flex justify-end gap-2">
           <button type="button" class="d-btn d-btn-ghost" :disabled="busy" @click="editing = false">
             {{ t('button-cancel') }}
           </button>
-          <button type="submit" class="d-btn d-btn-primary" :disabled="busy || !selected || selected === state.currency || (!!state.subscriptionId && !confirmed)">
+          <button type="submit" class="d-btn d-btn-primary" :disabled="busy || !selected || selected === state.currency || (!!state.subscriptionId && (!confirmed || !preview || previewBusy))">
             {{ t(state.subscriptionId ? 'billing-currency-schedule' : 'billing-currency-save') }}
           </button>
         </div>

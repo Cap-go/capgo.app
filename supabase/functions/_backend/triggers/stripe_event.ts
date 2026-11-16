@@ -1,3 +1,4 @@
+import { completeCurrencyTransition } from '../utils/billing_currency_transition.ts'
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { MiddlewareKeyVariablesStripe } from '../utils/hono_middleware_stripe.ts'
@@ -2301,6 +2302,15 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
   const customer = await loadStripeCustomer(c, stripeData)
 
   await assertStripeBillingAccount(c, customer)
+  if (stripeEvent.type === 'customer.subscription.deleted' && await completeCurrencyTransition(c, {
+    customerId: stripeData.data.customer_id,
+    currentSubscriptionId: customer.subscription_id,
+    billingAccount: getWebhookBillingAccount(c),
+    stripe: getStripe(c, getWebhookBillingAccount(c)),
+    publishableKey: '',
+  }, stripeEvent.data.object))
+    return c.json(BRES)
+
   await ensureCustomerMetadata(c, stripeData.data.customer_id, org.id, org.created_by)
   stripeData.data.customer_country = await syncStripeCustomerCountry(c, stripeData.data.customer_id)
 

@@ -1,5 +1,5 @@
 import type { Stripe } from '@stripe/stripe-js'
-import type { BillingCurrencyState, BillingDetails, BillingProfile, BillingTaxId } from '../../supabase/functions/shared/billing-profile'
+import type { BillingCurrencyPreview, BillingCurrencyState, BillingDetails, BillingProfile, BillingTaxId } from '../../supabase/functions/shared/billing-profile'
 import { loadStripe } from '@stripe/stripe-js'
 import { toast } from 'vue-sonner'
 import { i18n } from '~/modules/i18n'
@@ -255,6 +255,7 @@ export interface BillingCard {
 }
 
 export interface BillingSubscription {
+  pendingCurrency?: string
   status: string
   cancelAtPeriodEnd: boolean
   cancelAt: string | null
@@ -481,6 +482,10 @@ export function getBillingCurrencyState(orgId: string) {
   return callBilling<BillingCurrencyState>('currency', { orgId })
 }
 
-export function changeBillingCurrency(orgId: string, currency: string, confirmedSubscription: string | null) {
-  return callBilling<BillingCurrencyState>('currency/update', { orgId, currency, confirmedSubscription })
+export function changeBillingCurrency(orgId: string, currency: string, confirmedSubscription: string | null, quoteId?: string) {
+  return callBilling<BillingCurrencyState>('currency/update', { orgId, currency, confirmedSubscription, quoteId })
+}
+
+export function previewBillingCurrency(orgId: string, currency: string) {
+  return callBilling<BillingCurrencyPreview>('currency/preview', { orgId, currency })
 }

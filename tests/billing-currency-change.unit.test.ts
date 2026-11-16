@@ -2,13 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectiveBillingCurrency } from '../supabase/functions/_backend/utils/billing_currency'
 import { changeBillingCurrency, getBillingCurrencyState } from '../supabase/functions/_backend/utils/stripe_billing_currency'
 
-const mocks = vi.hoisted(() => ({ plans: vi.fn(), sync: vi.fn(), syncSubscription: vi.fn(), query: vi.fn() }))
+const mocks = vi.hoisted(() => ({ eligibility: vi.fn(), plans: vi.fn(), sync: vi.fn(), syncSubscription: vi.fn(), query: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
-  authPrincipal: vi.fn(), servicePrincipal: {}, queryJson: mocks.plans,
+  authPrincipal: vi.fn(), queryJsonOne: mocks.eligibility, servicePrincipal: {}, queryJson: mocks.plans,
   withRlsContext: (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({ query: mocks.query }),
 }))
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({ syncSubscriptionData: mocks.syncSubscription }))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile_sync.ts', () => ({ syncBillingProfile: mocks.sync }))
+vi.mock('../supabase/functions/_backend/utils/billing_currency_transition.ts', () => ({
+  CURRENCY_TRANSITION_KEY: 'capgo_currency_transition', CURRENCY_TRANSITION_END_KEY: 'capgo_currency_transition_end',
+  previewCurrencyTransition: async () => ({ quoteId: 'quote_example' }),
+}))
 const customer = { id: 'cus_example', currency: 'eur', metadata: {} as Record<string, string> }
 const stripe = {
   customers: { retrieve: vi.fn(), update: vi.fn() },
@@ -21,6 +25,7 @@ const ctx = { stripe, customerId: customer.id, billingAccount: 'us' } as any
 const sub = { id: 'sub_example', status: 'active', currency: 'eur', cancel_at_period_end: false, items: { data: [{ current_period_end: 1893456000 }] } }
 beforeEach(() => {
   vi.resetAllMocks()
+  mocks.eligibility.mockResolvedValue({ trial: false, plan_name: 'Team' })
   customer.metadata = {}
   stripe.customers.retrieve.mockResolvedValue(customer)
   stripe.customers.update.mockImplementation(async (_id, data) => { customer.metadata = data.metadata; return customer })
@@ -49,10 +54,10 @@ describe('self-service billing currency', () => {
   it('ends at the paid period boundary and exposes the pending currency', async () => {
     stripe.subscriptions.list.mockResolvedValue({ data: [sub] })
     stripe.subscriptions.update.mockImplementation(async () => {
-      stripe.subscriptions.list.mockResolvedValue({ data: [{ ...sub, cancel_at_period_end: true }] })
+      stripe.subscriptions.list.mockResolvedValue({ data: [{ ...sub, cancel_at_period_end: true, metadata: { capgo_currency_transition: 'usd' } }] })
     })
-    const result = await changeBillingCurrency({} as any, ctx, 'usd', sub.id)
-    expect(stripe.subscriptions.update).toHaveBeenCalledWith(sub.id, { cancel_at_period_end: true, proration_behavior: 'none' })
+    const result = await changeBillingCurrency({} as any, ctx, 'usd', sub.id, 'quote_example')
+    expect(stripe.subscriptions.update).toHaveBeenCalledWith(sub.id, { cancel_at_period_end: true, proration_behavior: 'none', metadata: { capgo_currency_transition: 'usd', capgo_currency_transition_end: '1893456000' } })
     expect(result).toMatchObject({ currency: 'eur', pendingCurrency: 'usd', endsAt: '2030-01-01T00:00:00.000Z' })
     expect(mocks.syncSubscription).toHaveBeenCalled()
   })
@@ -82,7 +87,7 @@ describe('self-service billing currency', () => {
   it('does not report success on cancellation failure and keeps billing in the active currency', async () => {
     stripe.subscriptions.list.mockResolvedValue({ data: [sub] })
     stripe.subscriptions.update.mockRejectedValue(new Error('unavailable'))
-    await expect(changeBillingCurrency({} as any, ctx, 'usd', sub.id)).rejects.toThrow()
+    await expect(changeBillingCurrency({} as any, ctx, 'usd', sub.id, 'quote_example')).rejects.toThrow()
     expect(await effectiveBillingCurrency(stripe as any, customer as any)).toBe('eur')
     expect(mocks.sync).not.toHaveBeenCalled()
   })
@@ -95,4 +100,21 @@ describe('self-service billing currency', () => {
     await expect(changeBillingCurrency({} as any, ctx, 'usd', null)).rejects.toThrow()
     expect(stripe.customers.update).not.toHaveBeenCalled()
   })
+})
+
+it('rejects an unreviewed or stale renewal quote before mutating Stripe', async () => {
+  stripe.subscriptions.list.mockResolvedValue({ data: [sub] })
+  await expect(changeBillingCurrency({} as any, ctx, 'usd', sub.id, 'old_quote')).rejects.toThrow()
+  expect(stripe.customers.update).not.toHaveBeenCalled()
+})
+
+it.each([
+  { live: false, trial: false, plan: 'Solo', expected: false },
+  { live: true, trial: false, plan: 'Solo', expected: true },
+  { live: false, trial: true, plan: 'Team', expected: true },
+  { live: true, trial: true, plan: 'Team', expected: false },
+])('only explains regional discounts for a current trial or Solo plan: %j', async ({ live, trial, plan, expected }) => {
+  mocks.eligibility.mockResolvedValue({ trial, plan_name: plan })
+  stripe.subscriptions.list.mockResolvedValue({ data: live ? [sub] : [] })
+  expect((await getBillingCurrencyState({} as any, ctx)).regionalDiscountEligible).toBe(expected)
 })
