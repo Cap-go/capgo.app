@@ -1,8 +1,7 @@
 /* eslint-disable node/prefer-global/process */
 import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
-import { createClient } from '@supabase/supabase-js'
+import { connectScriptDb, getDatabaseUrl } from './script_db.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -76,7 +75,7 @@ async function main() {
   }
 
   const s3 = await initS3()
-  const supabase = supabaseAdmin()
+  const db = await connectScriptDb(getDatabaseUrl(process.env))
   const list = await listAllObjectsInFolder(s3, 'apps/')
   // await s3.send(new ListObjectsV2Command({
   //   Bucket: S3_BUCKET,
@@ -101,14 +100,9 @@ async function main() {
       const versionName = itemPath[4].split('.zip').at(0) ?? ''
 
       async function checkSupabase() {
-        const { data: version, error: errorVer } = await supabase
-          .from('app_versions')
-          .select('*')
-          .eq('app_id', appId)
-          .eq('name', versionName)
-          .single()
+        const { rows } = await db.query('SELECT deleted FROM public.app_versions WHERE app_id = $1 AND name = $2', [appId, versionName])
 
-        if (errorVer || version.deleted) {
+        if (rows.length !== 1 || rows[0].deleted) {
           // console.error(`Cannot find version for ${JSON.stringify(item)}. Error: ${JSON.stringify(errorVer)}`)
           notFoundObjects.push(item)
         }
@@ -140,14 +134,10 @@ async function main() {
             const itemPath = item.Key!.split('/')
             const finalItem = itemPath.at(-1)
             if (finalItem && finalItem.endsWith('.zip')) {
-              const { data: version, error: errorVer } = await supabase
-                .from('app_versions')
-                .select('*')
-                .eq('r2_path', item.Key!)
-                .single()
+              const { rows } = await db.query('SELECT deleted FROM public.app_versions WHERE r2_path = $1', [item.Key!])
 
-              if (errorVer || version.deleted) {
-                console.log(errorVer)
+              if (rows.length !== 1 || rows[0].deleted) {
+                console.log(`app_versions rows for ${item.Key}: ${rows.length}`)
                 // console.error(`Cannot find version for ${JSON.stringify(item)}. Error: ${JSON.stringify(errorVer)}`)
                 notFoundObjects.push(item)
               }
@@ -202,6 +192,7 @@ async function main() {
     // console.log(notFoundObjects)
   }
 
+  await db.end()
   // console.log(list)
   // console.log(`${process.env.S3_ACCESS_KEY_ID}`)
 }
@@ -238,18 +229,6 @@ async function listAllObjectsInFolder(s3: S3Client, path: string, bucketName: st
     process.exit(1)
   }
   return object
-}
-
-export function supabaseAdmin() {
-  const c = null
-  const options = {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  }
-  return createClient<Database>(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'), options)
 }
 
 export function initS3() {
