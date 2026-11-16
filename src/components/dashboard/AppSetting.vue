@@ -21,7 +21,7 @@ import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
-import { checkPermissions } from '~/services/permissions'
+import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -1433,14 +1433,13 @@ async function transferAppOwnership() {
     return
 
   // Step 2: Organization selection - filter orgs where user has transfer permission
-  const destinationOrgs = await Promise.all(
-    organizationStore.organizations
-      .filter(org => org.gid !== appRef.value?.owner_org.id)
-      .map(async (org) => {
-        const hasTransferPermission = await checkPermissions('app.transfer', { orgId: org.gid })
-        return hasTransferPermission ? org : null
-      }),
-  ).then(results => results.filter((org): org is NonNullable<typeof org> => org !== null))
+  const candidateOrgs = organizationStore.organizations
+    .filter(org => org.gid !== appRef.value?.owner_org.id)
+  const canTransferTo = await checkPermissionsBatch(candidateOrgs.map(org => ({
+    permissions: 'app.transfer' as const,
+    scope: { orgId: org.gid },
+  })))
+  const destinationOrgs = candidateOrgs.filter((_org, idx) => canTransferTo[idx])
 
   if (destinationOrgs.length === 0) {
     toast.error(t('no-super-admin-organizations'))

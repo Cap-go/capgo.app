@@ -63,6 +63,7 @@ export const CONSOLE_RPCS = new Set([
   'mark_onboarding_feature_started',
   'rbac_check_permission',
   'rbac_check_permission_direct',
+  'rbac_check_permissions',
   'record_app_cicd_setup',
   'request_app_chart_refresh',
   'request_org_chart_refresh',

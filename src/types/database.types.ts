@@ -5779,6 +5779,14 @@ export type Database = {
         }
         Returns: boolean
       }
+      rbac_check_permissions: {
+        Args: { p_checks: Json }
+        Returns: {
+          allowed: boolean
+          idx: number
+          key: string
+        }[]
+      }
       rbac_denied_channel_ids_for_permission: {
         Args: { p_permission_key: string }
         Returns: number[]
