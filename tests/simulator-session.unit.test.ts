@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { SIMULATOR_MAX_DURATION_MINUTES } from '../supabase/functions/_backend/public/build/concurrency.ts'
 import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, multipartIpaStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
 
 describe('simulator sessions', () => {
+  it('stops unattended sessions after five minutes', () => {
+    expect(SIMULATOR_MAX_DURATION_MINUTES).toBe(5)
+  })
+
   it('asks the device host for one session tied to the Capgo org', () => {
     expect(emulatorSessionCreateBody({
       appId: 'ee.forgr.capgo',
@@ -14,7 +19,7 @@ describe('simulator sessions', () => {
       orgId: '91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57',
       name: 'Checkout',
       type: 'agent-device',
-      maxDurationMinutes: 40,
+      maxDurationMinutes: SIMULATOR_MAX_DURATION_MINUTES,
     })
   })
 
@@ -22,6 +27,7 @@ describe('simulator sessions', () => {
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', Date.parse('2026-10-29T12:00:30.400Z'))).toBe(30)
     expect(simulatorBillableSeconds(null)).toBe(0)
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.400Z', Date.parse('2026-10-29T12:00:00.600Z'))).toBe(1)
+    expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', Date.parse('2026-10-29T14:00:00.000Z'), SIMULATOR_MAX_DURATION_MINUTES)).toBe(300)
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', Date.parse('2026-10-29T14:00:00.000Z'), 40)).toBe(2400)
     const stoppedAt = '2026-10-29T12:05:00.000Z'
     const retryAt = Date.parse('2026-10-29T12:15:00.000Z')

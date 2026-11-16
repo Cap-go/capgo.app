@@ -6,7 +6,7 @@ import type { PgQueryClient } from '../../utils/pg.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from '../../utils/pg.ts'
 import { recordBuildTime } from '../../utils/supabase.ts'
 import { backgroundTask, getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
-import { reserveSimulatorSlot } from './concurrency.ts'
+import { reserveSimulatorSlot, SIMULATOR_MAX_DURATION_MINUTES } from './concurrency.ts'
 import { savedOutputsForJobs } from './outputs.ts'
 import { ensureBuildPermission, ensureBuildTimePlanAllowed, getBuildOwnerOrg } from './request.ts'
 
@@ -157,7 +157,7 @@ export function emulatorSessionCreateBody(input: { id?: string, appId: string, p
     orgId: input.orgId,
     name: input.name,
     type: 'agent-device',
-    maxDurationMinutes: 40,
+    maxDurationMinutes: SIMULATOR_MAX_DURATION_MINUTES,
   }
 }
 
@@ -168,7 +168,7 @@ export function simulatorUsageEnd(deviceStoppedAt: string | Date | null, now = D
   return Number.isFinite(parsed) ? parsed : now
 }
 
-export function simulatorBillingInstant(startedAt: string | null, stoppedAt: number, maxDurationMinutes = 40): number {
+export function simulatorBillingInstant(startedAt: string | null, stoppedAt: number, maxDurationMinutes = SIMULATOR_MAX_DURATION_MINUTES): number {
   if (!startedAt)
     return stoppedAt
   const started = Date.parse(startedAt)
@@ -177,7 +177,7 @@ export function simulatorBillingInstant(startedAt: string | null, stoppedAt: num
   return Math.min(stoppedAt, started + Math.max(1, maxDurationMinutes) * 60_000)
 }
 
-export function simulatorBillableSeconds(startedAt: string | null, now = Date.now(), maxDurationMinutes = 40): number {
+export function simulatorBillableSeconds(startedAt: string | null, now = Date.now(), maxDurationMinutes = SIMULATOR_MAX_DURATION_MINUTES): number {
   if (!startedAt)
     return 0
   const started = Date.parse(startedAt)
@@ -644,7 +644,7 @@ export async function stopSimulator(c: Context, sessionId: string, body: Simulat
   }
   const { remoteStatus, stoppedAt } = await confirmDeviceStopped(c, row, sessionId)
   const usageEnd = simulatorUsageEnd(stoppedAt)
-  const maxMinutes = Number(row.max_duration_minutes) || 40
+  const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_DURATION_MINUTES
   const seconds = simulatorBillableSeconds(row.started_at, usageEnd, maxMinutes)
   const billedAt = simulatorBillingInstant(row.started_at, usageEnd, maxMinutes)
   const platform = row.platform === 'android' ? 'android' : 'ios'

@@ -22,7 +22,7 @@ VALUES
     'ios',
     'in-progress',
     '6aa76066-55ef-4238-ade6-0b32334a4097',
-    40,
+    5,
     now() - interval '2 hours'
   ),
   (
@@ -32,8 +32,8 @@ VALUES
     'android',
     'in-progress',
     '6aa76066-55ef-4238-ade6-0b32334a4097',
-    40,
-    now() - interval '5 minutes'
+    5,
+    now() - interval '4 minutes'
   );
 
 SELECT tests.create_supabase_user('sim_bill_user', 'sim_bill_user@test.local');
@@ -84,7 +84,7 @@ SELECT is(
     WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
       AND build_id = '99000000-0000-4000-8000-000000000001'
   ),
-  2400::bigint,
+  300::bigint,
   'expiry bills the capped open time'
 );
 
@@ -107,7 +107,7 @@ SELECT is(
       AND build_id = '99000000-0000-4000-8000-000000000001'
   ),
   (
-    SELECT started_at + interval '40 minutes'
+    SELECT started_at + interval '5 minutes'
     FROM public.simulator_sessions
     WHERE id = '99000000-0000-4000-8000-000000000001'
   ),
@@ -242,8 +242,8 @@ VALUES (
   'android',
   'in-progress',
   '6aa76066-55ef-4238-ade6-0b32334a4097',
-  40,
-  now() - interval '5 minutes'
+  5,
+  now() - interval '1 minute'
 );
 
 DELETE FROM public.orgs WHERE id = '99000000-0000-4000-8000-000000000099';

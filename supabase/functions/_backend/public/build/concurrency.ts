@@ -6,6 +6,8 @@ import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logP
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
 
+export const SIMULATOR_MAX_DURATION_MINUTES = 5
+
 export const NATIVE_BUILD_TERMINAL_STATUSES = ['succeeded', 'failed', 'expired', 'released', 'cancelled', 'canceled'] as const
 export const NATIVE_BUILD_CONCURRENCY_ERROR = 'native_build_concurrency_limit_exceeded'
 const NON_ACTIVE_NATIVE_BUILD_STATUSES = ['pending', ...NATIVE_BUILD_TERMINAL_STATUSES] as const
@@ -434,7 +436,7 @@ export async function reserveSimulatorSlot(
         INSERT INTO public.simulator_sessions (
           owner_org, app_id, platform, name, status, requested_by, max_duration_minutes
         )
-        VALUES ($1, $2, $3, $4, 'starting', $5, 40)
+        VALUES ($1, $2, $3, $4, 'starting', $5, ${SIMULATOR_MAX_DURATION_MINUTES})
         RETURNING id
       `,
       [input.orgId, input.appId, input.platform, input.name ?? null, input.userId],
