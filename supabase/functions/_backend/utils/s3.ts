@@ -610,6 +610,29 @@ async function listObjectPage(c: Context, prefix: string, continuationToken: str
   return { objects, nextToken: result.value ?? null }
 }
 
+export interface ListedObjectMetadata { key: string, size: number, etag: string | null, lastModified: number | null }
+
+/** One listing page with the size metadata a manifest size receipt needs. */
+async function listObjectMetadataPage(c: Context, prefix: string, continuationToken: string | null, pageSize = 1_000) {
+  const client = initS3(c)
+  const iterator = client.listObjectsGrouped({ prefix, pageSize, maxResults: pageSize, continuationToken: continuationToken ?? undefined })
+  const objects: ListedObjectMetadata[] = []
+  let result = await iterator.next()
+  while (!result.done) {
+    if (result.value.type === 'Object') {
+      const lastModified = result.value.lastModified.getTime()
+      objects.push({
+        key: result.value.key,
+        size: result.value.size,
+        etag: result.value.etag?.replaceAll('"', '') || null,
+        lastModified: Number.isFinite(lastModified) ? lastModified : null,
+      })
+    }
+    result = await iterator.next()
+  }
+  return { objects, nextToken: result.value ?? null }
+}
+
 /** Server-side copy into the lifecycle trash; the source stays in place. */
 async function copyObjectToTrash(c: Context, fileId: string) {
   if (fileId.startsWith(R2_TRASH_PREFIX))
@@ -815,6 +838,7 @@ export const s3 = {
   restoreFromTrashIfMissing,
   deleteObjectKey,
   listObjectPage,
+  listObjectMetadataPage,
   getSize,
   deleteObject,
   statObject,
