@@ -87,6 +87,8 @@ vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: (...args: unknown[]) => mocks.checkPermission(...args),
+  checkPermissionsBatch: (c: unknown, checks: Array<{ permission: string, scope: unknown }>) =>
+    Promise.all(checks.map(check => mocks.checkPermission(c, check.permission, check.scope))),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/image_storage.ts', () => ({

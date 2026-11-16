@@ -9,28 +9,18 @@ import {
   unsubscribeMcpEvent,
   upsertMcpEventSubscription,
 } from '../utils/mcp_events.ts'
-import { closeClient, getPgClient } from '../utils/pg.ts'
 
-function mcpContext(c: Context, ctx: McpToolContext, apikeyRbacId: string) {
+function mcpContext(c: Context, ctx: McpToolContext, rbacId: string) {
   return {
     userId: ctx.caller.userId,
     apikeyId: ctx.caller.apikeyId,
-    rbacId: apikeyRbacId,
+    rbacId,
   }
 }
 
-export async function loadApikeyRbacId(c: Context, apikeyId: number): Promise<string | null> {
-  const pg = await getPgClient(c)
-  try {
-    const result = await pg.query<{ rbac_id: string | null }>(
-      'SELECT rbac_id FROM public.apikeys WHERE id = $1 LIMIT 1',
-      [apikeyId],
-    )
-    return result.rows[0]?.rbac_id ?? null
-  }
-  finally {
-    closeClient(c, pg)
-  }
+/** The RBAC identity of the calling key, from the row the MCP entry point already verified. */
+export function apikeyRbacId(ctx: McpToolContext): string | null {
+  return ctx.apikeyRow?.rbac_id ?? null
 }
 
 function mapSubscribeError(error: unknown): { code: number, message: string } {
@@ -117,7 +107,7 @@ export async function handleEventsSubscribe(
   params: Record<string, unknown>,
   echoSecret: boolean,
 ): Promise<JsonRpcResponse> {
-  const rbacId = await loadApikeyRbacId(c, ctx.caller.apikeyId)
+  const rbacId = apikeyRbacId(ctx)
   if (!rbacId)
     return jsonRpcError(requestId, JSON_RPC_ERRORS.internalError, 'API key missing RBAC identity')
 
@@ -160,7 +150,7 @@ export async function handleEventsUnsubscribe(
   requestId: string | number,
   params: Record<string, unknown>,
 ): Promise<JsonRpcResponse> {
-  const rbacId = await loadApikeyRbacId(c, ctx.caller.apikeyId)
+  const rbacId = apikeyRbacId(ctx)
   if (!rbacId)
     return jsonRpcError(requestId, JSON_RPC_ERRORS.internalError, 'API key missing RBAC identity')
 
@@ -187,7 +177,7 @@ export async function handleCapgoListEventSubscriptions(
   ctx: McpToolContext,
   orgId: string,
 ) {
-  const rbacId = await loadApikeyRbacId(c, ctx.caller.apikeyId)
+  const rbacId = apikeyRbacId(ctx)
   if (!rbacId)
     throw new Error('API key missing RBAC identity')
   return listMcpEventSubscriptions(c, orgId, ctx.caller.userId, rbacId)

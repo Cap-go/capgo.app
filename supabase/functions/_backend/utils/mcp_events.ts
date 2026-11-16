@@ -7,10 +7,9 @@ import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { BEGIN_WRITE_TRANSACTION_SQL, closeClient, getPgClient } from './pg.ts'
 import { queryJson, queryJsonOne } from './pg_rls.ts'
 import {
-  createDeliveryRecord,
+  createAndQueueWebhookDeliveries,
   generateStandardWebhookSignature,
   getWebhookPublicUrlValidationError,
-  queueWebhookDelivery,
 } from './webhook.ts'
 import { checkPermission } from './rbac.ts'
 
@@ -629,34 +628,21 @@ export async function dispatchMcpEvent(
   const envelope = buildMcpEventEnvelope(eventName, data)
   const deliveryPayload = mcpEnvelopeToDeliveryPayload(envelope)
 
-  await Promise.all(webhooks.map(async (webhook) => {
-    const delivery = await createDeliveryRecord(
-      c,
-      webhook.id,
-      webhook.org_id,
-      null,
-      eventName,
-      deliveryPayload,
-      'standard',
-    )
-    if (!delivery)
-      return
+  // Check URLs before writing anything, so a rejected URL leaves no delivery row behind.
+  const urlErrors = await Promise.all(webhooks.map(webhook => getWebhookPublicUrlValidationError(c, webhook.url)))
+  const targets = webhooks
+    .filter((_webhook, index) => !urlErrors[index])
+    .map(webhook => ({ webhookId: webhook.id, orgId: webhook.org_id, url: webhook.url }))
 
-    const urlError = await getWebhookPublicUrlValidationError(c, webhook.url)
-    if (urlError)
-      return
-
-    const queued = await queueWebhookDelivery(c, delivery.id, webhook.id, webhook.url, deliveryPayload)
-    if (!queued)
-      return
-
+  const queued = await createAndQueueWebhookDeliveries(c, targets, eventName, deliveryPayload, 'standard')
+  for (const delivery of queued) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Queued MCP event delivery',
       eventName,
-      webhookId: webhook.id,
+      webhookId: delivery.webhook_id,
     })
-  }))
+  }
 }
 
 export function mapAuditLogToMcpEvent(audit: AuditLogData): McpEventName | null {

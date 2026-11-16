@@ -32,7 +32,10 @@ vi.mock('~/stores/organization', () => ({ useOrganizationStore: () => ({
 vi.mock('~/stores/display', () => ({ useDisplayStore: () => ({ setAppNameResolver: vi.fn() }) }))
 vi.mock('~/stores/dialogv2', () => ({ useDialogV2Store: () => ({ closeDialog: vi.fn() }) }))
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
-vi.mock('~/services/permissions', () => ({ checkPermissions: async () => true }))
+vi.mock('~/services/permissions', () => ({
+  checkPermissions: async () => true,
+  checkPermissionsBatch: async (requests: unknown[]) => requests.map(() => true),
+}))
 vi.mock('~/services/capgoApi', () => ({ invokeCapgoApi: vi.fn() }))
 vi.mock('~/services/storage', () => ({ createSignedImageUrl: vi.fn(), getImmediateImageUrl: vi.fn() }))
 
