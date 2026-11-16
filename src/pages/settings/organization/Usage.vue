@@ -15,6 +15,7 @@ import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '
 import { formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { observeEventsForPlan } from '~/services/observePlanAllowance'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
@@ -211,6 +212,7 @@ async function getUsage(orgId: string) {
 
 const planUsageMap = ref(new Map<string, Awaited<ReturnType<typeof getUsage>>>())
 const planUsage = computed(() => planUsageMap.value?.get(currentOrganization.value?.gid ?? ''))
+const observeEventsIncluded = computed(() => observeEventsForPlan(planUsage.value?.currentPlan ?? {}))
 
 // Similar to Plans.vue - current plan and best plan computed properties
 const currentPlan = computed(() => main.plans.find(plan => plan.name === planUsage.value?.currentPlan?.name))
@@ -595,6 +597,21 @@ function nextRunDate() {
               <span>{{ formatBuildTime(planUsage?.currentPlan?.build_time_unit || 0) }}</span>
             </div>
           </div>
+        </div>
+
+        <div v-if="observeEventsIncluded > 0" class="p-5 transition-shadow border border-slate-200 shadow-sm bg-slate-50 rounded-xl dark:bg-white/[0.03] dark:border-white/10 hover:shadow-md">
+          <div class="text-sm font-medium text-gray-500 dark:text-gray-400">
+            {{ t('observe-events') }}
+          </div>
+          <div class="mt-3 text-lg font-bold text-gray-900 dark:text-white">
+            {{ formatNumberValue(observeEventsIncluded) }}
+          </div>
+          <div class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+            {{ t('included-in-plan') }}
+          </div>
+          <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('observe-events-counted-daily') }}
+          </p>
         </div>
       </div>
     </div>
