@@ -15,6 +15,7 @@ import { apikeyPrincipal, authPrincipal, queryJson, withRlsTransaction } from '.
 import { checkPermission } from '../../utils/rbac.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError, isRetryablePostgrestResult, retryWithBackoff } from '../../utils/retry.ts'
 import { readNativeActiveDevicesSummary, readNativeDailyPlatformActive, readNativeVersionUsage } from '../../utils/stats.ts'
+import { isStatisticsRangeTooLarge, MAX_STATISTICS_RANGE_DAYS, statisticsRangeDays } from '../../utils/statistics_range.ts'
 import { isStripeConfigured } from '../../utils/utils.ts'
 import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, fillMissingDailyCounts } from '../../utils/version_stats_helpers.ts'
 
@@ -394,6 +395,9 @@ function metricDayNumber(metricDate: string, from: Date, graphDays: number): num
 
 export const statisticsTestUtils = {
   withStatsDb,
+  getApiKeyAppsNormalStats,
+  getNormalStats,
+  checkOrganizationsAccess,
   executeStatsQueryWithRetry,
   fetchAppMetricsRows,
   getMissingAppStatsError,
@@ -405,35 +409,46 @@ export const statisticsTestUtils = {
 }
 
 async function checkOrganizationAccess(c: Context, orgId: string, db: StatsDb) {
-  if (!isStripeConfigured(c)) {
-    return { isPayingAndGoodPlan: true }
-  }
-  // Use the existing PostgreSQL function to check organization payment and plan status
-  let isPayingAndGoodPlan: boolean | null = null
-  let error: unknown = null
-  try {
-    const rows = await db<{ is_paying_and_good_plan_org: boolean | null }>('SELECT public.is_paying_and_good_plan_org(orgid => $1::uuid) AS is_paying_and_good_plan_org', [orgId])
-    isPayingAndGoodPlan = rows[0]?.is_paying_and_good_plan_org ?? null
-  }
-  catch (rpcError) {
-    error = rpcError
-  }
+  await checkOrganizationsAccess(c, [orgId], db)
+  return { isPayingAndGoodPlan: true }
+}
 
-  if (error) {
+/**
+ * Payment and plan check for several organizations in one read. Fails like checking each
+ * organization in order: a read error is a 404, and the first organization that is not paying
+ * (or has a bad plan) is a 402 naming that organization.
+ */
+async function checkOrganizationsAccess(c: Context, orgIds: string[], db: StatsDb) {
+  if (orgIds.length === 0 || !isStripeConfigured(c))
+    return
+
+  // Use the existing PostgreSQL function to check organization payment and plan status
+  let rows: { org_id: string, is_paying_and_good_plan_org: boolean | null }[]
+  try {
+    rows = await db<{ org_id: string, is_paying_and_good_plan_org: boolean | null }>(
+      `SELECT input.org_id, public.is_paying_and_good_plan_org(orgid => input.org_id) AS is_paying_and_good_plan_org
+       FROM unnest($1::uuid[]) WITH ORDINALITY AS input(org_id, ord)
+       ORDER BY input.ord`,
+      [orgIds],
+    )
+  }
+  catch (error) {
     throw quickError(404, 'organization_not_found', 'Organization not found or error checking status', {
       error,
     })
   }
 
-  // If organization is not paying or doesn't have a good plan, throw error
-  if (!isPayingAndGoodPlan) {
-    throw quickError(402, 'subscription_required', 'Organization subscription required or plan invalid', {
-      orgId,
-      isPayingAndGoodPlan,
-    })
+  const statusByOrg = new Map(rows.map(row => [row.org_id, row.is_paying_and_good_plan_org]))
+  for (const orgId of orgIds) {
+    const isPayingAndGoodPlan = statusByOrg.get(orgId) ?? null
+    // If organization is not paying or doesn't have a good plan, throw error
+    if (!isPayingAndGoodPlan) {
+      throw quickError(402, 'subscription_required', 'Organization subscription required or plan invalid', {
+        orgId,
+        isPayingAndGoodPlan,
+      })
+    }
   }
-
-  return { isPayingAndGoodPlan }
 }
 
 async function getStorageByteHoursByApp(
@@ -496,51 +511,27 @@ async function getStorageByteHoursByApp(
   return { data: storageByteHoursByApp, error: null }
 }
 
-async function getNormalStats(c: Context, appId: string | null, ownerOrg: string | null, from: Date, to: Date, db: StatsDb, isDashboard: boolean = false, includeBreakdown: boolean = false, noAccumulate: boolean = false) {
-  if (!appId && !ownerOrg)
-    return { data: null, error: 'Invalid appId or ownerOrg' }
+interface NormalStatsEntry {
+  date: string
+  mau: number
+  storage: number
+  storage_byte_hours: number
+  bandwidth: number
+  build_time_seconds: number
+  get: number | undefined
+}
 
-  let ownerOrgId = ownerOrg
-  if (appId && !ownerOrgId) {
-    const { ownerOrg: resolvedOwnerOrg, error, notFound } = await resolveAppOwnerOrg(c, appId, db)
-    if (error)
-      return { data: null, error }
-    if (notFound) {
-      return { data: null, error: { error: 'app_not_found', status: 404, app_id: appId } }
-    }
-    ownerOrgId = resolvedOwnerOrg
-  }
+interface NormalStatsResult {
+  data: any
+  error: any
+}
 
-  const startDate = dayjs(from).utc().format('YYYY-MM-DD')
-  const endDate = dayjs(to).utc().format('YYYY-MM-DD')
+function createZeroArray(length: number): number[] {
+  return Array.from({ length }, () => 0)
+}
 
-  const { data: rawMetrics, error: metricsError } = await fetchAppMetricsRows(c, db, {
-    orgId: ownerOrgId!,
-    appId,
-    startDate,
-    endDate,
-  })
-
-  if (metricsError)
-    return { data: null, error: metricsError }
-  const metrics = (rawMetrics ?? []) as AppMetricRow[]
-  const graphDays = getDaysBetweenDates(from, to)
-
-  const createUndefinedArray = (length: number) => {
-    const arr: any[] = [] as any[]
-    for (let i = 0; i < length; i++)
-      arr.push(0)
-    return arr
-  }
-
-  let mau = createUndefinedArray(graphDays) as number[]
-  let storage = createUndefinedArray(graphDays) as number[]
-  let bandwidth = createUndefinedArray(graphDays) as number[]
-  let buildTime = createUndefinedArray(graphDays) as number[]
-  let gets = isDashboard ? createUndefinedArray(graphDays) as number[] : []
-
-  // Group metrics by app_id
-  let metricsByApp = metrics.reduce((acc, metric) => {
+function groupMetricsByApp(metrics: AppMetricRow[]) {
+  return metrics.reduce((acc, metric) => {
     if (!acc[metric.app_id]) {
       acc[metric.app_id] = [metric]
     }
@@ -548,30 +539,32 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
       acc[metric.app_id].push(metric)
     }
     return acc
-  }, {} as Record<string, typeof metrics[0][]>)
+  }, {} as Record<string, AppMetricRow[]>)
+}
 
-  if (appId) {
-    metricsByApp = { [appId]: metricsByApp[appId] }
-  }
+/**
+ * Turns the rows read for one app or one organization into the daily series the endpoints return.
+ * Pure: every database read happens before, so the per-app and batched paths share this exactly.
+ */
+function assembleNormalStats(c: Context, params: {
+  metricsByApp: Record<string, AppMetricRow[]>
+  storageByteHoursByApp: Record<string, number[]>
+  currentStorageBytes: number | null
+  from: Date
+  graphDays: number
+  isDashboard: boolean
+  includeBreakdown: boolean
+  noAccumulate: boolean
+}): NormalStatsResult {
+  const { metricsByApp, storageByteHoursByApp, currentStorageBytes, from, graphDays, isDashboard, includeBreakdown, noAccumulate } = params
 
-  for (const key in metricsByApp) {
-    metricsByApp[key] ??= []
-  }
+  let mau = createZeroArray(graphDays)
+  let storage = createZeroArray(graphDays)
+  let bandwidth = createZeroArray(graphDays)
+  let buildTime = createZeroArray(graphDays)
+  let gets = isDashboard ? createZeroArray(graphDays) : []
 
-  const metricAppIds = Object.keys(metricsByApp).filter(Boolean)
-  const { data: storageByteHoursByApp, error: storageByteHoursError } = await getStorageByteHoursByApp(
-    c,
-    ownerOrgId,
-    appId ? [appId] : metricAppIds,
-    from,
-    to,
-    graphDays,
-    db,
-  )
-  if (storageByteHoursError)
-    return { data: null, error: storageByteHoursError }
-
-  let storageByteHours = createUndefinedArray(graphDays) as number[]
+  let storageByteHours = createZeroArray(graphDays)
   Object.values(storageByteHoursByApp).forEach((appStorageByteHours) => {
     appStorageByteHours.forEach((value, index) => {
       storageByteHours[index] += value ?? 0
@@ -601,19 +594,6 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
 
   if (storage.length !== 0) {
     // some magic, copied from the frontend without much understanding
-    const { data: currentStorageBytes, error: storageError } = await executeStatsQueryWithRetry<number>(
-      c,
-      appId ? 'get_total_app_storage_size_orgs' : 'get_total_storage_size_org',
-      async () => {
-        const rows = appId
-          ? await db<{ size: number | null }>('SELECT public.get_total_app_storage_size_orgs(org_id => $1::uuid, app_id => $2::varchar) AS size', [ownerOrgId!, appId])
-          : await db<{ size: number | null }>('SELECT public.get_total_storage_size_org(org_id => $1::uuid) AS size', [ownerOrgId!])
-        return { data: rows[0]?.size ?? null, error: null }
-      },
-    )
-    if (storageError)
-      return { data: null, error: storageError }
-
     const storageVariance = storage.reduce((p, c) => (p + (c ?? 0)), 0)
     const currentStorage = currentStorageBytes ?? 0
     const initValue = Math.max(0, (currentStorage - storageVariance + (storage[0] ?? 0)))
@@ -633,7 +613,7 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
   }
   const baseDay = dayjs(from).utc()
 
-  const finalStats = createUndefinedArray(graphDays) as { date: string, mau: number, storage: number, storage_byte_hours: number, bandwidth: number, build_time_seconds: number, get: number | undefined }[]
+  const finalStats = createZeroArray(graphDays) as unknown as NormalStatsEntry[]
   const today = dayjs().utc()
   for (let i = 0; i < graphDays; i++) {
     const day = baseDay.add(i, 'day')
@@ -651,7 +631,7 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
   }
 
   // If breakdown is requested, return both aggregated and per-app data
-  if (includeBreakdown && ownerOrg) {
+  if (includeBreakdown) {
     const breakdown: any[] = []
 
     // Process each app's data through the same aggregation logic
@@ -659,12 +639,12 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
       const appMetrics = metricsByApp[appId]
 
       // Initialize arrays for this app
-      let appMau = createUndefinedArray(graphDays) as number[]
-      let appStorage = createUndefinedArray(graphDays) as number[]
-      let appStorageByteHours = [...(storageByteHoursByApp[appId] ?? createUndefinedArray(graphDays))] as number[]
-      let appBandwidth = createUndefinedArray(graphDays) as number[]
-      let appBuildTime = createUndefinedArray(graphDays) as number[]
-      let appGets = isDashboard ? createUndefinedArray(graphDays) as number[] : []
+      let appMau = createZeroArray(graphDays)
+      let appStorage = createZeroArray(graphDays)
+      let appStorageByteHours = [...(storageByteHoursByApp[appId] ?? createZeroArray(graphDays))]
+      let appBandwidth = createZeroArray(graphDays)
+      let appBuildTime = createZeroArray(graphDays)
+      let appGets = isDashboard ? createZeroArray(graphDays) : []
 
       // Process metrics for this app (same logic as aggregated version)
       appMetrics.toSorted((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).forEach((item) => {
@@ -724,6 +704,270 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
   }
 
   return { data: finalStats.filter(x => !!x), error: null }
+}
+
+async function getNormalStats(c: Context, appId: string | null, ownerOrg: string | null, from: Date, to: Date, db: StatsDb, isDashboard: boolean = false, includeBreakdown: boolean = false, noAccumulate: boolean = false): Promise<NormalStatsResult> {
+  if (!appId && !ownerOrg)
+    return { data: null, error: 'Invalid appId or ownerOrg' }
+
+  let ownerOrgId = ownerOrg
+  if (appId && !ownerOrgId) {
+    const { ownerOrg: resolvedOwnerOrg, error, notFound } = await resolveAppOwnerOrg(c, appId, db)
+    if (error)
+      return { data: null, error }
+    if (notFound) {
+      return { data: null, error: { error: 'app_not_found', status: 404, app_id: appId } }
+    }
+    ownerOrgId = resolvedOwnerOrg
+  }
+
+  const startDate = dayjs(from).utc().format('YYYY-MM-DD')
+  const endDate = dayjs(to).utc().format('YYYY-MM-DD')
+
+  const { data: rawMetrics, error: metricsError } = await fetchAppMetricsRows(c, db, {
+    orgId: ownerOrgId!,
+    appId,
+    startDate,
+    endDate,
+  })
+
+  if (metricsError)
+    return { data: null, error: metricsError }
+  const metrics = (rawMetrics ?? []) as AppMetricRow[]
+  const graphDays = getDaysBetweenDates(from, to)
+
+  // Group metrics by app_id
+  let metricsByApp = groupMetricsByApp(metrics)
+
+  if (appId) {
+    metricsByApp = { [appId]: metricsByApp[appId] }
+  }
+
+  for (const key in metricsByApp) {
+    metricsByApp[key] ??= []
+  }
+
+  const metricAppIds = Object.keys(metricsByApp).filter(Boolean)
+  const { data: storageByteHoursByApp, error: storageByteHoursError } = await getStorageByteHoursByApp(
+    c,
+    ownerOrgId,
+    appId ? [appId] : metricAppIds,
+    from,
+    to,
+    graphDays,
+    db,
+  )
+  if (storageByteHoursError)
+    return { data: null, error: storageByteHoursError }
+
+  let currentStorageBytes: number | null = null
+  if (graphDays !== 0) {
+    const { data, error: storageError } = await executeStatsQueryWithRetry<number>(
+      c,
+      appId ? 'get_total_app_storage_size_orgs' : 'get_total_storage_size_org',
+      async () => {
+        const rows = appId
+          ? await db<{ size: number | null }>('SELECT public.get_total_app_storage_size_orgs(org_id => $1::uuid, app_id => $2::varchar) AS size', [ownerOrgId!, appId])
+          : await db<{ size: number | null }>('SELECT public.get_total_storage_size_org(org_id => $1::uuid) AS size', [ownerOrgId!])
+        return { data: rows[0]?.size ?? null, error: null }
+      },
+    )
+    if (storageError)
+      return { data: null, error: storageError }
+    currentStorageBytes = data
+  }
+
+  return assembleNormalStats(c, {
+    metricsByApp,
+    storageByteHoursByApp,
+    currentStorageBytes,
+    from,
+    graphDays,
+    isDashboard,
+    includeBreakdown: includeBreakdown && !!ownerOrg,
+    noAccumulate,
+  })
+}
+
+interface StatsAppAccessRow {
+  app_id: string
+  owner_org: string | null
+  org_read: boolean | null
+  app_read: boolean | null
+}
+
+interface StatsAppStorageSizeRow {
+  app_id: string
+  size: number | null
+}
+
+/**
+ * Account statistics for an API key, one result per app in `appIds` order.
+ *
+ * Each result equals `getNormalStats(c, appId, null, ...)` for that app, but the reads are batched
+ * instead of running four RLS transactions per app over the shared lanes:
+ * - one `apps` lookup for every owner org;
+ * - one access read, using the same checks `get_app_metrics` applies (org read for the org
+ *   overload, app read for the app overload);
+ * - one `get_app_metrics` call per org the key can read, filtered to the key's apps here, so the
+ *   per-org metrics cache JSON is decoded once per org instead of once per app. Orgs the key cannot
+ *   read (app-scoped keys) keep the per-app call, which is what they returned before;
+ * - one `daily_storage_hourly` read for all apps;
+ * - one statement for every app's current storage size.
+ */
+async function getApiKeyAppsNormalStats(c: Context, appIds: string[], from: Date, to: Date, db: StatsDb, noAccumulate: boolean): Promise<NormalStatsResult[]> {
+  if (appIds.length === 0)
+    return []
+
+  const uniqueAppIds = Array.from(new Set(appIds))
+  const failAll = (error: unknown) => appIds.map(() => ({ data: null, error }))
+
+  const { data: ownerRows, error: ownerError } = await executeStatsQueryWithRetry<StatsAppAccessRow[]>(
+    c,
+    'statistics_apps_access_lookup',
+    async () => ({
+      // `apps` is read under RLS, like `resolveAppOwnerOrg`; an app missing here is reported as not found.
+      data: await db<StatsAppAccessRow>(
+        `WITH input AS (
+           SELECT apps.app_id, apps.owner_org
+           FROM public.apps
+           WHERE apps.app_id = ANY($1::varchar[])
+         ),
+         org_access AS (
+           SELECT orgs.owner_org, public.request_has_org_read_access(orgs.owner_org) AS org_read
+           FROM (SELECT DISTINCT input.owner_org FROM input WHERE input.owner_org IS NOT NULL) AS orgs
+         )
+         SELECT
+           input.app_id,
+           input.owner_org,
+           COALESCE(org_access.org_read, false) AS org_read,
+           CASE WHEN input.owner_org IS NULL THEN false
+             ELSE public.request_has_app_read_access(input.owner_org, input.app_id)
+           END AS app_read
+         FROM input
+         LEFT JOIN org_access ON org_access.owner_org = input.owner_org`,
+        [uniqueAppIds],
+      ),
+      error: null,
+    }),
+  )
+  if (ownerError)
+    return failAll(ownerError)
+
+  const appRows = new Map((ownerRows ?? []).map(row => [row.app_id, row]))
+  const foundApps = uniqueAppIds.filter(appId => appRows.has(appId))
+  const graphDays = getDaysBetweenDates(from, to)
+  const startDate = dayjs(from).utc().format('YYYY-MM-DD')
+  const endDate = dayjs(to).utc().format('YYYY-MM-DD')
+
+  // Group the readable apps by owner org.
+  const appsByOrg = new Map<string, { orgRead: boolean, appIds: string[] }>()
+  for (const appId of foundApps) {
+    const row = appRows.get(appId)!
+    if (!row.owner_org || !row.app_read)
+      continue
+    const group = appsByOrg.get(row.owner_org) ?? { orgRead: !!row.org_read, appIds: [] }
+    group.appIds.push(appId)
+    appsByOrg.set(row.owner_org, group)
+  }
+
+  const metricsTask = Promise.all(Array.from(appsByOrg.entries()).map(async ([orgId, group]) => {
+    if (group.orgRead) {
+      const { data, error } = await fetchAppMetricsRows(c, db, { orgId, startDate, endDate })
+      if (error)
+        return { appIds: group.appIds, rows: [] as AppMetricRow[], error }
+      const wanted = new Set(group.appIds)
+      return { appIds: group.appIds, rows: (data ?? []).filter(row => wanted.has(row.app_id)), error: null }
+    }
+    const results = await Promise.all(group.appIds.map(appId => fetchAppMetricsRows(c, db, { orgId, appId, startDate, endDate })))
+    const error = results.find(result => result.error)?.error ?? null
+    return { appIds: group.appIds, rows: results.flatMap(result => result.data ?? []), error }
+  }))
+
+  const storageHourlyTask = foundApps.length === 0
+    ? Promise.resolve({ data: [] as (StorageHourlyMetricRow & { owner_org: string | null })[], error: null })
+    : executeStatsQueryWithRetry<(StorageHourlyMetricRow & { owner_org: string | null })[]>(
+        c,
+        'get_daily_storage_hourly_for_stats_batch',
+        async () => ({
+          data: await db<StorageHourlyMetricRow & { owner_org: string | null }>(
+            'SELECT app_id, owner_org, date, storage_byte_hours FROM public.daily_storage_hourly WHERE date >= $1 AND date < $2 AND app_id = ANY($3::varchar[]) ORDER BY date ASC, app_id ASC',
+            [startDate, endDate, foundApps],
+          ),
+          error: null,
+        }),
+      )
+
+  const storageSizeTask = foundApps.length === 0 || graphDays === 0
+    ? Promise.resolve({ data: [] as StatsAppStorageSizeRow[], error: null })
+    : executeStatsQueryWithRetry<StatsAppStorageSizeRow[]>(
+        c,
+        'get_total_app_storage_size_orgs_batch',
+        async () => ({
+          data: await db<StatsAppStorageSizeRow>(
+            `SELECT input.app_id, public.get_total_app_storage_size_orgs(org_id => input.owner_org, app_id => input.app_id) AS size
+             FROM unnest($1::varchar[], $2::uuid[]) AS input(app_id, owner_org)`,
+            [foundApps, foundApps.map(appId => appRows.get(appId)!.owner_org)],
+          ),
+          error: null,
+        }),
+      )
+
+  const [metricGroups, storageHourly, storageSizes] = await Promise.all([metricsTask, storageHourlyTask, storageSizeTask])
+
+  const metricsByAppId = new Map<string, AppMetricRow[]>()
+  const metricsErrorByAppId = new Map<string, unknown>()
+  for (const group of metricGroups) {
+    for (const appId of group.appIds) {
+      if (group.error)
+        metricsErrorByAppId.set(appId, group.error)
+      metricsByAppId.set(appId, [])
+    }
+    for (const row of group.rows)
+      metricsByAppId.get(row.app_id)?.push(row)
+  }
+
+  const storageByteHoursByAppId = new Map(foundApps.map(appId => [appId, createZeroArray(graphDays)]))
+  if (!storageHourly.error) {
+    for (const row of storageHourly.data ?? []) {
+      const ownerOrg = appRows.get(row.app_id)?.owner_org
+      // The per-app read also filtered on the app's owner org.
+      if (ownerOrg && row.owner_org !== ownerOrg)
+        continue
+      const series = storageByteHoursByAppId.get(row.app_id)
+      if (!series)
+        continue
+      const dayNumber = dayjs(row.date).utc().startOf('day').diff(dayjs(from).utc().startOf('day'), 'day')
+      if (dayNumber < 0 || dayNumber >= graphDays)
+        continue
+      series[dayNumber] += Number(row.storage_byte_hours ?? 0)
+    }
+  }
+
+  const storageSizeByAppId = new Map((storageSizes.data ?? []).map(row => [row.app_id, row.size ?? null]))
+
+  return appIds.map((appId) => {
+    if (!appRows.has(appId))
+      return { data: null, error: { error: 'app_not_found', status: 404, app_id: appId } }
+    const metricsError = metricsErrorByAppId.get(appId)
+    if (metricsError)
+      return { data: null, error: metricsError }
+    if (storageHourly.error)
+      return { data: null, error: storageHourly.error }
+    if (storageSizes.error)
+      return { data: null, error: storageSizes.error }
+
+    return assembleNormalStats(c, {
+      metricsByApp: { [appId]: metricsByAppId.get(appId) ?? [] },
+      storageByteHoursByApp: { [appId]: storageByteHoursByAppId.get(appId)! },
+      currentStorageBytes: storageSizeByAppId.get(appId) ?? null,
+      from,
+      graphDays,
+      isDashboard: false,
+      includeBreakdown: false,
+      noAccumulate,
+    })
+  })
 }
 
 async function getBundleUsage(appId: string, from: Date, to: Date, shouldGetLatestVersion: boolean, db: StatsDb) {
@@ -1110,9 +1354,19 @@ function getLatestDayVersionShare(
 }
 
 function getDaysBetweenDates(firstDate: Date, secondDate: Date) {
-  const oneDay = 24 * 60 * 60 * 1000
-  const res = Math.round(Math.abs((firstDate.valueOf() - secondDate.valueOf()) / oneDay))
-  return res
+  return statisticsRangeDays(firstDate, secondDate)
+}
+
+// Every day in the range becomes a row per app, so an unbounded range (e.g. 2000 → 2026) costs
+// thousands of rows per app. Reject it before touching the database.
+function assertStatisticsRange(range: { from: Date, to: Date }) {
+  if (isStatisticsRangeTooLarge(range.from, range.to)) {
+    throw simpleError('date_range_too_large', `The range between from and to must be at most ${MAX_STATISTICS_RANGE_DAYS} days`, {
+      from: range.from.toISOString(),
+      to: range.to.toISOString(),
+      maxDays: MAX_STATISTICS_RANGE_DAYS,
+    })
+  }
 }
 
 app.get('/app/:app_id', async (c) => {
@@ -1123,6 +1377,7 @@ app.get('/app/:app_id', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
+  assertStatisticsRange(body)
   const auth = c.get('auth') as AuthInfo
 
   // Use unified RBAC permission check
@@ -1154,6 +1409,7 @@ app.get('/org/:org_id', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
+  assertStatisticsRange(body)
 
   const auth = c.get('auth') as AuthInfo
   // Use unified RBAC permission check
@@ -1188,6 +1444,7 @@ app.get('/app/:app_id/bundle_usage', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
+  assertStatisticsRange(body)
   const principal = await getAuthorizedStatsAppPrincipal(c, appId)
 
   const { data, error } = await withStatsDb(c, principal, db => getBundleUsage(appId, body.from, body.to, useDashboard, db))
@@ -1208,6 +1465,7 @@ app.get('/app/:app_id/native_usage', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
+  assertStatisticsRange(body)
   const principal = await getAuthorizedStatsAppPrincipal(c, appId)
 
   const { data, error } = await getNativeVersionUsage(c, appId, body.from, body.to, principal)
@@ -1230,6 +1488,7 @@ app.get('/user', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
+  assertStatisticsRange(body)
 
   const stats = await withStatsDb<Array<{ data: any, error: any }>>(c, principal, async (db) => {
     let orgs: { org_id: string }[]
@@ -1248,11 +1507,9 @@ app.get('/user', async (c) => {
       throw quickError(401, 'no_organizations_found', 'No organizations found', { data: auth?.userId ?? null })
     }
 
-    // Check organization payment status for each organization before returning stats
-    for (const orgId of orgIds) {
-      if (auth.authType !== 'jwt')
-        await checkOrganizationAccess(c, orgId, db)
-    }
+    // Check organization payment status for every organization before returning stats
+    if (auth.authType !== 'jwt')
+      await checkOrganizationsAccess(c, orgIds, db)
 
     if (auth.authType === 'apikey') {
       let apps: { app_id: string }[]
@@ -1262,7 +1519,7 @@ app.get('/user', async (c) => {
       catch (appsError) {
         throw quickError(404, 'apps_not_found', 'Apps not found', { error: appsError })
       }
-      return await Promise.all(apps.map(app => getNormalStats(c, app.app_id, null, body.from, body.to, db, false, false, body.noAccumulate ?? false)))
+      return await getApiKeyAppsNormalStats(c, apps.map(app => app.app_id), body.from, body.to, db, body.noAccumulate ?? false)
     }
     return await Promise.all(orgIds.map(orgId => getNormalStats(c, null, orgId, body.from, body.to, db, auth.authType === 'jwt', false, body.noAccumulate ?? false)))
   })
