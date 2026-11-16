@@ -10,6 +10,7 @@ async function fix_apps() {
 
   if (!data || !data.length) {
     console.error('No apps_versions found')
+    await db.end()
     return
   }
 

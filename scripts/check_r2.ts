@@ -192,6 +192,7 @@ async function main() {
     // console.log(notFoundObjects)
   }
 
+  await db.end()
   // console.log(list)
   // console.log(`${process.env.S3_ACCESS_KEY_ID}`)
 }
@@ -257,4 +258,3 @@ export function initS3() {
 }
 
 await main()
-process.exit(0)
