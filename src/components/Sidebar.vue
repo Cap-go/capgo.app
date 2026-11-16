@@ -3,7 +3,7 @@ import type { Tab } from './comp_def'
 import { onClickOutside } from '@vueuse/core'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import IconSettings from '~icons/lucide/settings'
+import IconBuilding from '~icons/lucide/building'
 import { isSpoofTab, useAppNavigation } from '~/composables/useAppNavigation'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -35,7 +35,7 @@ onClickOutside(sidebar, () => emit('closeSidebar'))
 // Group destinations the way capgo.app groups products: where you work first,
 // then help and community links that open outside the console.
 // Settings of the organization currently selected in the switcher.
-const organizationSettingsTab: Tab = { label: 'settings', icon: IconSettings, key: '/settings/organization' }
+const organizationSettingsTab: Tab = { label: 'organization', icon: IconBuilding, key: '/settings/organization' }
 
 const navGroups = computed(() => [
   {
