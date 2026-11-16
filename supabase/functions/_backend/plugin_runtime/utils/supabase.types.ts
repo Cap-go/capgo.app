@@ -2414,6 +2414,7 @@ export type Database = {
           mau: number
           name: string
           native_build_concurrency: number
+          observe_events: number
           price_m: number
           price_m_id: string
           price_y: number
@@ -2440,6 +2441,7 @@ export type Database = {
           mau?: number
           name?: string
           native_build_concurrency?: number
+          observe_events?: number
           price_m?: number
           price_m_id: string
           price_y?: number
@@ -2466,6 +2468,7 @@ export type Database = {
           mau?: number
           name?: string
           native_build_concurrency?: number
+          observe_events?: number
           price_m?: number
           price_m_id?: string
           price_y?: number
