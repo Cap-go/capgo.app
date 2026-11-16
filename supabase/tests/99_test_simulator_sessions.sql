@@ -179,6 +179,10 @@ SELECT is(
   'max duration usage is dated when the session ended'
 );
 
+UPDATE public.simulator_sessions
+SET status = 'stopped'
+WHERE id = '99000000-0000-4000-8000-000000000005';
+
 INSERT INTO public.orgs (id, created_by, management_email, name)
 VALUES (
   '99000000-0000-4000-8000-000000000098',
