@@ -9,6 +9,8 @@ import IconDownload from '~icons/heroicons/arrow-down-tray'
 import IconCard from '~icons/heroicons/credit-card'
 import IconExclamationTriangle from '~icons/heroicons/exclamation-triangle'
 import IconShieldCheck from '~icons/heroicons/shield-check'
+import BillingProfileSection from '~/components/billing/BillingProfileSection.vue'
+import BillingSubscriptionDiscounts from '~/components/billing/BillingSubscriptionDiscounts.vue'
 import CancelPlanModal from '~/components/billing/CancelPlanModal.vue'
 import CardFormModal from '~/components/billing/CardFormModal.vue'
 import TrialPlanOfferModal from '~/components/billing/TrialPlanOfferModal.vue'
@@ -43,6 +45,7 @@ const showStartNowModal = ref(false)
 let scheduleAfterCardSave = false
 const showCardModal = ref<'setup' | 'backup' | 'invoice' | null>(null)
 const showCancelModal = ref(false)
+const discountRevision = ref(0)
 const permissionModal = ref<'org.read_billing' | 'org.update_billing' | null>(null)
 let loadRun = 0
 
@@ -313,10 +316,11 @@ async function onCardSaved() {
     await refreshOrganization()
 }
 
-async function onCanceled(sub: BillingSubscription | null) {
+async function onSubscriptionUpdated(sub: BillingSubscription | null) {
   showCancelModal.value = false
   if (overview.value)
     overview.value = { ...overview.value, subscription: sub }
+  discountRevision.value++
   await refreshOrganization()
 }
 
@@ -402,6 +406,7 @@ onMounted(async () => {
             <p class="mt-3 text-base font-medium text-slate-900 dark:text-white">
               {{ subscriptionLine }}
             </p>
+            <BillingSubscriptionDiscounts v-if="subscription" :key="`${orgId}:${discountRevision}`" :org-id="orgId" />
             <p v-if="trialPlan" class="mt-2 text-sm text-slate-600 dark:text-slate-300" data-test="billing-trial-plan">
               {{ trialPlan.scheduled
                 ? t('trial-plan-scheduled-line', { plan: trialPlan.planName, price: trialPlanPrice, date: trialPlanDate })
@@ -549,6 +554,8 @@ onMounted(async () => {
           </section>
         </div>
 
+        <BillingProfileSection :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
+
         <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60" data-test="billing-invoices">
           <h2 class="border-b border-slate-100 px-5 py-4 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:border-white/10 dark:text-slate-400">
             {{ t('billing-invoices-heading') }}
@@ -610,8 +617,8 @@ onMounted(async () => {
       v-if="showCancelModal"
       :org-id="orgId"
       @close="showCancelModal = false"
-      @canceled="onCanceled"
-      @saved="onCanceled"
+      @canceled="onSubscriptionUpdated"
+      @saved="onSubscriptionUpdated"
     />
     <RbacPermissionOnlyModal
       v-if="permissionModal"
