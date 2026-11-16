@@ -96,6 +96,25 @@ describe('server-side manifest existence check', () => {
     expect(listed.found.size).toBe(large.length)
   })
 
+  it('returns at the deadline even while a storage call is still in flight', async () => {
+    const wanted = paths(MANIFEST_REUSE_HEAD_ONLY_MAX_ENTRIES + 1)
+    let releaseList: () => void = () => {}
+    const reader: ManifestUploadObjectReader = {
+      head: async () => storedObject(1),
+      listPage: () => new Promise((resolve) => {
+        releaseList = () => resolve({ objects: wanted.map(key => ({ key, ...storedObject(1) })), nextToken: null })
+      }),
+    }
+    const startedAt = Date.now()
+    const result = await findExistingManifestObjects(reader, PREFIX, wanted, { deadlineMs: 20 })
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
+    expect(result.found.size).toBe(0)
+    // A late answer must not change the set already returned.
+    releaseList()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(result.found.size).toBe(0)
+  })
+
   it('signs receipts the set_manifest verifier accepts for that exact path only', async () => {
     const wanted = paths(2)
     const { reader } = fakeReader(new Map([[wanted[0]!, storedObject(1234)]]))

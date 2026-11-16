@@ -92,45 +92,64 @@ export async function findExistingManifestObjects(
   options: FindExistingManifestObjectsOptions = {},
 ): Promise<{ found: Map<string, FoundManifestObject>, listPages: number, heads: number, failures: number }> {
   const now = options.now ?? Date.now
-  const deadline = now() + (options.deadlineMs ?? MANIFEST_REUSE_DEADLINE_MS)
+  const deadlineMs = options.deadlineMs ?? MANIFEST_REUSE_DEADLINE_MS
+  const deadline = now() + deadlineMs
   const budget = Math.max(0, options.subrequestBudget ?? MANIFEST_REUSE_SUBREQUEST_BUDGET)
   const listPageBudget = Math.min(budget, Math.max(0, options.listPageBudget ?? MANIFEST_REUSE_LIST_PAGE_BUDGET))
   const concurrency = Math.max(1, options.headConcurrency ?? MANIFEST_REUSE_HEAD_CONCURRENCY)
   const found = new Map<string, FoundManifestObject>()
   const wanted = new Set(paths.filter(path => path.startsWith(prefix)))
-  let listPages = 0
-  let failures = 0
+  const stats = { listPages: 0, heads: 0, failures: 0 }
 
-  if (wanted.size > MANIFEST_REUSE_HEAD_ONLY_MAX_ENTRIES) {
-    let token: string | null = null
-    let complete = false
-    try {
-      while (listPages < listPageBudget && found.size < wanted.size && now() < deadline) {
-        const readStartedAt = now()
-        const page: Awaited<ReturnType<ManifestUploadObjectReader['listPage']>> = await reader.listPage(prefix, token)
-        listPages++
-        for (const object of page.objects) {
-          if (wanted.has(object.key))
-            found.set(object.key, { object: { size: object.size, etag: object.etag, lastModified: object.lastModified }, readStartedAt })
-        }
-        token = page.nextToken
-        if (!token) {
-          complete = true
-          break
+  const work = (async () => {
+    if (wanted.size > MANIFEST_REUSE_HEAD_ONLY_MAX_ENTRIES) {
+      let token: string | null = null
+      let complete = false
+      try {
+        while (stats.listPages < listPageBudget && found.size < wanted.size && now() < deadline) {
+          const readStartedAt = now()
+          const page: Awaited<ReturnType<ManifestUploadObjectReader['listPage']>> = await reader.listPage(prefix, token)
+          stats.listPages++
+          for (const object of page.objects) {
+            if (wanted.has(object.key))
+              found.set(object.key, { object: { size: object.size, etag: object.etag, lastModified: object.lastModified }, readStartedAt })
+          }
+          token = page.nextToken
+          if (!token) {
+            complete = true
+            break
+          }
         }
       }
+      catch {
+        stats.failures++
+      }
+      // A complete listing already answered every key; absent keys stay uploads.
+      if (complete)
+        return
     }
-    catch {
-      failures++
-    }
-    // A complete listing already answered every key; absent keys stay uploads.
-    if (complete)
-      return { found, listPages, heads: 0, failures }
-  }
 
-  const remaining = [...wanted].filter(path => !found.has(path)).slice(0, Math.max(0, budget - listPages))
-  failures += await headPaths(reader, remaining, found, concurrency, deadline, now)
-  return { found, listPages, heads: remaining.length, failures }
+    const remaining = [...wanted].filter(path => !found.has(path)).slice(0, Math.max(0, budget - stats.listPages))
+    stats.heads = remaining.length
+    stats.failures += await headPaths(reader, remaining, found, concurrency, deadline, now)
+  })()
+
+  // The deadline also bounds storage calls already in flight: a stalled listing or HEAD must not
+  // hold upload authorization past it. Whatever was proven by then is returned; the rest stays
+  // on the client-side existence check.
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const expired = new Promise<'expired'>((resolve) => {
+    timer = setTimeout(resolve, Math.max(0, deadlineMs), 'expired')
+  })
+  try {
+    if (await Promise.race([work.then(() => 'done' as const), expired]) === 'expired')
+      work.catch(() => undefined)
+  }
+  finally {
+    clearTimeout(timer)
+  }
+  // Snapshot: calls still in flight after the deadline must not change the returned set.
+  return { found: new Map(found), ...stats }
 }
 
 export function manifestSizeReceiptEvidenceFromStoredObject(object: StoredManifestObject, readStartedAt: number): ManifestSizeReceiptEvidence {
