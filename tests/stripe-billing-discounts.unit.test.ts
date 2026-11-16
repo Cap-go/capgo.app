@@ -31,7 +31,7 @@ describe('existing subscription discounts', () => {
     const { read, stripe, subscription } = fixture()
     subscription.discounts = [discount]
     expect(await read()).toMatchObject({ discounts: [{ code: 'EXAMPLE20', percentOff: 20 }] })
-    expect(stripe.subscriptions.retrieve).toHaveBeenCalledWith('sub_example', { expand: ['discounts.source.coupon', 'discounts.promotion_code'] })
+    expect(stripe.subscriptions.retrieve).toHaveBeenCalledWith('sub_example', { expand: ['discounts.source.coupon.currency_options', 'discounts.promotion_code'] })
     expect(stripe.subscriptions.create).not.toHaveBeenCalled()
     expect(stripe.subscriptions.update).not.toHaveBeenCalled()
     expect(stripe.subscriptions.cancel).not.toHaveBeenCalled()
@@ -62,7 +62,7 @@ describe('existing subscription discounts', () => {
         ? [{
             ...discount,
             end: 1893456000,
-            source: { coupon: params.expand.includes('discounts.source.coupon') ? coupon : 'coupon_example' },
+            source: { coupon: params.expand.some(field => field.startsWith('discounts.source.coupon')) ? coupon : 'coupon_example' },
             promotion_code: params.expand.includes('discounts.promotion_code') ? discount.promotion_code : 'promo_example',
           }]
         : ['di_example'],
@@ -75,7 +75,7 @@ describe('existing subscription discounts', () => {
       endsAt: '2030-01-01T00:00:00.000Z',
     }] })
     expect(stripe.subscriptionItems.retrieve).toHaveBeenCalledWith('si_example', {
-      expand: ['discounts.source.coupon', 'discounts.promotion_code'],
+      expand: ['discounts.source.coupon.currency_options', 'discounts.promotion_code'],
     })
     expect(stripe.subscriptions.create).not.toHaveBeenCalled()
     expect(stripe.subscriptions.update).not.toHaveBeenCalled()
@@ -88,6 +88,31 @@ describe('existing subscription discounts', () => {
     expect(await read()).toMatchObject({ discounts: [{ code: 'EXAMPLE20' }] })
     expect(stripe.subscriptionItems.retrieve).toHaveBeenCalledTimes(1)
     expect(stripe.subscriptionItems.retrieve).toHaveBeenCalledWith('si_discounted', expect.anything())
+  })
+  it.each(['subscription', 'customer', 'item'])('expands localized amounts for a %s discount', async (level) => {
+    const { read, subscription, stripe } = fixture()
+    subscription.currency = 'eur'
+    const expandedDiscount = (params?: { expand?: string[] }) => ({
+      ...discount,
+      source: { coupon: {
+        name: 'Example offer', percent_off: null, currency: 'usd', amount_off: 500,
+        // Stripe omits currency_options unless the request explicitly expands it.
+        ...(params?.expand?.includes(`${level === 'customer' ? 'discount' : 'discounts'}.source.coupon.currency_options`)
+          ? { currency_options: { eur: { amount_off: 700 } } }
+          : {}),
+      } },
+    })
+    if (level === 'subscription') {
+      stripe.subscriptions.retrieve.mockImplementation(async (_id, params) => ({ ...subscription, discounts: [expandedDiscount(params)] }))
+    }
+    else if (level === 'customer') {
+      stripe.customers.retrieve.mockImplementation(async (_id, params) => ({ discount: expandedDiscount(params) }))
+    }
+    else {
+      subscription.items.data[0].discounts = ['di_example']
+      stripe.subscriptionItems.retrieve.mockImplementation(async (_id, params) => ({ discounts: [expandedDiscount(params)] }))
+    }
+    expect(await read()).toMatchObject({ discounts: [{ code: 'EXAMPLE20', amountOff: 700, currency: 'eur' }] })
   })
   it('returns no discount without a subscription and does not create one', async () => {
     mocks.lookup.mockResolvedValue({ known: true, subscriptionId: null })

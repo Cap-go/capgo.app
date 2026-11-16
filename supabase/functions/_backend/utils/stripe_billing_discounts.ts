@@ -20,8 +20,8 @@ async function getDiscountContext(c: Context, ctx: InAppBillingContext) {
   if (!lookup.subscriptionId)
     return null
   const [subscription, customer] = await Promise.all([
-    ctx.stripe.subscriptions.retrieve(lookup.subscriptionId, { expand: ['discounts.source.coupon', 'discounts.promotion_code'] }),
-    ctx.stripe.customers.retrieve(ctx.customerId, { expand: ['discount.source.coupon', 'discount.promotion_code'] }),
+    ctx.stripe.subscriptions.retrieve(lookup.subscriptionId, { expand: ['discounts.source.coupon.currency_options', 'discounts.promotion_code'] }),
+    ctx.stripe.customers.retrieve(ctx.customerId, { expand: ['discount.source.coupon.currency_options', 'discount.promotion_code'] }),
   ])
   const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id
   if (customer.deleted || customerId !== ctx.customerId)
@@ -32,7 +32,7 @@ async function getDiscountContext(c: Context, ctx: InAppBillingContext) {
   const discountedItems = await Promise.all(subscription.items.data
     .filter(item => item.discounts?.length)
     .map(item => ctx.stripe.subscriptionItems.retrieve(item.id, {
-      expand: ['discounts.source.coupon', 'discounts.promotion_code'],
+      expand: ['discounts.source.coupon.currency_options', 'discounts.promotion_code'],
     })))
   const discounts = [...inherited, ...discountedItems.flatMap(item => item.discounts ?? [])]
   return { subscription, discounts }
