@@ -16,6 +16,8 @@ import { applyBuildStreamMessage, buildTimeline, createBuildLiveState, resolveBu
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { buildPreviewQrCodeDataUrl } from '~/services/previewQrCode'
+import { sendEvent } from '~/services/tracking'
+import { useOrganizationStore } from '~/stores/organization'
 
 type BuildRow = Pick<Database['public']['Tables']['build_requests']['Row'], 'status' | 'created_at' | 'started_at' | 'completed_at' | 'last_error' | 'builder_job_id'>
 
@@ -38,6 +40,7 @@ const MAX_RECONNECTS = 5
 
 const { t } = useI18n()
 const capgo = useConsole()
+const organizationStore = useOrganizationStore()
 const row = ref<BuildRow | null>(null)
 const live = ref<BuildLiveState>(createBuildLiveState())
 const now = ref(Date.now())
@@ -59,6 +62,8 @@ let clockTimer: ReturnType<typeof setInterval> | undefined
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined
 let stopDemo: (() => void) | undefined
+// The user saw this build while it was still running: only those builds feed the cancel-rate alert.
+let seenRunning = false
 
 const outcome = computed(() => resolveBuildOutcome(live.value.status, row.value?.status))
 const timeline = computed(() => buildTimeline({
@@ -243,6 +248,19 @@ async function copyFixPrompt() {
   }
 }
 
+function track(event: string, tags: Record<string, string> = {}) {
+  const orgId = organizationStore.currentOrganization?.gid
+  if (!orgId || props.demo)
+    return
+  void sendEvent({
+    channel: 'builder',
+    event,
+    org_id: orgId,
+    tracking_version: 2,
+    nonPersonTags: { app_id: props.appId, platform: props.platform, build_id: props.buildId, ...tags },
+  })
+}
+
 function stop() {
   stopped = true
   clearInterval(pollTimer)
@@ -260,6 +278,10 @@ watch(outcome, (value) => {
   if (!value)
     return
   endedAt.value ??= Date.now()
+  if (seenRunning) {
+    const cancelled = [live.value.status, row.value?.status].some(s => /^cancel/i.test(s ?? ''))
+    track('Build Live Ended', { result: cancelled ? 'cancelled' : value === 'success' ? 'succeeded' : 'failed' })
+  }
   clearInterval(clockTimer)
   closeSocket()
   const jobId = row.value?.builder_job_id
@@ -290,6 +312,10 @@ onMounted(async () => {
     return
   }
   await fetchRow()
+  if (row.value && !outcome.value) {
+    seenRunning = true
+    track('Build Live Viewed')
+  }
   if (!stopped && !row.value?.completed_at)
     pollTimer = setInterval(() => void fetchRow(), POLL_MS)
 })
