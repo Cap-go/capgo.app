@@ -1,22 +1,24 @@
 -- Settings describe plugin serving and regional metadata reads, never replication/storage.
-CREATE OR REPLACE FUNCTION public.valid_serving_regions(regions text[])
-RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path = ''
-AS $$
-  SELECT regions IS NOT NULL
-    AND pg_catalog.array_ndims(regions) = 1
-    AND pg_catalog.cardinality(regions) BETWEEN 1 AND 9
-    AND regions <@ ARRAY['EU','NA','SA','OC','AS_INDIA','AS_JAPAN','HK','AF','ME']::text[]
-    AND pg_catalog.array_position(regions, NULL) IS NULL
-    AND pg_catalog.cardinality(regions) = (SELECT pg_catalog.count(DISTINCT r) FROM pg_catalog.unnest(regions) r);
-$$;
-ALTER FUNCTION public.valid_serving_regions(text[]) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.valid_serving_regions(text[]) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.valid_serving_regions(text[]) TO anon, authenticated, service_role;
-
 ALTER TABLE public.apps
   ADD COLUMN serving_regions text[] NOT NULL DEFAULT ARRAY['EU','NA','SA','OC','AS_INDIA','AS_JAPAN','HK','AF','ME']::text[],
   ADD COLUMN serving_region_mode text NOT NULL DEFAULT 'route',
-  ADD CONSTRAINT apps_serving_regions_valid CHECK (public.valid_serving_regions(serving_regions)),
+  ADD CONSTRAINT apps_serving_regions_valid CHECK (
+    CASE WHEN pg_catalog.array_ndims(serving_regions) = 1 THEN
+      pg_catalog.cardinality(serving_regions) BETWEEN 1 AND 9
+        AND serving_regions <@ ARRAY['EU','NA','SA','OC','AS_INDIA','AS_JAPAN','HK','AF','ME']::text[]
+        AND pg_catalog.array_position(serving_regions, NULL) IS NULL
+        AND pg_catalog.cardinality(pg_catalog.array_positions(serving_regions, 'EU')) <= 1
+        AND pg_catalog.cardinality(pg_catalog.array_positions(serving_regions, 'NA')) <= 1
+        AND pg_catalog.cardinality(pg_catalog.array_positions(serving_regions, 'SA')) <= 1
+        AND pg_catalog.cardinality(pg_catalog.array_positions(serving_regions, 'OC')) <= 1
+        AND pg_catalog.cardinality(pg_catalog.array_positions(serving_regions, 'AS_INDIA')) <= 1
+        AND pg_catalog.cardinality(pg_catalog.array_positions(serving_regions, 'AS_JAPAN')) <= 1
+        AND pg_catalog.cardinality(pg_catalog.array_positions(serving_regions, 'HK')) <= 1
+        AND pg_catalog.cardinality(pg_catalog.array_positions(serving_regions, 'AF')) <= 1
+        AND pg_catalog.cardinality(pg_catalog.array_positions(serving_regions, 'ME')) <= 1
+      ELSE false
+    END
+  ),
   ADD CONSTRAINT apps_serving_region_mode_valid CHECK (serving_region_mode IN ('route', 'block'));
 
 COMMENT ON COLUMN public.apps.serving_regions IS 'Requested regional plugin metadata reads. Activated by strongly consistent serving-policy publication. Does not restrict global replication or bundle storage.';
