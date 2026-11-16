@@ -39,11 +39,12 @@ export function createAssistantAnalytics(
         return
       finished = true
       const duration = now() - started
+      const fallbackErrorCode = outcome === 'error' ? 'unknown' : 'none'
       emit(`Assistant ${kind} Finished`, {
         trigger,
         outcome,
         duration_ms: Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : 0,
-        error_code: errorCodes.has(errorCode) ? errorCode : outcome === 'error' ? 'unknown' : 'none',
+        error_code: errorCodes.has(errorCode) ? errorCode : fallbackErrorCode,
       })
     }
   }
