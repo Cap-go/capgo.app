@@ -6,6 +6,7 @@ import { and, eq, isNull, or, sql } from 'drizzle-orm'
 import { honoFactory, quickError, simpleRateLimit } from './hono.ts'
 import { getClaimsFromJWT } from './hono_jwt.ts'
 import { cloudlog } from './logging.ts'
+import { getInternalVerifiedApikey } from './internal_dispatch_auth.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from './pg.ts'
 import { throwDatabaseUnavailable } from './pg_auth_lookup.ts'
 import { waitAuthPgRetryJitter } from './pg_auth_retry.ts'
@@ -781,15 +782,15 @@ function unwrapSubkeyLookup(
  * @param capgkeyString - The key string provided in capgkey or authorization headers.
  * @returns quickError when authentication fails or undefined when authentication succeeds.
  */
-async function foundAPIKey(c: Context, capgkeyString: string) {
+async function foundAPIKey(c: Context, capgkeyString: string, verifiedApikey: ApikeyRow | null = null) {
   const subkey_id = await getSubkeyId(c)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'Capgkey provided', capgkeyPrefix: maskSecret(capgkeyString) })
+  cloudlog({ requestId: c.get('requestId'), message: 'Capgkey provided', capgkeyPrefix: maskSecret(capgkeyString), internalVerified: !!verifiedApikey })
   // Prefer direct Postgres on primary. PostgREST/Kong under parallel Vitest load
   // returns upstream errors that were previously misclassified as invalid_apikey 401
   // (flaky organization-api on backend shard 5/6). readOnly=false avoids replica lag
-  // right after key creation.
-  const apikey = unwrapApiKeyLookup(c, await resolveApiKey(c, capgkeyString, true, false))
+  // right after key creation. In-process MCP dispatch reuses the row it already verified.
+  const apikey = verifiedApikey ?? unwrapApiKeyLookup(c, await resolveApiKey(c, capgkeyString, true, false))
   if (!apikey) {
     cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', capgkeyPrefix: maskSecret(capgkeyString) })
     // Record failed auth attempt - await to ensure accurate counting
@@ -853,15 +854,20 @@ async function foundJWT(c: Context, jwt: string) {
 
 export function middlewareAuth(options: { preferApiKey?: boolean } = {}) {
   return honoFactory.createMiddleware(async (c, next) => {
-    // Check if IP is rate limited due to failed auth attempts
     setFailedAuthRateLimitPolicyHeader(c)
-    const ipRateLimited = await isIPRateLimited(c)
-    if (ipRateLimited.limited) {
-      return simpleRateLimit({ reason: 'too_many_failed_auth_attempts', ...buildRateLimitInfo(ipRateLimited.resetAt) })
+    const { jwt, capgkey } = resolveAuthHeaders(c)
+    const useJwt = !!jwt && !(capgkey && options.preferApiKey)
+    // The MCP entry point already ran the failed-auth IP check for this same client request.
+    const verifiedApikey = !useJwt && capgkey ? getInternalVerifiedApikey(c, capgkey) : null
+    if (!verifiedApikey) {
+      // Check if IP is rate limited due to failed auth attempts
+      const ipRateLimited = await isIPRateLimited(c)
+      if (ipRateLimited.limited) {
+        return simpleRateLimit({ reason: 'too_many_failed_auth_attempts', ...buildRateLimitInfo(ipRateLimited.resetAt) })
+      }
     }
 
-    const { jwt, capgkey } = resolveAuthHeaders(c)
-    if (jwt && !(capgkey && options.preferApiKey)) {
+    if (useJwt && jwt) {
       const res = await foundJWT(c, jwt)
       if (res) {
         return res
@@ -870,7 +876,7 @@ export function middlewareAuth(options: { preferApiKey?: boolean } = {}) {
       c.header('RateLimit-Policy', undefined)
     }
     else if (capgkey) {
-      const res = await foundAPIKey(c, capgkey)
+      const res = await foundAPIKey(c, capgkey, verifiedApikey)
       if (res) {
         return res
       }
@@ -941,14 +947,17 @@ export function middlewareKey(
     legacyRateLimitScope,
   )
   const subMiddlewareKey = honoFactory.createMiddleware(async (c, next) => {
-    // Check if IP is rate limited due to failed auth attempts
     setFailedAuthRateLimitPolicyHeader(c)
-    const ipRateLimited = await isIPRateLimited(c)
-    if (ipRateLimited.limited) {
-      return simpleRateLimit({ reason: 'too_many_failed_auth_attempts', ...buildRateLimitInfo(ipRateLimited.resetAt) })
-    }
-
     const { capgkeyString, apikeyString, key } = resolveKeyHeaders(c)
+    // In-process MCP dispatch: the key and the failed-auth IP check already passed at the MCP entry.
+    const verifiedApikey = key ? getInternalVerifiedApikey(c, key) : null
+    if (!verifiedApikey) {
+      // Check if IP is rate limited due to failed auth attempts
+      const ipRateLimited = await isIPRateLimited(c)
+      if (ipRateLimited.limited) {
+        return simpleRateLimit({ reason: 'too_many_failed_auth_attempts', ...buildRateLimitInfo(ipRateLimited.resetAt) })
+      }
+    }
     const subkey_id = await getSubkeyId(c)
 
     cloudlog({
@@ -968,7 +977,7 @@ export function middlewareKey(
       return quickError(401, 'no_key_provided', 'No key provided')
     }
 
-    const apikey = unwrapApiKeyLookup(c, await resolveApiKey(c, key, usePostgres, readOnly))
+    const apikey = verifiedApikey ?? unwrapApiKeyLookup(c, await resolveApiKey(c, key, usePostgres, readOnly))
 
     if (!apikey) {
       cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', keyPrefix: maskSecret(key), method: c.req.method, url: c.req.url })

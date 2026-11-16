@@ -2,15 +2,19 @@ import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { getBuildStatus } from '../public/build/status.ts'
+import { MAX_MEMBERS_PAGE_SIZE } from '../public/organization/members/get.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { DOCS_SEARCH_MAX_RESULTS, searchCapgoDocs } from '../utils/docs_search.ts'
 import { isStatisticsRangeTooLarge, MAX_STATISTICS_RANGE_DAYS } from '../utils/statistics_range.ts'
 import { MCP_EVENT_CATALOG, MCP_EVENT_NAMES, unsubscribeMcpEvent, upsertMcpEventSubscription } from '../utils/mcp_events.ts'
-import { handleCapgoListEventSubscriptions, loadApikeyRbacId, mcpSubscribeInputFromTool } from './events_rpc.ts'
+import { apikeyRbacId, handleCapgoListEventSubscriptions, mcpSubscribeInputFromTool } from './events_rpc.ts'
 import { MCP_OUTPUT_SCHEMAS } from './output_schemas.ts'
 import type { McpToolName } from './output_schemas.ts'
 import { guidanceForError } from './error_guidance.ts'
 import { getSkill, listSkills, readSkillResource } from './skills.ts'
+
+// Ceiling for the device-selection cap of one push send or update check. Omitting limit still targets the whole audience.
+export const MAX_NOTIFICATION_TARGET_LIMIT = 100_000
 
 /**
  * Hosted Capgo MCP tools.
@@ -524,8 +528,13 @@ const accountTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_list_organization_members,
     title: 'List organization members',
     description: 'List the members of an organization with their roles.'
-      + ' Returns member user ids, emails, roles, image URLs and temporary membership flags.',
-    input: { orgId: orgId.describe('Organization whose membership to inspect, using id from capgo_list_organizations.') },
+      + ' Returns member user ids, emails, roles, image URLs and temporary membership flags.'
+      + ' Pass limit (and offset for later pages) to page through large organizations; paged results are sorted by email.',
+    input: {
+      orgId: orgId.describe('Organization whose membership to inspect, using id from capgo_list_organizations.'),
+      limit: z.number().int().min(1).max(MAX_MEMBERS_PAGE_SIZE).optional().describe(`Maximum members to return, 1 to ${MAX_MEMBERS_PAGE_SIZE}. Omit with offset to list every member.`),
+      offset: z.number().int().min(0).optional().describe('Number of members to skip, for the next page: previous offset plus limit.'),
+    },
     annotations: READ,
     request: input => ({ method: 'GET', path: '/organization/members', query: input }),
   }),
@@ -1601,7 +1610,7 @@ const mcpEventTools: McpTool[] = [
     run: async (input, ctx) => {
       if (!ctx.hono)
         return textResult({ error: 'missing_context', message: 'Server context unavailable' }, true)
-      const rbacId = await loadApikeyRbacId(ctx.hono, ctx.caller.apikeyId)
+      const rbacId = apikeyRbacId(ctx)
       if (!rbacId)
         return textResult({ error: 'missing_rbac', message: 'API key missing RBAC identity' }, true)
       const data = input as {
@@ -1658,7 +1667,7 @@ const mcpEventTools: McpTool[] = [
     run: async (input, ctx) => {
       if (!ctx.hono)
         return textResult({ error: 'missing_context', message: 'Server context unavailable' }, true)
-      const rbacId = await loadApikeyRbacId(ctx.hono, ctx.caller.apikeyId)
+      const rbacId = apikeyRbacId(ctx)
       if (!rbacId)
         return textResult({ error: 'missing_rbac', message: 'API key missing RBAC identity' }, true)
       const data = input as { orgId: string, subscriptionId: string }
@@ -1720,7 +1729,7 @@ const notificationTools: McpTool[] = [
       name: z.string().max(180).optional().describe('Label for identifying this send in capgo_list_notification_campaigns; it is separate from the notification text displayed on devices.'),
       kind: z.enum(['alert', 'background', 'badge', 'update_check']).optional().describe('Push behavior: visible alert, background delivery, badge change, or update check.'),
       payload: z.record(z.string(), z.unknown()).optional().describe('Content passed to the notification provider for the selected kind. For an alert, supply title and body, for example {"title":"Release ready","body":"Open the app for details"}.'),
-      limit: z.number().int().positive().optional().describe('Cap how many matching device registrations this send may select. Omit to use normal audience selection without a caller-specified cap; delivery batching still applies.'),
+      limit: z.number().int().positive().max(MAX_NOTIFICATION_TARGET_LIMIT).optional().describe(`Cap how many matching device registrations this send may select, up to ${MAX_NOTIFICATION_TARGET_LIMIT}. Omit to use normal audience selection without a caller-specified cap; delivery batching still applies.`),
     },
     annotations: EXTERNAL,
     request: input => ({ method: 'POST', path: '/notifications/send', body: compact(input) }),
@@ -1736,7 +1745,7 @@ const notificationTools: McpTool[] = [
       target: notificationTarget.optional(),
       installMode: z.enum(['next', 'set']).optional().describe('Install on the next launch (next) or apply immediately (set); omitted uses the app push update setting.'),
       channel: z.string().nullable().optional().describe('Channel name to check; omitted or null uses the app push update channel setting.'),
-      limit: z.number().int().positive().optional().describe('Maximum matching device registrations to select for this update check.'),
+      limit: z.number().int().positive().max(MAX_NOTIFICATION_TARGET_LIMIT).optional().describe(`Maximum matching device registrations to select for this update check, up to ${MAX_NOTIFICATION_TARGET_LIMIT}. Omit to select every matching registration.`),
     },
     annotations: { ...EXTERNAL, destructiveHint: true },
     request: input => ({ method: 'POST', path: '/notifications/update-check', body: compact(input) }),
