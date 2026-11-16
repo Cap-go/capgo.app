@@ -37,6 +37,7 @@ describe('subscription promotion codes', () => {
     const { apply, stripe } = fixture()
     expect(await apply()).toMatchObject({ discounts: [{ code: 'EXAMPLE20', percentOff: 20 }] })
     expect(stripe.promotionCodes.list).toHaveBeenCalledWith({ code: 'EXAMPLE20', active: true, customer: 'cus_example', limit: 1 })
+    expect(stripe.coupons.retrieve).toHaveBeenCalledWith('coupon_example', { expand: ['applies_to'] })
     expect(stripe.subscriptions.update).toHaveBeenCalledWith('sub_example', {
       discounts: [{ promotion_code: 'promo_example' }], proration_behavior: 'none', expand: ['discounts.source.coupon', 'discounts.promotion_code'],
     }, { idempotencyKey: `billing-promotion:sub_example:${redemptionId}` })
@@ -86,11 +87,26 @@ describe('subscription promotion codes', () => {
     await expect(apply()).rejects.toMatchObject({ cause: { error: 'promotion_checkout_only' } })
     expect(stripe.subscriptions.update).not.toHaveBeenCalled()
   })
-  it('rejects a product-restricted coupon that would give no discount', async () => {
-    const { apply, stripe } = fixture()
-    stripe.coupons.retrieve.mockResolvedValue({ valid: true, applies_to: { products: ['prod_other'] } })
-    await expect(apply()).rejects.toThrow()
+  it.each(['id', 'object'])('expands restrictions on a coupon %s before replacing an existing discount', async (representation) => {
+    const { apply, stripe, subscription, promotion } = fixture()
+    subscription.discounts = ['di_existing']
+    if (representation === 'object')
+      Object.assign(promotion.promotion, { coupon: { id: 'coupon_example', valid: true } })
+    // Stripe omits applies_to unless it is explicitly expanded, including on embedded coupons.
+    stripe.coupons.retrieve.mockImplementation(async (_id: string, params?: { expand?: string[] }) => ({
+      valid: true,
+      ...(params?.expand?.includes('applies_to') ? { applies_to: { products: ['prod_other'] } } : {}),
+    }))
+    await expect(apply('EXAMPLE20', true)).rejects.toMatchObject({ cause: { error: 'invalid_promotion_code' } })
+    expect(stripe.coupons.retrieve).toHaveBeenCalledWith('coupon_example', { expand: ['applies_to'] })
     expect(stripe.subscriptions.update).not.toHaveBeenCalled()
+  })
+  it('accepts a valid coupon without product restrictions after requesting them', async () => {
+    const { apply, stripe } = fixture()
+    stripe.coupons.retrieve.mockResolvedValue({ valid: true, applies_to: null })
+    await expect(apply()).resolves.toMatchObject({ discounts: [{ code: 'EXAMPLE20' }] })
+    expect(stripe.coupons.retrieve).toHaveBeenCalledWith('coupon_example', { expand: ['applies_to'] })
+    expect(stripe.subscriptions.update).toHaveBeenCalledTimes(1)
   })
   it('propagates Stripe redemption failures rather than reporting success', async () => {
     const { apply, stripe } = fixture()

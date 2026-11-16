@@ -110,7 +110,9 @@ export async function applyBillingPromotionCode(c: Context, ctx: InAppBillingCon
     || Object.values(promotion.restrictions.currency_options ?? {}).some(option => option.minimum_amount != null))
     throw simpleError('promotion_checkout_only', 'This promotion code can only be used at an eligible checkout')
   const couponRef = promotion.promotion.coupon
-  const coupon = typeof couponRef === 'string' ? await ctx.stripe.coupons.retrieve(couponRef) : couponRef
+  const couponId = typeof couponRef === 'string' ? couponRef : couponRef?.id
+  // Even embedded coupons omit product restrictions unless explicitly expanded.
+  const coupon = couponId ? await ctx.stripe.coupons.retrieve(couponId, { expand: ['applies_to'] }) : null
   const products = new Set(current.subscription.items.data.map(item => typeof item.price.product === 'string' ? item.price.product : item.price.product.id))
   if (!coupon?.valid || (coupon.applies_to?.products?.length && !coupon.applies_to.products.some(product => products.has(product))))
     throw simpleError('invalid_promotion_code', 'This promotion code is not available for this subscription')
