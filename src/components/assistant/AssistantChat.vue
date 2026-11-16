@@ -180,6 +180,7 @@ function requestConnect() {
     id: signInDialogId,
     title: t('assistant-chatgpt-sign-in-title'),
     description: t('assistant-chatgpt-sign-in-description'),
+    size: '2xl',
     buttons: [
       { text: t('button-cancel'), role: 'cancel' },
       {
@@ -371,7 +372,7 @@ watch(open, (value) => {
   <div class="pointer-events-none fixed inset-0 z-40 flex items-end justify-end p-3 sm:p-5" data-test="assistant-root">
     <section
       v-if="open"
-      class="pointer-events-auto mb-16 flex h-[min(640px,calc(100dvh-7rem))] w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:w-[420px] dark:border-slate-700 dark:bg-slate-800"
+      class="ph-no-capture pointer-events-auto mb-16 flex h-[min(640px,calc(100dvh-7rem))] w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:w-[420px] dark:border-slate-700 dark:bg-slate-800"
       role="dialog"
       :aria-label="t('assistant-title')"
       data-test="assistant-panel"
@@ -687,21 +688,50 @@ watch(open, (value) => {
   </div>
 
   <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions.id === signInDialogId" to="#dialog-v2-content" defer>
-    <div class="space-y-4" data-test="assistant-chatgpt-sign-in-instructions">
-      <ol class="list-decimal space-y-3 pl-5 text-sm text-slate-600 dark:text-slate-300">
-        <li>{{ t('assistant-chatgpt-sign-in-step-sign-in') }}</li>
-        <li>{{ t('assistant-chatgpt-sign-in-step-copy') }}</li>
-        <li>{{ t('assistant-chatgpt-sign-in-step-paste') }}</li>
-      </ol>
+    <div class="space-y-5 text-sm leading-relaxed text-slate-600 dark:text-slate-300" data-test="assistant-chatgpt-sign-in-instructions">
+      <section class="rounded-xl border border-azure-500/20 bg-azure-500/5 p-4 dark:bg-azure-500/10" aria-labelledby="assistant-chatgpt-value-title">
+        <h3 id="assistant-chatgpt-value-title" class="mb-1 font-semibold text-slate-900 dark:text-white">
+          {{ t('assistant-chatgpt-sign-in-value-title') }}
+        </h3>
+        <p>{{ t('assistant-chatgpt-sign-in-value') }}</p>
+      </section>
+      <section aria-labelledby="assistant-chatgpt-privacy-title">
+        <h3 id="assistant-chatgpt-privacy-title" class="mb-1 font-semibold text-slate-900 dark:text-white">
+          {{ t('assistant-chatgpt-sign-in-privacy-title') }}
+        </h3>
+        <p>{{ t('assistant-chatgpt-sign-in-privacy-account') }}</p>
+        <p class="mt-2">
+          {{ t('assistant-chatgpt-sign-in-privacy-proxy') }}
+        </p>
+        <p class="mt-2">
+          {{ t('assistant-chatgpt-sign-in-privacy-device') }}
+        </p>
+      </section>
+      <section class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/30" aria-labelledby="assistant-chatgpt-manual-title">
+        <h3 id="assistant-chatgpt-manual-title" class="mb-1 font-semibold text-slate-900 dark:text-white">
+          {{ t('assistant-chatgpt-sign-in-manual-title') }}
+        </h3>
+        <p>{{ t('assistant-chatgpt-sign-in-manual') }}</p>
+      </section>
+      <section aria-labelledby="assistant-chatgpt-steps-title">
+        <h3 id="assistant-chatgpt-steps-title" class="mb-2 font-semibold text-slate-900 dark:text-white">
+          {{ t('assistant-chatgpt-sign-in-steps-title') }}
+        </h3>
+        <ol class="list-decimal space-y-2 pl-5">
+          <li>{{ t('assistant-chatgpt-sign-in-step-sign-in') }}</li>
+          <li>{{ t('assistant-chatgpt-sign-in-step-copy') }}</li>
+          <li>{{ t('assistant-chatgpt-sign-in-step-paste') }}</li>
+        </ol>
+      </section>
       <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
         <p class="mb-1 text-xs font-medium text-slate-700 dark:text-slate-200">
           {{ t('assistant-chatgpt-callback-label') }}
         </p>
         <code class="break-all text-xs text-slate-600 dark:text-slate-300">{{ CHATGPT_REDIRECT_URI }}?code=…&amp;state=…</code>
+        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+          {{ t('assistant-chatgpt-sign-in-private') }}
+        </p>
       </div>
-      <p class="text-xs text-slate-500 dark:text-slate-400">
-        {{ t('assistant-chatgpt-sign-in-private') }}
-      </p>
     </div>
   </Teleport>
 </template>
