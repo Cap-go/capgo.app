@@ -36,7 +36,7 @@ function harness(value: () => unknown) {
     dataAccess()
     return c.json({ url: getDatabaseURL(c, true), key: new CacheHelper(c).buildRequest('/cached').url })
   })
-  app.get('/receipt', async c => c.json({ receipt: await signServingIngress(c, appId) }))
+  app.get('/receipt', async c => c.json({ receipt: await signServingIngress(c, c.req.query('app_id') ?? appId) }))
   const env = {
     ENV_NAME: 'capgo_plugin-eu-prod', PLUGIN_STATE_KV: 'off', SERVING_REGION_SIGNING_KEY: secret,
     PLUGIN_STATE_POINTERS: { get },
@@ -48,7 +48,7 @@ function harness(value: () => unknown) {
 }
 
 beforeEach(() => { rollout.epoch = 'staging-test-epoch'; vi.stubEnv('ENV_NAME', 'capgo_plugin-eu-prod') })
-afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); resetReplicationLagMemory() })
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); resetReplicationLagMemory() })
 
 describe('serving policy', () => {
   it('reports disabled gateway status without R2 or a signing key', async () => {
@@ -182,11 +182,234 @@ describe('serving policy', () => {
     assert(signed && typeof signed === 'object' && 'receipt' in signed && typeof signed.receipt === 'string')
     const { receipt } = signed
     expect((await app.fetch(request('/', 'CDG', { 'x-capgo-serving-ingress': receipt }), env)).status).toBe(200)
-    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6000)
-    expect((await app.fetch(request('/', 'CDG', { 'x-capgo-serving-ingress': receipt }), env)).status).toBe(503)
-    vi.restoreAllMocks()
     const tampered = receipt.replace('NA', 'EU')
     expect((await app.fetch(request('/', 'CDG', { 'x-capgo-serving-ingress': tampered }), env)).status).toBe(503)
+    expect(dataAccess).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    { name: '3ms circuit match', matchMs: 3, jsonMs: 0, cacheMs: 3, kind: 'circuit' },
+    { name: 'slow complete circuit body', matchMs: 1500, jsonMs: 1499, cacheMs: 2999, kind: 'circuit' },
+    { name: 'stalled circuit match', matchMs: Infinity, jsonMs: 0, cacheMs: 3000, kind: 'circuit' },
+    { name: 'stalled circuit body', matchMs: 1, jsonMs: Infinity, cacheMs: 3000, kind: 'circuit' },
+    { name: 'stalled unrestricted app match', matchMs: Infinity, jsonMs: 0, cacheMs: 3000, kind: 'app' },
+    { name: 'stalled unrestricted app JSON', matchMs: 1, jsonMs: Infinity, cacheMs: 3000, kind: 'app' },
+    { name: 'stalled unrestricted cached rate-limit body', matchMs: 1, jsonMs: Infinity, cacheMs: 3000, kind: 'rate-limit' },
+  ])('accepts the final allowed snippet retry with $name after policy transit and two worker timeouts', async ({ matchMs, jsonMs, cacheMs, kind }) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-16T12:00:00Z'))
+    const startedAt = Date.now()
+    const regions = kind === 'circuit' ? ['NA', 'HK', 'ME'] : [...SERVING_REGIONS]
+    const mode = kind === 'circuit' ? 'block' : 'route'
+    const { app, env, dataAccess } = harness(() => document(regions, mode))
+    const releaseCache = Promise.withResolvers<void>()
+    const wait = (ms: number) => ms === Infinity ? releaseCache.promise : new Promise(resolve => setTimeout(resolve, ms))
+    const cached = Response.json({}, { headers: { 'X-Edge-Kind': 'answers' } })
+    const json = vi.spyOn(cached, 'json').mockImplementation(async () => {
+      await wait(jsonMs)
+      return { unhealthyAt: Date.now() - 300_000 }
+    })
+    if (kind === 'rate-limit') {
+      cached.headers.set('X-Edge-Kind', 'onprem')
+      const clone = cached.clone()
+      vi.spyOn(clone, 'text').mockImplementation(async () => { await releaseCache.promise; return '{}' })
+      vi.spyOn(cached, 'clone').mockReturnValue(clone)
+    }
+    const cache = { match: vi.fn(async () => {
+      await wait(matchMs)
+      return jsonMs ? cached : undefined
+    }), put: vi.fn(), delete: vi.fn() }
+    vi.stubGlobal('caches', { default: cache })
+    const signed = Promise.withResolvers<void>()
+    const attempts: { url: string, startedAt: number }[] = []
+    const fetcher = vi.fn(async (input: Request | string, init?: RequestInit) => {
+      const req = new Request(input, init)
+      if (new URL(req.url).pathname.startsWith('/serving_policy/')) {
+        const result = await (await app.fetch(request('/receipt', 'IAD'), env)).json()
+        assert(result && typeof result === 'object' && 'receipt' in result && typeof result.receipt === 'string')
+        const payload: unknown = JSON.parse(decodeURIComponent(result.receipt.slice(0, result.receipt.lastIndexOf('.'))))
+        assert(payload && typeof payload === 'object' && 'expires' in payload)
+        expect(payload.expires).toBe(startedAt + 5 * 3000)
+        signed.resolve()
+        // The receipt can age while the 3s control request is still in flight.
+        await new Promise(resolve => setTimeout(resolve, 2999))
+        return Response.json({ ...document(regions, mode), active: true, epoch: rollout.epoch, receipt: result.receipt })
+      }
+      attempts.push({ url: req.url, startedAt: Date.now() - startedAt })
+      if (attempts.length < 3) {
+        return new Promise<never>((_, reject) => {
+          req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true })
+        })
+      }
+      // Run the real HMAC gate near the end of the final 3s attempt.
+      await new Promise(resolve => setTimeout(resolve, 2999))
+      return app.fetch(request('/', 'CDG', Object.fromEntries(req.headers)), env)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const req = new Request('https://plugin.capgo.app/updates', {
+      method: 'POST', headers: { 'cf-connecting-ip': '192.0.2.1' }, body: JSON.stringify({ app_id: appId }),
+    })
+    Object.defineProperty(req, 'cf', { value: { colo: 'IAD' } })
+    const response = snippet.fetch(req)
+    await signed.promise
+    await vi.advanceTimersByTimeAsync(2999 + cacheMs + 6000 + 2999)
+    expect((await response).status).toBe(200)
+    const targets = kind === 'circuit' ? ['na', 'me', 'hk'] : ['na', 'eu', 'as']
+    expect(attempts).toEqual(targets.map((region, index) => ({
+      url: `https://plugin.${region}.capgo.app/updates`, startedAt: 2999 + cacheMs + index * 3000,
+    })))
+    expect(Date.now() - startedAt).toBe(11998 + cacheMs)
+    expect(Date.now() - startedAt).toBeLessThan(5 * 3000)
+    expect(dataAccess).toHaveBeenCalledOnce()
+    expect(json).toHaveBeenCalledTimes(jsonMs && kind !== 'rate-limit' ? 1 : 0)
+    expect(fetcher.mock.calls.length + cache.match.mock.calls.length + cache.put.mock.calls.length + cache.delete.mock.calls.length).toBe(5)
+    // Late read-only work cannot publish an answer or spend another subrequest.
+    releaseCache.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetcher.mock.calls.length + cache.match.mock.calls.length + cache.put.mock.calls.length + cache.delete.mock.calls.length).toBe(5)
+  })
+
+  it.each([null, 'staging-test-epoch'])('preserves a fresh open circuit with reader epoch %s', async (epoch) => {
+    rollout.epoch = epoch
+    const cache = { match: vi.fn(async (key: string) => key.includes('circuit-breaker') && key.includes(encodeURIComponent('https://plugin.na.capgo.app'))
+      ? Response.json({ unhealthyAt: Date.now() }) : undefined), put: vi.fn(), delete: vi.fn() }
+    vi.stubGlobal('caches', { default: cache })
+    const targets: string[] = []
+    const fetcher = vi.fn(async (input: Request | string) => {
+      const url = typeof input === 'string' ? input : input.url
+      if (url.includes('/serving_policy/'))
+        return Response.json({ ...document(['NA', 'HK']), active: true, epoch, receipt: 'signed' })
+      targets.push(url)
+      return Response.json({ status: 'ok' })
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const req = new Request('https://plugin.capgo.app/updates', { method: 'POST', body: JSON.stringify({ app_id: appId }) })
+    Object.defineProperty(req, 'cf', { value: { colo: 'IAD' } })
+    expect((await snippet.fetch(req)).status).toBe(200)
+    expect(targets).toEqual([epoch ? 'https://plugin.hk.capgo.app/updates' : 'https://plugin.eu.capgo.app/updates'])
+    expect(fetcher.mock.calls.length + cache.match.mock.calls.length + cache.put.mock.calls.length + cache.delete.mock.calls.length).toBeLessThanOrEqual(5)
+  })
+
+  it('bounds an active diagnostic circuit write before the final retry without detaching app-cache publication', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-16T12:00:00Z'))
+    const startedAt = Date.now()
+    const regions = ['NA', 'HK']
+    const { app, env, dataAccess } = harness(() => document(regions, 'block'))
+    const releaseWrite = Promise.withResolvers<void>()
+    const cache = { match: vi.fn(), put: vi.fn((_key: RequestInfo | URL, _response: Response) => releaseWrite.promise), delete: vi.fn() }
+    vi.stubGlobal('caches', { default: cache })
+    const signed = Promise.withResolvers<void>()
+    const attempts: number[] = []
+    const fetcher = vi.fn(async (input: Request | string, init?: RequestInit) => {
+      const req = new Request(input, init)
+      if (req.url.includes('/serving_policy/')) {
+        const result = await (await app.fetch(request('/receipt', 'IAD'), env)).json()
+        assert(result && typeof result === 'object' && 'receipt' in result)
+        signed.resolve()
+        await new Promise(resolve => setTimeout(resolve, 2999))
+        return Response.json({ ...document(regions, 'block'), active: true, epoch: rollout.epoch, receipt: result.receipt })
+      }
+      attempts.push(Date.now() - startedAt)
+      if (attempts.length === 1) {
+        return new Promise<never>((_, reject) => {
+          req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true })
+        })
+      }
+      await new Promise(resolve => setTimeout(resolve, 2999))
+      return app.fetch(request('/', 'CDG', Object.fromEntries(req.headers)), env)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const req = new Request('https://plugin.capgo.app/channel_self?app_id=' + appId, { headers: { 'cf-connecting-ip': '192.0.2.1' } })
+    Object.defineProperty(req, 'cf', { value: { colo: 'IAD' } })
+    const response = snippet.fetch(req)
+    await signed.promise
+    await vi.advanceTimersByTimeAsync(11998)
+    expect((await response).status).toBe(200)
+    expect(attempts).toEqual([2999, 8999])
+    expect(dataAccess).toHaveBeenCalledOnce()
+    expect(cache.put).toHaveBeenCalledOnce()
+    expect(String(cache.put.mock.calls[0][0])).toContain('/circuit-breaker/')
+    expect(fetcher.mock.calls.length + cache.match.mock.calls.length + cache.put.mock.calls.length).toBe(5)
+    releaseWrite.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetcher.mock.calls.length + cache.match.mock.calls.length + cache.put.mock.calls.length).toBe(5)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('aborts the active worker at the absolute routing deadline and starts no later retry', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-16T12:00:00Z'))
+    const startedAt = Date.now()
+    const cache = { match: vi.fn(), put: vi.fn(), delete: vi.fn() }
+    vi.stubGlobal('caches', { default: cache })
+    const entered = Promise.withResolvers<void>()
+    const attempts: AbortSignal[] = []
+    const fetcher = vi.fn(async (input: Request | string, init?: RequestInit) => {
+      const req = new Request(input, init)
+      if (req.url.includes('/serving_policy/'))
+        return Response.json({ ...document(['NA', 'HK', 'ME']), active: true, epoch: rollout.epoch, receipt: 'signed' })
+      attempts.push(req.signal)
+      if (attempts.length === 1) {
+        // Model scheduling/processing overhead between operations in the same budget.
+        vi.setSystemTime(startedAt + 14000)
+        return Response.json({}, { status: 503 })
+      }
+      entered.resolve()
+      return new Promise<never>((_, reject) => {
+        req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true })
+      })
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const req = new Request('https://plugin.capgo.app/updates', { method: 'POST', body: JSON.stringify({ app_id: appId }) })
+    Object.defineProperty(req, 'cf', { value: { colo: 'IAD' } })
+    const response = snippet.fetch(req)
+    await entered.promise
+    await vi.advanceTimersByTimeAsync(999)
+    expect(attempts[1].aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect((await response).status).toBe(503)
+    expect(attempts).toHaveLength(2)
+    expect(attempts[1].aborted).toBe(true)
+    expect(Date.now() - startedAt).toBe(5 * 3000)
+    expect(fetcher.mock.calls.length + cache.match.mock.calls.length + cache.put.mock.calls.length + cache.delete.mock.calls.length).toBe(4)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('rejects an expired signed ingress receipt before app data', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-16T12:00:00Z'))
+    const { app, env, dataAccess } = harness(() => document(['NA'], 'block'))
+    const result = await (await app.fetch(request('/receipt', 'IAD'), env)).json()
+    assert(result && typeof result === 'object' && 'receipt' in result && typeof result.receipt === 'string')
+    const payload: unknown = JSON.parse(decodeURIComponent(result.receipt.slice(0, result.receipt.lastIndexOf('.'))))
+    assert(payload && typeof payload === 'object' && 'expires' in payload && typeof payload.expires === 'number')
+    vi.setSystemTime(payload.expires + 1)
+    expect((await app.fetch(request('/', 'CDG', { 'x-capgo-serving-ingress': result.receipt }), env)).status).toBe(503)
+    expect(dataAccess).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['app', '/receipt?app_id=com.example.other', '192.0.2.1'],
+    ['IP', '/receipt', '192.0.2.2'],
+  ])('rejects a signed ingress receipt for a different %s before app data', async (_, path, ip) => {
+    const { app, env, dataAccess } = harness(() => document(['NA'], 'block'))
+    const result = await (await app.fetch(request(path, 'IAD'), env)).json()
+    assert(result && typeof result === 'object' && 'receipt' in result && typeof result.receipt === 'string')
+    expect((await app.fetch(request('/', 'CDG', { 'cf-connecting-ip': ip, 'x-capgo-serving-ingress': result.receipt }), env)).status).toBe(503)
+    expect(dataAccess).not.toHaveBeenCalled()
+  })
+
+  it('rejects a signed receipt beyond the finite future validity bound', async () => {
+    vi.useFakeTimers()
+    const now = new Date('2026-11-16T12:00:00Z')
+    vi.setSystemTime(now.getTime() + 1)
+    const { app, env, dataAccess } = harness(() => document(['NA'], 'block'))
+    const result = await (await app.fetch(request('/receipt', 'IAD'), env)).json()
+    assert(result && typeof result === 'object' && 'receipt' in result && typeof result.receipt === 'string')
+    vi.setSystemTime(now)
+    expect((await app.fetch(request('/', 'CDG', { 'x-capgo-serving-ingress': result.receipt }), env)).status).toBe(503)
+    expect(dataAccess).not.toHaveBeenCalled()
   })
 
   it('fences a delayed policy CAS after a newer publisher wins', async () => {

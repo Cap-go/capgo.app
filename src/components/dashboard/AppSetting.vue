@@ -293,6 +293,7 @@ const buildTimeoutMinutesInput = ref<number | string>(Math.trunc(DEFAULT_BUILD_T
 const exposeMetadataInput = ref(false)
 const allowPreviewInput = ref(false)
 const allowDeviceCustomIdInput = ref(false)
+const DEFAULT_SERVING_REGIONS = ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME']
 const servingRegionsInput = ref<string[]>([])
 const servingRegionModeInput = ref('route')
 const blockProviderInfraRequestsInput = ref(false)
@@ -301,7 +302,7 @@ const collectInputs = reactive<DeviceDataCollection>(parseAppRowDeviceDataCollec
 const isAppFormVisible = computed(() => !isFirstLoading.value && !isLoading.value)
 
 function seedAppForm() {
-  servingRegionsInput.value = [...(appRef.value?.serving_regions ?? ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME'])]
+  servingRegionsInput.value = [...(appRef.value?.serving_regions ?? DEFAULT_SERVING_REGIONS)]
   servingRegionModeInput.value = appRef.value?.serving_region_mode ?? 'route'
   appNameInput.value = appRef.value?.name ?? ''
   iosStoreUrlInput.value = appRef.value?.ios_store_url ?? ''
@@ -395,6 +396,12 @@ async function submit(form: {
 
   try {
     await updateServingRegions()
+  }
+  catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  }
+
+  try {
     await updateAppName(form.app_name)
   }
   catch (error) {
@@ -755,15 +762,24 @@ async function updateDeviceDataCollection(next: DeviceDataCollection) {
 }
 
 async function updateServingRegions() {
+  const regions = [...servingRegionsInput.value]
+  const mode = servingRegionModeInput.value
+  const savedRegions = appRef.value?.serving_regions ?? DEFAULT_SERVING_REGIONS
+  if (mode === (appRef.value?.serving_region_mode ?? 'route')
+    && regions.length === savedRegions.length
+    && savedRegions.every(region => regions.includes(region))) {
+    return
+  }
+
   const { error } = await capgo.from('apps').update({
-    serving_regions: servingRegionsInput.value,
-    serving_region_mode: servingRegionModeInput.value,
+    serving_regions: regions,
+    serving_region_mode: mode,
   }).eq('app_id', props.appId)
   if (error)
     throw error
   if (appRef.value) {
-    appRef.value.serving_regions = [...servingRegionsInput.value]
-    appRef.value.serving_region_mode = servingRegionModeInput.value
+    appRef.value.serving_regions = regions
+    appRef.value.serving_region_mode = mode
   }
 }
 

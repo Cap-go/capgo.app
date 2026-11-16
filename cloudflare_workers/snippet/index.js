@@ -22,6 +22,8 @@ const CIRCUIT_RESET_MS = 5 * 60 * 1000 // 5 minutes before retrying unhealthy wo
 // Every fetch and cache call goes through the budget below; optional cache
 // writes are skipped instead of failing the request.
 const MAX_SUBREQUESTS = 5
+// Also the receipt lifetime in servingPolicy.ts. Cache work shares this budget.
+const SERVING_ROUTE_MS = MAX_SUBREQUESTS * TIMEOUT_MS
 
 // On-prem and plan-upgrade caching use worker Cache-Control, with Retry-After as TTL fallback.
 // Cached responses keep Retry-After / X-RateLimit-Reset so clients and edge skip the worker.
@@ -84,12 +86,39 @@ const MAX_SEMVER_LENGTH = 256
 const DEVICE_PLATFORMS = new Set(['ios', 'android', 'electron'])
 
 function createBudget() {
-  return { used: 0 }
+  return { used: 0, deadline: null }
 }
 
 /** True when `count` more subrequests fit and still leave `reserve` for later ones. */
 function canSpend(budget, count = 1, reserve = 0) {
-  return budget.used + count + reserve <= MAX_SUBREQUESTS
+  return (budget.deadline === null || Date.now() < budget.deadline)
+    && budget.used + count + reserve <= MAX_SUBREQUESTS
+}
+
+// Active-policy routing has one absolute deadline, including complete cache
+// reads and breaker writes. Timed-out operations may finish, so only use this
+// for fetches, read-only cache work, and diagnostic circuit mutations.
+async function withinServingDeadline(budget, operation) {
+  if (budget.deadline === null)
+    return operation()
+  const remaining = Math.min(TIMEOUT_MS, budget.deadline - Date.now())
+  if (remaining <= 0)
+    throw new Error('Serving route deadline exceeded')
+  let timer
+  try {
+    const result = await Promise.race([
+      operation(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Serving route operation timed out')), remaining)
+      }),
+    ])
+    if (Date.now() >= budget.deadline)
+      throw new Error('Serving route deadline exceeded')
+    return result
+  }
+  finally {
+    clearTimeout(timer)
+  }
 }
 
 /**
@@ -165,23 +194,25 @@ async function markUnhealthy(budget, hostname, colo, workerUrl) {
       'Cache-Control': `max-age=${Math.floor(CIRCUIT_RESET_MS / 1000)}`,
     },
   })
-  if (await cachePut(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl), response))
+  if (await withinServingDeadline(budget, () => cachePut(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl), response)).catch(() => false))
     console.log(`Circuit OPEN for ${colo} → ${workerUrl}`)
 }
 
 /** Reads the breaker once; `hasEntry` lets a success clear it without another lookup. */
 async function readCircuit(budget, hostname, colo, workerUrl) {
-  const cached = await cacheMatch(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))
-  if (!cached)
-    return { healthy: true, hasEntry: false } // No cache entry = healthy
-  try {
-    const data = await cached.json()
-    // Circuit resets after CIRCUIT_RESET_MS (handled by Cache-Control, but double-check)
-    return { healthy: Date.now() - data.unhealthyAt >= CIRCUIT_RESET_MS, hasEntry: true }
-  }
-  catch {
-    return { healthy: true, hasEntry: true } // On error, assume healthy
-  }
+  return withinServingDeadline(budget, async () => {
+    const cached = await cacheMatch(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))
+    if (!cached)
+      return { healthy: true, hasEntry: false } // No cache entry = healthy
+    try {
+      const data = await cached.json()
+      // Circuit resets after CIRCUIT_RESET_MS (handled by Cache-Control, but double-check)
+      return { healthy: Date.now() - data.unhealthyAt >= CIRCUIT_RESET_MS, hasEntry: true }
+    }
+    catch {
+      return { healthy: true, hasEntry: true } // On error, assume healthy
+    }
+  }).catch(() => ({ healthy: true, hasEntry: false }))
 }
 
 // On-prem caching helper functions
@@ -310,6 +341,24 @@ async function withFreshRateLimitHeaders(cachedResponse) {
     statusText: cachedResponse.statusText,
     headers,
   })
+}
+
+// Nothing in this operation publishes an answer or starts another subrequest
+// after the match. A late read/body completion cannot spend the retry budget.
+async function readEdgeCache(budget, edgeKey) {
+  return withinServingDeadline(budget, async () => {
+    const cached = await cacheMatch(budget, edgeKey, null)
+    if (!cached)
+      return { miss: cached === undefined }
+    if (cached.headers.get(EDGE_KIND_HEADER) !== 'answers')
+      return { response: await withFreshRateLimitHeaders(cached), kind: cached.headers.get(EDGE_KIND_HEADER) }
+    try {
+      return { document: await cached.json() }
+    }
+    catch {
+      return {}
+    }
+  }).catch(() => ({}))
 }
 
 /** Persist absolute reset + Cache-Control so Cache API TTL and client countdown stay correct. */
@@ -648,7 +697,7 @@ async function tryEdgeAnswer(budget, request, url, endpoint, appId, body, rawBod
     const statHeader = edgeStatHeader({ e: 'updates', b: rawBody, n: fill.n })
     if (!ip || !statHeader || !canSpend(budget, 1, 2))
       return null
-    if (await cacheMatch(budget, getIpLimitCacheKey(url.hostname, ip), true))
+    if (await withinServingDeadline(budget, () => cacheMatch(budget, getIpLimitCacheKey(url.hostname, ip), true)).catch(() => true))
       return null
     return edgeAnswerResponse(fill.r, statHeader)
   }
@@ -777,17 +826,20 @@ export default {
       body = parseJsonBody(requestBody)
       appId = extractAppIdFromRequest(request, url, body)
       if (appId && servingRegionReaderEpoch) {
+        budget.deadline = Date.now() + SERVING_ROUTE_MS
         try {
           // One subrequest, before ANY app cache, including synthetic stats.
           budget.used++
-          const policyResponse = await fetch(new Request(`https://plugin.eu.capgo.app/serving_policy/${encodeURIComponent(appId)}`, {
-            headers: forwardedHeaders,
-            redirect: 'manual',
-            signal: AbortSignal.timeout(TIMEOUT_MS),
-          }))
-          if (!policyResponse.ok)
-            throw new Error('Policy unavailable')
-          const doc = await policyResponse.json()
+          const doc = await withinServingDeadline(budget, async () => {
+            const policyResponse = await fetch(new Request(`https://plugin.eu.capgo.app/serving_policy/${encodeURIComponent(appId)}`, {
+              headers: forwardedHeaders,
+              redirect: 'manual',
+              signal: AbortSignal.timeout(TIMEOUT_MS),
+            }))
+            if (!policyResponse.ok)
+              throw new Error('Policy unavailable')
+            return policyResponse.json()
+          })
           if (doc.active !== true || doc.epoch !== servingRegionReaderEpoch || doc.f !== 1 || doc.app_id !== appId || !doc.policy || typeof doc.receipt !== 'string')
             throw new Error('Invalid policy')
           servingPolicy = parseServingPolicy(doc.policy.regions, doc.policy.mode)
@@ -810,29 +862,20 @@ export default {
 
       if (edgeKey) {
         // null: the lookup failed, which must not read as nothing learned.
-        const cached = await cacheMatch(budget, edgeKey, null)
-        if (cached) {
-          if (cached.headers.get(EDGE_KIND_HEADER) !== 'answers') {
-            console.log(`Edge cache HIT (${cached.headers.get(EDGE_KIND_HEADER)}) for ${appId}/${endpoint}/${method}`)
-            return await withFreshRateLimitHeaders(cached)
-          }
-          let edgeDoc = null
-          try {
-            edgeDoc = await cached.json()
-          }
-          catch {
-            edgeDoc = null
-          }
-          if (isPlainObject(edgeDoc) && method === 'POST') {
-            const rawBody = new TextDecoder().decode(requestBody)
-            const answer = await tryEdgeAnswer(budget, request, url, endpoint, appId, body, rawBody, edgeDoc)
-            if (answer)
-              return answer
-          }
+        const entry = await readEdgeCache(budget, edgeKey)
+        if (entry.response) {
+          console.log(`Edge cache HIT (${entry.kind}) for ${appId}/${endpoint}/${method}`)
+          return entry.response
+        }
+        if (isPlainObject(entry.document) && method === 'POST') {
+          const rawBody = new TextDecoder().decode(requestBody)
+          const answer = await tryEdgeAnswer(budget, request, url, endpoint, appId, body, rawBody, entry.document)
+          if (answer)
+            return answer
         }
         // Nothing learned for this app here yet: answer /stats anyway, except
         // the share left to the worker to learn from.
-        else if (cached === undefined && STATS_ANSWER_ALL && endpoint === 'stats' && method === 'POST' && !isStatsLearnSample(appId, body)) {
+        else if (entry.miss && STATS_ANSWER_ALL && endpoint === 'stats' && method === 'POST' && !isStatsLearnSample(appId, body)) {
           const answer = await tryEdgeAnswer(budget, request, url, endpoint, appId, body, new TextDecoder().decode(requestBody), {})
           if (answer)
             return answer
@@ -922,18 +965,20 @@ export default {
       if (!canSpend(budget, 1, fallbackReserve))
         break
 
+      let timeoutId
+      const abortController = new AbortController()
       try {
-        const abortController = new AbortController()
-        const timeoutId = setTimeout(() => abortController.abort(), TIMEOUT_MS)
+        const timeoutMs = budget.deadline === null ? TIMEOUT_MS : Math.min(TIMEOUT_MS, budget.deadline - Date.now())
+        timeoutId = setTimeout(() => abortController.abort(), timeoutMs)
 
         budget.used++
-        const response = await fetch(`${workerUrl}${pathWithQuery}`, {
+        const response = await withinServingDeadline(budget, () => fetch(`${workerUrl}${pathWithQuery}`, {
           method: request.method,
           headers: forwardedHeaders,
           redirect: 'manual',
           body: requestBody ? requestBody.slice(0) : undefined,
           signal: abortController.signal,
-        })
+        }))
 
         clearTimeout(timeoutId)
 
@@ -948,7 +993,7 @@ export default {
 
         // Success (2xx, 3xx, 4xx) - worker is healthy
         if (circuit.hasEntry && canSpend(budget, 1, hintReserve + fallbackReserve))
-          await cacheDelete(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))
+          await withinServingDeadline(budget, () => cacheDelete(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))).catch(() => {})
         console.log(`Request served by ${workerUrl}`)
         // A KV canary response must not seed any cache shared with DB/control
         // devices. Keep rate-limit hints, but never learn its app-wide answers.
@@ -996,12 +1041,17 @@ export default {
         return response
       }
       catch (error) {
+        abortController.abort()
+        clearTimeout(timeoutId)
         // Network failure or timeout - mark unhealthy
         fallbackFailure = true
         console.log(`${workerUrl} failed: ${error.message}, marking unhealthy`)
         if (canSpend(budget, 1, fetchesLeft - 1 + hintReserve + fallbackReserve))
           await markUnhealthy(budget, hostname, colo, workerUrl)
         // continue to next fallback
+      }
+      finally {
+        clearTimeout(timeoutId)
       }
     }
 

@@ -49,6 +49,12 @@ existing periodic plugin_state_sync_tick. It operates independently of the
 payload writer/read flags. Policy jobs never promote unsynced apps to full sync,
 read manifests/history, publish ps1 payloads, run payload garbage collection or
 acknowledge app/full coverage. Payload work is gated by its existing SQL switch.
+The initial policy phase has a deadline halfway through the invocation and half
+the provider-operation allowance.
+Deadline checks occur between awaited operations; they do not cancel an in-flight
+SQL or R2 operation. It reserves eleven provider operations before each lease and
+bounds no-op claims too, so sustained policy backlog leaves payload capacity.
+Unused policy operations remain available to payloads and garbage collection.
 Each policy claim uses the shared monotonic generation sequence and a one-minute
 lease. Publication failure retries after ten seconds, up to five claims. Expired
 fifth leases are archived in batches of 200. Explicit repair_serving_policy_sync
@@ -71,8 +77,13 @@ on-prem, plan-upgrade and synthetic-stats answers. Restricted apps bypass only
 their snippet app answers. All retry targets are filtered; once a policy is
 known, the unfiltered original-origin fallback is forbidden. The shared
 five-subrequest budget includes the preflight, Cache API operations and retries.
-The gateway signs a five-second app-and-client-IP-bound ingress receipt using a separate
-SERVING_REGION_SIGNING_KEY secret, never embedded in snippet source. Workers
+The gateway signs a fifteen-second app-and-client-IP-bound ingress receipt using a
+separate SERVING_REGION_SIGNING_KEY secret, never embedded in snippet source. The
+active-policy snippet shares that routing horizon across its five-subrequest
+budget, including the policy request, complete cache reads and circuit writes,
+and worker attempts. These routing operations wait at most three seconds or the
+remaining routing time. Individual network timeouts remain three seconds. This
+bounds routing, not response-body delivery after a worker has answered. Workers
 verify it with Web Crypto; plain region headers have no authority. Direct
 regional requests use trusted request.cf.colo. No new Worker-to-Worker data
 forwarder is introduced. Deno fetches only the policy from the fixed gateway;

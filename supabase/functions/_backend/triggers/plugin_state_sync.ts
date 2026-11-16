@@ -65,6 +65,10 @@ const KV_MAX_VALUE_BYTES = 25 * 1024 * 1024
 /** Reserve headroom for rows, JS strings, document arrays, JSON encoding and Worker code. */
 const MANIFEST_MEMORY_LIMIT_BYTES = 4 * 1024 * 1024
 const MAX_PUBLICATION_ATTEMPTS = 5
+/** Bound policy work so payload publication retains its own capacity. */
+const POLICY_OPERATION_BUDGET = Math.floor(PROVIDER_OPERATION_BUDGET / 2)
+/** Readiness GET plus every GET/CAS pair in one policy publication. */
+const POLICY_PUBLICATION_OPERATIONS = 1 + 2 * MAX_PUBLICATION_ATTEMPTS
 const IMMUTABLE_GC_AGE_MS = 24 * 60 * 60 * 1000
 const IMMUTABLE_KEY_PREFIX = 'ps1:i:'
 const MAX_BUSY_RETRIES = 40
@@ -985,17 +989,25 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
   if (!pointers)
     return result
   const budget: PublicationBudget = { remaining: PROVIDER_OPERATION_BUDGET }
-  const deadline = Date.now() + (options.budgetMs ?? DRAIN_BUDGET_MS)
+  const startedAt = Date.now()
+  const deadline = startedAt + (options.budgetMs ?? DRAIN_BUDGET_MS)
+  const policyDeadline = startedAt + Math.floor((deadline - startedAt) / 2)
   const source = createPluginStateSourceReader(c, deadline)
   let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
     pg = await getPgClient(c)
+    const policyBudget: PublicationBudget = { remaining: POLICY_OPERATION_BUDGET }
     try {
-      await drainServingPolicies(pg, source, pointers, budget, deadline, result)
+      await drainServingPolicies(pg, createPluginStateSourceReader(c, policyDeadline), pointers, policyBudget, policyDeadline, result)
     }
     catch (error) {
       result.failed++
       cloudlogErr({ requestId: c.get('requestId'), message: 'serving policy sync drain failed', error: serializeError(error) })
+    }
+    finally {
+      // Policy-only recovery does not need KV or the payload switch. Charge
+      // actual usage so payloads and GC can use every unused provider slot.
+      budget.remaining -= POLICY_OPERATION_BUDGET - policyBudget.remaining
     }
     const [switches] = await mutate(pg, db => rows<{ enabled: boolean }>(db, sql`SELECT public.plugin_state_sync_enabled() AS enabled`))
     if (!switches?.enabled || !namespace)
@@ -1081,7 +1093,10 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
 }
 
 export async function drainServingPolicies(pg: Pg, source: SourceReader, pointers: PointerStore, budget: PublicationBudget, deadline: number, result: PluginStateDrainResult) {
-  while (Date.now() < deadline && budget.remaining >= 8) {
+  // Reserve for all five CAS attempts before taking a lease. The claim cap
+  // also bounds deleted/no-op rows, which consume no provider operations.
+  const maxClaims = Math.floor(budget.remaining / POLICY_PUBLICATION_OPERATIONS)
+  for (let claimed = 0; claimed < maxClaims && Date.now() < deadline && budget.remaining >= POLICY_PUBLICATION_OPERATIONS; claimed++) {
     const [claim] = await mutate(pg, db => rows<{ token: string, generation: string, app_id: string, active_epoch: string | null }>(db, sql`SELECT * FROM public.claim_serving_policy_sync()`))
     if (!claim)
       break
@@ -1104,6 +1119,8 @@ export async function drainServingPolicies(pg: Pg, source: SourceReader, pointer
       cloudlogErr({ message: 'serving policy sync failed', app_id: claim.app_id, error: serializeError(error) })
     }
     await mutate(pg, db => db.execute(sql`SELECT public.ack_serving_policy_sync(${claim.token}::uuid, ${ok})`))
+    if (!ok)
+      break
   }
 }
 

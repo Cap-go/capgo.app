@@ -9,6 +9,9 @@ import { isRestrictedServingPolicy, parseServingPolicy, servingPolicyKey } from 
 export interface ServingPolicyDocument { f: 1, app_id: string, generation: string, policy: ServingPolicy }
 const policies = new WeakMap<Request, ServingPolicy>()
 const ingressHeader = 'x-capgo-serving-ingress'
+// snippet/index.js bounds active routing by MAX_SUBREQUESTS * TIMEOUT_MS,
+// including policy transit, complete cache operations, and all worker attempts.
+const ingressReceiptLifetimeMs = 5 * 3000
 
 export function requestServingPolicy(c: Context) {
   return policies.get(c.req.raw)
@@ -80,7 +83,7 @@ export async function signServingIngress(c: Context, appId: string) {
   const ip = c.req.header('cf-connecting-ip')
   if (!ip)
     throw new Error('Trusted ingress IP unavailable')
-  const payload = JSON.stringify({ appId, region, ip, expires: Date.now() + 5000 })
+  const payload = JSON.stringify({ appId, region, ip, expires: Date.now() + ingressReceiptLifetimeMs })
   const signature = hex(await crypto.subtle.sign('HMAC', await signingKey(c), new TextEncoder().encode(payload)))
   return `${encodeURIComponent(payload)}.${signature}`
 }
@@ -98,8 +101,9 @@ async function ingressRegion(c: Context, appId: string): Promise<ServingRegion |
   if (!await crypto.subtle.verify('HMAC', await signingKey(c), bytes, new TextEncoder().encode(payload)))
     throw new Error('Invalid ingress signature')
   const data: unknown = JSON.parse(payload)
+  const now = Date.now()
   if (!data || typeof data !== 'object' || !('appId' in data) || data.appId !== appId
-    || !('expires' in data) || typeof data.expires !== 'number' || data.expires < Date.now() || data.expires > Date.now() + 5000
+    || !('expires' in data) || typeof data.expires !== 'number' || !Number.isFinite(data.expires) || data.expires < now || data.expires > now + ingressReceiptLifetimeMs
     || !('ip' in data) || data.ip !== c.req.header('cf-connecting-ip')
     || !('region' in data))
     throw new Error('Expired or mismatched ingress receipt')

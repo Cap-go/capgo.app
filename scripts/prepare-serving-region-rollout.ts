@@ -6,7 +6,7 @@ import { z } from 'zod'
 // Offline preparation only. Export this one nonsecret setting from private.settings
 // on the intended environment. No provider/DB mutation or automatic activation.
 const settings = z.array(z.object({ name: z.string(), value: z.string() }))
-const epoch = z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/)
+const epoch = z.string().regex(/^[a-zA-Z0-9_-]{8,80}$/)
 const input = process.argv[2]
 if (!input)
   throw new Error('Pass an explicit private.settings reader-epoch export path')
