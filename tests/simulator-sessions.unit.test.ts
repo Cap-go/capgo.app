@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clearSimulatorSessions, forgetSimulator, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorEpoch } from '../src/services/simulatorSessions'
+import { applySimulatorList, clearSimulatorSessions, forgetSimulator, formatSimulatorDuration, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorEpoch } from '../src/services/simulatorSessions'
 
 describe('running simulator sessions', () => {
   it('keeps a session started outside the card so it can be stopped', () => {
@@ -53,5 +53,26 @@ describe('running simulator sessions', () => {
     expect(failed).toBe(true)
     expect(runningSimulators(appId)).toHaveLength(1)
     forgetSimulator(appId, id)
+  })
+
+  it('follows the server list: shows sessions from other tabs and drops devices that stopped by themselves', () => {
+    const appId = 'ee.forgr.server-list'
+    rememberSimulator(appId, { id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4', url: 'https://ios-emulator.capgo.app/s/idle/' })
+    applySimulatorList(appId, [
+      { id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4', platform: 'ios', status: 'stopped', url: null, started_at: null, finished_at: null, build_time_seconds: 300, billable_seconds: 600 },
+      { id: '7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5', platform: 'ios', status: 'in-progress', url: 'https://ios-emulator.capgo.app/s/other-tab/', started_at: null, finished_at: null, build_time_seconds: null, billable_seconds: null },
+    ])
+    expect(runningSimulators(appId)).toEqual([{ id: '7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5', url: 'https://ios-emulator.capgo.app/s/other-tab/' }])
+    const epoch = simulatorEpoch()
+    clearSimulatorSessions()
+    applySimulatorList(appId, [{ id: '8c2f1e40-3d61-40ac-9e55-2d907f4c33e6', platform: 'ios', status: 'in-progress', url: 'https://ios-emulator.capgo.app/s/late/', started_at: null, finished_at: null, build_time_seconds: null, billable_seconds: null }], epoch)
+    expect(runningSimulators(appId)).toHaveLength(0)
+  })
+
+  it('formats simulator time the way the usage page does', () => {
+    expect(formatSimulatorDuration(null)).toBe('')
+    expect(formatSimulatorDuration(42)).toBe('42s')
+    expect(formatSimulatorDuration(420)).toBe('7m')
+    expect(formatSimulatorDuration(2400 * 2)).toBe('1h 20m')
   })
 })

@@ -341,7 +341,7 @@ npx @capgo/cli@latest build credentials export ANDROID_KEYSTORE_FILE \
 
 ## Cloud simulator
 
-A running simulator uses one native builder slot, the same limit as a native build. Stopping it records the open time as build minutes. Each session has its own URL.
+A running simulator uses one native builder slot, the same limit as a native build, and counts as build time while it runs (iOS time counts double). It stops by itself after 5 minutes without input (taps, typing, installs, or `simulator command` calls) and after 40 minutes at most; the build time recorded ends when the device stopped. Stop it as soon as you are done. Each session has its own URL.
 
 ### `simulator start [appId]`
 
@@ -385,7 +385,7 @@ npx @capgo/cli@latest simulator get <session-id> com.example.app
 npx @capgo/cli@latest simulator stop <session-id> com.example.app
 ```
 
-Stop ends the device and records build minutes. If the device host is still running, or the minute write fails, the session stays open so the same command can be retried. A session also ends by itself after its duration, which releases the builder slot and records the capped time.
+Stop ends the device and records build minutes. If the device host is still running, or the minute write fails, the session stays open so the same command can be retried. A session also ends by itself after 5 minutes without input or after 40 minutes, which releases the builder slot and records the time up to that stop. Commands sent to it after that fail with a message to start a new simulator.
 
 ## Supporting docs
 

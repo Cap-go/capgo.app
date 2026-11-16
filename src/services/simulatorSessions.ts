@@ -57,3 +57,39 @@ export function forgetSimulator(appId: string, id: string) {
   if (index >= 0)
     sessions.splice(index, 1)
 }
+
+// One row of GET /private/simulator: a recent session and the build time it counted.
+export interface SimulatorSummary {
+  id: string
+  platform: 'ios' | 'android'
+  status: string
+  url: string | null
+  started_at: string | null
+  finished_at: string | null
+  // How long it ran, and what that counted against the plan (iOS counts double).
+  build_time_seconds: number | null
+  billable_seconds: number | null
+}
+
+// The server knows about sessions started in other tabs, and about devices that stopped by themselves.
+export function applySimulatorList(appId: string, list: SimulatorSummary[], epoch = sessionEpoch) {
+  if (epoch !== sessionEpoch)
+    return
+  for (const item of list) {
+    if (item.status === 'in-progress')
+      rememberSimulator(appId, { id: item.id, url: item.url ?? '' }, epoch)
+    else
+      forgetSimulator(appId, item.id)
+  }
+}
+
+export function formatSimulatorDuration(seconds: number | null | undefined) {
+  if (seconds == null)
+    return ''
+  const total = Math.max(0, Math.round(seconds))
+  if (total < 60)
+    return `${total}s`
+  const minutes = Math.round(total / 60)
+  const hours = Math.floor(minutes / 60)
+  return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`
+}

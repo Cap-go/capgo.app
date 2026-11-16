@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, multipartIpaStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, multipartIpaStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, SIMULATOR_STOPPED_MESSAGE, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorListItem, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { deviceStopTime } from '../supabase/functions/_backend/public/build/simulator_host.ts'
 
 describe('simulator sessions', () => {
   it('asks the device host for one session tied to the Capgo org', () => {
@@ -15,7 +16,54 @@ describe('simulator sessions', () => {
       name: 'Checkout',
       type: 'agent-device',
       maxDurationMinutes: 40,
+      maxIdleTimeMinutes: 5,
     })
+  })
+
+  it('bills a device the host stopped for lack of input up to that stop', () => {
+    const now = Date.parse('2026-11-09T12:30:00.000Z')
+    expect(deviceStopTime({ id: 'a', url: 'u', status: 'in-progress', finishedAt: null }, now)).toBeUndefined()
+    expect(deviceStopTime(undefined, now)).toBeUndefined()
+    const stoppedAt = deviceStopTime({ id: 'a', url: 'u', status: 'stopped', finishedAt: '2026-11-09T12:07:00.000Z' }, now)
+    expect(stoppedAt).toBe('2026-11-09T12:07:00.000Z')
+    // Seven minutes, not the 40 minute maximum.
+    expect(simulatorBillableSeconds('2026-11-09T12:00:00.000Z', simulatorUsageEnd(stoppedAt ?? null, now))).toBe(420)
+    // A host clock ahead of ours never bills past now.
+    expect(deviceStopTime({ id: 'a', url: 'u', status: 'stopped', finishedAt: '2026-11-09T13:00:00.000Z' }, now)).toBe('2026-11-09T12:30:00.000Z')
+    expect(deviceStopTime({ id: 'a', url: 'u', status: 'errored' }, now)).toBe('2026-11-09T12:30:00.000Z')
+    expect(SIMULATOR_STOPPED_MESSAGE).toContain('5 minutes without input')
+  })
+
+  it('lists a session with the build time it counted', () => {
+    expect(simulatorListItem({
+      id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4',
+      platform: 'ios',
+      status: 'stopped',
+      url: 'https://ios-emulator.capgo.app/s/6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4/',
+      started_at: '2026-11-09T12:00:00.000Z',
+      finished_at: '2026-11-09T12:07:00.000Z',
+      build_time_unit: '420',
+      billable_seconds: '840',
+    })).toEqual({
+      id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4',
+      platform: 'ios',
+      status: 'stopped',
+      url: null,
+      started_at: '2026-11-09T12:00:00.000Z',
+      finished_at: '2026-11-09T12:07:00.000Z',
+      build_time_seconds: 420,
+      billable_seconds: 840,
+    })
+    expect(simulatorListItem({
+      id: '7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5',
+      platform: 'android',
+      status: 'in-progress',
+      url: 'https://ios-emulator.capgo.app/s/7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5/',
+      started_at: '2026-11-09T12:00:00.000Z',
+      finished_at: null,
+      build_time_unit: null,
+      billable_seconds: null,
+    })).toMatchObject({ url: 'https://ios-emulator.capgo.app/s/7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5/', finished_at: null, build_time_seconds: null })
   })
 
   it('bills the seconds the simulator stayed open', () => {
