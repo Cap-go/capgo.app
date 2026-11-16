@@ -451,15 +451,9 @@ export interface BillingDiscount {
 }
 
 export interface BillingDiscounts {
-  hasSubscription: boolean
-  canApply: boolean
   discounts: BillingDiscount[]
 }
 
 export function getBillingDiscounts(orgId: string) {
   return callBilling<BillingDiscounts>('discounts', { orgId })
-}
-
-export function applyBillingPromotionCode(orgId: string, code: string, replaceExisting: boolean, redemptionId: string) {
-  return callBilling<{ discounts: BillingDiscount[] }>('promotion-code', { orgId, code, replaceExisting, redemptionId })
 }

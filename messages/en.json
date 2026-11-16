@@ -4544,22 +4544,8 @@
   "billing-tax-status-verified": "Verified",
   "billing-tax-status-unavailable": "Verification unavailable",
   "billing-done": "Done",
-  "billing-discounts-heading": "Discounts & promo codes",
-  "billing-discounts-load-error": "Could not load discounts. Please try again.",
   "billing-discount-percent": "{amount}% off",
   "billing-discount-amount": "{amount} off",
   "billing-discount-active": "Active discount",
-  "billing-discount-ends": "Ends {date}",
-  "billing-no-discount": "No discount applied",
-  "billing-promo-code": "Discount / promo code",
-  "billing-promo-changed": "The subscription discount changed while applying this code. Review the current discount and confirm replacement again.",
-  "billing-promo-apply": "Apply code",
-  "billing-promo-desc": "Apply an eligible code to future subscription invoices. Existing invoices are not changed.",
-  "billing-promo-replace-confirm": "Replace my current subscription discount with this code. Discounts are not combined.",
-  "billing-promo-replace-required": "A discount is already applied. Confirm replacement before applying another code.",
-  "billing-promo-checkout-only": "This code is restricted to an eligible checkout and cannot be applied to an existing subscription.",
-  "billing-promo-error": "Could not apply this code. Check the code and its eligibility, then try again.",
-  "billing-promo-success": "Promo code applied to future subscription invoices.",
-  "billing-promo-checkout": "You can enter a promo code during checkout when choosing a plan.",
-  "billing-promo-unavailable": "Promo codes cannot be changed here for a scheduled, ending or inactive subscription, or a plan with item-level discounts. Contact support for help."
+  "billing-discount-ends": "Ends {date}"
 }

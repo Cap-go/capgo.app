@@ -17,12 +17,11 @@ const currentDiscount = { name: 'Example offer', code: 'EXAMPLE10', percentOff: 
 
 type Call = { path: string, body: Record<string, unknown>, authorization: string | undefined }
 
-async function openBilling(page: Page, options: { discounted?: boolean, rejectUpdate?: boolean, rejectPromotion?: boolean, changedPromotion?: boolean } = {}) {
+async function openBilling(page: Page, options: { discounted?: boolean, rejectUpdate?: boolean, noSubscription?: boolean } = {}) {
   const calls: Call[] = []
   let profile = { ...structuredClone(details), taxIds: [] as { id: string, type: string, value: string, status: string }[] }
-  let discounts = options.discounted ? [currentDiscount] : []
+  const discounts = options.discounted ? [currentDiscount] : []
   let orgId = ''
-  let changedPromotion = options.changedPromotion
   function capture(route: Route, path: string) {
     const request = route.request()
     const body = request.postDataJSON() as Record<string, unknown>
@@ -36,7 +35,7 @@ async function openBilling(page: Page, options: { discounted?: boolean, rejectUp
     orgId = route.request().postDataJSON().orgId
     return route.fulfill(json({
       publishableKey: '', card: null, backupCard: null, invoices: [], openInvoice: null, trialPlan: null,
-      subscription: { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: '2030-01-01T00:00:00Z' },
+      subscription: options.noSubscription ? null : { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: '2030-01-01T00:00:00Z' },
     }))
   })
   await page.route('**/private/stripe_billing/profile', route => route.fulfill(json(profile)))
@@ -58,23 +57,12 @@ async function openBilling(page: Page, options: { discounted?: boolean, rejectUp
     profile.taxIds = profile.taxIds.filter(tax => tax.id !== body.taxIdId)
     return route.fulfill(json({ status: 'ok' }))
   })
-  await page.route('**/private/stripe_billing/discounts', route => route.fulfill(json({ hasSubscription: true, canApply: true, discounts })))
-  await page.route('**/private/stripe_billing/promotion-code', (route) => {
-    const body = capture(route, 'promotion-code')
-    if (options.rejectPromotion)
-      return route.fulfill(json({ error: 'invalid_promotion_code' }, 400))
-    if (changedPromotion) {
-      changedPromotion = false
-      return route.fulfill(json({ discounts }))
-    }
-    discounts = [{ ...currentDiscount, code: String(body.code), percentOff: 20 }]
-    return route.fulfill(json({ discounts }))
-  })
+  await page.route('**/private/stripe_billing/discounts', route => route.fulfill(json({ discounts })))
   await page.login('test@capgo.app', 'testtest')
   await page.goto('/settings/organization/billing')
   await dismissSupportPrompt(page)
   await expect(page.locator('[data-test="billing-profile-details"]')).toContainText(details.email)
-  await expect(page.locator('[data-test="billing-discounts"]')).toContainText('Discount / promo code')
+  await expect(page.locator('[data-test="billing-subscription"]')).toBeVisible()
   return { calls, getOrgId: () => orgId }
 }
 
@@ -84,7 +72,7 @@ function expectScopedCall(call: Call, orgId: string) {
   expect(call.authorization).toMatch(/^Bearer \S+$/)
 }
 
-test.describe('Billing details, tax IDs and promotion codes', () => {
+test.describe('Billing details, tax IDs and applied discounts', () => {
   test('saves invoice identity and address through the authenticated page and HTTP API', async ({ page }) => {
     const { calls, getOrgId } = await openBilling(page)
     await page.locator('[data-test="billing-edit-details"]').click()
@@ -133,49 +121,33 @@ test.describe('Billing details, tax IDs and promotion codes', () => {
     await expect(page.locator('[data-test="billing-profile"]')).toContainText('No tax ID added')
   })
 
-  test('redeems a promotion code only after confirming replacement of the current discount', async ({ page }) => {
-    const { calls, getOrgId } = await openBilling(page, { discounted: true })
-    const section = page.locator('[data-test="billing-discounts"]')
-    await expect(section).toContainText('10% off')
-    await section.getByLabel('Discount / promo code', { exact: true }).fill('EXAMPLE20')
-    const apply = section.getByRole('button', { name: 'Apply code', exact: true })
-    await expect(apply).toBeDisabled()
+  test('shows an existing discount inside the subscription card without promo-code entry', async ({ page }) => {
+    const { calls } = await openBilling(page, { discounted: true })
+    const subscription = page.locator('[data-test="billing-subscription"]')
+    await expect(subscription.locator('[data-test="billing-discounts"]')).toContainText('10% off')
+    await expect(subscription).toContainText('EXAMPLE10')
+    await expect(page.locator('input[name="promotionCode"]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Apply code', exact: true })).toHaveCount(0)
     expect(calls).toHaveLength(0)
-    await section.getByRole('checkbox').check()
-    await apply.click()
-    await expect(section).toContainText('Promo code applied to future subscription invoices.')
-    await expect(section).toContainText('20% off')
-    expect(calls).toHaveLength(1)
-    expectScopedCall(calls[0], getOrgId())
-    expect(calls[0].body).toMatchObject({ code: 'EXAMPLE20', replaceExisting: true })
-    expect(calls[0].body.redemptionId).toMatch(/^[0-9a-f-]{36}$/i)
     await page.reload()
-    await expect(section).toContainText('20% off')
-    await expect(section).toContainText('EXAMPLE20')
+    await expect(subscription).toContainText('EXAMPLE10')
   })
 
-  test('requires fresh confirmation when a concurrent change supersedes a promo-code redemption', async ({ page }) => {
-    const { calls } = await openBilling(page, { discounted: true, changedPromotion: true })
-    const section = page.locator('[data-test="billing-discounts"]')
-    await section.getByLabel('Discount / promo code', { exact: true }).fill('EXAMPLE20')
-    await section.getByRole('checkbox').check()
-    const apply = section.getByRole('button', { name: 'Apply code', exact: true })
-    await apply.click()
-    await expect(section.getByRole('alert')).toContainText('The subscription discount changed')
-    await expect(section).toContainText('10% off')
-    await expect(section).not.toContainText('Promo code applied to future subscription invoices.')
-    await expect(apply).toBeDisabled()
-    await section.getByRole('checkbox').check()
-    await apply.click()
-    await expect(section).toContainText('20% off')
-    await expect(section).toContainText('Promo code applied to future subscription invoices.')
-    expect(calls).toHaveLength(2)
-    expect(calls[1].body.redemptionId).not.toBe(calls[0].body.redemptionId)
-    expect(calls[1].body.replaceExisting).toBe(true)
+  test('omits discount UI when the subscription has no discount', async ({ page }) => {
+    await openBilling(page)
+    await expect(page.locator('[data-test="billing-discounts"]')).toHaveCount(0)
+    await expect(page.locator('input[name="promotionCode"]')).toHaveCount(0)
   })
 
-  test('retains saved details and discounts when the API rejects changes', async ({ page }) => {
-    const { calls } = await openBilling(page, { discounted: true, rejectUpdate: true, rejectPromotion: true })
+  test('does not offer promo-code entry without a subscription', async ({ page }) => {
+    await openBilling(page, { noSubscription: true })
+    await expect(page.locator('[data-test="billing-subscription"]')).toContainText('No active subscription')
+    await expect(page.locator('[data-test="billing-discounts"]')).toHaveCount(0)
+    await expect(page.locator('input[name="promotionCode"]')).toHaveCount(0)
+  })
+
+  test('retains saved details when the API rejects changes', async ({ page }) => {
+    const { calls } = await openBilling(page, { rejectUpdate: true })
     await page.locator('[data-test="billing-edit-details"]').click()
     const dialog = page.getByRole('dialog')
     await dialog.getByLabel('Full name or company name').fill('Unsaved Company')
@@ -184,12 +156,6 @@ test.describe('Billing details, tax IDs and promotion codes', () => {
     await expect(dialog.getByLabel('Full name or company name')).toHaveValue('Unsaved Company')
     await dialog.locator('[data-test="billing-details-form"]').getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(page.locator('[data-test="billing-profile-details"]')).toContainText('Example Company')
-    const section = page.locator('[data-test="billing-discounts"]')
-    await section.getByLabel('Discount / promo code', { exact: true }).fill('INVALID')
-    await section.getByRole('checkbox').check()
-    await section.getByRole('button', { name: 'Apply code', exact: true }).click()
-    await expect(section.getByRole('alert')).toContainText('Could not apply this code')
-    await expect(section).toContainText('10% off')
-    expect(calls.map(call => call.path)).toEqual(['profile/update', 'promotion-code'])
+    expect(calls).toHaveLength(1)
   })
 })

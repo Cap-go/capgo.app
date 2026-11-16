@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   userId: 'user_example' as string | null,
   org: vi.fn(), permission: vi.fn(), context: vi.fn(),
-  discounts: vi.fn(), apply: vi.fn(), profile: vi.fn(), update: vi.fn(), add: vi.fn(), remove: vi.fn(),
+  discounts: vi.fn(), profile: vi.fn(), update: vi.fn(), add: vi.fn(), remove: vi.fn(),
 }))
 vi.mock('../supabase/functions/_backend/utils/hono_jwt.ts', () => ({
   middlewareAuth: async (c: any, next: () => Promise<void>) => {
@@ -23,12 +23,11 @@ vi.mock('../supabase/functions/_backend/utils/cancel_save_offer.ts', () => ({}))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile.ts', () => ({
   getBillingProfile: mocks.profile, updateBillingDetails: mocks.update, addBillingTaxId: mocks.add, removeBillingTaxId: mocks.remove,
 }))
-vi.mock('../supabase/functions/_backend/utils/stripe_promotion_codes.ts', () => ({ getBillingDiscounts: mocks.discounts, applyBillingPromotionCode: mocks.apply }))
+vi.mock('../supabase/functions/_backend/utils/stripe_billing_discounts.ts', () => ({ getBillingDiscounts: mocks.discounts }))
 const { app } = await import('../supabase/functions/_backend/private/stripe_billing')
 app.onError((_err, c) => c.json({ error: 'rejected' }, 400))
 const operations = [
   { path: 'discounts', permission: 'org.read_billing', action: mocks.discounts },
-  { path: 'promotion-code', permission: 'org.update_billing', action: mocks.apply },
   { path: 'profile', permission: 'org.read_billing', action: mocks.profile },
   { path: 'profile/update', permission: 'org.update_billing', action: mocks.update },
   { path: 'tax-id/add', permission: 'org.update_billing', action: mocks.add },
@@ -67,6 +66,11 @@ describe.each(operations)('$path authorization', ({ path, permission, action }) 
   it('uses the server-resolved customer and account, ignoring client-supplied replacements', async () => {
     expect((await request(path, { customerId: 'cus_other', billingAccount: 'ee', taxIdId: 'txi_example' })).status).toBe(200)
     expect(mocks.context).toHaveBeenCalledWith(expect.anything(), 'cus_resolved')
-    expect(action.mock.calls[0][path === 'discounts' || path === 'promotion-code' ? 1 : 0]).toEqual({ customerId: 'cus_resolved', billingAccount: 'us' })
+    expect(action.mock.calls[0][path === 'discounts' ? 1 : 0]).toEqual({ customerId: 'cus_resolved', billingAccount: 'us' })
   })
+})
+
+it('does not expose promotion-code mutation on the billing API', async () => {
+  expect((await request('promotion-code', { code: 'EXAMPLE20' })).status).toBe(404)
+  expect(mocks.context).not.toHaveBeenCalled()
 })

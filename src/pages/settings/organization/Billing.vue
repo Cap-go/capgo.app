@@ -9,8 +9,8 @@ import IconDownload from '~icons/heroicons/arrow-down-tray'
 import IconCard from '~icons/heroicons/credit-card'
 import IconExclamationTriangle from '~icons/heroicons/exclamation-triangle'
 import IconShieldCheck from '~icons/heroicons/shield-check'
-import BillingDiscountSection from '~/components/billing/BillingDiscountSection.vue'
 import BillingProfileSection from '~/components/billing/BillingProfileSection.vue'
+import BillingSubscriptionDiscounts from '~/components/billing/BillingSubscriptionDiscounts.vue'
 import CancelPlanModal from '~/components/billing/CancelPlanModal.vue'
 import CardFormModal from '~/components/billing/CardFormModal.vue'
 import TrialPlanOfferModal from '~/components/billing/TrialPlanOfferModal.vue'
@@ -404,6 +404,7 @@ onMounted(async () => {
             <p class="mt-3 text-base font-medium text-slate-900 dark:text-white">
               {{ subscriptionLine }}
             </p>
+            <BillingSubscriptionDiscounts v-if="subscription" :key="orgId" :org-id="orgId" />
             <p v-if="trialPlan" class="mt-2 text-sm text-slate-600 dark:text-slate-300" data-test="billing-trial-plan">
               {{ trialPlan.scheduled
                 ? t('trial-plan-scheduled-line', { plan: trialPlan.planName, price: trialPlanPrice, date: trialPlanDate })
@@ -550,8 +551,6 @@ onMounted(async () => {
             </div>
           </section>
         </div>
-
-        <BillingDiscountSection :key="`discounts-${orgId}`" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
 
         <BillingProfileSection :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
 

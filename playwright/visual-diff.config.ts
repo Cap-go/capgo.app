@@ -672,14 +672,13 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
         taxIds: [{ id: 'txi_visual', type: 'eu_vat', value: 'DE123456789', status: 'verified' }],
       } }))
       await page.route('**/private/stripe_billing/discounts', route => route.fulfill({ json: {
-        hasSubscription: true, canApply: true,
         discounts: [{ name: 'Example offer', code: 'EXAMPLE10', percentOff: 10, amountOff: null, currency: null, endsAt: null }],
       } }))
       await page.reload()
       await page.locator('[data-test="billing-subscription"]').waitFor()
       if (process.env.VISUAL_DIFF_PHASE === 'after') {
         await page.locator('[data-test="billing-profile-details"]').waitFor()
-        await page.locator('[data-test="billing-promo-form"]').waitFor()
+        await page.locator('[data-test="billing-subscription"] [data-test="billing-discounts"]').waitFor()
       }
     },
   },
