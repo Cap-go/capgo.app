@@ -423,10 +423,10 @@ async function checkOrganizationsAccess(c: Context, orgIds: string[], db: StatsD
     return
 
   // Use the existing PostgreSQL function to check organization payment and plan status
-  let rows: { org_id: string, is_paying_and_good_plan_org: boolean | null }[]
+  let rows: { ord: number | string, is_paying_and_good_plan_org: boolean | null }[]
   try {
-    rows = await db<{ org_id: string, is_paying_and_good_plan_org: boolean | null }>(
-      `SELECT input.org_id, public.is_paying_and_good_plan_org(orgid => input.org_id) AS is_paying_and_good_plan_org
+    rows = await db<{ ord: number | string, is_paying_and_good_plan_org: boolean | null }>(
+      `SELECT input.ord, public.is_paying_and_good_plan_org(orgid => input.org_id) AS is_paying_and_good_plan_org
        FROM unnest($1::uuid[]) WITH ORDINALITY AS input(org_id, ord)
        ORDER BY input.ord`,
       [orgIds],
@@ -438,9 +438,11 @@ async function checkOrganizationsAccess(c: Context, orgIds: string[], db: StatsD
     })
   }
 
-  const statusByOrg = new Map(rows.map(row => [row.org_id, row.is_paying_and_good_plan_org]))
-  for (const orgId of orgIds) {
-    const isPayingAndGoodPlan = statusByOrg.get(orgId) ?? null
+  // Match by input position: PostgreSQL returns uuids in lowercase canonical form, so keying by
+  // the returned id would miss callers that pass an uppercase organization id.
+  const statusByOrd = new Map(rows.map(row => [Number(row.ord), row.is_paying_and_good_plan_org]))
+  for (const [index, orgId] of orgIds.entries()) {
+    const isPayingAndGoodPlan = statusByOrd.get(index + 1) ?? null
     // If organization is not paying or doesn't have a good plan, throw error
     if (!isPayingAndGoodPlan) {
       throw quickError(402, 'subscription_required', 'Organization subscription required or plan invalid', {

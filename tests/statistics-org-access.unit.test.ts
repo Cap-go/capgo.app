@@ -17,7 +17,8 @@ function fakeDb(status: Record<string, boolean | null> | Error) {
     calls.push(values)
     if (status instanceof Error)
       throw status
-    return (values[0] as string[]).map(orgId => ({ org_id: orgId, is_paying_and_good_plan_org: status[orgId] ?? null })) as any[]
+    // Like PostgreSQL: WITH ORDINALITY yields a bigint (string from pg), uuids come back lowercased.
+    return (values[0] as string[]).map((orgId, index) => ({ ord: String(index + 1), is_paying_and_good_plan_org: status[orgId.toLowerCase()] ?? null })) as any[]
   }
   return { db: db as any, calls }
 }
@@ -55,6 +56,12 @@ describe('statistics organization access batch', () => {
       status: 402,
       moreInfo: { orgId: ORG_3, isPayingAndGoodPlan: null },
     })
+  })
+
+  it.concurrent('accepts an uppercase organization id', async () => {
+    const upper = 'ABCDEF00-0000-4000-8000-000000000001'
+    const { db } = fakeDb({ [upper.toLowerCase()]: true })
+    await expect(statisticsTestUtils.checkOrganizationsAccess(c, [upper], db)).resolves.toBeUndefined()
   })
 
   it.concurrent('fails with 404 when the status read fails', async () => {
