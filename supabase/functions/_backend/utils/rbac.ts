@@ -98,6 +98,36 @@ export interface PermissionScope {
  * errors must surface as 503 so clients (especially TUS) can retry.
  * Non-transient query failures (invalid UUID, etc.) still deny.
  */
+/**
+ * Permission checks bind the caller's plaintext API key as a query parameter. Drizzle's
+ * "Failed query" error repeats those parameters in its message, and driver errors can echo
+ * them too, so only the error name, driver code and parameter-free message are logged.
+ */
+export function sanitizePermissionCheckError(error: unknown, secrets: Array<string | null | undefined> = []) {
+  const clean = (text: unknown) => {
+    if (typeof text !== 'string')
+      return undefined
+    let result = text.replace(/\n?\s*params:[\s\S]*$/i, '')
+    for (const secret of secrets) {
+      if (secret)
+        result = result.split(secret).join('[redacted]')
+    }
+    return result
+  }
+  const describe = (value: unknown) => {
+    if (!value || typeof value !== 'object')
+      return { message: clean(String(value)) }
+    const record = value as { name?: unknown, code?: unknown, message?: unknown }
+    return {
+      name: typeof record.name === 'string' ? record.name : undefined,
+      code: typeof record.code === 'string' ? record.code : undefined,
+      message: clean(record.message),
+    }
+  }
+  const cause = error && typeof error === 'object' ? (error as { cause?: unknown }).cause : undefined
+  return { ...describe(error), cause: cause === undefined ? undefined : describe(cause) }
+}
+
 function handlePermissionCheckError(
   c: Context<MiddlewareKeyVariables>,
   permission: Permission,
@@ -113,7 +143,7 @@ function handlePermissionCheckError(
   cloudlogErr({
     requestId: c.get('requestId'),
     message: `${source} error`,
-    error,
+    error: sanitizePermissionCheckError(error, [c.get('capgkey') as string | undefined]),
     permission,
     scope,
     transient,
