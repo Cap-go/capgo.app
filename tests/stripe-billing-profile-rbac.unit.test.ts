@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   userId: 'user_example' as string | null,
   org: vi.fn(), permission: vi.fn(), context: vi.fn(),
-  discounts: vi.fn(), profile: vi.fn(), update: vi.fn(), add: vi.fn(), remove: vi.fn(),
+  invoice: vi.fn(), discounts: vi.fn(), profile: vi.fn(), update: vi.fn(), add: vi.fn(), remove: vi.fn(),
 }))
 vi.mock('../supabase/functions/_backend/utils/hono_jwt.ts', () => ({
   middlewareAuth: async (c: any, next: () => Promise<void>) => {
@@ -24,9 +24,11 @@ vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile.ts', () => 
   getBillingProfile: mocks.profile, updateBillingDetails: mocks.update, addBillingTaxId: mocks.add, removeBillingTaxId: mocks.remove,
 }))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_discounts.ts', () => ({ getBillingDiscounts: mocks.discounts }))
+vi.mock('../supabase/functions/_backend/utils/invoice_document.ts', () => ({ getInvoiceDocument: mocks.invoice }))
 const { app } = await import('../supabase/functions/_backend/private/stripe_billing')
 app.onError((_err, c) => c.json({ error: 'rejected' }, 400))
 const operations = [
+  { path: 'invoice-document', permission: 'org.read_invoices', action: mocks.invoice },
   { path: 'discounts', permission: 'org.read_billing', action: mocks.discounts },
   { path: 'profile', permission: 'org.read_billing', action: mocks.profile },
   { path: 'profile/update', permission: 'org.update_billing', action: mocks.update },
@@ -73,4 +75,9 @@ describe.each(operations)('$path authorization', ({ path, permission, action }) 
 it('does not expose promotion-code mutation on the billing API', async () => {
   expect((await request('promotion-code', { code: 'EXAMPLE20' })).status).toBe(404)
   expect(mocks.context).not.toHaveBeenCalled()
+})
+
+it('marks invoice data private and uncacheable', async () => {
+  const response = await request('invoice-document', { invoiceId: 'in_example' })
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store')
 })

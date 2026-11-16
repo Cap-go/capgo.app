@@ -1,3 +1,4 @@
+import { getInvoiceDocument } from '../utils/invoice_document.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
@@ -265,4 +266,11 @@ app.post('/invoice-payment-intent', middlewareAuth, async (c) => {
   if (!secret)
     throw simpleError('no_open_invoice', 'No open invoice to pay')
   return c.json(secret)
+})
+
+app.post('/invoice-document', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { invoiceId?: unknown }>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.read_invoices')
+  c.header('Cache-Control', 'private, no-store')
+  return c.json(await getInvoiceDocument(ctx, body.invoiceId))
 })

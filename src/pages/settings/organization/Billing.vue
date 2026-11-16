@@ -19,7 +19,7 @@ import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
-import { cancelTrialPlan, formatStripeAmount, getBillingOverview, payOpenInvoice, removeBackupCard, resumeSubscription, scheduleTrialPlan } from '~/services/stripe'
+import { cancelTrialPlan, formatStripeAmount, getBillingOverview, getInvoiceDocument, payOpenInvoice, removeBackupCard, resumeSubscription, scheduleTrialPlan } from '~/services/stripe'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -33,6 +33,7 @@ displayStore.NavTitle = t('billing-portal-tab')
 
 const overview = ref<BillingOverview | null>(null)
 const isLoading = ref(true)
+const downloadingInvoice = ref<string | null>(null)
 const loadFailed = ref(false)
 const isPaying = ref(false)
 const isResuming = ref(false)
@@ -91,6 +92,25 @@ function invoiceStatusClass(status: BillingInvoice['status']) {
   if (status === 'open')
     return 'bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-200'
   return 'bg-slate-50 text-slate-600 ring-slate-500/20 dark:bg-slate-500/10 dark:text-slate-300'
+}
+
+async function downloadInvoice(invoice: BillingInvoice) {
+  const id = orgId.value
+  downloadingInvoice.value = invoice.id
+  try {
+    const [document, { downloadInvoicePdf }] = await Promise.all([
+      getInvoiceDocument(id, invoice.id),
+      import('~/services/invoicePdf'),
+    ])
+    if (id === orgId.value)
+      await downloadInvoicePdf(document, id)
+  }
+  catch {
+    toast.error(t('billing-invoice-download-failed'))
+  }
+  finally {
+    downloadingInvoice.value = null
+  }
 }
 
 async function loadOverview() {
@@ -571,16 +591,17 @@ onMounted(async () => {
               <span class="inline-flex w-24 justify-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset" :class="invoiceStatusClass(invoice.status)">
                 {{ t(`billing-invoice-status-${invoice.status ?? 'void'}`) }}
               </span>
-              <a
-                v-if="invoice.pdfUrl"
-                :href="invoice.pdfUrl"
+              <button
+                v-if="invoice.number"
+                type="button"
+                :disabled="downloadingInvoice !== null"
                 class="d-btn d-btn-ghost d-btn-xs gap-1"
                 :aria-label="t('billing-download-invoice')"
-                download
+                @click="downloadInvoice(invoice)"
               >
                 <IconDownload class="h-4 w-4" />
                 PDF
-              </a>
+              </button>
             </li>
           </ul>
         </section>
