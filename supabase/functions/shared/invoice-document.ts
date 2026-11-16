@@ -8,7 +8,7 @@ export interface InvoiceDocument {
   customer: string[]
   fields: { name: string, value: string }[]
   description: string | null
-  lines: { description: string, period: string, quantity: string, unitPrice: string, amount: string }[]
+  lines: { description: string, period: string, quantity: string, unitPrice: string, amount: string, tax?: string }[]
   totals: { label: string, amount: string, strong?: boolean }[]
   notes: string[]
 }

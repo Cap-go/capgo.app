@@ -17,9 +17,9 @@ export const exampleInvoice = {
   total_taxes: [{ amount: 264, tax_behavior: 'exclusive', taxable_amount: 1200, taxability_reason: 'standard_rated', tax_rate_details: { tax_rate: 'txr_example' } }],
   custom_fields: [], description: null, footer: null,
 } as unknown as Stripe.Invoice
-export const exampleLines = [{ id: 'il_example', description: 'Solo', amount: 1200, quantity: 1, period: { start: 1793491200, end: 1796083200 }, pricing: { unit_amount_decimal: '1200' } }] as unknown as Stripe.InvoiceLineItem[]
+export const exampleLines = [{ id: 'il_example', description: 'Solo', amount: 1200, quantity: 1, period: { start: 1793491200, end: 1796083200 }, pricing: { unit_amount_decimal: '1200' }, taxes: exampleInvoice.total_taxes }] as unknown as Stripe.InvoiceLineItem[]
 export const exampleAccount = {
-  company: { name: 'Digital shift OU', address: { line1: 'Sepapaja tn 6', postal_code: '15551', city: 'Tallinn', country: 'EE' } },
+  company: { name: 'Digital shift OU', address: { line1: 'sepapaja tn 6', postal_code: '15551', city: 'Tallinn', country: 'EE' } },
   business_profile: { support_email: 'support@capgo.app' },
 } as Stripe.Account
 export const exampleRate = { id: 'txr_example', display_name: 'VAT - Italy', percentage: 22 } as Stripe.TaxRate

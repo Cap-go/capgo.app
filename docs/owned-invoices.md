@@ -1,8 +1,11 @@
 # Capgo invoice documents
 
 The billing page generates its own PDF when a customer selects **PDF**. The
-layout follows the invoice layout in [Cap-go/worker-invoices](https://github.com/Cap-go/worker-invoices/blob/main/src/pdf.ts),
-using a lazy-loaded local renderer instead of requiring a browser service.
+layout matches the existing Stripe invoice: US Letter paper, Inter typography,
+Capgo logo, compact address blocks, line-item tax column, totals and footer.
+The earlier [worker-invoices](https://github.com/Cap-go/worker-invoices/blob/main/src/pdf.ts)
+project informed the implementation; the final renderer uses the issued Stripe
+PDF as its visual reference and loads locally on demand.
 No customer data is sent to a PDF service.
 
 Stripe still owns subscriptions, taxes, payments, and finalized invoice records.
@@ -29,7 +32,7 @@ change its address on a regenerated PDF, so retain previously issued documents
 when changing legal details. Existing account routing and invoice-history scope
 are unchanged; this does not merge historical invoices between Stripe entities.
 
-The renderer embeds Roboto and supports its Latin, Greek, and Cyrillic glyphs.
+The renderer embeds Inter 4.1 (SIL Open Font License; see `public/invoice/INTER-LICENSE.txt`) and supports its Latin, Greek, and Cyrillic glyphs.
 Additional script fonts are not bundled. The PDF rendering regression covers
 accented names, long descriptions, and automatic multi-page layout.
 

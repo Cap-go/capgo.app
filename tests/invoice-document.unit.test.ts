@@ -22,8 +22,8 @@ describe('owned invoice documents', () => {
     const result = document()
     expect(result.number).toBe('EXAMPLE1-00042')
     expect(result.customer).toContain('billing@example.com')
-    expect(result.totals).toContainEqual({ label: 'VAT - Italy (22%)', amount: 'EUR 2.64' })
-    expect(result.totals).toContainEqual({ label: 'Total', amount: 'EUR 14.64', strong: true })
+    expect(result.totals).toContainEqual({ label: 'VAT - Italy (22% on €12.00)', amount: '€2.64' })
+    expect(result.totals).toContainEqual({ label: 'Total', amount: '€14.64' })
     expect(JSON.stringify(result)).not.toMatch(/cus_|in_example|stripe.com/)
   })
   it.concurrent.each(['ABC12345-0001', 'EXAMPLE1-00042'])('preserves each account numbering format %s exactly', (number) => {
@@ -33,17 +33,33 @@ describe('owned invoice documents', () => {
     expect(document({ customer_tax_ids: [{ type: 'eu_vat', value: 'EXAMPLE' }] }).notes).toEqual([])
     expect(document({ customer_tax_exempt: 'reverse' }).notes).toContain('Tax to be paid on reverse charge basis.')
   })
-  it.concurrent.each([['jpy', 'JPY 1,464'], ['kwd', 'KWD 1.464'], ['isk', 'ISK 14.64']])('formats Stripe units for %s', (currency, expected) => {
+  it.concurrent.each([['jpy', '¥1,464'], ['kwd', 'KWD 1.464'], ['isk', 'ISK 14.64']])('formats Stripe units for %s', (currency, expected) => {
     expect(document({ currency }).totals.find(row => row.label === 'Total')?.amount).toBe(expected)
   })
   it.concurrent('shows discounts, credits, and partial payment separately without recalculating totals', () => {
     const result = document({ total_discount_amounts: [{ amount: 200, discount: 'di_example' }], starting_balance: -100, post_payment_credit_notes_amount: 50, amount_paid: 400, amount_remaining: 914 })
     expect(result.totals).toEqual(expect.arrayContaining([
-      { label: 'Discount', amount: '-EUR 2.00' },
-      { label: 'Credit notes', amount: '-EUR 0.50' },
-      { label: 'Amount paid', amount: 'EUR 4.00' },
-      { label: 'Amount remaining', amount: 'EUR 9.14', strong: true },
+      { label: 'Discount', amount: '-€2.00' },
+      { label: 'Credit notes', amount: '-€0.50' },
+      { label: 'Amount paid', amount: '€4.00' },
+      { label: 'Amount remaining', amount: '€9.14', strong: true },
     ]))
+  })
+  it.concurrent('shows line tax and compact totals for an unpaid invoice, retaining partial payment details', () => {
+    const result = document()
+    expect(result.lines[0].tax).toBe('22%')
+    expect(result.lines[0].period).toBe('Nov 1–Dec 1, 2026')
+    expect(result.totals.map(row => row.label)).toEqual(['Subtotal', 'Total excluding tax', 'VAT - Italy (22% on €12.00)', 'Total', 'Amount due'])
+    expect(document({ status: 'paid', amount_paid: 1464, amount_remaining: 0 }).totals).toEqual(expect.arrayContaining([
+      { label: 'Amount paid', amount: '€14.64' },
+      { label: 'Amount remaining', amount: '€0.00', strong: true },
+    ]))
+  })
+  it.concurrent('resolves line-specific tax rates even when absent from aggregate taxes', async () => {
+    const { ctx, stripe } = context({ ...exampleInvoice, total_taxes: [] })
+    const result = await getInvoiceDocument(ctx, 'in_example')
+    expect(stripe.taxRates.retrieve).toHaveBeenCalledWith('txr_example')
+    expect(result.lines[0].tax).toBe('22%')
   })
   it.concurrent('fetches every line rather than the first embedded Stripe page', async () => {
     const lines = Array.from({ length: 101 }, (_, i) => ({ ...exampleLines[0], id: `il_${i}` }))
