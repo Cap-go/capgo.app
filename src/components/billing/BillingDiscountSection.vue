@@ -84,9 +84,12 @@ async function apply() {
     const errorCode = await getCapgoApiErrorCode(cause)
     if (disposed)
       return
-    error.value = t(errorCode === 'promotion_replace_required'
-      ? 'billing-promo-replace-required'
-      : errorCode === 'promotion_checkout_only' ? 'billing-promo-checkout-only' : 'billing-promo-error')
+    let errorKey = 'billing-promo-error'
+    if (errorCode === 'promotion_replace_required')
+      errorKey = 'billing-promo-replace-required'
+    else if (errorCode === 'promotion_checkout_only')
+      errorKey = 'billing-promo-checkout-only'
+    error.value = t(errorKey)
     // Refresh after failures: another admin may have added a discount since this page loaded.
     await load()
   }

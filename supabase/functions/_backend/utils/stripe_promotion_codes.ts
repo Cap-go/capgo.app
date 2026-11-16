@@ -26,7 +26,8 @@ async function getPromotionContext(c: Context, ctx: InAppBillingContext) {
   const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id
   if (customer.deleted || customerId !== ctx.customerId)
     throw simpleError('billing_unavailable', 'Billing is temporarily unavailable')
-  const inherited = subscription.discounts.length ? subscription.discounts : customer.discount ? [customer.discount] : []
+  const customerDiscounts = customer.discount ? [customer.discount] : []
+  const inherited = subscription.discounts.length ? subscription.discounts : customerDiscounts
   const discounts = [...inherited, ...subscription.items.data.flatMap(item => item.discounts ?? [])]
   return { subscription, discounts }
 }
@@ -92,7 +93,7 @@ export async function applyBillingPromotionCode(c: Context, ctx: InAppBillingCon
     const customer = typeof item.customer === 'string' ? item.customer : item.customer?.id
     return !item.customer_account && (!customer || customer === ctx.customerId)
   })
-  if (!promotion || !promotion.active)
+  if (!promotion?.active)
     throw simpleError('invalid_promotion_code', 'This promotion code is not available for this subscription')
 
   // Return success after a lost response without consuming another redemption.
@@ -110,8 +111,8 @@ export async function applyBillingPromotionCode(c: Context, ctx: InAppBillingCon
     throw simpleError('promotion_checkout_only', 'This promotion code can only be used at an eligible checkout')
   const couponRef = promotion.promotion.coupon
   const coupon = typeof couponRef === 'string' ? await ctx.stripe.coupons.retrieve(couponRef) : couponRef
-  const products = current.subscription.items.data.map(item => typeof item.price.product === 'string' ? item.price.product : item.price.product.id)
-  if (!coupon?.valid || (coupon.applies_to?.products?.length && !coupon.applies_to.products.some(product => products.includes(product))))
+  const products = new Set(current.subscription.items.data.map(item => typeof item.price.product === 'string' ? item.price.product : item.price.product.id))
+  if (!coupon?.valid || (coupon.applies_to?.products?.length && !coupon.applies_to.products.some(product => products.has(product))))
     throw simpleError('invalid_promotion_code', 'This promotion code is not available for this subscription')
 
   // Redeem the promotion ID, never its underlying coupon: Stripe must enforce expiry,
