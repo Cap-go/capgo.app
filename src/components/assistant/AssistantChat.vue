@@ -20,6 +20,7 @@ import IconClose from '~icons/heroicons/x-mark'
 import chatGptLogoWhite from '~/assets/assistant/chatgpt-logo-white.svg'
 import { AssistantKeyError, createAssistantKey, loadAssistantKey, saveAssistantKey } from '~/services/assistant'
 import { AssistantUpstreamError, runAssistant } from '~/services/assistantAgent'
+import { assistantAnalytics } from '~/services/assistantAnalytics'
 import { beginChatGptSignIn, CHATGPT_MANAGE_USAGE_URL, CHATGPT_REDIRECT_URI, ChatGptAuthError, completeChatGptSignIn, getChatGptAccessToken, loadChatGptCredentials, signOutChatGpt } from '~/services/chatgptAuth'
 import { useConsole } from '~/services/console'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -63,6 +64,20 @@ const welcomeSeen = useLocalStorage('capgo-assistant-chatgpt-welcome-seen', fals
 const scroller = useTemplateRef<HTMLElement>('scroller')
 const inputEl = useTemplateRef<HTMLTextAreaElement>('inputEl')
 let nextId = 1
+let finishConnection: ReturnType<typeof assistantAnalytics.start> | undefined
+
+function connectionFinished(outcome: 'success' | 'error' | 'cancelled', code = '') {
+  finishConnection?.(outcome, code)
+  finishConnection = undefined
+}
+
+function analyticsErrorCode(error: unknown) {
+  if (error instanceof AssistantUpstreamError)
+    return error.code
+  if (error instanceof ChatGptAuthError || error instanceof AssistantKeyError)
+    return error.message
+  return 'unknown'
+}
 
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
 // Everything the assistant needs stays on this device: the Capgo API key and the ChatGPT tokens.
@@ -167,6 +182,7 @@ async function finishSignIn(callback: ChatGptCallback) {
   signInWindow?.close()
   signInWindow = null
   showWelcome.value = !welcomeSeen.value
+  connectionFinished('success')
 }
 
 function requestConnect() {
@@ -196,6 +212,8 @@ function requestConnect() {
 async function connect() {
   if (!userId.value)
     return
+  connectionFinished('cancelled')
+  finishConnection = assistantAnalytics.start('Connection', 'connect')
   connecting.value = true
   connectError.value = ''
   // Popups must open inside the click; the address is set once it is built.
@@ -221,8 +239,12 @@ async function connect() {
         pasteStep.value = { redirectUri: CHATGPT_REDIRECT_URI }
       }
     }
+    else {
+      connectionFinished('success')
+    }
   }
   catch (error) {
+    connectionFinished('error', analyticsErrorCode(error))
     console.error('Cannot connect the assistant', error)
     signInWindow?.close()
     signInWindow = null
@@ -234,8 +256,10 @@ async function connect() {
 }
 
 async function submitPaste() {
+  finishConnection ??= assistantAnalytics.start('Connection', 'connect')
   const callback = parseChatGptCallback(pasteValue.value, CHATGPT_REDIRECT_URI)
   if (!callback) {
+    connectionFinished('error', 'invalid_callback')
     connectError.value = t('assistant-chatgpt-paste-invalid')
     return
   }
@@ -245,6 +269,7 @@ async function submitPaste() {
     await finishSignIn(callback)
   }
   catch (error) {
+    connectionFinished('error', analyticsErrorCode(error))
     console.error('Cannot complete ChatGPT sign-in', error)
     connectError.value = signInErrorMessage(error)
   }
@@ -254,6 +279,7 @@ async function submitPaste() {
 }
 
 function cancelPaste() {
+  connectionFinished('cancelled')
   pasteStep.value = null
   pasteValue.value = ''
   connectError.value = ''
@@ -262,19 +288,23 @@ function cancelPaste() {
 }
 
 async function run(confirm?: { tool: string, arguments: Record<string, unknown> }) {
+  const finishTurn = assistantAnalytics.start('Turn', confirm ? 'confirmation' : 'message')
   loading.value = true
   await scrollToBottom()
   try {
     const accessToken = await getChatGptAccessToken(userId.value)
     if (!accessToken) {
+      finishTurn('error', 'chatgpt_reconnect_required')
       reloadLocalState()
       return
     }
     const history = entries.value.filter(entry => !entry.error).map(({ role, content }) => ({ role, content }))
     const response = await runAssistant({ accessToken, apikey: apikey.value, messages: history, context: pageContext.value, confirm })
     entries.value.push({ id: nextId++, role: 'assistant', content: response.reply, cards: response.cards, actions: response.actions })
+    finishTurn('success')
   }
   catch (error) {
+    finishTurn('error', analyticsErrorCode(error))
     if (error instanceof ChatGptAuthError || (error instanceof AssistantUpstreamError && error.code === 'chatgpt_reconnect_required')) {
       // Expired, revoked in ChatGPT settings, or plan usage removed: show "Continue with ChatGPT" again.
       signOutChatGpt(userId.value)
@@ -351,6 +381,7 @@ function clear() {
 }
 
 function disconnect() {
+  assistantAnalytics.disconnected()
   signOutChatGpt(userId.value)
   reloadLocalState()
 }
@@ -364,6 +395,7 @@ watch(open, (value) => {
   if (!value)
     return
   reloadLocalState()
+  assistantAnalytics.opened(!needsConnect.value)
   scrollToBottom()
 })
 </script>
