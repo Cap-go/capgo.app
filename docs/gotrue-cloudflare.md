@@ -20,19 +20,10 @@ console → API relay /private/console/auth/* → GOTRUE service binding
 GoTrue reads its database namespace from `DB_NAMESPACE` (not `GOTRUE_DB_NAMESPACE`).
 With the wrong name it silently uses `auth`.
 
-## Secrets
+## Secrets: `internal/cloudflare_gotrue_auth/.env.prod`
 
-### Turnstile (`CAPTCHA_SECRET_KEY` Secrets Store)
-
-The GoTrue Worker binds `CAPTCHA_SECRET_KEY` from the account `default_secrets_store`
-(`cloudflare_workers/gotrue/wrangler.jsonc`). It must be the same Turnstile secret the
-API Worker uses (`CAPTCHA_SECRET_KEY` / `CLOUDFLARE_TURNSTILE_SECRET_KEY` on
-`capgo_api-prod`). Do not push a copy with `deploy:cloudflare_env:gotrue:prod`.
-
-Before first deploy, create or confirm the `CAPTCHA_SECRET_KEY` store secret (workers scope)
-if it is not there yet. The container maps it to `GOTRUE_SECURITY_CAPTCHA_SECRET`.
-
-### `internal/cloudflare_gotrue_auth/.env.prod`
+Capgo does not use Cloudflare Secrets Store for now (Martin, 2026-11-13), so the
+Turnstile secret is a copy on this Worker, like the others.
 
 Not in the repository yet. Encrypt it with git-secret like `internal/cloudflare/`,
 then push it with `bun run deploy:cloudflare_env:gotrue:prod`.
@@ -45,6 +36,8 @@ then push it with `bun run deploy:cloudflare_env:gotrue:prod`.
 - `GOTRUE_JWT_KEYS`: JSON array with the ES256 private JWK (`kid` = the standby key
   in the hosted JWKS), so the API accepts our tokens.
 - `GOTRUE_SAML_PRIVATE_KEY`: base64 DER RSA private key.
+- `GOTRUE_SECURITY_CAPTCHA_SECRET`: the Turnstile secret, same value as
+  `CAPTCHA_SECRET_KEY` on `capgo_api-prod` (the console's widget issues the tokens).
 
 Before GoTrue first connects, change the `gotrue_cf` password from the Supabase
 SQL editor with a SCRAM verifier, never the plaintext (statements are logged):
@@ -85,7 +78,7 @@ All through `http://localhost:8787/private/console/auth`:
 ## After merge: deploy and test against production
 
 CI deploys `capgo_gotrue-prod` on production releases that touch `cloudflare_workers/gotrue/`.
-The CI token needs Containers write, Cloudchamber write, and Account Secrets Store Edit permissions.
+The CI token needs Containers write and Cloudchamber write permissions.
 
 1. Change the `gotrue_cf` password (see above), then fill and push `internal/cloudflare_gotrue_auth/.env.prod`.
 2. Run the API locally against the deployed Worker (needs `wrangler login` with Workers rights):

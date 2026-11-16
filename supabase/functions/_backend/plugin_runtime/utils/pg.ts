@@ -1615,6 +1615,31 @@ export async function queryAppVersionPostgres(
   return appVersion ?? null
 }
 
+export interface AppVersionLookup {
+  value: { id: number, owner_org: string } | null
+  /** The read failed: `value` is null without the bundle being known missing. */
+  failed: boolean
+}
+
+/** getAppVersionPostgres that tells a failed read from a missing bundle (callers that memoize must not keep a failure). */
+export async function lookupAppVersionPostgres(
+  c: Context,
+  appId: string,
+  versionName: string,
+  allowedDeleted: boolean | undefined,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+): Promise<AppVersionLookup> {
+  try {
+    return { value: await queryAppVersionPostgres(appId, versionName, allowedDeleted, drizzleClient), failed: false }
+  }
+  catch (e: unknown) {
+    logPgError(c, 'getAppVersionPostgres', e)
+    if (isPluginStateMiss(e))
+      throw e
+    return { value: null, failed: true }
+  }
+}
+
 export async function getAppVersionPostgres(
   c: Context,
   appId: string,
@@ -1622,15 +1647,7 @@ export async function getAppVersionPostgres(
   allowedDeleted: boolean | undefined,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<{ id: number, owner_org: string } | null> {
-  try {
-    return await queryAppVersionPostgres(appId, versionName, allowedDeleted, drizzleClient)
-  }
-  catch (e: unknown) {
-    logPgError(c, 'getAppVersionPostgres', e)
-    if (isPluginStateMiss(e))
-      throw e
-    return null
-  }
+  return (await lookupAppVersionPostgres(c, appId, versionName, allowedDeleted, drizzleClient)).value
 }
 
 export async function getAppVersionsByAppIdPg(

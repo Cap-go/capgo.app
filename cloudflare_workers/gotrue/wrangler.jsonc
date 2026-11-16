@@ -1,7 +1,6 @@
 // Self-hosted GoTrue (auth migration, PR 2). No route: only the API Worker's
-// service binding reaches it. Database URL, JWT and SAML secrets come from
+// service binding reaches it. Database URL, JWT, SAML and Turnstile secrets come from
 // internal/cloudflare_gotrue_auth/.env.prod via `deploy:cloudflare_env:gotrue:prod`.
-// Turnstile uses the CAPTCHA_SECRET_KEY Secrets Store binding (same secret as the API Worker).
 {
   "name": "capgo_gotrue-prod",
   "main": "./index.ts",
@@ -22,13 +21,6 @@
   ],
   "durable_objects": { "bindings": [{ "name": "GOTRUE", "class_name": "GoTrue" }] },
   "migrations": [{ "tag": "gotrue-v1", "new_sqlite_classes": ["GoTrue"] }],
-  "secrets_store_secrets": [
-    {
-      "binding": "CAPTCHA_SECRET_KEY",
-      "store_id": "7d48cb4c7a544b3fb2d5714a852bff81",
-      "secret_name": "CAPTCHA_SECRET_KEY"
-    }
-  ],
   // Mirrors the hosted Supabase Auth settings of the production project.
   "vars": {
     "GOTRUE_API_HOST": "0.0.0.0",

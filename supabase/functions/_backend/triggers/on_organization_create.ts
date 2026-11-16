@@ -7,6 +7,7 @@ import { parseSignupAttributionRecord, signupAttributionEventTags } from '../../
 import { syncBentoSubscriberTags } from '../utils/bento.ts'
 import { applyDirectOfferBentoTags, buildBillingPlanBentoTags } from '../utils/billing_bento_tags.ts'
 import { getDirectOfferStatus } from '../utils/direct_offer.ts'
+import { gotrueAdmin } from '../utils/gotrue_admin.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent, syncOrgOnboardingIntentForOrg } from '../utils/org_onboarding_intent.ts'
@@ -15,7 +16,6 @@ import { queryJsonOne } from '../utils/pg_rls.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { resolveSignupAttributionForOrg, resolveSignupAttributionForUser } from '../utils/signup_attribution.ts'
 import { createStripeCustomer, finalizePendingStripeCustomer, isPendingStripeCustomerId } from '../utils/stripe_org.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
 
@@ -108,7 +108,7 @@ async function processOrgCreate(c: Context<MiddlewareKeyVariables>, pg: PgClient
 
   // Direct-offer (paid ads) creators never had a trial: tag offer=direct, no trial tags.
   // An unknown offer (lookup failed) only skips the trial tag; later syncs reconcile it.
-  const directOffer = await getDirectOfferStatus(c, supabaseAdmin(c), org.created_by)
+  const directOffer = await getDirectOfferStatus(c, gotrueAdmin(c), org.created_by)
   if (trialPlanName || directOffer === true) {
     let creator: { email: string } | undefined
     try {

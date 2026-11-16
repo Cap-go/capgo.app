@@ -9,6 +9,9 @@ const getChannelByNamePgMock = vi.fn()
 const getChannelsPgMock = vi.fn()
 const getChannelDeviceOverridePgMock = vi.fn()
 const upsertChannelDevicePgMock = vi.fn(() => Promise.resolve(true))
+const getAppByIdPgMock = vi.fn()
+const queryAppOwnerPostgresMock = vi.fn()
+const getCompatibleChannelsPgMock = vi.fn()
 
 ;(globalThis as any).EdgeRuntime = undefined
 
@@ -40,16 +43,18 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/org_email_notificat
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   closeClient: vi.fn(() => Promise.resolve()),
   deleteChannelDevicePg: deleteChannelDevicePgMock,
-  getAppByIdPg: vi.fn(),
+  getAppByIdPg: getAppByIdPgMock,
   getAppOwnerPostgres: getAppOwnerPostgresMock,
   getChannelByIdPg: getChannelByIdPgMock,
   getChannelByNamePg: getChannelByNamePgMock,
   getChannelDeviceOverridePg: getChannelDeviceOverridePgMock,
   getChannelsPg: getChannelsPgMock,
-  getCompatibleChannelsPg: vi.fn(),
+  getCompatibleChannelsPg: getCompatibleChannelsPgMock,
   getDrizzleClient: getDrizzleClientMock,
   getMainChannelsPg: vi.fn(),
   getPgClient: getPgClientMock,
+  logPgError: vi.fn(),
+  queryAppOwnerPostgres: queryAppOwnerPostgresMock,
   setReplicationLagHeader: vi.fn(() => Promise.resolve()),
   upsertChannelDevicePg: upsertChannelDevicePgMock,
 }))
@@ -246,5 +251,65 @@ describe('channel_self PUT database routing', () => {
     expect(deleteKv.get).not.toHaveBeenCalled()
     expect(deleteKv.put).not.toHaveBeenCalled()
     expect(deleteKv.delete).not.toHaveBeenCalled()
+  })
+})
+
+function listRequest() {
+  const params = new URLSearchParams({
+    app_id: 'com.test.app',
+    platform: 'ios',
+    is_emulator: 'false',
+    is_prod: 'true',
+  })
+  return new Request(`http://localhost/?${params.toString()}`)
+}
+
+async function fetchList() {
+  const { app } = await import('../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts')
+  return app.fetch(listRequest(), {}, { waitUntil: () => { } } as any)
+}
+
+describe('channel_self read fan-out', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    const owner = {
+      allow_device_custom_id: true,
+      owner_org: 'test-org',
+      orgs: { management_email: 'owner@example.com' },
+      plan_valid: true,
+    }
+    getAppOwnerPostgresMock.mockResolvedValue(owner)
+    queryAppOwnerPostgresMock.mockResolvedValue(owner)
+    getCompatibleChannelsPgMock.mockResolvedValue([
+      { id: 7, name: 'beta', public: false, allow_device_self_set: true },
+    ])
+    getChannelDeviceOverridePgMock.mockResolvedValue(null)
+  })
+
+  it('lists compatible channels with a single app owner read', async () => {
+    const response = await fetchList()
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual([{ id: 7, name: 'beta', public: false, allow_self_set: true }])
+    expect(queryAppOwnerPostgresMock).toHaveBeenCalledTimes(1)
+    expect(getAppByIdPgMock).not.toHaveBeenCalled()
+    expect(getAppOwnerPostgresMock).not.toHaveBeenCalled()
+  })
+
+  it('answers a missing app as on-premise after one owner read', async () => {
+    queryAppOwnerPostgresMock.mockResolvedValue(null)
+    const response = await fetchList()
+
+    expect(response.status).toBe(429)
+    expect(queryAppOwnerPostgresMock).toHaveBeenCalledTimes(1)
+    expect(getCompatibleChannelsPgMock).not.toHaveBeenCalled()
+  })
+
+  it('does not answer on-premise when the owner read fails', async () => {
+    queryAppOwnerPostgresMock.mockRejectedValue(new Error('connection lost'))
+    const response = await fetchList()
+
+    expect(response.status).toBeGreaterThanOrEqual(500)
+    expect(getCompatibleChannelsPgMock).not.toHaveBeenCalled()
   })
 })

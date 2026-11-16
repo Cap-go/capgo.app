@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { PluginStateSession } from './pluginState.ts'
 import type { PluginStateManifestDoc } from './pluginStateFormat.ts'
 import { CacheHelper } from './cache.ts'
+import { simpleError } from './hono.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { abandonPluginStateRequest, isPluginStateMiss, PluginStateMiss, shouldUsePluginState, startPluginStateRequest } from './pluginState.ts'
 import { evalManifestSizeLookup, evalManifestVersionSizes } from './pluginStateEval.ts'
@@ -25,6 +26,17 @@ const MANIFEST_SIZES_KV_CACHE_TTL_SECONDS = 30
 // scoped to the one bundle being downloaded; requests spanning several versions
 // keep the hash-scoped lookup without caching.
 const MANIFEST_SIZES_MAX_CACHED_VERSIONS = 1
+// Request bounds for this unauthenticated endpoint. Every distinct version id
+// reads that bundle's whole manifest, and the file list goes into one jsonb
+// parameter, so neither may grow with the request. A device asks for the files
+// of the one bundle it downloads, and uploads cap a bundle manifest at
+// MAX_MANIFEST_ENTRIES files (utils/manifest_limits.ts): the same limit here.
+// The plugin runtime does not import utils/, so the value is repeated and a
+// unit test keeps the two equal.
+// The version cap stays above the KV document budget so such requests keep
+// their batched replica fallback.
+export const MAX_MANIFEST_SIZE_FILES = 10_000
+export const MAX_MANIFEST_SIZE_VERSIONS = 32
 
 interface ManifestSizeRow {
   file_hash: string
@@ -445,6 +457,8 @@ export async function getManifestDownloadSize(
   filesInput: unknown,
   deviceId?: string,
 ): Promise<ManifestDownloadSizeResult> {
+  if (Array.isArray(filesInput) && filesInput.length > MAX_MANIFEST_SIZE_FILES)
+    throw simpleError('too_many_files', `Manifest size requests support up to ${MAX_MANIFEST_SIZE_FILES} files`, { max: MAX_MANIFEST_SIZE_FILES, count: filesInput.length })
   if (shouldUsePluginState(c, appId, deviceId ?? '')) {
     try {
       // A complete size map answers without loading even the app document.
@@ -495,6 +509,8 @@ async function computeManifestDownloadSize(
   }
 
   const scopedVersionIds = [...new Set(files.flatMap(file => file.version_id == null ? [] : [file.version_id]))]
+  if (scopedVersionIds.length > MAX_MANIFEST_SIZE_VERSIONS)
+    throw simpleError('too_many_versions', `Manifest size requests support files of up to ${MAX_MANIFEST_SIZE_VERSIONS} bundles`, { max: MAX_MANIFEST_SIZE_VERSIONS, count: scopedVersionIds.length })
   if (scopedVersionIds.length === 0 || scopedVersionIds.length > MANIFEST_SIZES_MAX_CACHED_VERSIONS) {
     const lookup = lookupQuery(appId, versionName, versionId, files)
     if (!lookup)
