@@ -89,7 +89,7 @@ test.describe('Actionable onboarding setup checklist', () => {
     await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('hide')
   })
 
-  test('follows persisted progress, stops polling on completion, and keeps CI/CD optional', async ({ page, context }) => {
+  test('follows persisted progress, stops polling on completion, and keeps CI/CD optional', async ({ page }) => {
     const time = new Date('2026-09-16T12:00:00Z')
     await page.clock.install({ time: new Date(time.getTime() - 60_000) })
     await page.clock.pauseAt(time)
@@ -100,23 +100,18 @@ test.describe('Actionable onboarding setup checklist', () => {
     await expect(listToggle).toHaveAttribute('aria-expanded', 'false')
     await listToggle.click()
     const optionalStep = page.locator('[data-test="setup-checklist-cicd-step"]')
-    const cicdGuide = optionalStep.getByRole('link', { name: 'CI/CD integration guide', exact: true })
-    const cicdHref = 'https://capgo.app/docs/getting-started/cicd-integration/'
+    const cicdGuide = optionalStep.getByRole('link', { name: 'Set up CI/CD', exact: true })
+    const cicdPath = '/app/com.example.onboarding-preview/ci-cd?product=ota'
     await expect(page.locator('[data-test="onboarding-setup-cli"] nav ol > li')).toHaveCount(7)
     await expect(page.locator('ol [data-test="setup-checklist-cicd-step"]')).toHaveCount(0)
     await expect(optionalStep).toContainText('Optional next step')
     await expect(optionalStep).toContainText('Automate updates with CI/CD')
     await expect(optionalStep.locator('button, input')).toHaveCount(0)
-    await expect(cicdGuide).toHaveAttribute('href', cicdHref)
-    await expect(cicdGuide).toHaveAttribute('target', '_blank')
-    await expect(cicdGuide).toHaveAttribute('rel', 'noopener noreferrer')
-    await context.route(cicdHref, route => route.fulfill({ contentType: 'text/html', body: 'Documentation preview' }))
-    const popupPromise = page.waitForEvent('popup')
+    // The guide opens in the console, next to the checklist, instead of the docs.
+    await expect(cicdGuide).toHaveAttribute('href', cicdPath)
+    await expect(cicdGuide).not.toHaveAttribute('target', '_blank')
     await cicdGuide.click()
-    const popup = await popupPromise
-    await popup.waitForLoadState()
-    expect(popup.url()).toBe(cicdHref)
-    await popup.close()
+    await expect.poll(() => new URL(page.url()).pathname + new URL(page.url()).search).toBe(cicdPath)
     expect(await page.evaluate(() => {
       const { appWrites, setupWrites, userWrites, skips, steps, outcome } = (window as any).onboardingSetupPreview.state
       return { appWrites, setupWrites, userWrites, skips, steps, outcome }
@@ -774,6 +769,152 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
       await expect(page.locator('[data-test="getting-started-nav-link"]')).toHaveCount(0)
     })
   }
+
+  for (const [product, query] of [
+    ['ota', 'version=3&otaInstalled=1'],
+    ['builder', 'assignment=both-builder&checklistState=completed&platform=android'],
+  ] as const) {
+    test(`resumes ${product} setup from the CI/CD sidebar entry`, async ({ page }) => {
+      await page.goto(`/app/${appId}?${query}`)
+      const link = page.locator('[data-test="cicd-nav-link"]')
+      await expect(link).toHaveAccessibleName('Set up CI/CD — My Capacitor app')
+      await expect(page.locator('[data-test="getting-started-nav-dismiss"]')).toHaveCount(0)
+      await link.click()
+      await expect(page).toHaveURL(`/app/${appId}/ci-cd?product=${product}${product === 'builder' ? '&platform=android' : ''}`)
+      await expect(page.getByRole('heading', { name: product === 'ota' ? 'Automate live updates with CI/CD' : 'Automate native builds with CI/CD' })).toBeVisible()
+      await expect(page.locator('[data-test^="cicd-product-"]')).toHaveCount(0)
+      await expect(link).toHaveAttribute('aria-current', 'page')
+      await page.locator('[data-test="cicd-mark-done"]').click()
+      await expect(page.locator('[data-test="cicd-status-marked-done"]')).toBeVisible()
+      await expect(link).toHaveCount(0)
+
+      // Apps whose CI already uploaded, or that never shipped, get no entry.
+      await page.goto(`/app/${appId}?version=3&otaInstalled=1&cicd=detected`)
+      await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+      await expect(link).toHaveCount(0)
+      await page.goto(`/app/${appId}?version=3&checklistState=dismissed`)
+      await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+      await expect(link).toHaveCount(0)
+    })
+  }
+
+  test('dismisses the CI/CD reminder per app, persists it after reload and restores it from settings', async ({ page }) => {
+    const dashboard = `/app/${appId}?version=3&otaInstalled=1`
+    await page.goto(dashboard)
+    await page.evaluate(() => {
+      (window as any).onboardingSetupPreview.sidebarApps.value = [{
+        app_id: 'com.example.other-ci-app',
+        owner_org: '00000000-0000-4000-8000-000000000002',
+        name: 'Other app',
+        icon_url: '',
+        need_onboarding: false,
+        onboarding: { getting_started_dismissed_at: '2026-11-01T00:00:00.000Z', features: { ota: { succeeded_at: '2026-11-01T00:00:00.000Z' } } },
+      }]
+    })
+    const primary = page.getByRole('link', { name: 'Set up CI/CD — My Capacitor app', exact: true })
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(2)
+    await page.getByRole('button', { name: /My Capacitor app$/ }).click()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(1)
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveAccessibleName('Set up CI/CD — Other app')
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdLedger.value)).not.toHaveProperty('marked_done_at')
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdSetupCalls)).toEqual([{ p_app_id: appId, p_event: 'dismissed' }])
+
+    await page.reload()
+    await expect(primary).toHaveCount(0)
+    await page.goto(`/app/${appId}/settings?version=3&otaInstalled=1`)
+    const restore = page.locator('[data-test="cicd-reminder-restore"]')
+    await expect(restore).toBeVisible()
+    await expect(page.locator('[data-test="getting-started-guide-open"]')).toHaveAttribute('href', `/app/${appId}/getting-started?showChecklist=1`)
+    await restore.click()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveAccessibleName('Set up CI/CD — My Capacitor app')
+    await page.reload()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toBeVisible()
+    await page.locator('[data-test="cicd-guide-open"]').click()
+    await expect(page.getByRole('heading', { name: 'Automate live updates with CI/CD' })).toBeVisible()
+  })
+
+  test('keeps a newly opened CI/CD guide visible when an earlier sidebar dismissal finishes', async ({ page }) => {
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdReminderDelayMs = 1000 })
+    await page.locator('[data-test="cicd-nav-dismiss"]').click()
+    await page.evaluate(appId => (window as any).onboardingSetupPreview.navigate(`/app/${appId}/ci-cd?product=ota`), appId)
+    await expect(page.locator('[data-test="cicd-guide"]')).toBeVisible()
+    await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.state.cicdReminderResponses)).toBe(1)
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await expect(page).toHaveURL(`/app/${appId}/ci-cd?product=ota`)
+    await expect(page.locator('[data-test="cicd-guide"]')).toBeVisible()
+  })
+
+  test('keeps the CI/CD reminder available when dismissal fails', async ({ page }) => {
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdDismissError = true })
+    await page.locator('[data-test="cicd-nav-dismiss"]').click()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toBeVisible()
+    await expect(page.getByText('Could not hide the CI/CD reminder. Please try again.', { exact: true })).toBeVisible()
+    await expect(page.locator('[data-test="cicd-nav-dismiss"]')).toBeEnabled()
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdLedger.value)).toBeUndefined()
+  })
+
+  test('keeps the CI/CD reminder dismissed when restoring fails', async ({ page }) => {
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    await page.locator('[data-test="cicd-nav-dismiss"]').click()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(0)
+    await page.goto(`/app/${appId}/settings?version=3&otaInstalled=1`)
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdRestoreError = true })
+    const restore = page.locator('[data-test="cicd-reminder-restore"]')
+    await restore.click()
+    await expect(page.getByText('Could not restore the CI/CD reminder. Please try again.', { exact: true })).toBeVisible()
+    await expect(restore).toBeEnabled()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(0)
+  })
+
+  test('refreshes the sidebar after CI connects while outside the guide', async ({ page }) => {
+    await page.clock.install()
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    const link = page.locator('[data-test="cicd-nav-link"]')
+    await expect(link).toBeVisible()
+    await page.evaluate(() => {
+      (window as any).onboardingSetupPreview.state.cicdRemoteLedger = {
+        ota_detected_at: '2026-11-06T12:00:00.000Z',
+        detected_via: 'ci',
+        ci_provider: 'GitHub Actions',
+      }
+    })
+    await expect(link).toBeVisible()
+    await page.clock.fastForward(30000)
+    await expect(link).toHaveCount(0)
+  })
+
+  test('limits periodic sidebar reads and refreshes the next apps as entries complete', async ({ page }) => {
+    await page.clock.install()
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    await page.evaluate(() => {
+      const preview = (window as any).onboardingSetupPreview
+      preview.sidebarApps.value = Array.from({ length: 4 }, (_, index) => ({
+        app_id: `com.example.sidebar-${index + 1}`,
+        owner_org: '00000000-0000-4000-8000-000000000002',
+        name: `Sidebar app ${index + 1}`,
+        icon_url: '',
+        need_onboarding: false,
+        onboarding: {
+          getting_started_dismissed_at: '2026-08-01T00:00:00.000Z',
+          features: { ota: { succeeded_at: '2026-08-01T00:00:00.000Z' } },
+        },
+      }))
+      preview.state.cicdRemoteLedger = { ota_detected_at: '2026-11-06T12:00:00.000Z', detected_via: 'ci' }
+    })
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(3)
+    await page.clock.fastForward(30000)
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(2)
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.state.cicdSidebarRefreshes.at(-1))).toEqual([
+      appId, 'com.example.sidebar-1', 'com.example.sidebar-2',
+    ])
+    await page.clock.fastForward(30000)
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(0)
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.state.cicdSidebarRefreshes.at(-1))).toEqual([
+      'com.example.sidebar-3', 'com.example.sidebar-4',
+    ])
+  })
 
   for (const scenario of [
     { name: 'v4 Builder', query: 'version=4&assignment=builder-only', checklist: '[data-test="builder-checklist"]', pollsProgress: false },

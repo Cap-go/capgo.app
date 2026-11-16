@@ -134,6 +134,8 @@ describe.skipIf(!USE_CLOUDFLARE)('[POST] /updates Cloudflare write guard', () =>
 
     const response = await postUpdate(baseData)
     expect(response.status).toBe(200)
+    if (env.PLUGIN_STATE_KV_TESTS === 'true')
+      expect(response.headers.get('X-Plugin-State')).toBe('kv')
     const jsonResponse = await response.json<UpdateRes>()
     expect(jsonResponse.checksum).toBe('3885ee49')
 
@@ -153,6 +155,8 @@ describe('[POST] /updates', () => {
     const response = await postUpdate(baseData)
 
     expect(response.status).toBe(200)
+    if (env.PLUGIN_STATE_KV_TESTS === 'true')
+      expect(response.headers.get('X-Plugin-State')).toBe('kv')
     const json = await response.json<UpdateRes>()
     expect(json.error).toEqual('no_new_version_available')
     expect(json.kind).toBe('up_to_date')
@@ -164,6 +168,8 @@ describe('[POST] /updates', () => {
 
     const response = await postUpdate(baseData)
     expect(response.status).toBe(200)
+    if (env.PLUGIN_STATE_KV_TESTS === 'true')
+      expect(response.headers.get('X-Plugin-State')).toBe('kv')
 
     const json = await response.json<UpdateRes>()
     expect(() => parseSchema(updateNewScheme, json)).not.toThrow()

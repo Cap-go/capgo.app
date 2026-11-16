@@ -8,6 +8,7 @@ import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import { getCustomerBilling, getPriceTier, isRegionalCurrency } from './regional_price.ts'
+import { normalizeCountryCode } from './request_country.ts'
 import {
   BillingAccountUnavailableError,
   getBillingAccountForCustomer,
@@ -1566,13 +1567,17 @@ async function findExistingOrgStripeCustomer(c: Context, orgId: string, email: s
   return await searchOrgStripeCustomer(c, orgId, billingAccount)
 }
 
-export async function createCustomer(c: Context, email: string, userId: string, orgId: string, name: string, billingAccount: BillingAccount = 'ee') {
+export async function createCustomer(c: Context, email: string, userId: string, orgId: string, name: string, billingAccount: BillingAccount = 'ee', profileCountry?: string | null) {
   cloudlog({ requestId: c.get('requestId'), message: 'createCustomer', email, userId, orgId, name, billingAccount })
   const baseConsoleUrl = trimTrailingSlashes(getEnv(c, 'WEBAPP_URL') || '')
   const metadata: Record<string, string> = {
     user_id: userId,
     org_id: orgId,
   }
+  const country = normalizeCountryCode(profileCountry)
+  // Profile country can be IP-inferred or user-edited; it is not a billing address.
+  if (country)
+    metadata.profile_country = country
   if (baseConsoleUrl) {
     metadata.log_as = `${baseConsoleUrl}/log-as/${userId}`
   }

@@ -46,7 +46,7 @@ async function refreshPendingOnboardingApp() {
   const lookupRun = ++onboardingLookupRun
   pendingOnboardingAppId.value = ''
 
-  if (/^\/app\/new\/?$/.test(route.path) || /^\/app\/[^/]+\/getting-started\/?$/.test(route.path) || route.path === '/onboarding' || route.path.startsWith('/onboarding/'))
+  if (/^\/app\/new\/?$/.test(route.path) || /^\/app\/[^/]+\/getting-started\/?$/.test(route.path) || /^\/app\/[^/]+\/ci-cd\/?$/.test(route.path) || route.path === '/onboarding' || route.path.startsWith('/onboarding/'))
     return
 
   await organizationStore.awaitInitialLoad()

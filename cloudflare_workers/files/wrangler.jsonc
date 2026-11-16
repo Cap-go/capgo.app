@@ -1,14 +1,15 @@
 {
   "name": "capgo_file",
   "logpush": true,
-  "compatibility_date": "2026-04-21",
+  "compatibility_date": "2026-11-10",
   "dependencies_instrumentation": {
     "enabled": true
   },
   "main": "./index.ts",
   "compatibility_flags": [
     "nodejs_compat",
-    "nodejs_compat_populate_process_env"
+    "nodejs_compat_populate_process_env",
+    "enable_request_signal"
   ],
   "workers_dev": false,
   "upload_source_maps": true,
@@ -158,7 +159,7 @@
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
-          "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         }
       ],
       "routes": [
@@ -187,14 +188,14 @@
       "r2_buckets": [
         {
           "binding": "ATTACHMENT_BUCKET",
-          "bucket_name": "capgo",
-          "preview_bucket_name": "capgo"
+          "bucket_name": "capgo-preprod",
+          "preview_bucket_name": "capgo-preprod"
         }
       ],
       "analytics_engine_datasets": [
         {
           "binding": "BANDWIDTH_USAGE",
-          "dataset": "bandwidth_usage"
+          "dataset": "bandwidth_usage_preprod"
         }
       ],
       "durable_objects": {

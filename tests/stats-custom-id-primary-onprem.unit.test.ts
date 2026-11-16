@@ -45,7 +45,7 @@ const onPremStatsMock = vi.fn(() => Promise.resolve())
 const sendStatsAndDeviceMock = vi.fn(() => Promise.resolve())
 const createStatsMauMock = vi.fn(() => Promise.resolve())
 const createStatsVersionMock = vi.fn(() => Promise.resolve())
-const getAppVersionPostgresMock = vi.fn(async () => ({ id: 1, owner_org: 'org-1' }))
+const lookupAppVersionPostgresMock = vi.fn(async () => ({ value: { id: 1, owner_org: 'org-1' }, failed: false }))
 const getEffectiveDeviceChannelNamePostgresMock = vi.fn(async () => null)
 
 ;(globalThis as any).EdgeRuntime = undefined
@@ -76,11 +76,11 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/notifications.ts', 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   closeClient: vi.fn(() => Promise.resolve()),
   getAppOwnerPostgres: getAppOwnerPostgresMock,
-  getAppVersionPostgres: getAppVersionPostgresMock,
   getDrizzleClient: getDrizzleClientMock,
   getEffectiveDeviceChannelNamePostgres: getEffectiveDeviceChannelNamePostgresMock,
   getPgClient: getPgClientMock,
   getReadReplicaBinding: vi.fn(() => null),
+  lookupAppVersionPostgres: lookupAppVersionPostgresMock,
 }))
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts', () => ({

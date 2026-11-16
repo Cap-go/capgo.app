@@ -13,6 +13,7 @@ import { buildChannelInsertOrExistingSql, resolveChannelInsert } from './channel
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
 import { CREATE_DEFAULT_API_KEYS_SQL } from './default_apikeys.ts'
 import { getDirectOfferStatus } from './direct_offer.ts'
+import { gotrueAdmin } from './gotrue_admin.ts'
 import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
@@ -1117,7 +1118,7 @@ export async function customerToSegmentOrg(
   // Direct-offer (paid ads) orgs never had a trial: tag offer=direct and strip trial tags.
   // Callers already loaded the org, so reuse its created_by instead of re-reading it.
   // An unknown offer (lookup failed) only withholds trial tags until a later sync.
-  const directOffer = await getDirectOfferStatus(c, supabaseAdmin(c), org.created_by)
+  const directOffer = await getDirectOfferStatus(c, gotrueAdmin(c), org.created_by)
   return applyDirectOfferBentoTags(await customerToSegmentOrgBase(c, org.id, price_id, plan, trialPlanNamesToRemove), directOffer, trialPlanNamesToRemove)
 }
 
@@ -1404,9 +1405,9 @@ type UsageRpcRows<F extends UsageRpc> = Database['public']['Functions'][F]['Retu
 
 /**
  * Service-role read of a usage RPC's rows as PostgREST JSON. Errors were ignored by these callers
- * (supabase-js `data ?? []`), so they still resolve to no rows; they are logged now.
+ * (supabase-js `data ?? []`). Preserve that fallback unless a caller requires a strict read.
  */
-async function readUsageRpc<F extends UsageRpc>(c: Context, fn: F, args: Record<string, unknown>): Promise<UsageRpcRows<F>> {
+async function readUsageRpc<F extends UsageRpc>(c: Context, fn: F, args: Record<string, unknown>, options: { throwOnError?: boolean } = {}): Promise<UsageRpcRows<F>> {
   const entries = Object.entries(args)
   const namedArgs = entries.map(([name], index) => `${quoteIdent(name)} => $${index + 1}`)
   try {
@@ -1414,6 +1415,8 @@ async function readUsageRpc<F extends UsageRpc>(c: Context, fn: F, args: Record<
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: `Error reading ${fn}`, app_id: args.p_app_id, error })
+    if (options.throwOnError)
+      throw error
     return [] as unknown as UsageRpcRows<F>
   }
 }
@@ -1430,7 +1433,7 @@ export function readStatsStorageSB(c: Context, app_id: string, period_start: str
   return readUsageRpc(c, 'read_storage_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 }
 
-export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string): Promise<VersionUsage[]> {
+export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string, options: { throwOnError?: boolean } = {}): Promise<VersionUsage[]> {
   const channelId = typeof channel === 'object' && channel ? channel.id : null
   const channelName = typeof channel === 'string' ? channel : channelId ? null : channel?.name
   const args = {
@@ -1440,7 +1443,7 @@ export async function readStatsVersionSB(c: Context, app_id: string, period_star
     ...(channelName ? { p_channel_name: channelName } : {}),
     ...(channelId ? { p_channel_id: channelId } : {}),
   }
-  const data = await readUsageRpc(c, 'read_version_usage', args)
+  const data = await readUsageRpc(c, 'read_version_usage', args, options)
   // Cast to VersionUsage[] - the SQL function returns version_name but auto-generated types are stale
   return data as unknown as VersionUsage[]
 }

@@ -7,11 +7,12 @@ import { isBentoConfigured, syncBentoSubscriberTags, trackBentoEvent } from '../
 import { normalizeBentoEmail, prepareNewUserProvisioning, syncBentoFirstOrgOnUserCreate } from '../utils/bento_first_org.ts'
 import { directOfferTrialTagsToRemove } from '../utils/billing_bento_tags.ts'
 import { DIRECT_OFFER_BENTO_TAG, isDirectOfferMetadata } from '../utils/direct_offer.ts'
+import { gotrueAdmin } from '../utils/gotrue_admin.ts'
 import { BRES, middlewareAPISecret, quickError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { trackOpenAIRegistration } from '../utils/openai_ads.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
-import { createApiKey, supabaseAdmin } from '../utils/supabase.ts'
+import { createApiKey } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { backgroundTask } from '../utils/utils.ts'
@@ -20,7 +21,7 @@ export const app = new Hono<MiddlewareKeyVariables>()
 const BENTO_REGISTERED_FROM_MOBILE_EVENT = 'user:registered_from_mobile'
 
 async function getAuthUser(c: Context, userId: string) {
-  const { data, error } = await supabaseAdmin(c).auth.admin.getUserById(userId)
+  const { data, error } = await gotrueAdmin(c).getUserById(userId)
   if (error)
     throw error
   return data.user

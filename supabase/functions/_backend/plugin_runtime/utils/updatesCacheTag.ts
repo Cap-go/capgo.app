@@ -13,7 +13,7 @@ const VERSIONS_TAG_SUFFIX = ':versions'
  * - `versions`: bundle-name lookups, purged on any app_versions identity
  *   change so uploads never evict the main tag
  */
-export type UpdatesCachePurgeScope = 'app' | 'versions'
+export type UpdatesCachePurgeScope = 'app' | 'versions' | 'plugin_state'
 
 function sanitizeAppId(appId: string) {
   return appId.toLowerCase().replace(/[^a-z0-9._-]/g, '_')
@@ -33,7 +33,14 @@ export function updatesVersionsCacheTag(appId: string) {
   return `${UPDATES_EDGE_CACHE_TAG_PREFIX}${sanitizeAppId(appId)}${VERSIONS_TAG_SUFFIX}`
 }
 
+/** Snapshot publication must never evict the database or snippet cohorts. */
+export function pluginStateAppCacheTag(appId: string) {
+  return `capgo-plugin-state-${sanitizeAppId(appId)}`
+}
+
 /** Tag to purge for a queued (app, scope) pair; unknown or missing scopes purge the main tag. */
 export function updatesCacheTagForScope(appId: string, scope: string | null | undefined) {
+  if (scope === 'plugin_state')
+    return pluginStateAppCacheTag(appId)
   return scope === 'versions' ? updatesVersionsCacheTag(appId) : updatesAppCacheTag(appId)
 }

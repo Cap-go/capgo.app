@@ -1,6 +1,6 @@
 BEGIN;
 
-DROP TABLE IF EXISTS public.version_files, public.delta_files, public.delta_sessions, public.channel_devices, public.manifest, public.onboarding_demo_data, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
+DROP TABLE IF EXISTS public.version_files, public.delta_files, public.delta_sessions, public.channel_devices, public.manifest, public.onboarding_demo_data, public.read_replica_commit_marker, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
 DROP SEQUENCE IF EXISTS public.app_versions_id_seq, public.channel_devices_id_seq, public.channel_id_seq, public.manifest_id_seq, public.org_users_id_seq, public.stripe_info_id_seq CASCADE;
 DROP FUNCTION IF EXISTS public.one_month_ahead();
 DROP TYPE IF EXISTS public.channel_update_package, public.manifest_entry, public.disable_update, public.stripe_status;
@@ -117,7 +117,9 @@ CREATE TABLE public.apps (
     onboarding_completed_at timestamp with time zone,
     onboarding jsonb DEFAULT '{}'::jsonb NOT NULL,
     device_data_collection jsonb DEFAULT '{"country": true, "is_prod": true, "platform": true, "os_version": true, "is_emulator": true, "version_build": true, "install_source": true, "plugin_version": true}'::jsonb NOT NULL,
-    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600)))
+    bundle_incompatible_alert text DEFAULT 'default'::text NOT NULL,
+    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600))),
+    CONSTRAINT apps_bundle_incompatible_alert_check CHECK ((bundle_incompatible_alert = ANY (ARRAY['default'::text, 'all'::text])))
 );
 
 ALTER TABLE ONLY public.apps REPLICA IDENTITY FULL;
@@ -455,6 +457,17 @@ ALTER TABLE ONLY public.orgs REPLICA IDENTITY FULL;
 
 
 --
+-- Name: read_replica_commit_marker; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.read_replica_commit_marker (
+    id smallint NOT NULL,
+    committed_at timestamp with time zone NOT NULL,
+    CONSTRAINT read_replica_commit_marker_singleton CHECK ((id = 1))
+);
+
+
+--
 -- Name: stripe_info; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -665,6 +678,14 @@ ALTER TABLE ONLY public.orgs
 
 
 --
+-- Name: read_replica_commit_marker read_replica_commit_marker_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.read_replica_commit_marker
+    ADD CONSTRAINT read_replica_commit_marker_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: stripe_info stripe_info_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -702,6 +723,13 @@ ALTER TABLE ONLY public.orgs
 
 ALTER TABLE ONLY public.version_files
     ADD CONSTRAINT version_files_pkey PRIMARY KEY (app_version_id);
+
+
+--
+-- Name: app_versions_app_id_id_desc_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX app_versions_app_id_id_desc_idx ON public.app_versions USING btree (app_id, id DESC);
 
 
 --

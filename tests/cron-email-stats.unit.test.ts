@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   buildWeeklyEmailMetadata,
   computeWeeklyInstallStats,
-  getFailRateFunComparison,
-  getIsoWeekNumber,
   getPreviousMonthUtcRange,
+  getWeeklyReportRange,
   isInPreviousMonthRange,
   shouldRetryDeployInstallStats,
   shouldSendDeployInstallStatsEmail,
   summarizeDeviceVersionAdoption,
+  sumVersionFailures,
   sumVersionInstalls,
   toStatNumber,
 } from '../supabase/functions/_backend/utils/cron_email_stats.ts'
@@ -23,97 +23,35 @@ describe('toStatNumber', () => {
   })
 })
 
-describe('computeWeeklyInstallStats', () => {
-  it.concurrent('uses install/(install+fail), not install-fail', () => {
-    const stats = computeWeeklyInstallStats({
-      all_updates: 100,
-      failed_updates: 50,
-      open_app: 200,
+describe('weekly event reports', () => {
+  it.concurrent('keeps repeated checks separate from installs and failures', () => {
+    const stats = computeWeeklyInstallStats({ all_updates: '90', failed_updates: '10', update_checks: '1200000' })
+    expect(stats).toEqual({ successfulInstalls: 90, failedUpdates: 10, updateChecks: 1200000 })
+    const metadata = buildWeeklyEmailMetadata('com.example.report', stats, getWeeklyReportRange(new Date('2026-01-03T12:30:00Z')))
+    expect(metadata).toMatchObject({
+      report_schema_version: '2', window_start: '2025-12-27', window_end: '2026-01-03',
+      weekly_install: '90', weekly_fail: '10', weekly_update_checks: '1200000', weekly_update_checks_formatted: '1,200,000',
     })
-
-    expect(stats.successfulInstalls).toBe(100)
-    expect(stats.failedUpdates).toBe(50)
-    expect(stats.totalUpdates).toBe(150)
-    expect(stats.successPercentage).toBe(0.6667)
-    expect(stats.failureRate).toBe(0.3333)
-    expect(stats.openApp).toBe(200)
+    expect(metadata).not.toHaveProperty('weekly_open')
+    expect(metadata).not.toHaveProperty('weekly_install_success')
+    expect(metadata).not.toHaveProperty('fun_comparison_2')
   })
 
-  it.concurrent('handles more fails than installs without negative success', () => {
-    const stats = computeWeeklyInstallStats({
-      all_updates: 10,
-      failed_updates: 40,
-      open_app: 0,
-    })
-
-    expect(stats.successfulInstalls).toBe(10)
-    expect(stats.totalUpdates).toBe(50)
-    expect(stats.successPercentage).toBe(0.2)
-    expect(stats.failureRate).toBe(0.8)
+  it.concurrent.each([null, undefined, '', 'NaN', 'Infinity', -1, 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid analytics instead of sending a misleading zero: %s', (value) => {
+    for (const field of ['all_updates', 'failed_updates', 'update_checks']) {
+      expect(() => computeWeeklyInstallStats({ all_updates: 1, failed_updates: 0, update_checks: 2, [field]: value })).toThrow()
+    }
   })
 
-  it.concurrent('returns zeros when there is no update activity', () => {
-    const stats = computeWeeklyInstallStats({
-      all_updates: 0,
-      failed_updates: 0,
-      open_app: 5,
-    })
-
-    expect(stats.totalUpdates).toBe(0)
-    expect(stats.successPercentage).toBe(0)
-    expect(stats.failureRate).toBe(0)
-    expect(stats.openApp).toBe(5)
+  it.concurrent('preserves zero counts and failures greater than installs without a health claim', () => {
+    expect(computeWeeklyInstallStats({ all_updates: 0, failed_updates: 40, update_checks: 0 }))
+      .toEqual({ successfulInstalls: 0, failedUpdates: 40, updateChecks: 0 })
   })
 
-  it.concurrent('coerces stringy SQL/rpc values', () => {
-    const stats = computeWeeklyInstallStats({
-      all_updates: '80',
-      failed_updates: '20',
-      open_app: '10',
-    })
-
-    expect(stats.totalUpdates).toBe(100)
-    expect(stats.successPercentage).toBe(0.8)
-    expect(stats.failureRate).toBe(0.2)
-  })
-})
-
-describe('getFailRateFunComparison', () => {
-  it.concurrent('reserves flawless copy for zero failures only', () => {
-    expect(getFailRateFunComparison(0, 0).toLowerCase()).toContain('flawless')
-    expect(getFailRateFunComparison(1, 0.01).toLowerCase()).not.toContain('flawless')
-    // Rounded failureRate can be 0 for huge weeks with 1 fail — still not flawless.
-    expect(getFailRateFunComparison(1, 0).toLowerCase()).not.toContain('flawless')
-  })
-
-  it.concurrent('keeps threshold copy aligned at exact 10% and 20% boundaries', () => {
-    expect(getFailRateFunComparison(10, 0.10).toLowerCase()).toContain('about one in ten')
-    expect(getFailRateFunComparison(20, 0.20).toLowerCase()).toContain('one in five')
-    expect(getFailRateFunComparison(21, 0.21).toLowerCase()).toContain('failing')
-  })
-})
-
-describe('getIsoWeekNumber', () => {
-  it.concurrent('uses ISO week rules around year boundaries', () => {
-    expect(getIsoWeekNumber(new Date('2021-01-01T00:00:00.000Z'))).toBe(53)
-    expect(getIsoWeekNumber(new Date('2022-01-03T00:00:00.000Z'))).toBe(1)
-  })
-})
-
-describe('buildWeeklyEmailMetadata', () => {
-  it.concurrent('keeps install/fail/success fields consistent', () => {
-    const stats = computeWeeklyInstallStats({
-      all_updates: 90,
-      failed_updates: 10,
-      open_app: 300,
-    })
-    const metadata = buildWeeklyEmailMetadata('com.demo.app', stats, new Date('2026-07-25T00:00:00.000Z'))
-
-    expect(metadata.weekly_updates).toBe('100')
-    expect(metadata.weekly_install).toBe('90')
-    expect(metadata.weekly_fail).toBe('10')
-    expect(metadata.weekly_install_success).toBe('90')
-    expect(metadata.fun_comparison_2.toLowerCase()).not.toContain('flawless')
+  it.concurrent('uses seven completed UTC days regardless of time of day or timezone', () => {
+    expect(getWeeklyReportRange(new Date('2026-03-01T23:59:59Z'))).toEqual({ start: '2026-02-22', end: '2026-03-01' })
+    expect(getWeeklyReportRange(new Date('2026-03-02T01:00:00+02:00'))).toEqual({ start: '2026-02-22', end: '2026-03-01' })
+    expect(getWeeklyReportRange(new Date('2024-03-01T00:00:00Z'))).toEqual({ start: '2024-02-23', end: '2024-03-01' })
   })
 })
 
@@ -194,6 +132,23 @@ describe('sumVersionInstalls', () => {
   })
 })
 
+describe('deploy report count validation', () => {
+  it.concurrent.each([null, undefined, '', '  ', '0x10', 'invalid', -1, '-5', Number.NaN, Number.POSITIVE_INFINITY, 'Infinity', 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid install count %s', (install) => {
+    expect(() => sumVersionInstalls([{ version_name: '1.0.0', install }], '1.0.0')).toThrow()
+  })
+
+  it.concurrent('rejects an overflowing total instead of rounding it', () => {
+    expect(() => sumVersionInstalls([
+      { version_name: '1.0.0', install: Number.MAX_SAFE_INTEGER },
+      { version_name: '1.0.0', install: 1 },
+    ], '1.0.0')).toThrow()
+  })
+
+  it.concurrent.each([Number.POSITIVE_INFINITY, Number.NaN, -10, 1.5, Number.MAX_SAFE_INTEGER + 1])('does not send invalid total %s', installs => {
+    expect(shouldSendDeployInstallStatsEmail(installs)).toBe(false)
+  })
+})
+
 describe('shouldRetryDeployInstallStats', () => {
   it.concurrent('retries within 48 hours of deploy', () => {
     const deployedAt = new Date('2026-07-25T00:00:00.000Z')
@@ -263,7 +218,7 @@ function assertCleanNumericString(value: string, label: string) {
 }
 
 describe('weekly stats invariants (seeded random weeks)', () => {
-  it.concurrent('keeps rates sane, matches the admin success rate, and emits clean email fields', () => {
+  it.concurrent('preserves independent counts and emits clean numeric email fields', () => {
     let seed = 42
     const rand = () => {
       seed = (seed * 1664525 + 1013904223) % 4294967296
@@ -279,27 +234,42 @@ describe('weekly stats invariants (seeded random weeks)', () => {
       const stats = computeWeeklyInstallStats({
         all_updates: asStrings ? String(installs) : installs,
         failed_updates: asStrings ? String(fails) : fails,
-        open_app: asStrings ? String(gets) : gets,
+        update_checks: asStrings ? String(gets) : gets,
       })
-      const metadata = buildWeeklyEmailMetadata('com.stress.app', stats)
-      const total = installs + fails
-
-      expect(stats.totalUpdates).toBe(total)
+      const metadata = buildWeeklyEmailMetadata('com.stress.app', stats, getWeeklyReportRange())
       expect(stats.successfulInstalls).toBe(installs)
       expect(stats.failedUpdates).toBe(fails)
-      expect(stats.successPercentage).toBeGreaterThanOrEqual(0)
-      expect(stats.successPercentage).toBeLessThanOrEqual(1)
-      // Must match the admin dashboard success_rate formula.
-      expect(Math.abs(stats.successPercentage * 100 - (total > 0 ? (installs / total) * 100 : 0))).toBeLessThan(0.05)
-
-      for (const field of ['weekly_updates', 'weekly_install', 'weekly_fail', 'weekly_open', 'weekly_install_success'] as const)
+      expect(stats.updateChecks).toBe(gets)
+      for (const field of ['weekly_install', 'weekly_fail', 'weekly_update_checks'] as const)
         assertCleanNumericString(metadata[field], `week ${i} ${field}`)
-      expect(Number(metadata.weekly_install_success)).toBeCloseTo(stats.successPercentage * 100, 4)
-
-      if (fails > 0)
-        expect(metadata.fun_comparison_2.toLowerCase()).not.toMatch(/flawless|no failed updates/)
-      else
-        expect(metadata.fun_comparison_2.toLowerCase()).toContain('flawless')
     }
+  })
+})
+
+
+describe('deployment failure event counts', () => {
+  it.concurrent('sums named and legacy rows without mixing bundles', () => {
+    expect(sumVersionFailures([
+      { version_name: '1.2.3', fail: '2' },
+      { version_name: '123', fail: 3 },
+      { version_name: 'other', fail: 999 },
+    ], '1.2.3', 123)).toBe(5)
+  })
+
+  it.concurrent('rejects failure sum overflow', () => {
+    expect(() => sumVersionFailures([
+      { version_name: '1.2.3', fail: Number.MAX_SAFE_INTEGER },
+      { version_name: '1.2.3', fail: 1 },
+    ], '1.2.3')).toThrow()
+  })
+
+  it.concurrent('requires valid counters and includes failure-only activity', () => {
+    expect(shouldSendDeployInstallStatsEmail(0, 1)).toBe(true)
+    expect(shouldSendDeployInstallStatsEmail(1, 1)).toBe(true)
+    expect(shouldSendDeployInstallStatsEmail(0, 0)).toBe(false)
+    expect(shouldSendDeployInstallStatsEmail(1, 0)).toBe(false)
+    expect(shouldSendDeployInstallStatsEmail(10, -1)).toBe(false)
+    expect(shouldSendDeployInstallStatsEmail(-1, 1)).toBe(false)
+    expect(shouldSendDeployInstallStatsEmail(10, Number.NaN)).toBe(false)
   })
 })

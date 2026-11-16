@@ -518,16 +518,18 @@ async function prepareScreenshotData(supabaseUrl: string, supabaseAnon: string) 
     throw new Error(`Unable to sign in for visual diff setup: ${signInError.message}`)
 }
 
-async function login(page: Page) {
+async function login(page: Page, credentials?: { email: string, password: string }) {
+  const email = credentials?.email ?? 'test@capgo.app'
+  const password = credentials?.password ?? 'testtest'
   await page.goto('/login/', { waitUntil: 'domcontentloaded' })
-  await page.fill('[data-test="email"]', 'test@capgo.app')
+  await page.fill('[data-test="email"]', email)
 
   const continueButton = page.locator('[data-test="continue"]')
   const submit = page.locator('[data-test="submit"]')
   if (await continueButton.count())
     await continueButton.click()
   await submit.waitFor({ state: 'visible', timeout: 30_000 })
-  await page.fill('[data-test="password"]', 'testtest')
+  await page.fill('[data-test="password"]', password)
 
   if (await submit.isEnabled())
     await submit.click()
@@ -569,7 +571,7 @@ async function captureRouteScreenshot(
 
     if (route.auth) {
       console.log(`[visual-diff] logging in for ${phase} ${route.slug}`)
-      await login(page)
+      await login(page, route.authCredentials)
       console.log(`[visual-diff] logged in for ${phase} ${route.slug}`)
     }
 

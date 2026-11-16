@@ -8,7 +8,7 @@ import { sanitizeFilename, toCsv } from '../utils/csv.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { appIdSchema, cursorSchema, deviceIdSchema, hasInvalidQueryLimitInput, hasUnsafeDevicesQueryText, queryLimitSchema, safeQueryTextSchema } from '../utils/privateAnalyticsValidation.ts'
+import { appIdSchema, cursorSchema, deviceIdListSchema, hasInvalidQueryLimitInput, MAX_DEVICE_ID_FILTER, hasUnsafeDevicesQueryText, queryLimitSchema, safeQueryTextSchema } from '../utils/privateAnalyticsValidation.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { countDevices, countInstallSources, readDevices } from '../utils/stats.ts'
@@ -60,7 +60,9 @@ const DEFAULT_EXPORT_LIMIT = 10_000
 // The ids end up in the device query itself (a PostgREST in-list or an Analytics
 // Engine IN clause), which stays reliable up to PostgREST's 1000-row page. Beyond
 // that the request is refused rather than silently showing a subset.
-const MAX_OVERRIDE_DEVICE_IDS = 1000
+const MAX_OVERRIDE_DEVICE_IDS = MAX_DEVICE_ID_FILTER
+// Install sources are a short fixed set; the list becomes an IN clause.
+const MAX_INSTALL_SOURCES = 50
 const devicesBodyShape = {
   appId: appIdSchema,
   count: z.boolean().optional(),
@@ -72,11 +74,11 @@ const devicesBodyShape = {
   osVersionOp: versionCompareOpSchema.optional(),
   platform: platformSchema.optional(),
   defaultChannel: safeQueryTextSchema.optional(),
-  devicesId: z.array(deviceIdSchema).optional(),
-  deviceIds: z.array(deviceIdSchema).optional(),
+  devicesId: deviceIdListSchema.optional(),
+  deviceIds: deviceIdListSchema.optional(),
   overrides: z.boolean().optional(),
   overrideChannelId: z.number().int().positive().optional(),
-  installSources: z.array(safeQueryTextSchema).optional(),
+  installSources: z.array(safeQueryTextSchema).max(MAX_INSTALL_SOURCES).optional(),
   search: safeQueryTextSchema.optional(),
   customIdMode: z.boolean().optional(),
   order: z.array(orderItemSchema).optional(),

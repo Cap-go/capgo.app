@@ -1,9 +1,9 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { countDevicesCF, countInstallSourcesCF, readBandwidthUsageCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
-import { countInstallSources, readStatsBandwidth } from '../supabase/functions/_backend/utils/stats.ts'
-import { countDevicesSB, countInstallSourcesSB, readBandwidthUsageSB } from '../supabase/functions/_backend/utils/supabase.ts'
+import { countDevicesCF, countInstallSourcesCF, readBandwidthUsageCF, readStatsVersionCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { countInstallSources, readStatsBandwidth, readStatsVersion } from '../supabase/functions/_backend/utils/stats.ts'
+import { countDevicesSB, countInstallSourcesSB, readBandwidthUsageSB, readStatsVersionSB } from '../supabase/functions/_backend/utils/supabase.ts'
 
 vi.mock('hono/adapter', async (importOriginal) => {
   const actual = await importOriginal<typeof import('hono/adapter')>()
@@ -18,12 +18,14 @@ vi.mock('../supabase/functions/_backend/utils/cloudflare.ts', () => ({
   countDevicesCF: vi.fn(),
   countInstallSourcesCF: vi.fn(),
   readBandwidthUsageCF: vi.fn(),
+  readStatsVersionCF: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   countDevicesSB: vi.fn(),
   countInstallSourcesSB: vi.fn(),
   readBandwidthUsageSB: vi.fn(),
+  readStatsVersionSB: vi.fn(),
 }))
 
 function createContextMock(env: Record<string, unknown>) {
@@ -116,5 +118,19 @@ describe('readStatsBandwidth routing', () => {
       { throwOnError: true },
     )
     expect(readBandwidthUsageSB).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('strict report analytics routing', () => {
+  it('refuses missing Cloudflare credentials instead of silently using missing data', () => {
+    expect(() => readStatsVersion(createContextMock({ VERSION_USAGE: {} }), 'com.example.app', '2026-11-01', '2026-11-02', undefined, { throwOnError: true })).toThrow('Analytics Engine read configuration')
+  })
+
+  it('forwards strict mode to the on-premise reader', async () => {
+    const c = createContextMock({})
+    await readStatsVersion(c, 'com.example.app', '2026-11-01', '2026-11-02', undefined, { throwOnError: true })
+    expect(readStatsVersionSB).toHaveBeenCalledWith(c, 'com.example.app', '2026-11-01', '2026-11-02', undefined, { throwOnError: true })
+    expect(readStatsVersionCF).not.toHaveBeenCalled()
   })
 })

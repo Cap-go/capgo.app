@@ -41,6 +41,7 @@ import { decryptZip } from './bundle/decrypt'
 import { deleteBundle } from './bundle/delete'
 import { encryptZip } from './bundle/encrypt'
 import { listBundle } from './bundle/list'
+import { recommendBundle } from './bundle/recommend'
 import { printReleaseType } from './bundle/releaseType'
 import { handleBundleUploadCommand } from './bundle/upload-command'
 import { zipBundle } from './bundle/zip'
@@ -65,17 +66,17 @@ import { observeCommand } from './observe/command'
 import { startOnboardingChecks } from './onboarding/background'
 import { waitForOnboardingChecks } from './onboarding/background-shutdown'
 import { finishOnboardingCommand } from './onboarding/background-workers'
-import { setNoticeOutputOptions } from './onboarding/setup-notice-policy'
 import { setupDebug } from './onboarding/setup-diagnostics'
+import { setNoticeOutputOptions } from './onboarding/setup-notice-policy'
 import { addOrganization, deleteOrganization, inviteMember, listMembers, listOrganizations, removeMember, setMemberRole, setOrganization } from './organization'
 import { capturePosthogException, getCommandPath, shouldCapturePosthogException } from './posthog'
 import { getPreviewQr } from './preview/qr'
 import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
-import { getSimulatorCommand, startSimulatorCommand, stopSimulatorCommand } from './simulator/session'
 import { CliUserError } from './shared/cli-user-error'
 import { ORG_EMAIL_PREFERENCE_KEYS, USER_EMAIL_PREFERENCE_KEYS } from './shared/email-preferences'
 import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
+import { getSimulatorCommand, sendSimulatorCommand, startSimulatorCommand, stopSimulatorCommand } from './simulator/session'
 import { getAccount, setAccount } from './user/settings'
 import { whoami } from './user/whoami'
 import { formatError, setCapgoHostOverride } from './utils'
@@ -268,6 +269,20 @@ Examples:
 const bundle = program
   .command('bundle')
   .description(`📦 Manage app bundles for deployment in Capgo Cloud, including upload, compatibility checks, and encryption.`)
+
+bundle
+  .command('recommend [appId]')
+  .description('Suggest the next version using Cloudflare AI (active paid subscription required)')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--base-version <version>', 'Override the latest Capgo version as the release baseline')
+  .option('--since <ref>', 'Git ref to compare from (defaults to the latest reachable local tag)')
+  .option('--ref <ref>', 'Git ref to compare to (defaults to HEAD locally; required for GitHub)')
+  .option('--repo <owner/repo>', 'Use GitHub comparison history through your authenticated gh CLI')
+  .option('--changelog', 'Also draft a Markdown changelog')
+  .option('--json', 'Print the recommendation as JSON')
+  .option('--dry-run', 'Print local context without sending it to Capgo or AI')
+  .action(recommendBundle)
 
 bundle
   .command('upload [appId]')
@@ -1086,7 +1101,16 @@ const build = program
   .command('build')
   .description(`Build native iOS and Android apps with Capgo Cloud.
 
-Native cloud builds are currently in limited beta.
+Capgo Build is generally available for production iOS and Android releases.
+Build, sign, and submit Capacitor apps from Windows, Linux, macOS, CI, or an AI coding agent. No local Mac or Xcode required.
+
+One CLI covers 2 native platforms, guided signing setup, live build logs, and optional App Store Connect and Google Play submission.
+For AI-assisted setup, configure your agent's MCP client to launch npx @capgo/cli@latest mcp, then ask it to call start_capgo_builder_onboarding.
+Client configuration: https://capgo.app/docs/cli/reference/mcp/
+
+Build minutes are included in Capgo plans; extra minutes use prepaid credits. Current pricing: https://capgo.app/pricing/
+Measured build times and methodology: https://capgo.app/builder-data/
+Setup and requirements: https://capgo.app/docs/builder/
 
 Quick start:
   npx @capgo/cli@latest build init
@@ -1788,6 +1812,10 @@ Selected tools exposed via MCP:
   - capgo_get_account_id, capgo_get_account, capgo_update_account, capgo_doctor, capgo_get_stats, capgo_observe
   - capgo_request_build, capgo_get_build_status, capgo_get_build_logs, capgo_generate_encryption_keys
   - capgo_search_docs, capgo_set_project_dir
+  - capgo_list_skills, capgo_get_skill
+
+Hosted account tools all publish outputSchema. Successful HTTP API results are also returned as structuredContent.data; the text content preserves the original API JSON for older clients. Non-HTTP tools return the object described by their own outputSchema. Errors use isError=true with guidance, and oversized results require pagination or narrower filters.
+The CLI bundles the same public skills catalog as the hosted MCP at release time. Use capgo_list_skills to discover workflow guides and capgo_get_skill to read one; resourceUri selects a supporting file from its manifest. These reads work offline without login or a selected project. MCP 2026-07-28 clients can use the skills extension (skills/list and skills/get); both modern and legacy clients can use resources/list and resources/read. Reading a skill does not run it or authorize its actions. Update the CLI to receive newer skill content.
 
 The project directory follows the client's MCP roots (the agent's workspace), so a global
 install works from any folder. Clients without roots can call capgo_set_project_dir.
@@ -1825,6 +1853,7 @@ simulator
   .action(startSimulatorCommand)
   .option('-p, --platform <platform>', 'ios or android', 'ios')
   .option('-n, --name <name>', 'Session name')
+  .option('--build-job <buildJobId>', 'Saved iOS build job to install into the simulator')
   .option('--json', 'Print the session JSON')
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--api-host <apiHost>', optionDescriptions.apiHost)
@@ -1834,6 +1863,17 @@ simulator
   .description('Read one simulator session.')
   .action(getSimulatorCommand)
   .option('--json', 'Print the session JSON')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+
+simulator
+  .command('command <deviceCommand> [sessionId] [appId]')
+  .description('Send one agent-device command to a running simulator: devices, screenshot, snapshot, home, lock, tap, or open.')
+  .action(sendSimulatorCommand)
+  .option('--x <x>', 'Tap x. 0 to 1 is a fraction of the screen. Above 1 is a point.', value => Number(value))
+  .option('--y <y>', 'Tap y. 0 to 1 is a fraction of the screen. Above 1 is a point.', value => Number(value))
+  .option('--bundle-id <bundleId>', 'Bundle id for open')
+  .option('--json', 'Print the command JSON')
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--api-host <apiHost>', optionDescriptions.apiHost)
 

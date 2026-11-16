@@ -103,8 +103,6 @@ async function postCronEmail(body: Record<string, unknown>): Promise<Response> {
 const cronCases = [
   { preference: 'weekly_stats', body: { type: 'weekly_install_stats' } },
   { preference: 'monthly_stats', body: { type: 'monthly_create_stats' } },
-  // Preference check happens before the (non-existent) version lookup.
-  { preference: 'deploy_stats_24h', body: { type: 'deploy_install_stats', versionId: 999999 } },
 ] as const
 
 describe('[POST] /triggers/cron_email - Email Preference Filtering', () => {

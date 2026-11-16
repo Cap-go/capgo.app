@@ -10,6 +10,7 @@ import {
   TUS_EXTENSIONS,
   TUS_VERSION,
 } from '../../files/util.ts'
+import { recordCicdDeploy } from '../../utils/cicdDetection.ts'
 import { getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth, middlewareKey } from '../../utils/hono_middleware.ts'
 import { apikeyPrincipal } from '../../utils/pg_rls.ts'
@@ -27,7 +28,7 @@ import {
 import { streamBuildLogs } from './logs.ts'
 import { getBuildLogsToken } from './logs_token.ts'
 import { requestBuild } from './request.ts'
-import { readSimulator, startSimulator, stopSimulator, type SimulatorBody } from './simulator.ts'
+import { commandSimulator, readSimulator, startSimulator, stopSimulator, type SimulatorBody } from './simulator.ts'
 import { startBuild } from './start.ts'
 import { getBuildStatus } from './status.ts'
 import { uploadSupportLogs } from './support_logs.ts'
@@ -62,11 +63,21 @@ app.post('/simulator/:id/stop', middlewareKey(['all', 'write']), async (c) => {
   return stopSimulator(c, c.req.param('id'), body, apikey.user_id, apikeyPrincipal(c, apikey.key))
 })
 
+app.post('/simulator/:id/command', middlewareKey(['all', 'write']), async (c) => {
+  const body = await getBodyOrQuery<SimulatorBody>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return commandSimulator(c, c.req.param('id'), body, apikey.user_id, apikeyPrincipal(c, apikey.key))
+})
+
 // POST /build/request - Request a new native build
 app.post('/request', middlewareKey(['all', 'write']), async (c) => {
   const body = await getBodyOrQuery<RequestBuildBody>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-  return requestBuild(c, body, apikey)
+  const response = await requestBuild(c, body, apikey)
+  // A native build requested from CI completes the CI/CD onboarding step.
+  if (response.ok)
+    await recordCicdDeploy(c, { appId: body?.app_id, product: 'builder', apikeyRbacId: apikey?.rbac_id })
+  return response
 })
 
 // POST /build/start/:jobId - Start a build after uploading bundle

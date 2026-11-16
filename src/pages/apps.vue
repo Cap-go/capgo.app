@@ -42,6 +42,9 @@ const lacksSecurityAccess = computed(() => {
 function normalizeAppRow(app: AppIconSource): AppRow {
   return {
     ...app,
+    bundle_incompatible_alert: 'bundle_incompatible_alert' in app && typeof app.bundle_incompatible_alert === 'string'
+      ? app.bundle_incompatible_alert
+      : 'default',
     created_from_onboarding: 'created_from_onboarding' in app ? app.created_from_onboarding : false,
     onboarding: 'onboarding' in app ? app.onboarding : {},
     onboarding_completed_at: 'onboarding_completed_at' in app ? app.onboarding_completed_at : null,

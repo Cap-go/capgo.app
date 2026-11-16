@@ -52,7 +52,7 @@ function readCapgoAttributionCookie(): ResolvedSignupAttribution {
 function readUserMetadataSignupAttribution(user: User | null | undefined): ResolvedSignupAttribution {
   if (!user?.user_metadata)
     return {}
-  return parseSignupAttributionRecord(user.user_metadata as Record<string, unknown>)
+  return parseSignupAttributionRecord(user.user_metadata)
 }
 
 function readLocationSignupAttribution(): ResolvedSignupAttribution {

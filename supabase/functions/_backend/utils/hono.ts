@@ -66,6 +66,7 @@ export interface MiddlewareKeyVariables {
     skipChannelSelfPostgresFallback?: boolean
     requireReadReplica?: boolean
     deviceDataCollection?: import('./deviceDataCollection.ts').DeviceDataCollection
+    manifestSizeLookupSubrequestBudgetPerMessage?: number
   }
 }
 
@@ -189,6 +190,7 @@ export const useCors = cors({
     'x-cli-command',
     'x-cli-node',
     'x-cli-os',
+    'x-cli-ci',
     'x-image-path',
     'x-image-upsert',
   ],

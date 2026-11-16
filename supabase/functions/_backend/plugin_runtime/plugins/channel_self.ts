@@ -16,11 +16,12 @@ import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
 import { sendNotifToOrgMembersCached } from '../utils/org_email_notifications.ts'
-import { closeClient, createLazyPgClient, deleteChannelDevicePg, getAppByIdPg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getMainChannelsPg, getPgClient, refreshReplicationLag, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
+import { closeClient, createLazyPgClient, deleteChannelDevicePg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getMainChannelsPg, getPgClient, logPgError, queryAppOwnerPostgres, refreshReplicationLag, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
 import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
 import { getAppOwnerWithEdgeCache, getChannelByNameWithEdgeCache, getCompatibleChannelsWithEdgeCache } from '../utils/pluginEdgeCacheReads.ts'
+import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss, markPluginStateResponse, startPluginStateRequest } from '../utils/pluginState.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { logSkippedSupabaseWrite, shouldSkipChannelSelfPostgresFallback } from '../utils/supabase_write_guard.ts'
@@ -596,6 +597,21 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
   return c.json(BRES)
 }
 
+/**
+ * Owner read for the channel list. Every failure is rethrown: null means "app
+ * missing" and answers a publicly cached on_premise_app 429, so a failed read
+ * must surface as a retryable 503 instead.
+ */
+async function getListAppOwnerPg(c: Context, appId: string, drizzleClient: ReturnType<typeof getDrizzleClient>) {
+  try {
+    return await queryAppOwnerPostgres(c, appId, drizzleClient, PLAN_MAU_ACTIONS)
+  }
+  catch (e: unknown) {
+    logPgError(c, 'getListAppOwnerPg', e)
+    throw e
+  }
+}
+
 async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult, edgeCache = false): Promise<Response> {
   const { app_id, platform, is_emulator, is_prod } = body
   c.set('deviceDataCollection', parseDeviceDataCollection(cachedAppStatus.device_data_collection))
@@ -604,12 +620,14 @@ async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<type
     return cachedLimit
   }
 
-  // With the edge cache, the cached owner answers both the existence check and the owner lookup.
-  const cachedOwner = edgeCache ? (await getAppOwnerWithEdgeCache(c, app_id, drizzleClient, PLAN_MAU_ACTIONS)).value : null
-  // First check if app exists - Read operation can use v2 flag
-  const appExists = edgeCache ? cachedOwner : await getAppByIdPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+  // One owner read answers both the existence check and the owner lookup: the
+  // owner row already carries owner_org and plan_valid, so a separate
+  // apps-by-id read would fetch the same row (and run the plan check) twice.
+  const appOwner = edgeCache
+    ? (await getAppOwnerWithEdgeCache(c, app_id, drizzleClient, PLAN_MAU_ACTIONS)).value
+    : await getListAppOwnerPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>)
 
-  if (!appExists) {
+  if (!appOwner) {
     const blocked = await blockProviderInfrastructure(c, 'GET', true)
     if (blocked)
       return blocked
@@ -617,7 +635,6 @@ async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<type
     // App doesn't exist in database - normalize response to avoid oracle
     return onPremiseAppResponse(c)
   }
-  const appOwner = edgeCache ? cachedOwner : await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   c.set('deviceDataCollection', parseDeviceDataCollection(appOwner?.device_data_collection ?? cachedAppStatus.device_data_collection))
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
@@ -750,6 +767,40 @@ async function runChannelSelfWithLazyPgClient(
   }
 }
 
+/**
+ * /channel_self answered from the KV plugin state (pluginState.ts): the same
+ * handler with every query answered by the session. Null when a key it needs
+ * is not synced yet (the caller then uses the database and records the
+ * request itself).
+ */
+async function runChannelSelfWithPluginState(
+  c: Context,
+  pluginState: NonNullable<Awaited<ReturnType<typeof startPluginStateRequest>>>,
+  run: (drizzleClient: ReturnType<typeof getDrizzleClient>) => Promise<Response>,
+  record: () => Promise<void>,
+) {
+  const { drizzle, lazy } = createPluginStateDatabase(c, pluginState)
+  let fallback = false
+  try {
+    const response = await run(drizzle)
+    markPluginStateResponse(response, lazy.isConnected() ? 'kv-escaped' : 'kv')
+    return response
+  }
+  catch (error) {
+    if (!isPluginStateMiss(error))
+      throw error
+    fallback = true
+    abandonPluginStateRequest(c)
+    return null
+  }
+  finally {
+    await lazy.close()
+    // Do not block the response on rate-limit Cache writes (P999 wall time).
+    if (!fallback)
+      await backgroundTask(c, record())
+  }
+}
+
 async function runChannelSelfDeviceOperation(
   c: Context,
   bodyParsed: DeviceLink,
@@ -778,7 +829,13 @@ async function runChannelSelfDeviceOperation(
     await recordChannelSelfIPRateLimitSafely(c, bodyParsed.app_id)
   }
 
-  // The edge cache only serves read-replica requests; the primary fallback is unchanged.
+  // The KV plugin state and the edge cache only serve read-replica requests; the primary fallback is unchanged.
+  const pluginState = canUseReadReplica ? await startPluginStateRequest(c, bodyParsed.app_id, bodyParsed.device_id) : null
+  if (pluginState) {
+    const stateResponse = await runChannelSelfWithPluginState(c, pluginState, drizzleClient => run(drizzleClient, false), record)
+    if (stateResponse)
+      return stateResponse
+  }
   if (canUseReadReplica && shouldUseUpdatesEdgeCache(c, bodyParsed.app_id, bodyParsed.device_id))
     return await runChannelSelfWithLazyPgClient(c, drizzleClient => run(drizzleClient, true), record)
 
@@ -897,6 +954,13 @@ app.get('/', async (c) => {
       await recordChannelSelfRequestSafely(c, bodyParsed.app_id, bodyRaw.device_id, 'list')
     }
     await recordChannelSelfIPRateLimitSafely(c, bodyParsed.app_id)
+  }
+
+  const pluginState = await startPluginStateRequest(c, bodyParsed.app_id, bodyRaw.device_id ?? '')
+  if (pluginState) {
+    const stateResponse = await runChannelSelfWithPluginState(c, pluginState, drizzleClient => listCompatibleChannels(c, drizzleClient, bodyParsed, appStatus), record)
+    if (stateResponse)
+      return stateResponse
   }
 
   // Without a device id there is no per-device bucket: keep the live path.

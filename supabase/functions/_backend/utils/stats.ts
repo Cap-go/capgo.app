@@ -190,7 +190,9 @@ export function readStatsStorage(c: Context, app_id: string, start_date: string,
 export function readStatsVersion(c: Context, app_id: string, start_date: string, end_date: string, channel?: VersionUsageChannel | string, options: VersionUsageChannelFilterOptions = {}): Promise<VersionUsage[]> {
   // The Postgres fallback (on-prem/local) only matches rows recorded with the channel.
   if (!c.env.VERSION_USAGE)
-    return readStatsVersionSB(c, app_id, start_date, end_date, channel)
+    return readStatsVersionSB(c, app_id, start_date, end_date, channel, options)
+  if (options.throwOnError)
+    assertAnalyticsEngineReadConfig(c, 'version usage')
   return readStatsVersionCF(c, app_id, start_date, end_date, channel, options)
 }
 

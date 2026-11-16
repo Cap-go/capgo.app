@@ -61,9 +61,16 @@ Connect the Capgo MCP server so the agent can manage apps, channels, bundles,
 native builds, and stats:
 
 - Hosted MCP: `https://api.capgo.app/mcp` ([docs](https://capgo.app/docs/ai/mcp/))
-- Local MCP (served by the CLI in this repo): `npx @capgo/cli@latest mcp`
+- MCP Events on the hosted server: subscribe with `events/subscribe` or `capgo_subscribe_events` for `build.succeeded`, `build.failed`, `bundle.uploaded`, and `bundle.deployed` (Standard Webhooks delivery).
+- Local MCP (served by the CLI in this repo): `npx @capgo/cli@latest mcp` (stdio only; event callbacks require the hosted MCP).
 
 Per-agent setup instructions are at [capgo.app/agents](https://capgo.app/agents/).
+
+### Hosted MCP: accurate tool hints and read-only build status
+
+OpenAI and other remote MCP clients rely on tool annotations (`readOnlyHint`, `destructiveHint`) to decide when to ask for confirmation. The hosted server at `https://api.capgo.app/mcp` now documents bundle upload and credentials upload as destructive, and polls native cloud build status through a read-only path that does not sync `build_requests`, record build minutes, cancel timed-out jobs, or emit webhooks. HTTP `/build/status` and the CLI still persist on every poll.
+
+When a hosted MCP poll sees a job still `running` past the app's configured timeout, the payload includes `timeout_exceeded` and `timeout_warning` so agents can call `capgo_cancel_build` or wait for Capgo reconciliation instead of polling indefinitely. See [Capgo MCP docs](https://capgo.app/docs/ai/mcp/). Website documentation updates for hosted build polling are tracked in [Cap-go/website](https://github.com/Cap-go/website) and may lag this repository until published.
 
 ## Features
 
@@ -86,6 +93,18 @@ Per-agent setup instructions are at [capgo.app/agents](https://capgo.app/agents/
 - 🌐 **Open Source**: Licensed under GNU AFFERO GENERAL PUBLIC LICENSE
 - 🌐 **Open Source Backend**: Self install
   [our backend](https://github.com/Cap-go/capgo) in your infra
+
+### Security updates
+
+The Capgo console shows **published** Capacitor security advisories and optional email
+alerts for your apps. The `security_updates` email preference defaults to off; turn it on
+under Account settings, Notifications. Per app, open Observe, Security updates to review
+matches against native package versions already reported on bundles. Public docs:
+[Notifications security advisories](https://capgo.app/docs/webapp/notifications-security-advisories/),
+[Observe security updates](https://capgo.app/docs/webapp/observe-security-updates/),
+[website #1413](https://github.com/Cap-go/website/pull/1413),
+[Console security updates](https://github.com/Cap-go/website/pull/1394), and
+[Security advisories feature](https://github.com/Cap-go/website/pull/1393).
 
 <br>
 

@@ -1,4 +1,4 @@
-import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue } from '@cloudflare/workers-types'
+import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue, R2Bucket } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { DeviceInfoWriteCachePayload } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
@@ -64,6 +64,9 @@ export type Bindings = {
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace
   PLUGIN_NOTIFICATION_QUEUE?: KVNamespace
+  /** KV plugin state (pluginState.ts), written by triggers/plugin_state_sync. */
+  PLUGIN_STATE?: KVNamespace
+  PLUGIN_STATE_POINTERS?: R2Bucket
   LOCAL_READ_REPLICA_SUPABASE_DB_URL?: string
   HYPERDRIVE_CAPGO_DIRECT_EU?: Hyperdrive
   HYPERDRIVE_CAPGO_READ_NA: Hyperdrive

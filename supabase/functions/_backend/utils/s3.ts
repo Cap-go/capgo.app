@@ -380,6 +380,31 @@ export interface StorageSizeDiagnostics {
   size: number
 }
 
+function isSerializedMissingObjectStatus(status: unknown): boolean {
+  return status === 404 || status === 'NoSuchKey'
+}
+
+function isSizeCandidateDefinitelyMissing(candidate: SizeKeyDiagnostic): boolean {
+  if (candidate.finalSize > 0)
+    return false
+
+  if (candidate.usedFallback && candidate.range?.status === 404)
+    return true
+
+  if (!candidate.head.success)
+    return isSerializedMissingObjectStatus(candidate.head.error?.status)
+
+  return false
+}
+
+/** True when every storage candidate is a definitive 404 (safe to ack without retry). */
+export function isManifestStorageObjectDefinitelyMissing(diagnostics: StorageSizeDiagnostics): boolean {
+  if (diagnostics.size > 0 || diagnostics.candidates.length === 0)
+    return false
+
+  return diagnostics.candidates.every(candidate => isSizeCandidateDefinitelyMissing(candidate))
+}
+
 async function getSizeFromRangeFallback(
   c: Context,
   client: ReturnType<typeof initS3>,
@@ -808,5 +833,6 @@ export const s3 = {
 }
 
 export const s3TestUtils = {
+  isManifestStorageObjectDefinitelyMissing,
   shouldUseSizeRangeFallback,
 }

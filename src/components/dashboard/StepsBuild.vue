@@ -185,7 +185,11 @@ function resetFlow() {
 
 // The live build failed: go back to the build command so the user can run it again.
 function retryBuild() {
+  // Keep the count that already includes the failed build: a retry run before the
+  // wait step polls must still be seen as new.
+  const baseline = initialCount.value
   resetFlow()
+  initialCount.value = baseline
   step.value = steps.value.findIndex(s => s.key === requestStep.value.key)
   scrollToElement(`build_step_${step.value}`)
 }
@@ -327,11 +331,13 @@ watchEffect(async () => {
     realtimeListener.value = true
     await organizationStore.awaitInitialLoad()
 
-    try {
-      initialCount.value = await getBuildRequestsCount(platform)
-    }
-    catch {
-      initialCount.value = 0
+    if (initialCount.value === null) {
+      try {
+        initialCount.value = await getBuildRequestsCount(platform)
+      }
+      catch {
+        initialCount.value = 0
+      }
     }
 
     clearWatchers()
@@ -340,6 +346,7 @@ watchEffect(async () => {
       try {
         const current = await getBuildRequestsCount(platform)
         if (initialCount.value !== null && current > initialCount.value) {
+          initialCount.value = current
           const latestId = await getLatestBuildId(platform)
           step.value += 1
           buildId.value = latestId ?? ''
@@ -378,7 +385,9 @@ onUnmounted(() => {
       :build-id="liveBuild.id"
       :platform="liveBuild.platform"
       :demo="buildDemo"
+      :closable="canClose"
       @retry="retryBuild"
+      @close="emit('closeStep')"
       @done="emit('done')"
     />
     <div v-else class="flex w-full flex-col gap-6 px-4 sm:px-0">

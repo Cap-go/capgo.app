@@ -1,11 +1,9 @@
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 /// <reference lib="deno.ns" />
 import { ensureFile } from 'https://deno.land/std/fs/ensure_file.ts'
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js'
+import pg from 'npm:pg@8'
 
-const supabaseUrl = 'https://sb.capgo.app'
-const supabaseServiceRole = '***'
+const databaseUrl = '***'
 const appToTransfer = 'com.demo.app'
 const newOwnerEmail = 'admin@capgo.app'
 
@@ -19,29 +17,18 @@ async function main() {
     bucket: 'capgo',
   })
 
-  const supabase = createClient<Database>(supabaseUrl, supabaseServiceRole, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  })
+  const db = new pg.Client({ connectionString: databaseUrl })
+  await db.connect()
 
-  const { data: oldUser, error: error1 } = await supabase.from('apps')
-    .select('*')
-    .eq('app_id', appToTransfer)
-    .single()
+  const { rows: oldUsers } = await db.query('SELECT * FROM public.apps WHERE app_id = $1', [appToTransfer])
+  if (oldUsers.length !== 1)
+    throw new Error(`Expected 1 app ${appToTransfer}, got ${oldUsers.length}`)
+  const oldUser = oldUsers[0]
 
-  if (error1)
-    throw error1
-
-  const { data: newUser, error: error2 } = await supabase.from('users')
-    .select('*')
-    .eq('email', newOwnerEmail)
-    .single()
-
-  if (error2)
-    throw error1
+  const { rows: newUsers } = await db.query('SELECT * FROM public.users WHERE email = $1', [newOwnerEmail])
+  if (newUsers.length !== 1)
+    throw new Error(`Expected 1 user ${newOwnerEmail}, got ${newUsers.length}`)
+  const newUser = newUsers[0]
 
   const oldUserId = oldUser.user_id as string
   const newUserId = newUser.id as string
@@ -71,52 +58,26 @@ async function main() {
   }
 
   console.log('Updating user_id in apps')
-  const { error: error3 } = await supabase.from('apps')
-    .update({ user_id: newUserId })
-    .eq('user_id', oldUserId)
-
-  if (error3)
-    throw error3
+  await db.query('UPDATE public.apps SET user_id = $1 WHERE user_id = $2', [newUserId, oldUserId])
 
   console.log('Updating user_id in app_versions')
-  const { error: error4 } = await supabase.from('app_versions')
-    .update({ user_id: newUserId })
-    .eq('app_id', appToTransfer)
-
-  if (error4)
-    throw error4
+  await db.query('UPDATE public.app_versions SET user_id = $1 WHERE app_id = $2', [newUserId, appToTransfer])
 
   console.log('Updating user_id in app_versions_meta')
-  const { error: error5 } = await supabase.from('app_versions_meta')
-    .update({ user_id: newUserId })
-    .eq('app_id', appToTransfer)
-
-  if (error5)
-    throw error5
+  await db.query('UPDATE public.app_versions_meta SET user_id = $1 WHERE app_id = $2', [newUserId, appToTransfer])
 
   console.log('Updating user_id in channel_devices')
-  const { error: error6 } = await supabase.from('channel_devices')
-    .update({ created_by: newUserId })
-    .eq('app_id', appToTransfer)
-
-  if (error6)
-    throw error6
+  await db.query('UPDATE public.channel_devices SET created_by = $1 WHERE app_id = $2', [newUserId, appToTransfer])
 
   console.log('Updating user_id in channels')
-  const { error: error7 } = await supabase.from('channels')
-    .update({ created_by: newUserId })
-    .eq('app_id', appToTransfer)
-
-  if (error7)
-    console.log(JSON.stringify(error7))
+  await db.query('UPDATE public.channels SET created_by = $1 WHERE app_id = $2', [newUserId, appToTransfer])
+    .catch((error: unknown) => console.log(JSON.stringify(error)))
 
   console.log('Updating user_id in devices_override')
-  const { error: error8 } = await supabase.from('devices_override')
-    .update({ created_by: newUserId })
-    .eq('app_id', appToTransfer)
+  await db.query('UPDATE public.devices_override SET created_by = $1 WHERE app_id = $2', [newUserId, appToTransfer])
+    .catch((error: unknown) => console.log(JSON.stringify(error)))
 
-  if (error8)
-    console.log(JSON.stringify(error8))
+  await db.end()
 }
 
 await main()

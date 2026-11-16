@@ -37,6 +37,7 @@ const jobId = 'builder-job'
 function context() {
   return {
     get: (key: string) => key === 'requestId' ? 'request-id' : undefined,
+    req: { header: () => undefined },
     json: (data: unknown, status = 200) => new Response(JSON.stringify(data), { status }),
   } as any
 }
@@ -77,7 +78,7 @@ describe('build status Builder checklist persistence', () => {
     const response = await getBuildStatus(c, { job_id: jobId, app_id: appId, platform: 'ios' }, { key: 'api-key' } as any)
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toMatchObject({ job_id: jobId, status: 'succeeded' })
+    expect(await response.json()).toMatchObject({ job_id: jobId, status: 'succeeded', persisted: true })
     expect(mocks.checklist).toHaveBeenCalledWith(c, { appId, platform: 'ios', status: 'succeeded' })
   })
 
@@ -86,6 +87,90 @@ describe('build status Builder checklist persistence', () => {
     const response = await getBuildStatus(context(), { job_id: jobId, app_id: appId, platform: 'ios' }, { key: 'api-key' } as any)
 
     expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ persisted: false })
     expect(mocks.checklist).not.toHaveBeenCalled()
+  })
+
+  it('still persists when HTTP query has persist=false', async () => {
+    await getBuildStatus(context(), { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' }, { key: 'api-key' } as any)
+    expect(mocks.adminQuery).toHaveBeenCalled()
+  })
+
+  it('skips DB sync, billing and checklist for hosted MCP read-only', async () => {
+    const response = await getBuildStatus(
+      context(),
+      { job_id: jobId, app_id: appId, platform: 'ios' },
+      { key: 'api-key' } as any,
+      { hostedMcpReadOnly: true },
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ job_id: jobId, status: 'succeeded', persisted: false })
+    expect(mocks.adminQuery).not.toHaveBeenCalled()
+    expect(mocks.checklist).not.toHaveBeenCalled()
+    expect(mocks.emit).not.toHaveBeenCalled()
+    expect(mocks.recordBuildTime).not.toHaveBeenCalled()
+  })
+
+  it('does not cancel a timed-out build when MCP read-only polling', async () => {
+    const startedAt = Date.now() - 901_000
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (init?.method === 'POST' && url.includes('/cancel'))
+        throw new Error('unexpected_builder_cancel')
+      return new Response(JSON.stringify({
+        job: { status: 'running', started_at: startedAt, completed_at: null, error: null },
+        machine: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    const response = await getBuildStatus(
+      context(),
+      { job_id: jobId, app_id: appId, platform: 'ios' },
+      { key: 'api-key' } as any,
+      { hostedMcpReadOnly: true },
+    )
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      status: 'running',
+      persisted: false,
+      timeout_exceeded: true,
+      timeout_warning: expect.stringMatching(/exceeded configured timeout/i),
+    })
+    const urls = vi.mocked(globalThis.fetch).mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${String(url)}`)
+    expect(urls.some(entry => entry.includes('/cancel'))).toBe(false)
+  })
+
+  it('reports builder succeeded on hosted MCP read-only when job finished after timeout', async () => {
+    const startedAt = Date.now() - 3_600_000
+    const completedAt = Date.now() - 3_000_000
+    mocks.rlsQuery.mockImplementation(async (text: string) => {
+      if (text.includes('FROM public.build_requests')) {
+        return { rows: [{ row: {
+          app_id: appId,
+          owner_org: '11111111-1111-4111-8111-111111111111',
+          requested_by: '22222222-2222-4222-8222-222222222222',
+          platform: 'ios',
+          status: 'running',
+          build_mode: 'release',
+        } }] }
+      }
+      return { rows: [{ row: { build_timeout_seconds: 60, build_timeout_updated_at: new Date(0).toISOString() } }] }
+    })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+      job: { status: 'succeeded', started_at: startedAt, completed_at: completedAt, error: null },
+      machine: null,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    const response = await getBuildStatus(
+      context(),
+      { job_id: jobId, app_id: appId, platform: 'ios' },
+      { key: 'api-key' } as any,
+      { hostedMcpReadOnly: true },
+    )
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      status: 'succeeded',
+      persisted: false,
+      timeout_exceeded: true,
+    })
   })
 })

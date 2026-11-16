@@ -9,7 +9,7 @@ import { sanitizeFilename, toCsv } from '../utils/csv.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { appIdSchema, deviceIdSchema, hasInvalidQueryLimitInput, hasUnsafeQueryText, hasUnsafeStatsQueryText, MAX_QUERY_LIMIT, queryLimitSchema, safeQueryDateSchema, safeQueryTextSchema, statsActionSchema } from '../utils/privateAnalyticsValidation.ts'
+import { appIdSchema, deviceIdListSchema, hasInvalidQueryLimitInput, hasUnsafeQueryText, hasUnsafeStatsQueryText, MAX_QUERY_LIMIT, queryLimitSchema, safeQueryDateSchema, safeQueryTextSchema, statsActionSchema } from '../utils/privateAnalyticsValidation.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readStats, readStatsInsights } from '../utils/stats.ts'
 import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
@@ -33,7 +33,7 @@ const NUMERIC_RANGE_INPUT = /^-?(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)$/
 
 const statsBodyShape = {
   appId: appIdSchema,
-  devicesId: z.array(deviceIdSchema).optional(),
+  devicesId: deviceIdListSchema.optional(),
   search: safeQueryTextSchema.optional(),
   order: z.array(z.object({
     key: z.enum(ORDER_KEYS),

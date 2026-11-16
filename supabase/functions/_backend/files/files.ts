@@ -7,6 +7,7 @@ import { Hono } from 'hono/tiny'
 import { app as download_link } from '../private/download_link.ts'
 import { app as upload_link } from '../private/upload_link.ts'
 import { app as ok } from '../public/ok.ts'
+import { serviceHeaders, storageObjectUrl } from '../utils/bundle_storage.ts'
 import { sendDiscordAlert } from '../utils/discord.ts'
 import { quickError, simpleError, simpleRateLimit } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
@@ -21,7 +22,6 @@ import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { checkPermissionPgFreshRetry } from '../utils/rbac.ts'
 import { createStatsBandwidth } from '../utils/stats.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
 import { buildFileReadCacheRequest, getFileReadCache, isAttachmentVersionDeleted } from './file_read_cache.ts'
 import { app as files_config } from './files_config.ts'
@@ -33,6 +33,13 @@ import { ALLOWED_HEADERS, ALLOWED_METHODS, buildFileHttpMetadata, decodeUploadLo
 const DO_CALL_TIMEOUT = 1000 * 60 * 30 // 30 minutes
 const DO_FETCH_RETRY_ATTEMPTS = 3
 const DO_FETCH_RETRY_DELAY_MS = 250
+
+/** Disable runtime DO stub retries so only our replay aware loop counts (Workers runtime default is 4 retries). */
+export const DO_STUB_DISABLE_RUNTIME_RETRY = { retry: { maxRetries: 0 } } as const
+
+export function getAttachmentUploadDurableObjectStub(ns: DurableObjectNamespace, id: DurableObjectId): DurableObjectStub {
+  return ns.get(id, DO_STUB_DISABLE_RUNTIME_RETRY as Parameters<DurableObjectNamespace['get']>[1])
+}
 
 // # test deploy
 
@@ -100,10 +107,15 @@ function canReplayUploadRequest(request: Request): boolean {
 }
 
 function buildDurableObjectRequest(request: Request): Request {
+  const timeoutSignal = AbortSignal.timeout(DO_CALL_TIMEOUT)
+  const clientSignal = request.signal
+  const combinedSignal = typeof AbortSignal.any === 'function'
+    ? AbortSignal.any([timeoutSignal, clientSignal])
+    : timeoutSignal
   const requestInit: RequestInit & { duplex?: 'half' } = {
     headers: request.headers,
     method: request.method,
-    signal: AbortSignal.timeout(DO_CALL_TIMEOUT),
+    signal: combinedSignal,
   }
 
   const uploadBody = getForwardedUploadBody(request)
@@ -374,52 +386,55 @@ async function saveBandwidthUsage(c: Context, fileSize: number | null | undefine
   }
 }
 
+/** A HEAD error has no body; the metadata route says which 400 it was without downloading the object. */
+async function getStorageInfoErrorBody(c: Context, fileId: string): Promise<string> {
+  const infoUrl = storageObjectUrl(c, fileId, true, 'capgo').replace('/storage/v1/object/', '/storage/v1/object/info/')
+  try {
+    const info = await fetch(infoUrl, { headers: serviceHeaders(c) })
+    if (info.ok) {
+      await info.body?.cancel()
+      return ''
+    }
+    return await info.text()
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getHandler files storage info fetch failed', fileId, error })
+    return ''
+  }
+}
+
 async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<Response> {
   const method = c.req.raw.method === 'HEAD' ? 'HEAD' : 'GET'
-  const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin(c).storage.from('capgo').createSignedUrl(fileId, 60)
-
-  if (signedUrlError || !signedUrlData?.signedUrl) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'getHandler files signed URL creation failed',
-      fileId,
-      error: signedUrlError,
-    })
-    if (signedUrlError?.status === 404) {
-      return notFoundAttachmentResponse(c, method === 'HEAD')
-    }
-    throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId }, signedUrlError, { alert: false })
-  }
-
-  const requestHeaders = new Headers()
+  // fetch() resolves `..` segments, which would let the service key read outside the bucket.
+  if (!isSafeAttachmentKey(fileId))
+    return notFoundAttachmentResponse(c, method === 'HEAD')
   const rangeHeader = c.req.header('range')
-  if (method === 'GET' && rangeHeader) {
-    requestHeaders.set('range', rangeHeader)
-  }
+  const range: Record<string, string> = method === 'GET' && rangeHeader ? { Range: rangeHeader } : {}
 
   let response: Response
   try {
-    const fetchInit: RequestInit = { method }
-    if (rangeHeader) {
-      fetchInit.headers = requestHeaders
-    }
-    response = await fetch(signedUrlData.signedUrl, fetchInit)
+    // Same bucket as the TUS upload proxy (supabaseTusProxy.ts), not S3_BUCKET.
+    response = await fetch(storageObjectUrl(c, fileId, true, 'capgo'), { method, headers: serviceHeaders(c, range) })
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'getHandler files signed URL fetch failed', fileId, error })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getHandler files storage fetch failed', fileId, error })
     throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId }, error, { alert: false })
   }
 
   if (!response.ok) {
-    const responseBody = await response.text().catch(() => '')
+    // Supabase Storage answers a missing object, and a missing bucket, with 400 and a message body.
+    let responseBody = await response.text().catch(() => '')
+    if (method === 'HEAD' && response.status === 400 && !responseBody)
+      responseBody = await getStorageInfoErrorBody(c, fileId)
+    const isMissing = response.status === 404 || (response.status === 400 && /object not found|resource was not found/i.test(responseBody))
     cloudlogErr({
       requestId: c.get('requestId'),
-      message: 'getHandler files signed URL response failed',
+      message: 'getHandler files storage response failed',
       fileId,
       status: response.status,
       responseBody,
     })
-    if (response.status === 404 || responseBody.toLowerCase().includes('not found')) {
+    if (isMissing) {
       return notFoundAttachmentResponse(c, method === 'HEAD')
     }
     throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId, status: response.status }, responseBody, { alert: false })
@@ -428,8 +443,12 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
   if (method !== 'HEAD') {
     await saveBandwidthUsage(c, getTransferredBytesFromResponse(response))
   }
-  const attachmentResponse = withAttachmentResponseHeaders(response, fileId, method !== 'HEAD')
-  return attachmentResponse
+  // Signed URLs sent no Cache-Control, so the file read policy applied; the authenticated
+  // route sends the object's stored value (often no-cache), so drop it to keep that policy.
+  const headers = new Headers(response.headers)
+  headers.delete('cache-control')
+  const storageResponse = new Response(response.body, { headers, status: response.status, statusText: response.statusText })
+  return withAttachmentResponseHeaders(storageResponse, fileId, method !== 'HEAD')
 }
 
 async function getHandler(c: Context): Promise<Response> {
@@ -875,7 +894,7 @@ async function uploadHandler(c: Context) {
     throw simpleError('invalid_bucket_configuration', 'Invalid bucket configuration')
   }
 
-  const handler = durableObjNs.get(durableObjNs.idFromName(normalizedRequestId))
+  const handler = getAttachmentUploadDurableObjectStub(durableObjNs, durableObjNs.idFromName(normalizedRequestId))
   cloudlog({ requestId: c.get('requestId'), message: 'upload handler - forwarding to DO', method: c.req.raw.method, url: c.req.url })
 
   const method = c.req.raw.method
@@ -891,6 +910,7 @@ async function uploadHandler(c: Context) {
     // HEAD must not forward a request body and must preserve the verb (Hono/tiny maps HEAD to GET).
     method,
     headers,
+    signal: c.req.raw.signal,
   }
   const uploadBody = getForwardedUploadBody(c.req.raw)
   if (uploadBody != null) {
@@ -1416,4 +1436,6 @@ export const filesTestUtils = {
   fetchUploadHandlerWithRetry,
   isRetryableDurableObjectFetchError,
   retryableUploadUnavailableResponse,
+  DO_STUB_DISABLE_RUNTIME_RETRY,
+  getAttachmentUploadDurableObjectStub,
 }

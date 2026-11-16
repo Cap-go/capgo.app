@@ -79,6 +79,8 @@ test.describe('AI agent alternatives to manual actions', () => {
     await page.goto('/app/new?mode=manual')
     await expect(appName).toBeVisible()
     await expect(page.locator('[data-test="add-app-setup-mode"]')).toHaveCount(0)
+    // The manual wizard leads with the one CLI command to run in the project.
+    await expect(page.locator('[data-test="app-onboarding-manual-cli-copy"]')).toContainText('npx @capgo/cli@latest ')
   })
 
   test('bundle upload offers a prompt for the AI agent', async ({ page }) => {

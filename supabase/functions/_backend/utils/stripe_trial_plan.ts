@@ -13,8 +13,9 @@ import type { BillingAccount } from './stripe_billing.ts'
 import type { PriceTier } from './country_price_tier.ts'
 import { FULL_PRICE_TIER, priceTierForCountries } from './country_price_tier.ts'
 import { getCustomerBilling, isRegionalCurrency } from './regional_price.ts'
+import { getStripe } from './stripe.ts'
 import type { Database } from './supabase.types.ts'
-import { findPlanByProductId, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, getRequestCountry, isAutomaticTaxEnabled, singleRowOrNull, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
+import { findPlanByProductId, getBillingAccountForCustomer, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, getRequestCountry, isAutomaticTaxEnabled, singleRowOrNull, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
 
 type PlanRow = Database['public']['Tables']['plans']['Row']
 
@@ -240,6 +241,117 @@ async function listPendingTrialPlanSchedules(stripe: Stripe, customerId: string)
 
 export async function findPendingTrialPlanSchedule(stripe: Stripe, customerId: string) {
   return (await listPendingTrialPlanSchedules(stripe, customerId))[0] ?? null
+}
+
+export type SyncPendingTrialPlanScheduleResult = 'updated' | 'unchanged' | 'no_schedule' | 'canceled' | 'failed'
+
+function pendingTrialPlanScheduleStartUnix(schedule: Stripe.SubscriptionSchedule): number | null {
+  const phaseStart = schedule.phases[0]?.start_date
+  if (typeof phaseStart === 'number')
+    return phaseStart
+  return null
+}
+
+async function loadStripeInfoTrialAt(c: Context, customerId: string): Promise<string | null> {
+  return singleRowOrNull(await adminQuery(c, client => queryJson<{ trial_at: string | null }>(
+    client,
+    'SELECT trial_at FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+    [customerId],
+  )))?.trial_at ?? null
+}
+
+// Moves a pending trial-end subscription schedule to match stripe_info.trial_at.
+// stripe_info.trial_at is the only source of truth under the advisory lock; queue payloads are not authoritative.
+// Stripe failures leave stripe_info unchanged and return failed (queue retries).
+export async function syncPendingTrialPlanScheduleWithTrialAt(
+  c: Context,
+  stripe: Stripe,
+  customerId: string,
+): Promise<SyncPendingTrialPlanScheduleResult> {
+  let outcome: SyncPendingTrialPlanScheduleResult = 'no_schedule'
+  try {
+    await withTrialPlanLockForScheduleSync(c, customerId, async () => {
+      const trialAtNow = await loadStripeInfoTrialAt(c, customerId)
+      const lockedStart = getTrialPlanStartDate(trialAtNow)
+      const schedules = await listPendingTrialPlanSchedules(stripe, customerId)
+      if (schedules.length === 0) {
+        outcome = 'no_schedule'
+        return
+      }
+      const primary = schedules[0]!
+      if (!lockedStart) {
+        await cancelAllPendingTrialPlanSchedules(c, stripe, customerId, 'trial plan schedule canceled because trial ended')
+        outcome = 'canceled'
+        return
+      }
+      const lockedStartUnix = Math.floor(lockedStart.getTime() / 1000)
+      if (pendingTrialPlanScheduleStartUnix(primary) === lockedStartUnix) {
+        await cancelPendingTrialPlanSchedulesExcept(
+          c,
+          stripe,
+          customerId,
+          primary.id,
+          'duplicate trial plan schedule canceled during trial end sync',
+        )
+        outcome = 'unchanged'
+        return
+      }
+      const primaryPhase = primary.phases[0]
+      const primaryPrice = primaryPhase?.items[0]?.price
+      const priceId = typeof primaryPrice === 'string' ? primaryPrice : primaryPrice?.id
+      if (!primaryPhase || !priceId)
+        throw new Error('pending trial plan schedule missing price')
+      const phaseMetadata = primaryPhase.metadata ?? {}
+      const orgId = typeof primary.metadata?.org_id === 'string'
+        ? primary.metadata.org_id
+        : (typeof phaseMetadata.org_id === 'string' ? phaseMetadata.org_id : undefined)
+      await stripe.subscriptionSchedules.update(primary.id, {
+        phases: [{
+          items: [{ price: priceId, quantity: 1 }],
+          start_date: lockedStartUnix,
+          metadata: {
+            ...primaryPhase.metadata,
+            [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: 'true',
+            ...(orgId ? { org_id: orgId } : {}),
+          },
+        }],
+      })
+      await cancelPendingTrialPlanSchedulesExcept(
+        c,
+        stripe,
+        customerId,
+        primary.id,
+        'duplicate trial plan schedule canceled during trial end sync',
+      )
+      outcome = 'updated'
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'trial plan schedule start synced to trial end',
+        customerId,
+        scheduleId: primary.id,
+        startsAt: lockedStart.toISOString(),
+      })
+    })
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'trial plan schedule start sync failed',
+      customerId,
+      error,
+    })
+    return 'failed'
+  }
+  return outcome
+}
+
+export async function syncTrialPlanScheduleForCustomer(
+  c: Context,
+  customerId: string,
+  _trialAt?: string | null,
+): Promise<SyncPendingTrialPlanScheduleResult> {
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  return syncPendingTrialPlanScheduleWithTrialAt(c, getStripe(c, billingAccount), customerId)
 }
 
 async function cancelSchedules(c: Context, stripe: Stripe, customerId: string, schedules: readonly Stripe.SubscriptionSchedule[], message: string) {
@@ -594,6 +706,24 @@ async function withTrialPlanLock<T>(c: Context, customerId: string, run: () => P
     const { result, connectionLost } = await holdTrialPlanLock(c, client, customerId, run)
     broken = connectionLost
     return result
+  }
+  finally {
+    releasePgClient(pool, client, broken)
+    closeClient(c, pool)
+  }
+}
+
+// Same lock as withTrialPlanLock, but fails when the DB connection drops so queue retries can reconcile Stripe.
+async function withTrialPlanLockForScheduleSync(c: Context, customerId: string, run: () => Promise<void>): Promise<void> {
+  const pool = await getPgClient(c)
+  let client: Awaited<ReturnType<typeof checkoutPgClient>> | null = null
+  let broken = false
+  try {
+    client = await checkoutPgClient(pool)
+    const { connectionLost } = await holdTrialPlanLock(c, client, customerId, run)
+    broken = connectionLost
+    if (connectionLost)
+      throw new Error('trial plan schedule sync lock connection lost')
   }
   finally {
     releasePgClient(pool, client, broken)

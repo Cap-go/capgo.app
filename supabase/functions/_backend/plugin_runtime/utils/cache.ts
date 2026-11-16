@@ -58,6 +58,8 @@ export interface CachePutOptions {
    * evicted in every data center by one zone purge-by-tag API call.
    */
   tags?: string[]
+  /** Extra response headers stored with the entry (read back with matchResponse). */
+  headers?: Record<string, string>
 }
 
 // Local workerd has no purge-by-tag API: remember tagged keys per isolate so
@@ -147,6 +149,32 @@ export class CacheHelper {
     return result
   }
 
+  /** Raw cached response (headers and unread body), or null on miss, timeout or error. */
+  async matchResponse(key: Request, options?: { timeoutMs?: number }): Promise<Response | null> {
+    const timeoutMs = options?.timeoutMs ?? CACHE_MATCH_TIMEOUT_MS
+    const lookup = this.matchResponseUnbound(key)
+    const result = await withTimeout(lookup, timeoutMs)
+    if (result === TIMEOUT) {
+      // Release the body of a match that lands after the timeout.
+      void lookup.then(response => response?.body?.cancel()).catch(() => undefined)
+      return null
+    }
+    return result
+  }
+
+  private async matchResponseUnbound(key: Request): Promise<Response | null> {
+    try {
+      const cache = await this.ensureCache()
+      if (!cache)
+        return null
+      return (await cache.match(key)) ?? null
+    }
+    catch (error) {
+      this.logCacheError('Error reading cached response', error)
+      return null
+    }
+  }
+
   private async matchJsonUnbound<T>(key: Request): Promise<T | null> {
     try {
       const cache = await this.ensureCache()
@@ -170,18 +198,19 @@ export class CacheHelper {
    */
   async putJson(key: Request, payload: unknown, ttlSeconds: number, options?: CachePutOptions) {
     if (options?.timeoutMs == null)
-      return this.putJsonUnbound(key, payload, ttlSeconds, options?.tags)
-    const result = await withTimeout(this.putJsonUnbound(key, payload, ttlSeconds, options.tags), options.timeoutMs)
+      return this.putJsonUnbound(key, payload, ttlSeconds, options?.tags, options?.headers)
+    const result = await withTimeout(this.putJsonUnbound(key, payload, ttlSeconds, options.tags, options.headers), options.timeoutMs)
     if (result === TIMEOUT)
       return
   }
 
-  private async putJsonUnbound(key: Request, payload: unknown, ttlSeconds: number, tags?: string[]) {
+  private async putJsonUnbound(key: Request, payload: unknown, ttlSeconds: number, tags?: string[], extraHeaders?: Record<string, string>) {
     try {
       const cache = await this.ensureCache()
       if (!cache)
         return
       const headers = new Headers({
+        ...extraHeaders,
         'Content-Type': 'application/json',
         'Cache-Control': this.buildCacheControl(ttlSeconds),
       })

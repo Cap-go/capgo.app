@@ -1,6 +1,7 @@
 import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue, SendEmail } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { DeviceInfoWriteCachePayload } from './deviceComparison.ts'
+import type { LegacyDownloadFailLogRow } from './legacyDownloadFail.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
 import type { Database } from './supabase.types.ts'
 import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
@@ -72,6 +73,8 @@ export type Bindings = {
   NOTIFICATION_QUEUE?: Queue
   AUTH_EMAIL?: SendEmail
   CONSOLE_EVENTS?: DurableObjectNamespace
+  // Self-hosted GoTrue (cloudflare_workers/gotrue); bound only in the local_gotrue API env.
+  GOTRUE?: Fetcher
   QUEUE_DISPATCHER?: DurableObjectNamespace
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace
@@ -671,6 +674,7 @@ interface StoreApp {
 }
 
 export interface VersionUsageChannelFilterOptions {
+  throwOnError?: boolean
   /**
    * Also match `get` rows written without any channel. /updates only started
    * recording the serving channel on `get` rows recently, so dashboards that
@@ -738,12 +742,15 @@ export interface LegacyDownloadFailQuery {
 
 /**
  * Legacy download_fail per bucket and version (see legacyDownloadFail.ts) that
- * version_usage still counted as fails. Never throws: without it, a read keeps
- * the recorded counts.
+ * version_usage still counted as fails. Dashboards keep recorded counts on error;
+ * strict report reads require the correction to succeed.
  */
-export async function readLegacyDownloadFailsCF(c: Context, query: LegacyDownloadFailQuery): Promise<Map<string, number>> {
-  if (!c.env.APP_LOG)
+export async function readLegacyDownloadFailsCF(c: Context, query: LegacyDownloadFailQuery, options: { throwOnError?: boolean } = {}): Promise<Map<string, number>> {
+  if (!c.env.APP_LOG) {
+    if (options.throwOnError)
+      throw new Error('Legacy failure correction requires APP_LOG')
     return new Map()
+  }
   const versionFilter = query.versionName === undefined ? '' : `AND blob3 = '${escapeSqlString(query.versionName)}'`
   const sql = `SELECT
   ${query.bucket} AS bucket,
@@ -762,10 +769,18 @@ WHERE
   ${buildAppLogFailureChannelFilterCF(query.channel)}
 GROUP BY bucket, version_name, plugin_version`
   try {
-    return sumLegacyDownloadFails(await runQueryToCFA(c, sql))
+    const rows = await runQueryToCFA<LegacyDownloadFailLogRow>(c, sql)
+    if (options.throwOnError && rows.some(row => !Number.isSafeInteger(Number(row.count)) || Number(row.count) < 0 || row.count == null))
+      throw new Error('Invalid legacy failure count')
+    const counts = sumLegacyDownloadFails(rows)
+    if (options.throwOnError && [...counts.values()].some(count => !Number.isSafeInteger(count)))
+      throw new Error('Legacy failure count overflow')
+    return counts
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading legacy download_fail', error: serializeError(e), query: sql })
+    if (options.throwOnError)
+      throw e
     return new Map()
   }
 }
@@ -849,12 +864,16 @@ ORDER BY date`
   try {
     const [usage, legacyFails] = await Promise.all([
       runQueryToCFA<VersionUsage>(c, query),
-      readLegacyDownloadFailsCF(c, { appId: app_id, start: period_start, end: period_end, bucket: DAY_BUCKET_CF, channel }),
+      readLegacyDownloadFailsCF(c, { appId: app_id, start: period_start, end: period_end, bucket: DAY_BUCKET_CF, channel }, options),
     ])
+    if (options.throwOnError && usage.some(row => !Number.isSafeInteger(row.fail) || row.fail < 0))
+      throw new Error('Invalid version failure count')
     return subtractLegacyDownloadFails(usage, row => legacyDownloadFailKey(row.date, row.version_name), legacyFails)
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading version usage', error: serializeError(e), query })
+    if (options.throwOnError)
+      throw e
   }
   return []
 }

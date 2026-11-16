@@ -23,7 +23,7 @@ import {
   isTrialOrg,
 } from './supabase.ts'
 import { sendEventToTracking } from './tracking.ts'
-import { isStripeConfigured } from './utils.ts'
+import { getEnv, isStripeConfigured } from './utils.ts'
 
 type CreditMetric = Database['public']['Enums']['credit_metric_type']
 type PlanUsageMetric = Exclude<keyof PlanUsage, 'total_percent'>
@@ -446,11 +446,17 @@ async function userAbovePlan(c: Context, org: {
     c,
     eventName,
     'usage_limit',
-    { best_plan: bestPlanKey, plan_name: currentPlanName },
+    {
+      best_plan: bestPlanKey,
+      best_name: bestPlan,
+      plan_name: currentPlanName,
+      plans_url: getConsolePlansUrl(c, orgId),
+    },
     orgId,
     orgId,
     '0 0 * * 1',
     drizzleClient,
+    'admins_and_billing',
   )
   if (sent) {
     cloudlog({ requestId: c.get('requestId'), message: eventName, orgId })
@@ -465,6 +471,11 @@ async function userAbovePlan(c: Context, org: {
   return { exceededFlags, needsUpgrade: true }
 }
 
+function getConsolePlansUrl(c: Context, orgId: string) {
+  const base = (getEnv(c, 'WEBAPP_URL') || '').replace(/\/+$/, '')
+  return base ? `${base}/settings/organization/plans?oid=${encodeURIComponent(orgId)}` : null
+}
+
 async function userIsAtPlanUsage(c: Context, orgId: string, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>) {
   const alert = getPlanUsageAlert(percentUsage)
   if (!alert)
@@ -473,9 +484,11 @@ async function userIsAtPlanUsage(c: Context, orgId: string, percentUsage: PlanUs
   const sent = await sendNotifToOrgMembers(c, alert.eventName, 'usage_limit', {
     metric: alert.metric,
     metric_percent: alert.metricPercent,
-    percent: alert.percentUsage,
+    percent: String(alert.threshold),
+    usage: alert.percentUsage,
     threshold: alert.threshold,
-  }, orgId, orgId, '0 0 1 * *', drizzleClient)
+    plans_url: getConsolePlansUrl(c, orgId),
+  }, orgId, orgId, '0 0 1 * *', drizzleClient, 'admins_and_billing')
   if (sent) {
     await sendEventToTracking(c, {
       channel: 'usage',

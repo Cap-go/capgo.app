@@ -5,6 +5,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconAlert from '~icons/lucide/alert-circle'
+import IconArrowLeft from '~icons/lucide/arrow-left'
 import IconCheckCircle from '~icons/lucide/check-circle-2'
 import IconCircle from '~icons/lucide/circle'
 import IconDownload from '~icons/lucide/download'
@@ -26,8 +27,10 @@ const props = defineProps<{
   demo?: string
   // Inside a host card that already has its own title (Getting started checklist).
   embedded?: boolean
+  // Show a back control that leaves the live page while the build runs.
+  closable?: boolean
 }>()
-const emit = defineEmits<{ retry: [], done: [] }>()
+const emit = defineEmits<{ retry: [], done: [], close: [] }>()
 
 const POLL_MS = 3000
 const HEARTBEAT_MS = 2000
@@ -39,6 +42,11 @@ const row = ref<BuildRow | null>(null)
 const live = ref<BuildLiveState>(createBuildLiveState())
 const now = ref(Date.now())
 const endedAt = ref<number | null>(null)
+// The last status read failed: the progress shown may be stale.
+const statusStale = ref(false)
+// Artifact recovered from the saved build outputs when the stream did not deliver it.
+const savedDownloadUrl = ref('')
+const outputsChecked = ref(false)
 let stopped = false
 let socket: WebSocket | null = null
 let reconnects = 0
@@ -63,7 +71,8 @@ const currentRow = computed(() => timeline.value.rows[timeline.value.current])
 const currentLabel = computed(() => currentRow.value ? rowLabel(currentRow.value.key) : '')
 const queued = computed(() => !outcome.value && (currentRow.value?.key === 'upload' || currentRow.value?.key === 'machine'))
 const errorText = computed(() => row.value?.last_error || live.value.statusMessage || t('build-live-failed-no-error'))
-const qrCode = computed(() => live.value.downloadUrl ? buildPreviewQrCodeDataUrl(live.value.downloadUrl) : '')
+const downloadUrl = computed(() => live.value.downloadUrl || savedDownloadUrl.value)
+const qrCode = computed(() => downloadUrl.value ? buildPreviewQrCodeDataUrl(downloadUrl.value) : '')
 const terminalCommand = computed(() => `npx @capgo/cli@latest build request ${props.appId} --platform ${props.platform}`)
 const jobShort = computed(() => row.value?.builder_job_id ? `${row.value.builder_job_id.slice(0, 12)}…` : '')
 
@@ -111,12 +120,27 @@ async function fetchRow() {
     .select('status, created_at, started_at, completed_at, last_error, builder_job_id')
     .eq('id', props.buildId)
     .maybeSingle()
+  if (stopped)
+    return
+  statusStale.value = !!error
   if (error) {
     console.warn('Polling build_requests failed', error)
     return
   }
-  if (data && !stopped)
+  if (data)
     row.value = data
+  // Keep polling past the stream's outcome until the row itself is final (last_error, completed_at).
+  if (data?.completed_at)
+    clearInterval(pollTimer)
+}
+
+// The stream can end before the page connects: read the saved artifact so the download is not lost.
+async function loadSavedOutput(jobId: string) {
+  const { data } = await invokeCapgoApi<{ outputs?: Record<string, { url: string }> }>(`private/simulator/outputs?app_id=${encodeURIComponent(props.appId)}&job_ids=${encodeURIComponent(jobId)}`, { method: 'GET' })
+  if (stopped)
+    return
+  savedDownloadUrl.value = data?.outputs?.[jobId]?.url ?? ''
+  outputsChecked.value = true
 }
 
 function closeSocket() {
@@ -161,7 +185,6 @@ async function connectStream(jobId: string) {
     synced = true
   }
   ws.addEventListener('open', () => {
-    reconnects = 0
     heartbeat()
     heartbeatTimer = setInterval(heartbeat, HEARTBEAT_MS)
   })
@@ -175,6 +198,8 @@ async function connectStream(jobId: string) {
     catch {
       parsed = null
     }
+    // Only a connection that delivers data resets the backoff, so open-then-close loops stay bounded.
+    reconnects = 0
     live.value = applyBuildStreamMessage(live.value, parsed)
   })
   ws.addEventListener('close', () => {
@@ -218,14 +243,20 @@ watch(() => row.value?.builder_job_id, (jobId) => {
 watch(outcome, (value) => {
   if (!value)
     return
-  const completedAt = row.value?.completed_at ? Date.parse(row.value.completed_at) : Number.NaN
-  endedAt.value = Number.isNaN(completedAt) ? Date.now() : completedAt
+  endedAt.value ??= Date.now()
   clearInterval(clockTimer)
-  clearInterval(pollTimer)
   closeSocket()
-  // The stream can finish before the row: one last read picks up last_error/completed_at.
-  if (!props.demo && !stopped)
-    void fetchRow()
+  const jobId = row.value?.builder_job_id
+  if (value === 'success' && !live.value.downloadUrl && jobId && !props.demo)
+    void loadSavedOutput(jobId)
+  else
+    outputsChecked.value = true
+})
+
+watch(() => row.value?.completed_at, (completedAt) => {
+  const ms = completedAt ? Date.parse(completedAt) : Number.NaN
+  if (!Number.isNaN(ms))
+    endedAt.value = ms
 })
 
 onMounted(async () => {
@@ -243,7 +274,7 @@ onMounted(async () => {
     return
   }
   await fetchRow()
-  if (!stopped && !outcome.value)
+  if (!stopped && !row.value?.completed_at)
     pollTimer = setInterval(() => void fetchRow(), POLL_MS)
 })
 
@@ -252,13 +283,24 @@ onUnmounted(stop)
 
 <template>
   <div class="@container flex flex-col gap-6" data-test="build-live-progress">
-    <header v-if="!embedded" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-800/60 sm:p-6">
-      <h2 class="text-2xl font-semibold text-slate-950 dark:text-white sm:text-3xl">
-        {{ title }}
-      </h2>
-      <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300 sm:text-base">
-        {{ subtitle }}
-      </p>
+    <header v-if="!embedded" class="flex gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-800/60 sm:p-6">
+      <button
+        v-if="closable"
+        type="button"
+        class="d-btn d-btn-ghost d-btn-square shrink-0 text-slate-600 dark:text-slate-200"
+        :aria-label="t('button-back')"
+        @click="emit('close')"
+      >
+        <IconArrowLeft class="h-5 w-5" />
+      </button>
+      <div class="min-w-0">
+        <h2 class="text-2xl font-semibold text-slate-950 dark:text-white sm:text-3xl">
+          {{ title }}
+        </h2>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300 sm:text-base">
+          {{ subtitle }}
+        </p>
+      </div>
     </header>
 
     <!-- Success -->
@@ -270,14 +312,14 @@ onUnmounted(stop)
             {{ t('build-live-status-succeeded', { duration: elapsed }) }}
           </span>
           <p class="mt-4 max-w-xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-            {{ live.downloadUrl ? t('build-live-success-download') : platform === 'ios' ? t('build-live-success-store-ios') : t('build-live-success-store-android') }}
+            {{ downloadUrl ? t('build-live-success-download') : !outputsChecked ? '' : platform === 'ios' ? t('build-live-success-store-ios') : t('build-live-success-store-android') }}
           </p>
           <div class="mt-5 flex flex-wrap gap-3">
-            <a v-if="live.downloadUrl" class="d-btn d-btn-primary gap-2" :href="live.downloadUrl" target="_blank" rel="noopener noreferrer">
+            <a v-if="downloadUrl" class="d-btn d-btn-primary gap-2" :href="downloadUrl" target="_blank" rel="noopener noreferrer">
               <IconDownload class="h-4 w-4" />
               {{ t('build-live-download') }}
             </a>
-            <button v-if="!embedded" type="button" class="d-btn" :class="live.downloadUrl ? 'd-btn-outline' : 'd-btn-primary'" @click="emit('done')">
+            <button v-if="!embedded" type="button" class="d-btn" :class="downloadUrl ? 'd-btn-outline' : 'd-btn-primary'" @click="emit('done')">
               {{ t('build-live-view-builds') }}
             </button>
           </div>
@@ -303,6 +345,10 @@ onUnmounted(stop)
       <h3 class="mt-3 text-lg font-semibold text-slate-950 dark:text-white">
         {{ appId }} · {{ platformLabel }}
       </h3>
+      <p v-if="statusStale && !outcome" class="mt-2 flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400" role="status" data-test="build-live-stale">
+        <IconAlert class="h-4 w-4 shrink-0" />
+        {{ t('build-live-status-stale') }}
+      </p>
       <dl class="mt-4 flex gap-8">
         <div>
           <dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">

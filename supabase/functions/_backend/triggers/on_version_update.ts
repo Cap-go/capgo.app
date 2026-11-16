@@ -11,7 +11,24 @@ import { deleteVersionManifestBatch } from '../utils/manifest_cleanup.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { queryJsonOne } from '../utils/pg_rls.ts'
 import { getPath, s3 } from '../utils/s3.ts'
+import { purgeUpdatesCache } from '../utils/purgeUpdatesCache.ts'
 import { createStatsMeta } from '../utils/stats.ts'
+import { backgroundTask } from '../utils/utils.ts'
+
+function schedulePurgeUpdatesCache(c: Context, appId: string | null | undefined) {
+  if (!appId)
+    return
+  const task = purgeUpdatesCache(c, appId)
+  if (c.req)
+    void backgroundTask(c, task)
+  else
+    void task
+}
+
+async function respondWithUpdatesPurge(c: Context, appId: string | null | undefined) {
+  schedulePurgeUpdatesCache(c, appId)
+  return c.json(BRES)
+}
 
 /**
  * Resolves `owner_org` for an app version row.
@@ -263,14 +280,14 @@ async function updateItWithClient(c: Context, pg: PgClient, record: Database['pu
   if (metadataBranch === 'r2_bundle_size' && v2Path) {
     const shouldContinue = await v2PathSize(c, pg, record, v2Path)
     if (!shouldContinue)
-      return c.json(BRES)
+      return respondWithUpdatesPurge(c, record.app_id)
   }
   else {
     cloudlog({ requestId: c.get('requestId'), message: 'on_version_update zero metadata branch selected', ...versionUpdateLogFields(record), metadataBranch, resolved_r2_path: v2Path })
     const ownerOrg = await resolveOwnerOrg(c, pg, record)
     if (!ownerOrg) {
       cloudlog({ requestId: c.get('requestId'), message: 'missing owner_org for app_versions_meta upsert', id: record.id, app_id: record.app_id })
-      return c.json(BRES)
+      return respondWithUpdatesPurge(c, record.app_id)
     }
     try {
       await upsertVersionMeta(pg, record, ownerOrg, 0)
@@ -281,7 +298,7 @@ async function updateItWithClient(c: Context, pg: PgClient, record: Database['pu
     }
   }
 
-  return c.json(BRES)
+  return respondWithUpdatesPurge(c, record.app_id)
 }
 
 /**
@@ -392,7 +409,7 @@ export async function deleteIt(c: Context, record: Database['public']['Tables'][
     cloudlog({ requestId: c.get('requestId'), message: 'No r2 path for deleted version', id: record.id })
   }
 
-  return c.json(BRES)
+  return respondWithUpdatesPurge(c, record.app_id)
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -405,7 +422,7 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 
   if (!record.app_id) {
     cloudlog({ requestId: c.get('requestId'), message: 'no app_id', record })
-    return c.json(BRES)
+    return respondWithUpdatesPurge(c, undefined)
   }
   // Queue payloads omit app_versions.manifest; reload before deleted-version decisions.
   let workRecord = record
@@ -423,6 +440,7 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 
   if (!workRecord.r2_path && !workRecord.manifest) {
     cloudlog({ requestId: c.get('requestId'), message: 'no r2_path and no manifest, skipping update', ...versionUpdateLogFields(workRecord, oldRecord) })
+    schedulePurgeUpdatesCache(c, workRecord.app_id)
     return c.json(BRES)
   }
 

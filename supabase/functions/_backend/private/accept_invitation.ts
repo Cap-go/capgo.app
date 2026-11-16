@@ -10,8 +10,10 @@ import { captureOrganizationInvitationPosthogEvent, sanitizeOrganizationInvitati
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { queryJsonOne } from '../utils/pg_rls.ts'
+import { getRequestCountry } from '../utils/request_country.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { emptySupabase, supabaseAdmin } from '../utils/supabase.ts'
+import { gotrueAdmin } from '../utils/gotrue_admin.ts'
+import { emptySupabase } from '../utils/supabase.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -91,12 +93,12 @@ async function rollbackCreatedUser(c: Context, pg: PgClient, userId: string) {
   }
   catch {}
   try {
-    await supabaseAdmin(c).auth.admin.deleteUser(userId)
+    await gotrueAdmin(c).deleteUser(userId)
   }
   catch {}
 }
 
-async function insertUserRow(pg: PgClient, payload: { id: string, email: string, first_name: string, last_name: string, enable_notifications: boolean, opt_for_newsletters: boolean, created_via_invite?: boolean }) {
+async function insertUserRow(pg: PgClient, payload: { id: string, email: string, first_name: string, last_name: string, country: string | null, enable_notifications: boolean, opt_for_newsletters: boolean, created_via_invite?: boolean }) {
   const columns = Object.keys(payload) as (keyof typeof payload)[]
   return queryJsonOne<UserRow>(
     pg,
@@ -128,6 +130,7 @@ async function ensurePublicUserRowExists(
     email: invitation.email,
     first_name: invitation.first_name,
     last_name: invitation.last_name,
+    country: getRequestCountry(c),
     enable_notifications: true,
     opt_for_newsletters: optForNewsletters,
     created_via_invite: true,
@@ -368,7 +371,7 @@ app.post('/', async (c) => {
     cloudlog({ requestId: c.get('requestId'), context: 'accept_invitation validated body', body: bodyWithoutSecrets })
 
     // here the real magic happens
-    const { data: user, error: userError } = await supabaseAdmin(c).auth.admin.createUser({
+    const { data: user, error: userError } = await gotrueAdmin(c).createUser({
       email: invitation.email,
       password: body.password,
       email_confirm: true,
@@ -429,6 +432,7 @@ app.post('/', async (c) => {
         email: invitation.email,
         first_name: invitation.first_name,
         last_name: invitation.last_name,
+        country: getRequestCountry(c),
         enable_notifications: true,
         opt_for_newsletters: body.opt_for_newsletters,
         created_via_invite: true,

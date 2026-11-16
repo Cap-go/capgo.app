@@ -16,6 +16,7 @@ function body(route: Route) {
 
 async function openCancelDialog(page: Page, offer: (route: Route) => Promise<void>) {
   const calls: { path: string, body: Record<string, unknown> }[] = []
+  await page.route('**/private/config', route => route.fulfill(json({ stripeEnabled: true })))
   await page.route('**/private/sso/check-enforcement', route => route.fulfill(json({ allowed: true })))
   await page.route('**/private/stripe_past_due', route => route.fulfill(json({ past_due: false, invoice: null })))
   await page.route('**/private/stripe_billing/overview', route => route.fulfill(json({

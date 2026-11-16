@@ -15,7 +15,7 @@ async function assertCompatibilityTableColumns(appId: string, packageName: strin
     nodeModules: join(process.cwd(), 'node_modules'),
   })
 
-  expect(result.success).toBe(true)
+  expect(result.success, result.error).toBe(true)
   const packageEntry = result.data?.find((entry: any) => entry.name === packageName)
   expect(packageEntry).toBeDefined()
   expect(packageEntry!.localVersion).toContain(localVersion)
@@ -93,7 +93,7 @@ describe('tests CLI metadata', () => {
       ignoreCompatibilityCheck: false,
       packageJsonPaths: packageJsonPath,
     })
-    expect(result.success).toBe(true)
+    expect(result.success, result.error).toBe(true)
 
     // Now compatibility check should show remote versions from the uploaded bundle
     // The SDK reports the currently installed dependency version from node_modules.

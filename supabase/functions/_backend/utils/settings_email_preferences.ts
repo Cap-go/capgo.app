@@ -22,6 +22,7 @@ export const USER_SETTINGS_EMAIL_PREFERENCE_KEYS = [
   ...ORG_SETTINGS_EMAIL_PREFERENCE_KEYS,
   'bundle_incompatible',
   'cli_realtime_feed',
+  'security_updates',
 ] as const satisfies readonly EmailPreferenceKey[]
 
 /** Partial patch of known email preference keys; unknown keys fail validation. */
