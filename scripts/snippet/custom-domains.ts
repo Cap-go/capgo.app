@@ -1,4 +1,6 @@
 export const MAX_CUSTOM_DOMAINS = 1000
+// Same production project as deploy:supabase:prod; snippets only target production.
+const PRODUCTION_PROJECT_REF = 'xvwzpoazmxkqosrdewyv'
 export const CUSTOM_DOMAINS_SQL = `SELECT coalesce(json_agg(domains), '[]'::json) AS domains
 FROM (
   SELECT hostname, (provider_id IS NOT NULL AND provider_route_id IS NOT NULL) AS provisioned
@@ -17,16 +19,15 @@ export function validateCustomDomains(domains: readonly string[]): string[] {
   return [...new Set(domains)].sort()
 }
 
-export async function loadProductionCustomDomains({ token, projectRef, fetcher = fetch }: {
+export async function loadProductionCustomDomains({ token, fetcher = fetch }: {
   token: string
-  projectRef: string
   fetcher?: typeof fetch
 }): Promise<string[]> {
-  if (!token || !/^[a-z]{20}$/.test(projectRef))
-    throw new Error('Set SUPABASE_ACCESS_TOKEN and SUPABASE_PROJECT_ID_PROD to read production custom domains')
+  if (!token)
+    throw new Error('Set SUPABASE_ACCESS_TOKEN to read production custom domains')
   let response: Response
   try {
-    response = await fetcher(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
+    response = await fetcher(`https://api.supabase.com/v1/projects/${PRODUCTION_PROJECT_REF}/database/query`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: CUSTOM_DOMAINS_SQL, read_only: true }),

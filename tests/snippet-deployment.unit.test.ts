@@ -151,8 +151,7 @@ describe('snippet release deployment', () => {
     expect(step.env.CLOUDFLARE_API_TOKEN).toBe('${{ secrets.CLOUDFLARE_API_TOKEN }}')
     // eslint-disable-next-line no-template-curly-in-string
     expect(step.env.SUPABASE_ACCESS_TOKEN).toBe('${{ secrets.SUPABASE_TOKEN }}')
-    // eslint-disable-next-line no-template-curly-in-string
-    expect(step.env.SUPABASE_PROJECT_ID_PROD).toBe('${{ secrets.SUPABASE_PROJECT_ID_PROD }}')
+    expect(step.env.SUPABASE_PROJECT_ID_PROD).toBeUndefined()
     expect(matchesComponent('capgo', ['scripts/snippet/deploy-snippets.ts'])).toBe(true)
   })
 })

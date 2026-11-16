@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CUSTOM_DOMAINS_SQL, includeCustomDomains, loadProductionCustomDomains, MAX_CUSTOM_DOMAINS } from '../scripts/snippet/custom-domains'
 
-const projectRef = 'abcdefghijklmnopqrst'
 const token = 'test-token'
 
 describe('production domain inventory', () => {
@@ -14,13 +13,13 @@ describe('production domain inventory', () => {
       expect(init?.redirect).toBe('error')
       return Response.json([{ domains: [{ hostname: 'updates.example.com', provisioned: true }] }])
     })
-    expect(await loadProductionCustomDomains({ token, projectRef, fetcher })).toEqual(['updates.example.com'])
-    expect(fetcher.mock.calls[0][0]).toBe(`https://api.supabase.com/v1/projects/${projectRef}/database/query`)
+    expect(await loadProductionCustomDomains({ token, fetcher })).toEqual(['updates.example.com'])
+    expect(fetcher.mock.calls[0][0]).toBe('https://api.supabase.com/v1/projects/xvwzpoazmxkqosrdewyv/database/query')
   })
 
   it.concurrent('accepts an empty inventory without removing existing routes', async () => {
     const fetcher = async () => Response.json([{ domains: [] }])
-    expect(await loadProductionCustomDomains({ token, projectRef, fetcher })).toEqual([])
+    expect(await loadProductionCustomDomains({ token, fetcher })).toEqual([])
   })
 
   it.concurrent.each([
@@ -30,19 +29,18 @@ describe('production domain inventory', () => {
     { label: 'incomplete registration', data: [{ domains: [{ hostname: 'updates.example.com', provisioned: false }] }] },
     { label: 'too many rows', data: [{ domains: Array.from({ length: MAX_CUSTOM_DOMAINS + 1 }, (_, i) => ({ hostname: `host${i}.example.com`, provisioned: true })) }] },
   ])('rejects $label', async ({ data }) => {
-    await expect(loadProductionCustomDomains({ token, projectRef, fetcher: async () => Response.json(data) })).rejects.toThrow()
+    await expect(loadProductionCustomDomains({ token, fetcher: async () => Response.json(data) })).rejects.toThrow()
   })
 
   it.concurrent('sanitizes provider and parsing errors', async () => {
-    await expect(loadProductionCustomDomains({ token, projectRef, fetcher: async () => new Response('private data', { status: 403 }) })).rejects.toThrow('query failed (HTTP 403)')
-    await expect(loadProductionCustomDomains({ token, projectRef, fetcher: async () => new Response('private data') })).rejects.toThrow('Invalid production custom-domain response')
-    await expect(loadProductionCustomDomains({ token, projectRef, fetcher: async () => { throw new Error('private data') } })).rejects.toThrow('Unable to read production custom domains')
+    await expect(loadProductionCustomDomains({ token, fetcher: async () => new Response('private data', { status: 403 }) })).rejects.toThrow('query failed (HTTP 403)')
+    await expect(loadProductionCustomDomains({ token, fetcher: async () => new Response('private data') })).rejects.toThrow('Invalid production custom-domain response')
+    await expect(loadProductionCustomDomains({ token, fetcher: async () => { throw new Error('private data') } })).rejects.toThrow('Unable to read production custom domains')
   })
 
   it.concurrent('requires production credentials before making requests', async () => {
     const fetcher = vi.fn()
-    await expect(loadProductionCustomDomains({ token: '', projectRef, fetcher })).rejects.toThrow('SUPABASE_ACCESS_TOKEN')
-    await expect(loadProductionCustomDomains({ token, projectRef: '../alpha', fetcher })).rejects.toThrow('SUPABASE_PROJECT_ID_PROD')
+    await expect(loadProductionCustomDomains({ token: '', fetcher })).rejects.toThrow('SUPABASE_ACCESS_TOKEN')
     expect(fetcher).not.toHaveBeenCalled()
   })
 })

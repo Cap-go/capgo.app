@@ -31,8 +31,9 @@ workflow to retry, following the repository's deployment retry contract.
 
 The job uses the existing `CLOUDFLARE_API_TOKEN` repository secret. That Cloudflare
 token needs **Zone → Snippets → Edit** for `capgo.app`. It also uses the existing
-`SUPABASE_TOKEN` and `SUPABASE_PROJECT_ID_PROD` secrets to read production custom
-domains. No new secret or third-party deployment action is required. Builds use
+`SUPABASE_TOKEN` secret to read production custom domains. The query targets the
+same fixed production project as `deploy:supabase:prod`; no project-ID environment
+variable is required. No new secret or third-party deployment action is required. Builds use
 Bun without installing project dependencies.
 
 ## Routing and inventory
@@ -82,7 +83,7 @@ a separate change; this PR does not route authentication traffic to GoTrue.
 ```sh
 bun run build:snippets
 bunx vitest run tests/snippet-deployment.unit.test.ts tests/snippet-custom-domains.unit.test.ts tests/cloudflare-snippet.unit.test.ts
-# Uses CLOUDFLARE_API_TOKEN, SUPABASE_ACCESS_TOKEN, SUPABASE_PROJECT_ID_PROD:
+# Uses CLOUDFLARE_API_TOKEN and SUPABASE_ACCESS_TOKEN:
 # Reads production code, rules, and database; makes no changes.
 bun run check:snippets:live
 ```
