@@ -16,6 +16,7 @@ function body(route: Route) {
 
 async function openCancelDialog(page: Page, offer: (route: Route) => Promise<void>) {
   const calls: { path: string, body: Record<string, unknown> }[] = []
+  let offerAccepted = false
   await page.route('**/private/config', route => route.fulfill(json({ stripeEnabled: true })))
   await page.route('**/private/sso/check-enforcement', route => route.fulfill(json({ allowed: true })))
   await page.route('**/private/stripe_past_due', route => route.fulfill(json({ past_due: false, invoice: null })))
@@ -28,21 +29,33 @@ async function openCancelDialog(page: Page, offer: (route: Route) => Promise<voi
     openInvoice: null,
     trialPlan: null,
   })))
+  await page.route('**/private/stripe_billing/profile', route => route.fulfill(json({
+    name: '', email: '', phone: '', taxIds: [],
+    address: { line1: '', line2: '', city: '', state: '', postal_code: '', country: '' },
+  })))
   await page.route('**/private/stripe_billing/cancel-offer', async (route) => {
     calls.push({ path: 'cancel-offer', body: body(route) })
     await offer(route)
   })
   await page.route('**/private/stripe_billing/cancel-offer/accept', async (route) => {
     calls.push({ path: 'accept', body: body(route) })
+    offerAccepted = true
     await route.fulfill(json({ discountEnd: new Date(Date.now() + 90 * 86400000).toISOString(), subscription: activeSubscription }))
   })
+  await page.route('**/private/stripe_billing/discounts', route => route.fulfill(json({
+    discounts: offerAccepted
+      ? [{ name: 'Example retention offer', code: null, percentOff: 50, amountOff: null, currency: null, endsAt: null }]
+      : [],
+  })))
   await page.route('**/private/stripe_billing/cancel', async (route) => {
     calls.push({ path: 'cancel', body: body(route) })
     await route.fulfill(json({ subscription: { ...activeSubscription, cancelAtPeriodEnd: true } }))
   })
 
   await page.login('test@capgo.app', 'testtest')
+  const discountsLoaded = page.waitForResponse('**/private/stripe_billing/discounts')
   await page.goto('/settings/organization/billing')
+  await discountsLoaded
   await dismissSupportPrompt(page)
   await page.locator('[data-test="billing-cancel"]').click({ timeout: 30000 })
   await page.locator('[data-test="cancel-reason-too_expensive"]').click()
@@ -60,10 +73,14 @@ const eligible = (route: Route) => route.fulfill(json({ offer: { id: OFFER_ID, p
 test.describe('Cancel plan save offer', () => {
   test('keeping the plan with the discount does not cancel it', async ({ page }) => {
     const calls = await openCancelDialog(page, eligible)
+    const discounts = page.locator('[data-test="billing-subscription"] [data-test="billing-discounts"]')
+    await expect(discounts).toHaveCount(0)
     await continuePastLoss(page)
     await expect(page.locator('[data-test="cancel-save-offer"]')).toBeVisible()
     await page.locator('[data-test="cancel-offer-accept"]').click()
     await expect(page.locator('[data-test="cancel-save-offer"]')).toBeHidden()
+    await expect(discounts).toContainText('50% off')
+    await expect(discounts).toContainText('Example retention offer')
     expect(calls.map(call => call.path)).toEqual(['cancel-offer', 'accept'])
     expect(calls[0].body).toMatchObject({ reason: 'too_expensive' })
     expect(calls[1].body).toMatchObject({ offerId: OFFER_ID })
