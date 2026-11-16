@@ -227,12 +227,21 @@ async function bestEffortStopSimulatorDevice(c: Context, row: Pick<SimulatorRow,
   if (!row.emulator_id)
     return null
   try {
-    await stopRemoteDevice(c, row.emulator_id, row.id, row.id)
+    const remoteStatus = await stopRemoteDevice(c, row.emulator_id, row.id, row.id)
+    if (!simulatorHostStopIsFinal(remoteStatus))
+      return null
+    try {
+      return rememberDeviceStop(c, row.id, new Date().toISOString())
+    }
+    catch (rememberError) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Idle expiry could not record device stop time', sessionId: row.id, error: rememberError })
+      return null
+    }
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Idle expiry could not stop the simulator device', sessionId: row.id, error })
+    return null
   }
-  return rememberDeviceStop(c, row.id, new Date().toISOString())
 }
 
 async function finalizeExpiredSimulatorSession(
@@ -241,6 +250,8 @@ async function finalizeExpiredSimulatorSession(
 ) {
   const now = Date.now()
   const deviceStoppedAt = await bestEffortStopSimulatorDevice(c, input.row)
+  if (input.row.emulator_id && !deviceStoppedAt)
+    return
   const usageEnd = simulatorUsageEnd(deviceStoppedAt, now)
   const maxMinutes = Number(input.row.max_duration_minutes) || SIMULATOR_MAX_DURATION_MINUTES
   const billEnd = simulatorBillingEndInstant(input.row.started_at, input.row.last_activity_at, usageEnd, maxMinutes)
@@ -263,7 +274,12 @@ export async function stopDevicesForDueSimulatorExpiry(
   for (const row of sessions) {
     if (!row.emulator_id || row.device_stopped_at)
       continue
-    await bestEffortStopSimulatorDevice(c, row)
+    try {
+      await bestEffortStopSimulatorDevice(c, row)
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to stop simulator device after expiry', sessionId: row.id, error })
+    }
   }
 }
 
@@ -302,6 +318,10 @@ async function touchSimulatorActivity(
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to record simulator activity', sessionId, error })
+    if (context?.row.status === 'in-progress' && simulatorSessionPastExpiry(context.row)) {
+      await finalizeExpiredSimulatorSession(c, context)
+      return 'expired'
+    }
     return 'skipped'
   }
 }

@@ -206,6 +206,7 @@ const SIMULATOR_SESSIONS_DUE_FOR_EXPIRY_SQL = `
       COALESCE(started_at, created_at) <= now() - make_interval(mins => max_duration_minutes)
       OR COALESCE(last_activity_at, started_at, created_at) <= now() - make_interval(mins => ${SIMULATOR_IDLE_TIMEOUT_MINUTES})
     )
+  FOR UPDATE
 `
 
 export async function expireSimulatorSessions(c: Context, orgId: string): Promise<void> {
