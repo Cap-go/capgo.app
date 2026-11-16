@@ -15,6 +15,7 @@ describe('Build Endpoints Job/App Binding', () => {
 
   let readKey = ''
   let writeKey = ''
+  let readKeyB = ''
   let apikeyIds: number[] = []
 
   let buildRequestId: string | null = null
@@ -69,13 +70,23 @@ describe('Build Endpoints Job/App Binding', () => {
       appId: appA,
       appRoleName: 'app_developer',
     })
-    if (!readRow?.key || !writeRow?.key) {
+    const readRowB = await createDirectApiKeyWithBindings({
+      userId,
+      key: randomUUID(),
+      name: `test-build-job-scope-read-b-${id}`,
+      orgId,
+      roleName: 'org_member',
+      appId: appB,
+      appRoleName: 'app_reader',
+    })
+    if (!readRow?.key || !writeRow?.key || !readRowB?.key) {
       throw new Error('Seeded API keys missing generated key values')
     }
 
     readKey = readRow.key
     writeKey = writeRow.key
-    apikeyIds = [readRow.id, writeRow.id]
+    readKeyB = readRowB.key
+    apikeyIds = [readRow.id, writeRow.id, readRowB.id]
   })
 
   afterAll(async () => {
@@ -159,5 +170,39 @@ describe('Build Endpoints Job/App Binding', () => {
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
     expect(data).toHaveProperty('error', 'unauthorized')
+  })
+
+  it.concurrent('GET /build/logs_token/:jobId rejects unauthenticated callers', async () => {
+    const response = await fetch(`${BASE_URL}/build/logs_token/${jobIdB}`)
+
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    const data = await response.json() as { logs_token?: string }
+    expect(data.logs_token).toBeUndefined()
+  })
+
+  it.concurrent('GET /build/logs_token/:jobId denies a key bound to another app', async () => {
+    const response = await fetch(`${BASE_URL}/build/logs_token/${jobIdB}`, {
+      headers: { Authorization: readKey },
+    })
+
+    expect(response.status).toBe(400)
+    const data = await response.json() as { error: string, logs_token?: string }
+    expect(data).toHaveProperty('error', 'unauthorized')
+    expect(data.logs_token).toBeUndefined()
+  })
+
+  it.concurrent('GET /build/logs_token/:jobId lets a reader of the build app through', async () => {
+    const response = await fetch(`${BASE_URL}/build/logs_token/${jobIdB}`, {
+      headers: { Authorization: readKeyB },
+    })
+
+    const data = await response.json() as { error?: string, logs_token?: string }
+    // Local stacks have no JWT_SECRET to sign with: passing RLS and app.read_logs is what matters here.
+    if (response.status !== 200) {
+      expect(data).toHaveProperty('error', 'config_error')
+      return
+    }
+    const payload = JSON.parse(Buffer.from(data.logs_token!.split('.')[1], 'base64url').toString()) as { role?: string }
+    expect(payload.role).toBe('read')
   })
 })
