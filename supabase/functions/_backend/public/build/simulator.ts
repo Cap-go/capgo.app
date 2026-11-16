@@ -568,7 +568,9 @@ async function confirmDeviceStopped(c: Context, row: SimulatorRow, sessionId: st
     return { remoteStatus: 200, stoppedAt: row.device_stopped_at }
   const remote = row.emulator_id ? await stopRemoteDevice(c, row.emulator_id, sessionId, row.id) : null
   // A device the host already stopped for lack of input is billed up to that stop, not up to now.
-  const stoppedAt = await rememberDeviceStop(c, row.id, remote?.stoppedAt ?? new Date().toISOString())
+  // A stop answered without a session (404, 409) still leaves the host's record to ask.
+  const hostStop = remote?.stoppedAt ?? (remote ? deviceStopTime(await runningDevice(c, row)) : undefined)
+  const stoppedAt = await rememberDeviceStop(c, row.id, hostStop ?? new Date().toISOString())
   return { remoteStatus: remote?.status ?? null, stoppedAt }
 }
 
