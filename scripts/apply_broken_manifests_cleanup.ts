@@ -8,8 +8,7 @@
  * Optional:
  *   --input=./tmp/unused_versions/broken_manifest_cleanup_candidates.json
  */
-import { createClient } from '@supabase/supabase-js'
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import { connectScriptDb, getDatabaseUrl } from './script_db.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const DEFAULT_INPUT = './tmp/unused_versions/broken_manifest_cleanup_candidates.json'
@@ -74,11 +73,7 @@ async function main() {
   }
 
   const env = await loadEnv(ENV_FILE)
-  const supabase = createClient<Database>(
-    env.SUPABASE_URL,
-    env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-  )
+  const db = await connectScriptDb(getDatabaseUrl(env))
 
   const chunks = chunkArray(items, CHUNK_SIZE)
   let updated = 0
@@ -89,49 +84,32 @@ async function main() {
       if (row.app_id.startsWith('com.capdemo')) {
         continue
       }
-      const { error: deleteError } = await supabase
-        .from('manifest')
-        .delete()
-        .eq('app_version_id', row.id)
+      await db.query('DELETE FROM public.manifest WHERE app_version_id = $1', [row.id]).catch((error) => {
+        console.error('Error deleting manifest rows:', { version_id: row.id, error })
+        process.exit(1)
+      })
 
-      if (deleteError) {
-        console.error('Error deleting manifest rows:', { version_id: row.id, error: deleteError })
+      await db.query('UPDATE public.app_versions SET manifest_count = 0 WHERE id = $1', [row.id]).catch((error) => {
+        console.error('Error updating manifest_count:', { version_id: row.id, error })
+        process.exit(1)
+      })
+
+      const { rows: appRows } = await db.query('SELECT manifest_bundle_count FROM public.apps WHERE app_id = $1', [row.app_id]).catch((error) => {
+        console.error('Error reading app manifest_bundle_count:', { app_id: row.app_id, error })
+        process.exit(1)
+      })
+      if (appRows.length !== 1) {
+        console.error('Error reading app manifest_bundle_count:', { app_id: row.app_id, error: `expected 1 app row, got ${appRows.length}` })
         process.exit(1)
       }
 
-      const { error: updateError } = await supabase
-        .from('app_versions')
-        .update({ manifest_count: 0 })
-        .eq('id', row.id)
-
-      if (updateError) {
-        console.error('Error updating manifest_count:', { version_id: row.id, error: updateError })
-        process.exit(1)
-      }
-
-      const { data: appData, error: appReadError } = await supabase
-        .from('apps')
-        .select('manifest_bundle_count')
-        .eq('app_id', row.app_id)
-        .single()
-
-      if (appReadError) {
-        console.error('Error reading app manifest_bundle_count:', { app_id: row.app_id, error: appReadError })
-        process.exit(1)
-      }
-
-      const currentCount = appData?.manifest_bundle_count ?? 0
+      const currentCount = appRows[0].manifest_bundle_count ?? 0
       const nextCount = Math.max(currentCount - 1, 0)
 
-      const { error: appError } = await supabase
-        .from('apps')
-        .update({ manifest_bundle_count: nextCount })
-        .eq('app_id', row.app_id)
-
-      if (appError) {
-        console.error('Error updating app manifest_bundle_count:', { app_id: row.app_id, error: appError })
+      await db.query('UPDATE public.apps SET manifest_bundle_count = $1 WHERE app_id = $2', [nextCount, row.app_id]).catch((error) => {
+        console.error('Error updating app manifest_bundle_count:', { app_id: row.app_id, error })
         process.exit(1)
-      }
+      })
       updatedApps += 1
 
       updated += 1
@@ -145,3 +123,4 @@ async function main() {
 }
 
 await main()
+process.exit(0)

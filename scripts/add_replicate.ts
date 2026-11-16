@@ -1,33 +1,30 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js'
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import pg from 'npm:pg@8'
 
-const supabaseUrl = 'https://sb.capgo.app'
-const supabaseServiceRole = '****'
+const databaseUrl = '****'
 const ids = []
 
-async function fetchAllIds(supabase: ReturnType<typeof createClient<Database>>) {
+// bigint ids as numbers, like PostgREST returned them.
+pg.types.setTypeParser(20, Number)
+
+async function fetchAllIds(db: pg.Client) {
   let allIds: number[] = []
   let lastId = 0
   const pageSize = 1000
 
   while (true) {
-    const { data, error } = await supabase
-      .from('app_versions')
-      .select('*')
-      .order('id', { ascending: true })
-      .gt('id', lastId)
-      .limit(pageSize)
-
-    if (error) {
-      console.error('Error fetching data:', error)
+    const { rows: data } = await db.query('SELECT id FROM public.app_versions WHERE id > $1 ORDER BY id LIMIT $2', [lastId, pageSize])
+      .catch((error: unknown) => {
+        console.error('Error fetching data:', error)
+        return { rows: null }
+      })
+    if (!data)
       return []
-    }
 
     if (data.length === 0) {
       break
     }
 
-    allIds = allIds.concat(data.map(item => item.id))
+    allIds = allIds.concat(data.map((item: { id: number }) => item.id))
     lastId = data[data.length - 1].id
 
     if (data.length < pageSize) {
@@ -44,15 +41,11 @@ function generateInsertQuery(idsToInsert: number[]): string {
 }
 
 async function main() {
-  const supabase = createClient<Database>(supabaseUrl, supabaseServiceRole, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  })
+  const db = new pg.Client({ connectionString: databaseUrl })
+  await db.connect()
 
-  const idsInSupabase = await fetchAllIds(supabase)
+  const idsInSupabase = await fetchAllIds(db)
+  await db.end()
   const idsSet = new Set(ids.map(item => item.id))
 
   const idsInSupabaseNotInIds = idsInSupabase.filter(obj => !idsSet.has(obj.id))

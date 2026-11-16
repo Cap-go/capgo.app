@@ -1,7 +1,6 @@
 /// <reference lib="deno.ns" />
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js'
 import { load } from 'https://deno.land/std@0.224.0/dotenv/mod.ts'
+import pg from 'npm:pg@8'
 
 const accountId = 'THE ACCOUNT ID TO RESTORE'
 
@@ -10,11 +9,10 @@ const accountId = 'THE ACCOUNT ID TO RESTORE'
 const envPath = new URL('../internal/cloudflare/.env.prod', import.meta.url).pathname
 const env = await load({ envPath })
 
-const supabaseUrl = env.SUPABASE_URL
-const supabaseServiceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+const databaseUrl = env.MAIN_SUPABASE_DB_URL || env.DATABASE_URL || env.SUPABASE_DB_URL || env.SUPABASE_DB_DIRECT_URL
 
-if (!supabaseUrl || !supabaseServiceRoleKey) {
-  console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.prod')
+if (!databaseUrl) {
+  console.error('Missing MAIN_SUPABASE_DB_URL (or DATABASE_URL, SUPABASE_DB_URL, SUPABASE_DB_DIRECT_URL) in .env.prod')
   Deno.exit(1)
 }
 
@@ -43,24 +41,19 @@ interface ToDeleteAccount {
 }
 
 async function main() {
-  const supabase = createClient<Database>(supabaseUrl, supabaseServiceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  })
+  // Supabase's pooler certificate is signed by Supabase's own CA (see scripts/script_db.ts).
+  const url = new URL(databaseUrl)
+  url.searchParams.delete('sslmode')
+  const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
+  const db = new pg.Client({ connectionString: url.toString(), ssl: local ? false : { rejectUnauthorized: false } })
+  await db.connect()
 
   // Get all accounts pending deletion
-  const { data: accountsToRestore, error: fetchError } = await supabase
-    .from('to_delete_accounts')
-    .select('*')
-    .eq('account_id', accountId)
-
-  if (fetchError) {
-    console.error('Error fetching accounts to restore:', fetchError)
-    Deno.exit(1)
-  }
+  const { rows: accountsToRestore } = await db.query('SELECT * FROM public.to_delete_accounts WHERE account_id = $1', [accountId])
+    .catch((fetchError: unknown) => {
+      console.error('Error fetching accounts to restore:', fetchError)
+      Deno.exit(1)
+    })
 
   if (!accountsToRestore || accountsToRestore.length === 0) {
     console.log('No accounts found in to_delete_accounts table')
@@ -93,31 +86,20 @@ async function main() {
         }
 
         // Check if this apikey already exists by visible key or hash.
-        let existingKeyQuery = supabase
-          .from('apikeys')
-          .select('id')
+        const { rows: existingKeys } = apikey.key
+          ? await db.query('SELECT id FROM public.apikeys WHERE key = $1', [apikey.key])
+          : await db.query('SELECT id FROM public.apikeys WHERE key_hash = $1', [apikey.key_hash])
 
-        existingKeyQuery = apikey.key
-          ? existingKeyQuery.eq('key', apikey.key)
-          : existingKeyQuery.eq('key_hash', apikey.key_hash)
-
-        const { data: existingKey } = await existingKeyQuery.single()
-
-        if (existingKey) {
+        if (existingKeys.length === 1) {
           console.log(`  Skipping API key "${apikey.name}" - already exists`)
           continue
         }
 
         // Insert the API key back
-        const { error: insertError } = await supabase
-          .from('apikeys')
-          .insert({
-            user_id: apikey.user_id,
-            key: apikey.key,
-            name: apikey.name,
-            key_hash: apikey.key_hash,
-            expires_at: apikey.expires_at,
-          })
+        const insertError = await db.query(
+          'INSERT INTO public.apikeys (user_id, key, name, key_hash, expires_at) VALUES ($1, $2, $3, $4, $5)',
+          [apikey.user_id, apikey.key, apikey.name, apikey.key_hash, apikey.expires_at],
+        ).then(() => null, (error: unknown) => error)
 
         if (insertError) {
           console.error(`  Error restoring API key "${apikey.name}":`, insertError)
@@ -129,10 +111,8 @@ async function main() {
     }
 
     // Remove the account from to_delete_accounts
-    const { error: deleteError } = await supabase
-      .from('to_delete_accounts')
-      .delete()
-      .eq('id', account.id)
+    const deleteError = await db.query('DELETE FROM public.to_delete_accounts WHERE id = $1', [account.id])
+      .then(() => null, (error: unknown) => error)
 
     if (deleteError) {
       console.error(`  Error removing account from to_delete_accounts:`, deleteError)
@@ -142,6 +122,7 @@ async function main() {
     }
   }
 
+  await db.end()
   console.log('\nRestore complete!')
 }
 
