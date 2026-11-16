@@ -208,7 +208,7 @@ async function removeTax(id: string) {
       <form class="grid gap-4 sm:grid-cols-2" data-test="billing-details-form" @submit.prevent="saveDetails">
         <label v-for="field in (['name', 'email', 'phone'] as const)" :key="field" class="flex flex-col gap-1 text-sm" :class="field === 'name' ? 'sm:col-span-2' : ''">
           {{ t(`billing-field-${field}`) }}
-          <input v-model="draft[field]" :name="field" :type="field === 'email' ? 'email' : field === 'phone' ? 'tel' : 'text'" :required="field !== 'phone'" :maxlength="field === 'email' ? 320 : field === 'phone' ? 40 : 200" class="d-input d-input-bordered w-full" :autocomplete="field === 'name' ? 'billing organization' : field === 'phone' ? 'billing tel' : 'billing email'">
+          <input v-model="draft[field]" :name="field" :type="field === 'email' ? 'email' : field === 'phone' ? 'tel' : 'text'" :required="field !== 'phone'" :maxlength="field === 'email' ? 320 : field === 'phone' ? 20 : 200" class="d-input d-input-bordered w-full" :autocomplete="field === 'name' ? 'billing organization' : field === 'phone' ? 'billing tel' : 'billing email'">
         </label>
         <label v-for="field in (['line1', 'line2', 'city', 'state', 'postal_code'] as const)" :key="field" class="flex flex-col gap-1 text-sm" :class="field === 'line1' || field === 'line2' ? 'sm:col-span-2' : ''">
           {{ t(`billing-field-${field}`) }}

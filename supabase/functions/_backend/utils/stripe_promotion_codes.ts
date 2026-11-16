@@ -119,10 +119,12 @@ export async function applyBillingPromotionCode(c: Context, ctx: InAppBillingCon
 
   // Redeem the promotion ID, never its underlying coupon: Stripe must enforce expiry,
   // redemption limits and customer restrictions. No price, quantity or cycle changes.
-  const updated = await ctx.stripe.subscriptions.update(current.subscription.id, {
+  await ctx.stripe.subscriptions.update(current.subscription.id, {
     discounts: [{ promotion_code: promotion.id }],
     proration_behavior: 'none',
     expand: ['discounts.source.coupon', 'discounts.promotion_code'],
   }, { idempotencyKey: `billing-promotion:${current.subscription.id}:${redemptionId}` })
+  // An idempotent replay returns its original response, even after another admin changes the discount.
+  const updated = await ctx.stripe.subscriptions.retrieve(current.subscription.id, { expand: ['discounts.source.coupon', 'discounts.promotion_code'] })
   return { discounts: updated.discounts.map(discount => summarizeDiscount(discount, updated.currency)) }
 }

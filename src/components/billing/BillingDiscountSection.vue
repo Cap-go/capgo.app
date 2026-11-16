@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { BillingDiscount, BillingDiscounts } from '~/services/stripe'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getCapgoApiErrorCode } from '~/services/capgoApi'
 import { formatLocalDate } from '~/services/date'
@@ -76,8 +76,14 @@ async function apply() {
     const result = await applyBillingPromotionCode(props.orgId, code.value.trim(), replaceExisting.value, redemptionId)
     if (!disposed && state.value) {
       state.value.discounts = result.discounts
-      success.value = true
-      // Keep this id for network retries; a changed code or confirmation gets a new id.
+      success.value = result.discounts.some(discount => discount.code?.toLowerCase() === code.value.trim().toLowerCase())
+      if (!success.value) {
+        replaceExisting.value = false
+        redemptionId = crypto.randomUUID()
+        await nextTick()
+        if (!disposed)
+          error.value = t('billing-promo-changed')
+      }
     }
   }
   catch (cause) {

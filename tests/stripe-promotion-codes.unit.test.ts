@@ -20,7 +20,10 @@ function fixture() {
     promotion: { coupon: 'coupon_example' }, restrictions: { first_time_transaction: false, minimum_amount: null as number | null, currency_options: {} } }
   const stripe = {
     customers: { retrieve: vi.fn().mockResolvedValue({ discount: null }) },
-    subscriptions: { retrieve: vi.fn().mockResolvedValue(subscription), update: vi.fn().mockResolvedValue({ ...subscription, discounts: [discount] }) },
+    subscriptions: { retrieve: vi.fn().mockResolvedValue(subscription), update: vi.fn().mockImplementation(async () => {
+      subscription.discounts = [discount]
+      return subscription
+    }) },
     promotionCodes: { list: vi.fn().mockResolvedValue({ data: [promotion] }) },
     coupons: { retrieve: vi.fn().mockResolvedValue({ valid: true, applies_to: { products: ['prod_example'] } }) },
   }
@@ -112,6 +115,15 @@ describe('subscription promotion codes', () => {
     const { apply, stripe } = fixture()
     stripe.subscriptions.update.mockRejectedValue(new Error('redemption limit reached'))
     await expect(apply()).rejects.toThrow('redemption limit reached')
+  })
+  it('returns current discounts when an idempotent replay contains an older discount', async () => {
+    const { apply, stripe, subscription } = fixture()
+    const historicalResponse = { ...subscription, discounts: [discount] }
+    subscription.discounts = [{ ...discount, promotion_code: { id: 'promo_other', code: 'OTHER' } }]
+    stripe.subscriptions.update.mockResolvedValue(historicalResponse)
+    await expect(apply('EXAMPLE20', true)).resolves.toMatchObject({ discounts: [{ code: 'OTHER' }] })
+    expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(2)
+    expect(stripe.subscriptions.retrieve).toHaveBeenLastCalledWith('sub_example', { expand: ['discounts.source.coupon', 'discounts.promotion_code'] })
   })
   it.each(['scheduled', 'ending', 'inactive', 'item-discount', 'wrong-customer'])('does not alter %s subscriptions', async (mode) => {
     const { apply, stripe, subscription } = fixture()

@@ -17,11 +17,12 @@ const currentDiscount = { name: 'Example offer', code: 'EXAMPLE10', percentOff: 
 
 type Call = { path: string, body: Record<string, unknown>, authorization: string | undefined }
 
-async function openBilling(page: Page, options: { discounted?: boolean, rejectUpdate?: boolean, rejectPromotion?: boolean } = {}) {
+async function openBilling(page: Page, options: { discounted?: boolean, rejectUpdate?: boolean, rejectPromotion?: boolean, changedPromotion?: boolean } = {}) {
   const calls: Call[] = []
   let profile = { ...structuredClone(details), taxIds: [] as { id: string, type: string, value: string, status: string }[] }
   let discounts = options.discounted ? [currentDiscount] : []
   let orgId = ''
+  let changedPromotion = options.changedPromotion
   function capture(route: Route, path: string) {
     const request = route.request()
     const body = request.postDataJSON() as Record<string, unknown>
@@ -62,6 +63,10 @@ async function openBilling(page: Page, options: { discounted?: boolean, rejectUp
     const body = capture(route, 'promotion-code')
     if (options.rejectPromotion)
       return route.fulfill(json({ error: 'invalid_promotion_code' }, 400))
+    if (changedPromotion) {
+      changedPromotion = false
+      return route.fulfill(json({ discounts }))
+    }
     discounts = [{ ...currentDiscount, code: String(body.code), percentOff: 20 }]
     return route.fulfill(json({ discounts }))
   })
@@ -85,6 +90,7 @@ test.describe('Billing details, tax IDs and promotion codes', () => {
     await page.locator('[data-test="billing-edit-details"]').click()
     const dialog = page.getByRole('dialog')
     await expect(dialog.getByLabel('Billing email', { exact: true })).toHaveValue(details.email)
+    await expect(dialog.getByLabel('Phone (optional)', { exact: true })).toHaveAttribute('maxlength', '20')
     await dialog.getByLabel('Full name or company name').fill('Updated Example Company')
     await dialog.getByLabel('Billing email', { exact: true }).fill('invoices@example.com')
     await dialog.getByLabel('Address line 1', { exact: true }).fill('456 Example Avenue')
@@ -146,6 +152,26 @@ test.describe('Billing details, tax IDs and promotion codes', () => {
     await page.reload()
     await expect(section).toContainText('20% off')
     await expect(section).toContainText('EXAMPLE20')
+  })
+
+  test('requires fresh confirmation when a concurrent change supersedes a promo-code redemption', async ({ page }) => {
+    const { calls } = await openBilling(page, { discounted: true, changedPromotion: true })
+    const section = page.locator('[data-test="billing-discounts"]')
+    await section.getByLabel('Discount / promo code', { exact: true }).fill('EXAMPLE20')
+    await section.getByRole('checkbox').check()
+    const apply = section.getByRole('button', { name: 'Apply code', exact: true })
+    await apply.click()
+    await expect(section.getByRole('alert')).toContainText('The subscription discount changed')
+    await expect(section).toContainText('10% off')
+    await expect(section).not.toContainText('Promo code applied to future subscription invoices.')
+    await expect(apply).toBeDisabled()
+    await section.getByRole('checkbox').check()
+    await apply.click()
+    await expect(section).toContainText('20% off')
+    await expect(section).toContainText('Promo code applied to future subscription invoices.')
+    expect(calls).toHaveLength(2)
+    expect(calls[1].body.redemptionId).not.toBe(calls[0].body.redemptionId)
+    expect(calls[1].body.replaceExisting).toBe(true)
   })
 
   test('retains saved details and discounts when the API rejects changes', async ({ page }) => {

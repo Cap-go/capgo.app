@@ -2,7 +2,7 @@
   "apikeys.spec.ts": 36,
   "app-dashboard-tabs.spec.ts": 8,
   "auth.spec.ts": 9,
-  "billing-details.spec.ts": 31,
+  "billing-details.spec.ts": 38,
   "bundle-incompatible-alert.spec.ts": 15,
   "compatibility-events.spec.ts": 7,
   "confirmation-redirect.spec.ts": 3,

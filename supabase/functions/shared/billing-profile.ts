@@ -1,4 +1,4 @@
-// Tax ID types supported by the installed Stripe SDK. Stripe validates each value.
+// Tax ID types supported by the pinned 2026-03-25.dahlia API. Stripe validates each value.
 export const BILLING_TAX_ID_TYPES = [
   'ad_nrt',
   'ae_trn',
@@ -45,10 +45,8 @@ export const BILLING_TAX_ID_TYPES = [
   'et_tin',
   'eu_oss_vat',
   'eu_vat',
-  'fo_vat',
   'gb_vat',
   'ge_vat',
-  'gi_tin',
   'gn_nif',
   'hk_br',
   'hr_oib',
@@ -57,7 +55,6 @@ export const BILLING_TAX_ID_TYPES = [
   'il_vat',
   'in_gst',
   'is_vat',
-  'it_cf',
   'jp_cn',
   'jp_rn',
   'jp_trn',
@@ -88,7 +85,6 @@ export const BILLING_TAX_ID_TYPES = [
   'pe_ruc',
   'ph_tin',
   'pl_nip',
-  'py_ruc',
   'ro_tin',
   'rs_pib',
   'ru_inn',

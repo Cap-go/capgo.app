@@ -4552,6 +4552,7 @@
   "billing-discount-ends": "Ends {date}",
   "billing-no-discount": "No discount applied",
   "billing-promo-code": "Discount / promo code",
+  "billing-promo-changed": "The subscription discount changed while applying this code. Review the current discount and confirm replacement again.",
   "billing-promo-apply": "Apply code",
   "billing-promo-desc": "Apply an eligible code to future subscription invoices. Existing invoices are not changed.",
   "billing-promo-replace-confirm": "Replace my current subscription discount with this code. Discounts are not combined.",

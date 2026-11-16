@@ -33,6 +33,14 @@ describe('billing profile', () => {
     expect(await updateBillingDetails(ctx, { ...details, name: ' Example Company ' })).toEqual(details)
     expect(customers.update).toHaveBeenCalledWith('cus_example', details)
   })
+  it.concurrent('accepts a phone at the Stripe limit and rejects longer values before saving', async () => {
+    const { ctx, customers } = context()
+    const valid = { ...details, phone: '+'.padEnd(20, '1') }
+    customers.update.mockResolvedValue(valid)
+    await expect(updateBillingDetails(ctx, valid)).resolves.toEqual(valid)
+    await expect(updateBillingDetails(ctx, { ...valid, phone: `${valid.phone}1` })).rejects.toMatchObject({ cause: { error: 'invalid_billing_details' } })
+    expect(customers.update).toHaveBeenCalledTimes(1)
+  })
   it.concurrent.each([
     { ...details, email: 'invalid' }, { ...details, name: '' },
     { ...details, address: { ...details.address, country: 'ZZ' } },
@@ -55,9 +63,9 @@ describe('billing profile', () => {
     await expect(addBillingTaxId(ctx, { type: 'eu_vat', value: 'invalid' })).rejects.toThrow()
     expect(customers.deleteTaxId).not.toHaveBeenCalled()
   })
-  it.concurrent('rejects unsupported tax IDs before Stripe', async () => {
+  it.concurrent.each(['fake', 'fo_vat', 'gi_tin', 'it_cf', 'py_ruc'])('rejects tax ID type %s unsupported by the pinned API before Stripe', async (type) => {
     const { ctx, customers } = context()
-    await expect(addBillingTaxId(ctx, { type: 'fake', value: '123' })).rejects.toThrow()
+    await expect(addBillingTaxId(ctx, { type, value: '123' })).rejects.toMatchObject({ cause: { error: 'invalid_tax_id' } })
     expect(customers.createTaxId).not.toHaveBeenCalled()
   })
   it.concurrent('scopes deletion to the resolved customer', async () => {

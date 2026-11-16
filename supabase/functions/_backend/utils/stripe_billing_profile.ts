@@ -9,7 +9,7 @@ const field = z.string().trim().max(200)
 const detailsSchema = z.object({
   name: field.min(1),
   email: z.string().trim().email().max(320),
-  phone: z.string().trim().max(40),
+  phone: z.string().trim().max(20),
   address: z.object({
     line1: field.min(1),
     line2: field,
