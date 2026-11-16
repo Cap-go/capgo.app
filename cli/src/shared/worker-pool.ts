@@ -38,6 +38,8 @@ export function runWorkerPool<T>(
     let completed = 0
     let failed = false
     let firstError: unknown
+    // Assigned below; settle and launch call each other.
+    let launch: () => void = () => {}
 
     const settle = () => {
       if (failed) {
@@ -51,7 +53,7 @@ export function runWorkerPool<T>(
         launch()
     }
 
-    const launch = () => {
+    launch = () => {
       while (!failed && active < limit && nextIndex < count) {
         const index = nextIndex++
         active++
