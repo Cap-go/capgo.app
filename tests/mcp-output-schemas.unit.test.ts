@@ -46,7 +46,6 @@ vi.mock(
     ...(await original<
       typeof import('../supabase/functions/_backend/mcp/events_rpc.ts')
     >()),
-    loadApikeyRbacId: async () => 'example-rbac',
     handleCapgoListEventSubscriptions: async () => [subscription],
   }),
 )
