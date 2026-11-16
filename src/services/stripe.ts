@@ -1,4 +1,5 @@
 import type { Stripe } from '@stripe/stripe-js'
+import type { BillingDetails, BillingProfile, BillingTaxId } from '../../supabase/functions/shared/billing-profile'
 import { loadStripe } from '@stripe/stripe-js'
 import { toast } from 'vue-sonner'
 import { i18n } from '~/modules/i18n'
@@ -422,4 +423,37 @@ export function formatStripeAmount(amount: number, currency: string) {
   catch {
     return `${value} ${currency.toUpperCase()}`
   }
+}
+
+export function getBillingProfile(orgId: string) {
+  return callBilling<BillingProfile>('profile', { orgId })
+}
+
+export function updateBillingDetails(orgId: string, details: BillingDetails) {
+  return callBilling<BillingDetails>('profile/update', { orgId, details })
+}
+
+export function addBillingTaxId(orgId: string, taxId: { type: string, value: string }) {
+  return callBilling<BillingTaxId>('tax-id/add', { orgId, taxId })
+}
+
+export function removeBillingTaxId(orgId: string, taxIdId: string) {
+  return callBilling<{ status: 'ok' }>('tax-id/remove', { orgId, taxIdId })
+}
+
+export interface BillingDiscount {
+  name: string | null
+  code: string | null
+  percentOff: number | null
+  amountOff: number | null
+  currency: string | null
+  endsAt: string | null
+}
+
+export interface BillingDiscounts {
+  discounts: BillingDiscount[]
+}
+
+export function getBillingDiscounts(orgId: string) {
+  return callBilling<BillingDiscounts>('discounts', { orgId })
 }

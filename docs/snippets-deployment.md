@@ -30,21 +30,46 @@ it does not hide partial failures. Re-run **all jobs** of the appropriate releas
 workflow to retry, following the repository's deployment retry contract.
 
 The job uses the existing `CLOUDFLARE_API_TOKEN` repository secret. That Cloudflare
-token needs **Zone → Snippets → Edit** for `capgo.app`. No additional secret or
-third-party deployment action is required. Builds use Bun without installing
-project dependencies.
+token needs **Zone → Snippets → Edit** for `capgo.app`. It also uses the existing
+`SUPABASE_TOKEN` secret to read production custom domains. The query targets the
+same fixed production project as `deploy:supabase:prod`; no project-ID environment
+variable is required. No new secret or third-party deployment action is required. Builds use
+Bun without installing project dependencies.
 
 ## Routing and inventory
 
-This job updates **code only**. It never writes or deletes the zone's snippet
-rules, changes rule order or enablement, or deletes a snippet. Existing rule
-expressions contain private custom hostnames and must not be copied to this
-public repository or CI logs. Routing is compared before and after deployment;
-concurrent changes cause the job to fail for inspection.
+Before uploading code, the job reads `public.org_custom_domains` from the
+production primary database through the Supabase Management API with
+`read_only: true`. A single bounded query returns only hostnames and a provisioning
+flag. Invalid responses, incomplete registrations, or more than 1,000 domains
+fail deployment before Cloudflare writes. No database changes are made.
+
+After verifying every code upload, the job adds any missing database hostname as
+an unconditional `http.host eq` alternative to the enabled `plugin_load_balancer`
+rule. Existing manual hostnames and path predicates are retained. A hostname
+mentioned only inside a conditional or negated expression does not count as full
+coverage. The result must fit Cloudflare's 4,096-character expression limit.
+
+The Cloudflare rules API replaces the entire list, so the job sends every current
+rule in its original order, preserving descriptions and enablement and changing
+only the plugin rule's expression. It rechecks for concurrent changes immediately
+before the write and reads back all rules afterward. There is no automatic
+rollback that could overwrite an operator's concurrent edit.
+
+An empty database leaves routing unchanged. Removing a database registration does
+not delete an existing rule alternative: legacy domains may have been provisioned
+manually, so domain removal remains a deliberate operational change. This job
+does not provision DNS, certificates, custom hostnames, or Worker routes; the
+custom-domain API manages those resources.
+
+Existing expressions and production hostnames stay in memory and must not be
+copied to this public repository, artifacts, or CI logs. Output contains counts,
+snippet names, and code hashes only. Provider error bodies are never logged.
 
 Before uploading anything, the deployer verifies that the complete live snippet
-inventory matches the catalog, every snippet has a routing rule (disabled rules
-are preserved), and all live modules can be read. Unexpected, missing, or
+inventory matches the catalog, every snippet has a routing rule, the plugin rule
+is enabled and unique, and all live modules can be read. Other rules' disabled
+states are preserved. Unexpected, missing, or
 multi-module snippets fail preflight instead of being silently ignored or
 clobbered. Reconcile deliberate dashboard/probe changes before the next release.
 
@@ -57,8 +82,9 @@ a separate change; this PR does not route authentication traffic to GoTrue.
 
 ```sh
 bun run build:snippets
-bunx vitest run tests/snippet-deployment.unit.test.ts tests/cloudflare-snippet.unit.test.ts
-# Uses CLOUDFLARE_API_TOKEN; reads production, makes no changes:
+bunx vitest run tests/snippet-deployment.unit.test.ts tests/snippet-custom-domains.unit.test.ts tests/cloudflare-snippet.unit.test.ts
+# Uses CLOUDFLARE_API_TOKEN and SUPABASE_ACCESS_TOKEN:
+# Reads production code, rules, and database; makes no changes.
 bun run check:snippets:live
 ```
 
@@ -68,3 +94,4 @@ tracked `index.min.js` remain available for the load balancer's existing checks,
 but CI deployment builds fresh code from source rather than uploading that file.
 
 API reference: <https://developers.cloudflare.com/rules/snippets/create-api/>.
+Read-only query: <https://supabase.com/docs/reference/api/v1-run-a-query>.
