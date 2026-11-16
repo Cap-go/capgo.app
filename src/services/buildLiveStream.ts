@@ -28,7 +28,7 @@ interface TimelineRow {
   durationMs?: number
 }
 
-const SUCCESS_STATUSES = new Set(['succeeded', 'released'])
+const SUCCESS_STATUSES = new Set(['succeeded', 'released', 'completed'])
 const FAILURE_STATUSES = new Set(['failed', 'expired', 'cancelled', 'canceled'])
 const STEP_STATUS: Record<string, StepStatus> = { started: 'running', succeeded: 'succeeded', failed: 'failed' }
 

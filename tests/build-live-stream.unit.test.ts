@@ -79,6 +79,7 @@ describe('applyBuildStreamMessage', () => {
 describe('resolveBuildOutcome', () => {
   it('prefers a terminal stream status over a lagging database row', () => {
     expect(resolveBuildOutcome('succeeded', 'running')).toBe('success')
+    expect(resolveBuildOutcome(undefined, 'completed')).toBe('success')
     expect(resolveBuildOutcome('failed', 'running')).toBe('failure')
   })
 
