@@ -74,16 +74,16 @@ async function apply() {
       return
     }
     const result = await applyBillingPromotionCode(props.orgId, code.value.trim(), replaceExisting.value, redemptionId)
-    if (!disposed && state.value) {
-      state.value.discounts = result.discounts
-      success.value = result.discounts.some(discount => discount.code?.toLowerCase() === code.value.trim().toLowerCase())
-      if (!success.value) {
-        replaceExisting.value = false
-        redemptionId = crypto.randomUUID()
-        await nextTick()
-        if (!disposed)
-          error.value = t('billing-promo-changed')
-      }
+    if (disposed || !state.value)
+      return
+    state.value.discounts = result.discounts
+    success.value = result.discounts.some(discount => discount.code?.toLowerCase() === code.value.trim().toLowerCase())
+    if (!success.value) {
+      replaceExisting.value = false
+      redemptionId = crypto.randomUUID()
+      await nextTick()
+      if (!disposed)
+        error.value = t('billing-promo-changed')
     }
   }
   catch (cause) {
