@@ -521,12 +521,12 @@ watch(
             <div v-if="compareSearch.trim() ? compareSearchLoading : compareVersionsLoading" class="px-3 py-2 text-xs text-slate-400">
               {{ t('loading') }}
             </div>
-            <div v-else-if="compareSearch.trim() ? compareSearchError : compareVersionsError" role="status" class="px-3 py-2 text-xs text-slate-400">
+            <output v-else-if="compareSearch.trim() ? compareSearchError : compareVersionsError" class="block px-3 py-2 text-xs text-slate-400">
               {{ t('bundle-compare-load-error') }}
-            </div>
-            <div v-else-if="compareOptions.length === 0" role="status" class="px-3 py-2 text-xs text-slate-400">
+            </output>
+            <output v-else-if="compareOptions.length === 0" class="block px-3 py-2 text-xs text-slate-400">
               {{ compareSearch.trim() ? noResultsLabel : t(compareMode === 'dependencies' ? 'bundle-compare-empty-dependencies' : 'bundle-compare-empty-manifest') }}
-            </div>
+            </output>
           </div>
         </div>
       </div>

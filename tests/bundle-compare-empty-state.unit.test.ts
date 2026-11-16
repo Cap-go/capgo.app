@@ -76,7 +76,7 @@ describe('bundle comparison empty state', () => {
     mount(mode)
     await settle()
 
-    expect(container.querySelector('[role="status"]')?.textContent).toContain(messages[`bundle-compare-empty-${mode}`])
+    expect(container.querySelector('output')?.textContent).toContain(messages[`bundle-compare-empty-${mode}`])
     expect(container.textContent).toContain('No comparison')
     expect(container.textContent).not.toContain('No matching bundle')
   })
@@ -91,7 +91,7 @@ describe('bundle comparison empty state', () => {
     mount()
     await settle()
     expect(container.textContent).toContain(messages.loading)
-    expect(container.querySelector('[role="status"]')).toBeNull()
+    expect(container.querySelector('output')).toBeNull()
 
     resolveBundles(response())
     await settle()
@@ -102,7 +102,7 @@ describe('bundle comparison empty state', () => {
     mount()
     await settle()
     await search('missing-bundle')
-    expect(container.querySelector('[role="status"]')?.textContent).toContain('No matching bundle')
+    expect(container.querySelector('output')?.textContent).toContain('No matching bundle')
     expect(container.textContent).not.toContain(messages['bundle-compare-empty-manifest'])
 
     await search('   ')
@@ -116,11 +116,11 @@ describe('bundle comparison empty state', () => {
       : response())
     mount()
     await settle()
-    expect(container.querySelector('[role="status"]')?.textContent).toContain(messages['bundle-compare-load-error'])
+    expect(container.querySelector('output')?.textContent).toContain(messages['bundle-compare-load-error'])
     expect(container.textContent).not.toContain(messages['bundle-compare-empty-manifest'])
 
     await search('1.0')
-    expect(container.querySelector('[role="status"]')?.textContent).toContain(messages['bundle-compare-load-error'])
+    expect(container.querySelector('output')?.textContent).toContain(messages['bundle-compare-load-error'])
     expect(container.textContent).not.toContain('No matching bundle')
   })
 
@@ -131,7 +131,7 @@ describe('bundle comparison empty state', () => {
     mount('manifest', onSelect)
     await settle()
 
-    expect(container.querySelector('[role="status"]')).toBeNull()
+    expect(container.querySelector('output')).toBeNull()
     const option = [...container.querySelectorAll('button')].find(button => button.textContent?.includes(bundle.name))!
     option.click()
     expect(onSelect).toHaveBeenCalledWith(bundle)
