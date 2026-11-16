@@ -18,9 +18,12 @@ const currentDiscount = { name: 'Example offer', code: 'EXAMPLE10', percentOff: 
 
 type Call = { path: string, body: Record<string, unknown>, authorization: string | undefined }
 
-async function openBilling(page: Page, options: { discounted?: boolean, rejectUpdate?: boolean, noSubscription?: boolean } = {}) {
+async function openBilling(page: Page, options: { discounted?: boolean, rejectUpdate?: boolean, noSubscription?: boolean, rejectCurrency?: boolean } = {}) {
+  if (process.env.CAPGO_PR_SCREENSHOTS)
+    await page.setViewportSize({ width: 1440, height: 1100 })
   const calls: Call[] = []
   let profile = { ...structuredClone(details), currency: 'eur', taxIds: [] as { id: string, type: string, value: string, status: string }[] }
+  let currencyState = { currency: 'eur', currencies: ['eur', 'usd'], subscriptionId: options.noSubscription ? null : 'sub_example', endsAt: options.noSubscription ? null : '2030-01-01T00:00:00Z', pendingCurrency: null as string | null }
   const discounts = options.discounted ? [currentDiscount] : []
   let orgId = ''
   function capture(route: Route, path: string) {
@@ -36,10 +39,19 @@ async function openBilling(page: Page, options: { discounted?: boolean, rejectUp
     orgId = route.request().postDataJSON().orgId
     return route.fulfill(json({
       publishableKey: '', card: null, backupCard: null, invoices: [], openInvoice: null, trialPlan: null,
-      subscription: options.noSubscription ? null : { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: '2030-01-01T00:00:00Z' },
+      subscription: options.noSubscription ? null : { status: 'active', cancelAtPeriodEnd: !!currencyState.pendingCurrency, cancelAt: null, currentPeriodEnd: '2030-01-01T00:00:00Z' },
     }))
   })
   await page.route('**/private/stripe_billing/profile', route => route.fulfill(json(profile)))
+  await page.route('**/private/stripe_billing/currency', route => route.fulfill(json(currencyState)))
+  await page.route('**/private/stripe_billing/currency/update', (route) => {
+    const body = capture(route, 'currency/update')
+    if (options.rejectCurrency)
+      return route.fulfill(json({ error: 'billing_currency_failed' }, 400))
+    currencyState = { ...currencyState, ...(currencyState.subscriptionId ? { pendingCurrency: body.currency as string } : { currency: body.currency as string }) }
+    return route.fulfill(json(currencyState))
+  })
+
   await page.route('**/private/stripe_billing/profile/update', (route) => {
     const body = capture(route, 'profile/update')
     if (options.rejectUpdate)
@@ -81,7 +93,7 @@ test.describe('Billing details, tax IDs and applied discounts', () => {
     if (process.env.CAPGO_PR_SCREENSHOTS) {
       mkdirSync('docs/pr-screenshots/billing-currency', { recursive: true })
       await page.emulateMedia({ colorScheme: 'dark' })
-      await page.screenshot({ path: 'docs/pr-screenshots/billing-currency/billing-dark.png' })
+      await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/billing-dark.png' })
     }
     await page.locator('[data-test="billing-edit-details"]').click()
     const dialog = page.getByRole('dialog')
@@ -92,7 +104,7 @@ test.describe('Billing details, tax IDs and applied discounts', () => {
     await dialog.getByLabel('Address line 1', { exact: true }).fill('456 Example Avenue')
     await dialog.getByRole('combobox', { name: 'Country', exact: true }).selectOption('FR')
     if (process.env.CAPGO_PR_SCREENSHOTS)
-      await page.screenshot({ path: 'docs/pr-screenshots/billing-currency/address-editor.png' })
+      await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/address-editor.png' })
     await dialog.getByRole('button', { name: 'Save billing details', exact: true }).click()
     await expect(dialog).toBeHidden()
     await expect(page.locator('[data-test="billing-profile-details"]')).toContainText('Updated Example Company')
@@ -182,9 +194,9 @@ test('credits display the billing currency and block purchases when pricing is u
   await expect(page.locator('[data-test="credits-top-up-submit"]')).toBeEnabled()
   if (process.env.CAPGO_PR_SCREENSHOTS) {
     await page.emulateMedia({ colorScheme: 'dark' })
-    await page.screenshot({ path: 'docs/pr-screenshots/billing-currency/credits-eur.png' })
+    await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/credits-eur.png' })
     await page.setViewportSize({ width: 390, height: 844 })
-    await page.screenshot({ path: 'docs/pr-screenshots/billing-currency/credits-mobile.png' })
+    await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/credits-mobile.png' })
   }
   unavailable = true
   await page.reload()
@@ -212,7 +224,7 @@ test('offers USD after the yearly currency limit and requires reviewing prices b
   await expect(alert).toContainText('Switch to USD')
   if (process.env.CAPGO_PR_SCREENSHOTS) {
     await page.emulateMedia({ colorScheme: 'dark' })
-    await page.screenshot({ path: 'docs/pr-screenshots/billing-currency/checkout-limit.png' })
+    await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/checkout-limit.png' })
   }
   await alert.getByRole('button', { name: 'Show prices in USD' }).click()
   await expect(page.locator('[data-test="plans-currency-select"]')).toHaveValue('usd')
@@ -223,4 +235,55 @@ test('offers USD after the yearly currency limit and requires reviewing prices b
   await expect.poll(() => checkouts.length).toBe(2)
   expect(checkouts[1].currency).toBe('usd')
   expect(checkouts[1].standardPrice).toBe(true)
+})
+
+
+test('changes currency immediately without a subscription', async ({ page }) => {
+  const { calls, getOrgId } = await openBilling(page, { noSubscription: true })
+  await page.getByRole('button', { name: 'Change currency', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('combobox').selectOption('usd')
+  await expect(dialog).toContainText('No payment is taken now')
+  await expect(dialog.getByRole('button', { name: 'Save currency' })).toBeEnabled()
+  if (process.env.CAPGO_PR_SCREENSHOTS)
+    await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/change-currency.png' })
+  await dialog.getByRole('button', { name: 'Save currency' }).click()
+  await expect(dialog).not.toBeVisible()
+  await expect(page.locator('[data-test="billing-currency"]')).toContainText('USD')
+  const call = calls.find(call => call.path === 'currency/update')!
+  expectScopedCall(call, getOrgId())
+  expect(call.body).toMatchObject({ currency: 'usd', confirmedSubscription: null })
+  await expect(page.locator('[data-test="billing-currency"]').getByRole('link', { name: 'Choose a plan', exact: true })).toHaveAttribute('href', '/settings/organization/plans')
+})
+
+test('confirms the paid-period cancellation before changing a subscribed currency', async ({ page }) => {
+  const { calls } = await openBilling(page)
+  await page.getByRole('button', { name: 'Change currency', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('combobox').selectOption('usd')
+  const submit = dialog.getByRole('button', { name: 'Confirm cancellation and currency' })
+  await expect(submit).toBeDisabled()
+  await expect(dialog).toContainText('It will not restart automatically')
+  await dialog.getByRole('checkbox').check()
+  await expect(submit).toBeEnabled()
+  if (process.env.CAPGO_PR_SCREENSHOTS)
+    await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/change-subscription-currency.png' })
+  await submit.click()
+  await expect(dialog).not.toBeVisible()
+  await expect(page.locator('[data-test="billing-currency-pending"]')).toContainText('USD')
+  await expect(page.locator('[data-test="billing-currency"]')).toContainText('EUR')
+  expect(calls.find(call => call.path === 'currency/update')?.body).toMatchObject({ currency: 'usd', confirmedSubscription: 'sub_example' })
+  if (process.env.CAPGO_PR_SCREENSHOTS)
+    await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/pending-currency.png' })
+})
+
+test('retains the current currency and offers a retry after a failed change', async ({ page }) => {
+  await openBilling(page, { noSubscription: true, rejectCurrency: true })
+  await page.getByRole('button', { name: 'Change currency', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('combobox').selectOption('usd')
+  await dialog.getByRole('button', { name: 'Save currency' }).click()
+  await expect(dialog.getByRole('alert')).toContainText('Could not change currency')
+  await expect(dialog.getByRole('button', { name: 'Save currency' })).toBeEnabled()
+  await expect(page.locator('[data-test="billing-currency"] > p').first()).toHaveText('EUR')
 })

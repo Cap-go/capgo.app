@@ -1,3 +1,4 @@
+import { effectiveBillingCurrency } from './billing_currency.ts'
 import type Stripe from 'stripe'
 import type { BillingDetails, BillingProfile, BillingTaxId } from '../../shared/billing-profile.ts'
 import type { InAppBillingContext } from './stripe_in_app.ts'
@@ -54,7 +55,7 @@ export async function getBillingProfile(ctx: InAppBillingContext): Promise<Billi
   ])
   if (customer.deleted)
     throw simpleError('no_customer', 'No customer')
-  return { ...toDetails(customer), currency: customer.currency?.toLowerCase() ?? null, taxIds: taxIds.data.map(toTaxId) }
+  return { ...toDetails(customer), currency: await effectiveBillingCurrency(ctx.stripe, customer), taxIds: taxIds.data.map(toTaxId) }
 }
 
 export async function updateBillingDetails(ctx: InAppBillingContext, value: unknown): Promise<BillingDetails> {

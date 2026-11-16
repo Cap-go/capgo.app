@@ -6,9 +6,10 @@ import BillingModal from '~/components/billing/BillingModal.vue'
 import { checkPermissions } from '~/services/permissions'
 import { addBillingTaxId, getBillingProfile, removeBillingTaxId, updateBillingDetails } from '~/services/stripe'
 import { BILLING_COUNTRIES, BILLING_TAX_ID_TYPES } from '../../../supabase/functions/shared/billing-profile'
+import BillingCurrencySection from './BillingCurrencySection.vue'
 
 const props = defineProps<{ orgId: string }>()
-const emit = defineEmits<{ denied: [] }>()
+const emit = defineEmits<{ denied: [], changed: [] }>()
 const { t, locale } = useI18n()
 const profile = ref<BillingProfile | null>(null)
 const loading = ref(true)
@@ -75,6 +76,11 @@ async function edit(mode: 'details' | 'tax') {
   error.value = ''
   removing.value = null
   editing.value = mode
+}
+
+async function currencyChanged() {
+  await load()
+  emit('changed')
 }
 
 async function saveDetails() {
@@ -204,17 +210,7 @@ async function removeTax(id: string) {
         </button>
       </div>
     </div>
-    <div v-if="profile && !loading && !loadFailed" class="mt-6 border-t border-slate-200 pt-4 dark:border-slate-700" data-test="billing-currency">
-      <h3 class="text-sm font-medium text-slate-900 dark:text-white">
-        {{ t('billing-currency-heading') }}
-      </h3>
-      <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">
-        {{ profile.currency?.toUpperCase() || t('billing-currency-unset') }}
-      </p>
-      <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-        {{ t(profile.currency ? 'billing-currency-fixed' : 'billing-currency-first-payment') }}
-      </p>
-    </div>
+    <BillingCurrencySection :org-id="orgId" @denied="emit('denied')" @changed="currencyChanged" />
     <BillingModal v-if="editing === 'details' && draft" :title="t('billing-edit-details')" :description="t('billing-details-desc')" :busy="busy" size="lg" @close="editing = null">
       <form class="grid gap-4 sm:grid-cols-2" data-test="billing-details-form" @submit.prevent="saveDetails">
         <label v-for="field in (['name', 'email', 'phone'] as const)" :key="field" class="flex flex-col gap-1 text-sm" :class="field === 'name' ? 'sm:col-span-2' : ''">

@@ -1,3 +1,4 @@
+import { changeBillingCurrency, getBillingCurrencyState } from '../utils/stripe_billing_currency.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
@@ -268,4 +269,16 @@ app.post('/invoice-payment-intent', middlewareAuth, async (c) => {
   if (!secret)
     throw simpleError('no_open_invoice', 'No open invoice to pay')
   return c.json(secret)
+})
+
+app.post('/currency', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.read_billing')
+  return c.json(await getBillingCurrencyState(c, ctx))
+})
+
+app.post('/currency/update', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { currency?: unknown, confirmedSubscription?: unknown }>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  return c.json(await changeBillingCurrency(c, ctx, body.currency, body.confirmedSubscription))
 })

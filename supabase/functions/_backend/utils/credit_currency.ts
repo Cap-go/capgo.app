@@ -1,3 +1,4 @@
+import { effectiveBillingCurrency } from './billing_currency.ts'
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import { stripeAmountToMajorUnits } from '../../shared/stripe-amount.ts'
@@ -29,6 +30,7 @@ export async function getCreditQuote(stripe: Stripe, customerId: string, priceId
   ])
   if (customer.deleted)
     throw simpleError('no_customer', 'No customer')
+  customer.currency = await effectiveBillingCurrency(stripe, customer)
   const wanted = customer.currency?.toLowerCase() || currencyForCountry(customer.address?.country)
   if (c && wanted && wanted !== price.currency && !price.currency_options?.[wanted]) {
     const product = typeof price.product === 'string' ? price.product : price.product.id

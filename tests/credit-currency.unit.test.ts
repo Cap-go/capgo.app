@@ -42,3 +42,12 @@ it.concurrent('converts a USD-only US credit price using the standard US plan ca
   expect(quote).toMatchObject({ currency: 'eur', unitAmount: 92, unitPrice: 0.92, priceData: { product: 'prod_credit_us', currency: 'eur', unit_amount_decimal: '92' } })
   expect(retrieve).toHaveBeenCalledWith('price_full_us', { expand: ['currency_options'] })
 })
+
+it.concurrent.each(['active', 'canceled'])('quotes credits using the saved currency only after subscription status becomes %s', async (status) => {
+  const saved = { ...customer('eur'), id: 'cus_example', metadata: { capgo_billing_currency: 'usd' } }
+  const stripe = {
+    customers: { retrieve: async () => saved }, prices: { retrieve: async () => price },
+    subscriptions: { list: async () => ({ data: [{ status, currency: 'eur' }] }) },
+  } as unknown as Stripe
+  expect((await getCreditQuote(stripe, saved.id, 'price_example')).currency).toBe(status === 'active' ? 'eur' : 'usd')
+})

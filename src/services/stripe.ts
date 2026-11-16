@@ -1,5 +1,5 @@
 import type { Stripe } from '@stripe/stripe-js'
-import type { BillingDetails, BillingProfile, BillingTaxId } from '../../supabase/functions/shared/billing-profile'
+import type { BillingCurrencyState, BillingDetails, BillingProfile, BillingTaxId } from '../../supabase/functions/shared/billing-profile'
 import { loadStripe } from '@stripe/stripe-js'
 import { toast } from 'vue-sonner'
 import { i18n } from '~/modules/i18n'
@@ -475,4 +475,12 @@ export interface BillingDiscounts {
 
 export function getBillingDiscounts(orgId: string) {
   return callBilling<BillingDiscounts>('discounts', { orgId })
+}
+
+export function getBillingCurrencyState(orgId: string) {
+  return callBilling<BillingCurrencyState>('currency', { orgId })
+}
+
+export function changeBillingCurrency(orgId: string, currency: string, confirmedSubscription: string | null) {
+  return callBilling<BillingCurrencyState>('currency/update', { orgId, currency, confirmedSubscription })
 }

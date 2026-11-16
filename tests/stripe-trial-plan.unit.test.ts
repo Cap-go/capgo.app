@@ -398,6 +398,13 @@ describe('start trial plan now', () => {
     metadata: { affonso_referral: 'ref_example' },
   }
 
+  it('passes the selected billing currency to Stripe when starting a trial plan', async () => {
+    const create = vi.fn(async () => ({ id: 'sub_now', created: 1 }))
+    const stripe = { subscriptions: { create, list: vi.fn(async () => ({ data: [] })) } } as unknown as Stripe
+    await createStartNowSubscription(stripe, { ...input, currency: 'eur' })
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ currency: 'eur', items: [{ price: 'price_solo', quantity: 1 }] }))
+  })
+
   it('charges the first invoice now and marks the subscription as a trial plan started now', async () => {
     const create = vi.fn(async () => ({ id: 'sub_now', created: 1 }))
     const stripe = { subscriptions: { create, list: vi.fn(async () => ({ data: [] })) } } as unknown as Stripe

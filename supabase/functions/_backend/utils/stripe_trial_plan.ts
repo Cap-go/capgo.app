@@ -73,6 +73,7 @@ export interface TrialPlanAttribution {
 }
 
 interface TrialState {
+  currency: string
   planName: string
   productId: string
   priceId: string
@@ -158,7 +159,7 @@ async function loadTrialState(c: Context, ctx: InAppBillingContext): Promise<Tri
   }
   if (!priceId || !productId)
     return null
-  return { planName: plan.name, productId, priceId, startsAt }
+  return { planName: plan.name, productId, priceId, startsAt, currency: (await getCustomerBilling(ctx.stripe, ctx.customerId)).currency ?? 'usd' }
 }
 
 function isSchedulableTrialPlanName(name: string | null | undefined): boolean {
@@ -176,20 +177,21 @@ export async function listSchedulableTrialPlans(c: Context, ctx: InAppBillingCon
     )),
     getTrialPriceTier(c, ctx),
   ])
-  // Console Plans page lists these in USD; keep the picker consistent.
+  const currency = (await getCustomerBilling(ctx.stripe, ctx.customerId)).currency ?? 'usd'
   const options = await Promise.all(plans.map(async (plan): Promise<TrialPlanOption | null> => {
     try {
       const productId = getPlanProductId(plan, billingAccount)
       if (!productId || !isSchedulableTrialPlanName(plan.name))
         return null
-      // A regional discount shows the USD amount of the price the schedule will charge.
-      const regionalPriceId = getRegionalPlanPriceId(plan.regional_price_ids, tier, billingAccount, 'month')
-      // plans.price_m is a major-unit monthly list price (e.g. 14 for Solo).
-      const regularAmount = Math.round(Number(plan.price_m) * 100)
-      const amount = regionalPriceId ? (await ctx.stripe.prices.retrieve(regionalPriceId)).unit_amount ?? regularAmount : regularAmount
+      const priceId = getTrialPlanPriceId(plan, billingAccount, tier)
+      const regularId = getPlanPriceId(plan, billingAccount, 'month')
+      const price = await priceInCurrency(ctx, priceId, currency)
+      const regular = priceId === regularId ? price : await priceInCurrency(ctx, regularId, currency)
+      const amount = price.unit_amount ?? 0
+      const regularAmount = regular.unit_amount ?? amount
       if (!Number.isFinite(amount) || amount <= 0)
         return null
-      return { productId, planName: plan.name!, amount, currency: 'usd', ...(amount < regularAmount ? { regularAmount } : {}) }
+      return { productId, planName: plan.name!, amount, currency, ...(amount < regularAmount ? { regularAmount } : {}) }
     }
     catch {
       return null
@@ -222,7 +224,7 @@ async function applyTrialPlanProduct(c: Context, ctx: InAppBillingContext, produ
   if (nextProductId !== productId)
     throw simpleError('invalid_trial_plan', 'This plan cannot start automatically when the trial ends')
   await setStripeInfoProduct(c, ctx.customerId, nextProductId)
-  return { planName: plan.name!, productId: nextProductId, priceId, startsAt: state.startsAt }
+  return { planName: plan.name!, productId: nextProductId, priceId, startsAt: state.startsAt, currency: state.currency }
 }
 
 async function listPendingTrialPlanSchedules(stripe: Stripe, customerId: string) {
@@ -387,6 +389,16 @@ async function cancelPendingTrialPlanSchedulesExcept(
   return schedules.length
 }
 
+async function priceInCurrency(ctx: InAppBillingContext, priceId: string, currency: string) {
+  const price = await ctx.stripe.prices.retrieve(priceId, { expand: ['currency_options'] })
+  if (price.currency === currency)
+    return price
+  const option = price.currency_options?.[currency]
+  if (!option || option.unit_amount === null)
+    throw simpleError('invalid_currency', 'This plan is not available in your billing currency')
+  return { ...price, currency, unit_amount: option.unit_amount }
+}
+
 // Describes the pending schedule as Stripe will bill it, whether or not the org would be
 // eligible to schedule a new one, so Billing always shows (and can cancel) a pending charge.
 async function summarizePendingSchedule(c: Context, ctx: InAppBillingContext, schedule: Stripe.SubscriptionSchedule): Promise<TrialPlanSummary | null> {
@@ -395,7 +407,7 @@ async function summarizePendingSchedule(c: Context, ctx: InAppBillingContext, sc
   const priceId = typeof scheduledPrice === 'string' ? scheduledPrice : scheduledPrice?.id
   if (!phase || !priceId)
     return null
-  const price = await ctx.stripe.prices.retrieve(priceId)
+  const price = phase.currency ? await priceInCurrency(ctx, priceId, phase.currency) : await ctx.stripe.prices.retrieve(priceId)
   const productId = typeof price.product === 'string' ? price.product : price.product.id
   const { data: plan } = await findPlanByProductId(c, productId)
   return {
@@ -417,7 +429,7 @@ export async function getTrialPlanSummary(c: Context, ctx: InAppBillingContext):
   const state = await loadTrialState(c, ctx)
   if (!state)
     return null
-  const price = await ctx.stripe.prices.retrieve(state.priceId)
+  const price = await priceInCurrency(ctx, state.priceId, state.currency)
   return {
     planName: state.planName,
     productId: state.productId,
@@ -561,7 +573,7 @@ export async function scheduleTrialPlan(
           collection_method: 'charge_automatically',
         },
         // Phase metadata lands on the subscription so the webhook can recognize it.
-        phases: [{ items: [{ price: state.priceId, quantity: 1 }], metadata: { ...metadata, org_id: orgId, [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: 'true' } }],
+        phases: [{ currency: state.currency, items: [{ price: state.priceId, quantity: 1 }], metadata: { ...metadata, org_id: orgId, [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: 'true' } }],
         metadata: { [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: 'true', org_id: orgId },
       })
       cloudlog({ requestId: c.get('requestId'), message: 'trial plan scheduled', orgId, scheduleId: schedule.id, startsAt: state.startsAt.toISOString(), productId: state.productId })
@@ -590,6 +602,7 @@ export async function scheduleTrialPlan(
 }
 
 export interface StartNowSubscriptionInput {
+  currency?: string
   customerId: string
   orgId: string
   priceId: string
@@ -629,6 +642,7 @@ export async function createStartNowSubscription(stripe: Stripe, input: StartNow
   }
   const params: Stripe.SubscriptionCreateParams = {
     customer: input.customerId,
+    ...(input.currency ? { currency: input.currency } : {}),
     items: [{ price: input.priceId, quantity: 1 }],
     default_payment_method: input.paymentMethodId,
     collection_method: 'charge_automatically',
@@ -761,6 +775,7 @@ export async function startTrialPlanNow(
       customerId: ctx.customerId,
       orgId,
       priceId: state.priceId,
+      currency: state.currency,
       paymentMethodId,
       automaticTax: isAutomaticTaxEnabled(ctx.billingAccount),
       metadata,
@@ -781,7 +796,7 @@ export async function startTrialPlanNow(
   // bills and put the org's selected product back to it.
   const subscribedPrice = subscription.items?.data[0]?.price
   const subscribedPriceId = typeof subscribedPrice === 'string' ? subscribedPrice : subscribedPrice?.id
-  const price = await ctx.stripe.prices.retrieve(reused && subscribedPriceId ? subscribedPriceId : state.priceId)
+  const price = await priceInCurrency(ctx, reused && subscribedPriceId ? subscribedPriceId : state.priceId, subscription.currency ?? state.currency)
   let planName = state.planName
   let planProductId = state.productId
   if (price.id !== state.priceId) {

@@ -777,6 +777,9 @@ function buttonStyle(p: Plan) {
           </p>
           <p v-if="lockedCurrency" data-test="plans-currency-locked" class="text-xs text-gray-500 dark:text-gray-400">
             {{ t(lockedCurrencyUnavailable ? 'plans-currency-unavailable' : 'plans-currency-locked', { currency: lockedCurrency.toUpperCase() }) }}
+            <RouterLink class="ml-2 underline" to="/settings/organization/billing">
+              {{ t('billing-change-currency') }}
+            </RouterLink>
           </p>
         </div>
       </div>

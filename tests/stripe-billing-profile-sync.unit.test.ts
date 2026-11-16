@@ -23,3 +23,9 @@ it('does not report a successful sync if the customer/account row is missing', a
   mocks.query.mockResolvedValue({ rowCount: 0 })
   await expect(syncBillingProfile({} as any, ctx)).rejects.toThrow()
 })
+
+it('persists the selected currency in Capgo even while the old subscription is winding down', async () => {
+  mocks.retrieve.mockResolvedValue({ address: { country: 'AR' }, currency: 'ars', metadata: { capgo_billing_currency: 'usd' } })
+  await syncBillingProfile({} as any, ctx)
+  expect(mocks.query.mock.calls[1][1][3]).toBe('usd')
+})

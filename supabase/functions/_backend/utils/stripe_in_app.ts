@@ -1,3 +1,5 @@
+import { BILLING_CURRENCY_KEY } from './billing_currency.ts'
+import { syncBillingProfile } from './stripe_billing_profile_sync.ts'
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { BillingAccount } from './stripe_billing.ts'
@@ -443,6 +445,9 @@ export async function resumeSubscription(c: Context, ctx: InAppBillingContext) {
     cancel_at_period_end: false,
     cancellation_details: { feedback: '', comment: '' },
   })
+  // Keeping the current plan also abandons a pending currency change.
+  await ctx.stripe.customers.update(ctx.customerId, { metadata: { [BILLING_CURRENCY_KEY]: '' } })
+  await syncBillingProfile(c, ctx)
   await syncSubscriptionData(c, ctx.customerId, subscriptionId)
   return await getSubscriptionSummary(c, ctx)
 }

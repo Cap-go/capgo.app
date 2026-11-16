@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getActiveSubscriptionId: vi.fn(),
   lookupActiveSubscriptionId: vi.fn(),
   syncSubscriptionData: vi.fn(),
+  syncBillingProfile: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
@@ -14,6 +15,8 @@ vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
   getStripe: vi.fn(),
   syncSubscriptionData: mocks.syncSubscriptionData,
 }))
+
+vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile_sync.ts', () => ({ syncBillingProfile: mocks.syncBillingProfile }))
 
 function mockActiveSubscription(subscriptionId: string | null, known = true) {
   mocks.getActiveSubscriptionId.mockResolvedValue(subscriptionId)
@@ -116,6 +119,8 @@ describe('resumeSubscription', () => {
     stripe.subscriptions.retrieve.mockResolvedValue({ status: 'active', cancel_at_period_end: false, cancel_at: null, items: { data: [] } })
 
     await resumeSubscription(createContext(), createBillingContext(stripe))
+    expect(stripe.customers.update).toHaveBeenCalledWith('cus_123', { metadata: { capgo_billing_currency: '' } })
+    expect(mocks.syncBillingProfile).toHaveBeenCalled()
 
     expect(stripe.subscriptions.update).toHaveBeenCalledWith('sub_123', {
       cancel_at: '',
