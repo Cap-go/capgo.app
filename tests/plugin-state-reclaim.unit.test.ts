@@ -72,6 +72,8 @@ describe('plugin state same-app reclaim', () => {
     ]
     provider.execute.mockImplementation(async (query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'ok', lease_token: `lease-${++generation}`, generation: String(generation), has_more: false,
           apps: [{ app_id: appId, jobs, attempts: 1 }],
@@ -149,6 +151,8 @@ describe('plugin state same-app reclaim', () => {
     })
     provider.execute.mockImplementation(async (query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'ok', lease_token: `lease-${++generation}`, generation: String(generation), has_more: false,
           apps: [...jobsByApp].filter(([, jobs]) => jobs.length > 0).map(([app_id, jobs]) => ({ app_id, jobs, attempts: 1 })),
@@ -205,6 +209,8 @@ describe('plugin state same-app reclaim', () => {
     const dialect = new PgDialect()
     provider.execute.mockImplementation(async (query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'ok', lease_token: 'failed-lease', generation: '2', has_more: false,
           apps: [{ app_id: appId, jobs: [{ kind: 'version', ref: '1.0.0' }, { kind: 'manifest', ref: '101' }], attempts: 5 }],
@@ -236,6 +242,8 @@ describe('plugin state same-app reclaim', () => {
     let versionReads = 0
     provider.execute.mockImplementation(async (query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync(')) {
         claimCount++
         return { rows: [{ result: {
@@ -282,6 +290,8 @@ describe('plugin state same-app reclaim', () => {
     const dialect = new PgDialect()
     provider.execute.mockImplementation(async (query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync(')) {
         claims++
         return { rows: [{ result: claims === 1 ? { status: 'empty', retry_after_ms: 5 } : {
@@ -307,6 +317,8 @@ describe('plugin state same-app reclaim', () => {
     const dialect = new PgDialect()
     provider.execute.mockImplementation(async (query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'ok', lease_token: 'fixture-lease', generation: '1', has_more: false,
           apps: [{ app_id: 'com.test.full-backoff', jobs: [{ kind: 'device', ref: 'fixture-device' }], attempts: 1 }],
@@ -340,6 +352,8 @@ describe('plugin state same-app reclaim', () => {
     const dialect = new PgDialect()
     provider.execute.mockImplementation(async (query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'ok', lease_token: 'retry-lease', generation: '2', has_more: false,
           apps: [{ app_id: appId, jobs: [{ kind: 'version', ref: '1.0.0' }], attempts: 2 }],
@@ -369,6 +383,8 @@ describe('plugin state same-app reclaim', () => {
     const acks: Statement[] = []
     provider.execute.mockImplementation(async (query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'ok', lease_token: 'old-lease', generation: '1', has_more: false,
           apps: [{ app_id: appId, jobs: [{ kind: 'app', ref: '' }], attempts: 1 }],
@@ -394,6 +410,8 @@ describe('plugin state same-app reclaim', () => {
     const dialect = new PgDialect()
     provider.execute.mockImplementation(async (query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'ok', lease_token: 'device-lease', generation: '1', has_more: false,
           apps: [{ app_id: appId, jobs: [{ kind: 'device', ref: 'fixture-device' }], attempts: 1 }],
@@ -440,6 +458,8 @@ describe('plugin state same-app reclaim', () => {
     const dialect = new PgDialect()
     provider.execute.mockImplementation(async (query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       statements.push(statement.sql)
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'ok', lease_token: 'app-lease', generation: '2', has_more: false,

@@ -45,6 +45,12 @@ INSERT INTO public.serving_policy_sync_progress(id) VALUES(true);
 ALTER TABLE public.serving_policy_sync_pending ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.serving_policy_sync_failed ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.serving_policy_sync_progress ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Deny all direct access" ON public.serving_policy_sync_pending
+  AS RESTRICTIVE FOR ALL TO PUBLIC USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all direct access" ON public.serving_policy_sync_failed
+  AS RESTRICTIVE FOR ALL TO PUBLIC USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all direct access" ON public.serving_policy_sync_progress
+  AS RESTRICTIVE FOR ALL TO PUBLIC USING (false) WITH CHECK (false);
 REVOKE ALL ON public.serving_policy_sync_pending, public.serving_policy_sync_failed, public.serving_policy_sync_progress FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE FUNCTION public.serving_policy_active_epoch() RETURNS text

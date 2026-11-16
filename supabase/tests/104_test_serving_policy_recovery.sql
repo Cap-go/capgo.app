@@ -1,7 +1,17 @@
 BEGIN;
-SELECT plan(24);
+SELECT plan(26);
 SELECT pg_catalog.set_config('capgo.plugin_state_wake_sent', 'on', true);
 SELECT pg_catalog.set_config('capgo.updates_cache_wake_sent', 'on', true);
+SELECT is((SELECT count(*)::int FROM pg_policies
+  WHERE schemaname='public'
+    AND tablename IN ('serving_policy_sync_pending','serving_policy_sync_failed','serving_policy_sync_progress')
+    AND permissive='RESTRICTIVE' AND cmd='ALL' AND roles=ARRAY['public']::name[]
+    AND qual='false' AND with_check='false'),3,'policy queue tables explicitly deny all direct access');
+SELECT ok(NOT EXISTS (
+  SELECT 1 FROM (VALUES ('anon'),('authenticated'),('service_role')) roles(role_name)
+  CROSS JOIN (VALUES ('serving_policy_sync_pending'),('serving_policy_sync_failed'),('serving_policy_sync_progress')) tables(table_name)
+  WHERE has_table_privilege(roles.role_name,'public.'||tables.table_name,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+),'policy RPC callers retain no direct queue-table privileges');
 INSERT INTO private.settings(name,value) VALUES ('CAPGO_PLUGIN_STATE_SYNC_ENABLED','false')
 ON CONFLICT(name) DO UPDATE SET value = EXCLUDED.value;
 DELETE FROM private.settings WHERE name IN ('CAPGO_SERVING_REGIONS_READER_EPOCH','CAPGO_SERVING_REGIONS_ACTIVE_EPOCH');
