@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getBuildStatus } from '../public/build/status.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { DOCS_SEARCH_MAX_RESULTS, searchCapgoDocs } from '../utils/docs_search.ts'
+import { isStatisticsRangeTooLarge, MAX_STATISTICS_RANGE_DAYS } from '../utils/statistics_range.ts'
 import { MCP_EVENT_CATALOG, MCP_EVENT_NAMES, unsubscribeMcpEvent, upsertMcpEventSubscription } from '../utils/mcp_events.ts'
 import { handleCapgoListEventSubscriptions, loadApikeyRbacId, mcpSubscribeInputFromTool } from './events_rpc.ts'
 import { MCP_OUTPUT_SCHEMAS } from './output_schemas.ts'
@@ -206,6 +207,8 @@ interface ApiToolSpec<S extends Shape> {
   input: S
   annotations: McpToolAnnotations
   request: (input: z.infer<z.ZodObject<S>>) => McpApiRequest
+  /** Cross-field checks applied to the whole input after the per-field schema. */
+  refine?: { check: (input: z.infer<z.ZodObject<S>>) => boolean, message: string, path: string[] }
 }
 
 function apiTool<S extends Shape>(spec: ApiToolSpec<S>): McpTool {
@@ -214,7 +217,9 @@ function apiTool<S extends Shape>(spec: ApiToolSpec<S>): McpTool {
     title: spec.title,
     outputSchema: spec.outputSchema,
     description: spec.description,
-    inputSchema: z.object(spec.input) as unknown as z.ZodObject<z.ZodRawShape>,
+    inputSchema: (spec.refine
+      ? z.object(spec.input).refine(input => spec.refine!.check(input as z.infer<z.ZodObject<S>>), { message: spec.refine.message, path: spec.refine.path })
+      : z.object(spec.input)) as unknown as z.ZodObject<z.ZodRawShape>,
     annotations: { title: spec.title, ...spec.annotations },
     run: async (input, ctx) => apiResult(await ctx.call(spec.request(input as z.infer<z.ZodObject<S>>))),
   }
@@ -1038,8 +1043,22 @@ const deviceTools: McpTool[] = [
 // ---------------------------------------------------------------------------
 const statsRange = {
   from: dateString.describe('Start of the usage reporting window. Supply a calendar date such as 2026-01-31 or an ISO timestamp with its timezone.'),
-  to: dateString.describe('End of the usage reporting window. Use the same date or timestamp convention as from so the requested period is unambiguous.'),
+  to: dateString.describe(`End of the usage reporting window. Use the same date or timestamp convention as from so the requested period is unambiguous; the window spans at most ${MAX_STATISTICS_RANGE_DAYS} days.`),
   noAccumulate: z.boolean().optional().describe('Return daily values instead of cumulative totals; omitted or false returns accumulated usage.'),
+}
+
+// Mirrors the statistics endpoints, which reject longer ranges with date_range_too_large.
+// Unparseable dates are left to the endpoint, which reports them field by field.
+const statsRangeLimit = {
+  check: (input: { from: string, to: string }) => {
+    const from = new Date(input.from)
+    const to = new Date(input.to)
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()))
+      return true
+    return !isStatisticsRangeTooLarge(from, to)
+  },
+  message: `from and to must be at most ${MAX_STATISTICS_RANGE_DAYS} days apart. Split longer periods into several calls.`,
+  path: ['to'],
 }
 
 function statsQuery(input: { from: string, to: string, noAccumulate?: boolean, breakdown?: boolean }) {
@@ -1060,6 +1079,7 @@ const statsTools: McpTool[] = [
       + ' Returns data as dated usage records with mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.',
     input: { appId, ...statsRange },
     annotations: READ,
+    refine: statsRangeLimit,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}`, query: statsQuery(rest) }),
   }),
   apiTool({
@@ -1070,6 +1090,7 @@ const statsTools: McpTool[] = [
       + ' Returns data as dated usage records, or data.global and data.byApp when breakdown is true. Metrics accumulate unless noAccumulate is true.',
     input: { orgId, ...statsRange, breakdown: z.boolean().optional().describe('Include per-app usage alongside organization totals.') },
     annotations: READ,
+    refine: statsRangeLimit,
     request: ({ orgId: id, ...rest }) => ({ method: 'GET', path: `/statistics/org/${enc(id)}`, query: statsQuery(rest) }),
   }),
   apiTool({
@@ -1081,6 +1102,7 @@ const statsTools: McpTool[] = [
       + ' When records share a date, storage_byte_hours is retained from the first record, not summed.',
     input: statsRange,
     annotations: READ,
+    refine: statsRangeLimit,
     request: input => ({ method: 'GET', path: '/statistics/user', query: statsQuery(input) }),
   }),
   apiTool({
@@ -1091,6 +1113,7 @@ const statsTools: McpTool[] = [
       + ' Returns date labels and version datasets in labels and datasets.',
     input: { appId, from: dateString.describe('Start of the usage reporting window. Supply a calendar date such as 2026-01-31 or an ISO timestamp with its timezone.'), to: statsRange.to },
     annotations: READ,
+    refine: statsRangeLimit,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}/bundle_usage`, query: rest }),
   }),
   apiTool({
@@ -1101,6 +1124,7 @@ const statsTools: McpTool[] = [
       + ' Returns data.labels, data.datasets and data.latestVersion for version adoption, plus data.activeDevices and data.previousPeriodActiveDevices for platform totals and data.dailyPlatformActive for counts aligned with labels. Secondary summary read failures return zero-filled summaries; zeros do not prove inactivity.',
     input: { appId, from: dateString.describe('Start of the usage reporting window. Supply a calendar date such as 2026-01-31 or an ISO timestamp with its timezone.'), to: statsRange.to },
     annotations: READ,
+    refine: statsRangeLimit,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}/native_usage`, query: rest }),
   }),
   apiTool({
