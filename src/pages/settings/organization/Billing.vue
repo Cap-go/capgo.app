@@ -9,6 +9,7 @@ import IconDownload from '~icons/heroicons/arrow-down-tray'
 import IconCard from '~icons/heroicons/credit-card'
 import IconExclamationTriangle from '~icons/heroicons/exclamation-triangle'
 import IconShieldCheck from '~icons/heroicons/shield-check'
+import BillingProfileSection from '~/components/billing/BillingProfileSection.vue'
 import CancelPlanModal from '~/components/billing/CancelPlanModal.vue'
 import CardFormModal from '~/components/billing/CardFormModal.vue'
 import TrialPlanOfferModal from '~/components/billing/TrialPlanOfferModal.vue'
@@ -548,6 +549,8 @@ onMounted(async () => {
             </div>
           </section>
         </div>
+
+        <BillingProfileSection :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
 
         <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60" data-test="billing-invoices">
           <h2 class="border-b border-slate-100 px-5 py-4 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:border-white/10 dark:text-slate-400">

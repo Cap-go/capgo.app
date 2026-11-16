@@ -24,6 +24,7 @@ import {
   savePaymentMethodFromIntent,
   scheduleSubscriptionCancel,
 } from '../utils/stripe_in_app.ts'
+import { addBillingTaxId, getBillingProfile, removeBillingTaxId, updateBillingDetails } from '../utils/stripe_billing_profile.ts'
 import { cancelTrialPlan, getTrialPlanSummary, listSchedulableTrialPlans, scheduleTrialPlan, startTrialPlanNow } from '../utils/stripe_trial_plan.ts'
 import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 
@@ -109,6 +110,32 @@ app.post('/overview', middlewareAuth, async (c) => {
     }),
   ])
   return c.json({ publishableKey: ctx.publishableKey, card, backupCard, subscription, invoices, openInvoice, trialPlan })
+})
+
+// Profile is separate so a Stripe profile failure never hides cards or invoices.
+app.post('/profile', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.read_billing')
+  return c.json(await getBillingProfile(ctx))
+})
+
+app.post('/profile/update', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { details?: unknown }>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  return c.json(await updateBillingDetails(ctx, body.details))
+})
+
+app.post('/tax-id/add', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { taxId?: unknown }>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  return c.json(await addBillingTaxId(ctx, body.taxId))
+})
+
+app.post('/tax-id/remove', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { taxIdId?: unknown }>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  await removeBillingTaxId(ctx, body.taxIdId)
+  return c.json({ status: 'ok' })
 })
 
 // Trial card prompt: card on file and the onboarding plan that starts when the trial ends.

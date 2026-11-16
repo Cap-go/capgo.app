@@ -41,6 +41,7 @@ declare module 'vue' {
     AuthPageShell: typeof import('./components/auth/AuthPageShell.vue')['default']
     Banner: typeof import('./components/Banner.vue')['default']
     BillingModal: typeof import('./components/billing/BillingModal.vue')['default']
+    BillingProfileSection: typeof import('./components/billing/BillingProfileSection.vue')['default']
     BillingRegionChoice: typeof import('./components/dashboard/BillingRegionChoice.vue')['default']
     BlurBg: typeof import('./components/BlurBg.vue')['default']
     BuildChartControls: typeof import('./components/dashboard/BuildChartControls.vue')['default']
