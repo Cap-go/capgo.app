@@ -1304,10 +1304,21 @@ export async function getDefaultUploadChannel(
 }
 
 export async function uploadBundleInternal(preAppid: string, options: OptionsUpload, silent = false, reporter?: UploadReporter): Promise<UploadBundleResult> {
-  return runWithUploadReporter(reporter, () => uploadBundleInternalWithReporter(preAppid, options, silent))
+  return runWithUploadReporter(reporter, async () => {
+    // Every exit path (version persistence, manifest authorization, ZIP upload or delta failures)
+    // must remove the prepared delta bytes; a long-lived SDK/MCP process would otherwise keep a
+    // bundle-sized temp directory per failed upload until it exits.
+    const payloadCaches = new Set<ManifestPayloadCache>()
+    try {
+      return await uploadBundleInternalWithReporter(preAppid, options, silent, payloadCaches)
+    }
+    finally {
+      await Promise.all([...payloadCaches].map(cache => cache.dispose()))
+    }
+  })
 }
 
-async function uploadBundleInternalWithReporter(preAppid: string, options: OptionsUpload, silent: boolean): Promise<UploadBundleResult> {
+async function uploadBundleInternalWithReporter(preAppid: string, options: OptionsUpload, silent: boolean, payloadCaches: Set<ManifestPayloadCache>): Promise<UploadBundleResult> {
   if (!silent)
     getUploadReporter().intro(`Uploading with CLI version ${pack.version}`)
   let sessionKey: Buffer | undefined
@@ -1741,6 +1752,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (shouldRequestManifestUpload && options.delta) {
     try {
       manifestPayloadCache = await ManifestPayloadCache.create()
+      payloadCaches.add(manifestPayloadCache)
       manifestUploadEntries = await prepareManifestUploadEntries(manifest, path, encryptionData, options, undefined, manifestPayloadCache)
     }
     catch (error) {
