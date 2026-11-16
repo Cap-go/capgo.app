@@ -101,9 +101,9 @@ async function apply() {
     <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
       {{ t('billing-discounts-heading') }}
     </h2>
-    <div v-if="loading" class="mt-4" role="status" :aria-label="t('loading')">
+    <output v-if="loading" class="mt-4 block" :aria-label="t('loading')">
       <span class="d-loading d-loading-spinner d-loading-sm" />
-    </div>
+    </output>
     <div v-else-if="failed" class="mt-4" role="alert">
       <p class="text-sm text-red-600 dark:text-red-300">
         {{ t('billing-discounts-load-error') }}
@@ -160,8 +160,8 @@ async function apply() {
     <p v-if="error" role="alert" class="mt-3 text-sm text-red-600 dark:text-red-300">
       {{ error }}
     </p>
-    <p v-if="success" role="status" class="mt-3 text-sm text-emerald-700 dark:text-emerald-300">
+    <output v-if="success" class="mt-3 block text-sm text-emerald-700 dark:text-emerald-300">
       {{ t('billing-promo-success') }}
-    </p>
+    </output>
   </section>
 </template>

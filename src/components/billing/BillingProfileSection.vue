@@ -149,9 +149,9 @@ async function removeTax(id: string) {
     <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
       {{ t('billing-details-desc') }}
     </p>
-    <div v-if="loading" class="py-5" role="status" :aria-label="t('loading')">
+    <output v-if="loading" class="block py-5" :aria-label="t('loading')">
       <span class="d-loading d-loading-spinner d-loading-sm" />
-    </div>
+    </output>
     <div v-else-if="loadFailed" class="mt-4" role="alert">
       <p class="text-sm text-red-600 dark:text-red-300">
         {{ t('billing-details-load-error') }}
