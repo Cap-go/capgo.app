@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { SIMULATOR_MAX_DURATION_MINUTES } from '../supabase/functions/_backend/public/build/concurrency.ts'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, multipartIpaStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { SIMULATOR_IDLE_TIMEOUT_MINUTES, SIMULATOR_MAX_DURATION_MINUTES } from '../supabase/functions/_backend/public/build/concurrency.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, multipartIpaStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, simulatorBillableSeconds, simulatorBillableSecondsWithIdle, simulatorBillingEndInstant, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
 
 describe('simulator sessions', () => {
-  it('stops unattended sessions after five minutes', () => {
-    expect(SIMULATOR_MAX_DURATION_MINUTES).toBe(5)
+  it('keeps a forty minute max duration and a five minute idle timeout', () => {
+    expect(SIMULATOR_MAX_DURATION_MINUTES).toBe(40)
+    expect(SIMULATOR_IDLE_TIMEOUT_MINUTES).toBe(5)
   })
 
   it('asks the device host for one session tied to the Capgo org', () => {
@@ -27,14 +28,23 @@ describe('simulator sessions', () => {
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', Date.parse('2026-10-29T12:00:30.400Z'))).toBe(30)
     expect(simulatorBillableSeconds(null)).toBe(0)
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.400Z', Date.parse('2026-10-29T12:00:00.600Z'))).toBe(1)
-    expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', Date.parse('2026-10-29T14:00:00.000Z'), SIMULATOR_MAX_DURATION_MINUTES)).toBe(300)
-    expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', Date.parse('2026-10-29T14:00:00.000Z'), 40)).toBe(2400)
+    expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', Date.parse('2026-10-29T14:00:00.000Z'), SIMULATOR_MAX_DURATION_MINUTES)).toBe(2400)
     const stoppedAt = '2026-10-29T12:05:00.000Z'
     const retryAt = Date.parse('2026-10-29T12:15:00.000Z')
     expect(simulatorUsageEnd(stoppedAt, retryAt)).toBe(Date.parse(stoppedAt))
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', simulatorUsageEnd(stoppedAt, retryAt), 40)).toBe(300)
     const nextDay = Date.parse('2026-10-30T08:00:00.000Z')
     expect(simulatorBillingInstant('2026-10-29T23:50:00.000Z', nextDay, 40)).toBe(Date.parse('2026-10-30T00:30:00.000Z'))
+  })
+
+  it('bills idle expiry at last activity plus five minutes', () => {
+    const startedAt = '2026-10-29T12:00:00.000Z'
+    const lastActivityAt = '2026-10-29T12:00:00.000Z'
+    const idleStop = Date.parse('2026-10-29T12:10:00.000Z')
+    expect(simulatorBillingEndInstant(startedAt, lastActivityAt, idleStop)).toBe(Date.parse('2026-10-29T12:05:00.000Z'))
+    expect(simulatorBillableSecondsWithIdle(startedAt, lastActivityAt, idleStop)).toBe(300)
+    const activeUntil = '2026-10-29T12:35:00.000Z'
+    expect(simulatorBillableSecondsWithIdle(startedAt, activeUntil, Date.parse('2026-10-29T13:00:00.000Z'))).toBe(2400)
   })
 
   it('builds an agent-device command against the session URL', () => {

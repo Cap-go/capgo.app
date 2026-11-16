@@ -6,7 +6,9 @@ import type { PgQueryClient } from '../../utils/pg.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from '../../utils/pg.ts'
 import { recordBuildTime } from '../../utils/supabase.ts'
 import { backgroundTask, getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
-import { reserveSimulatorSlot, SIMULATOR_MAX_DURATION_MINUTES } from './concurrency.ts'
+import { reserveSimulatorSlot, SIMULATOR_IDLE_TIMEOUT_MINUTES, SIMULATOR_MAX_DURATION_MINUTES } from './concurrency.ts'
+
+export { SIMULATOR_IDLE_TIMEOUT_MINUTES, SIMULATOR_MAX_DURATION_MINUTES } from './concurrency.ts'
 import { savedOutputsForJobs } from './outputs.ts'
 import { ensureBuildPermission, ensureBuildTimePlanAllowed, getBuildOwnerOrg } from './request.ts'
 
@@ -188,6 +190,52 @@ export function simulatorBillableSeconds(startedAt: string | null, now = Date.no
   return Math.min(elapsed, cap)
 }
 
+export function simulatorBillingEndInstant(
+  startedAt: string | null,
+  lastActivityAt: string | null,
+  stoppedAt: number,
+  maxDurationMinutes = SIMULATOR_MAX_DURATION_MINUTES,
+  idleTimeoutMinutes = SIMULATOR_IDLE_TIMEOUT_MINUTES,
+): number {
+  if (!startedAt)
+    return stoppedAt
+  const opened = Date.parse(startedAt)
+  if (!Number.isFinite(opened))
+    return stoppedAt
+  const activitySource = lastActivityAt ?? startedAt
+  const activity = Date.parse(activitySource)
+  const activityAt = Number.isFinite(activity) ? activity : opened
+  const maxEnd = opened + Math.max(1, maxDurationMinutes) * 60_000
+  const idleEnd = activityAt + Math.max(1, idleTimeoutMinutes) * 60_000
+  return Math.min(stoppedAt, maxEnd, idleEnd)
+}
+
+export function simulatorBillableSecondsWithIdle(
+  startedAt: string | null,
+  lastActivityAt: string | null,
+  now = Date.now(),
+  maxDurationMinutes = SIMULATOR_MAX_DURATION_MINUTES,
+  idleTimeoutMinutes = SIMULATOR_IDLE_TIMEOUT_MINUTES,
+): number {
+  const end = simulatorBillingEndInstant(startedAt, lastActivityAt, now, maxDurationMinutes, idleTimeoutMinutes)
+  return simulatorBillableSeconds(startedAt, end, maxDurationMinutes)
+}
+
+async function touchSimulatorActivity(c: Context, sessionId: string) {
+  try {
+    await queryWrite(c, `
+      UPDATE public.simulator_sessions
+      SET last_activity_at = now(),
+          updated_at = now()
+      WHERE id = $1::uuid
+        AND status = 'in-progress'
+    `, [sessionId])
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to record simulator activity', sessionId, error })
+  }
+}
+
 function requirePlatform(value: unknown): 'ios' | 'android' {
   if (value === 'ios' || value === 'android')
     return value
@@ -289,6 +337,7 @@ async function markSession(c: Context, id: string, status: 'in-progress' | 'stop
         url = COALESCE($3, url),
         emulator_id = COALESCE($4, emulator_id),
         started_at = CASE WHEN $2 = 'in-progress' AND started_at IS NULL THEN now() ELSE started_at END,
+        last_activity_at = CASE WHEN $2 = 'in-progress' THEN now() ELSE last_activity_at END,
         finished_at = CASE WHEN $2 IN ('stopped', 'errored') THEN now() ELSE finished_at END,
         updated_at = now()
     WHERE id = $1::uuid
@@ -348,7 +397,7 @@ async function postEmulator(origin: string, accessKey: string, path: string, met
   return { status: response.status, data: payload?.data }
 }
 
-async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string, sessionUrl: string, accessKey: string) {
+async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string, sessionUrl: string, accessKey: string, sessionId: string) {
   const saved = (await savedOutputsForJobs(c, principal, appId, ownerOrg, [jobId]))[jobId]
   if (saved?.kind !== 'ios_ipa')
     throw new Error('This build has no saved iOS app.')
@@ -379,6 +428,7 @@ async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: strin
     const text = await response.text().catch(() => '')
     throw new Error(text.slice(0, 300) || 'The simulator could not install the build.')
   }
+  await touchSimulatorActivity(c, sessionId)
 }
 
 function simulatorConfig(c: Context) {
@@ -414,11 +464,12 @@ async function savedBuildInstallError(input: {
   platform: string
   sessionUrl: string
   accessKey: string
+  sessionId: string
 }) {
   if (!input.jobId || input.platform !== 'ios')
     return null
   try {
-    await installSavedIpa(input.c, input.principal, input.appId, input.ownerOrg, input.jobId, input.sessionUrl, input.accessKey)
+    await installSavedIpa(input.c, input.principal, input.appId, input.ownerOrg, input.jobId, input.sessionUrl, input.accessKey, input.sessionId)
     return null
   }
   catch (error) {
@@ -459,8 +510,11 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
     const device = openedSimulator(created.data)
     await markSession(c, slot.id, 'in-progress', { url: device.url, emulatorId: device.id })
     if (platform === 'ios')
-      await backgroundTask(c, wakeSimulatorDevice(device.url, accessKey))
-    const installError = await savedBuildInstallError({ c, principal, appId, ownerOrg: orgId, jobId: body.build_job_id, platform, sessionUrl: device.url, accessKey })
+      await backgroundTask(c, (async () => {
+        await wakeSimulatorDevice(device.url, accessKey)
+        await touchSimulatorActivity(c, slot.id)
+      })())
+    const installError = await savedBuildInstallError({ c, principal, appId, ownerOrg: orgId, jobId: body.build_job_id, platform, sessionUrl: device.url, accessKey, sessionId: slot.id })
     return c.json({
       data: {
         id: slot.id,
@@ -509,6 +563,7 @@ async function recordStartupFailure(c: Context, slotId: string, emulatorId: stri
 export async function readSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const appId = requireAppId(body.app_id)
   const { row } = await ownedSession(c, principal, userId, appId, sessionId)
+  await touchSimulatorActivity(c, sessionId)
   const remoteConfig = await simulatorRemoteConfig(c, row)
   return c.json({
     data: {
@@ -553,6 +608,7 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
   const { row } = await ownedSession(c, principal, userId, appId, sessionId)
   if (row.status !== 'in-progress' || !row.url)
     throw simpleError('invalid_request', 'This simulator is not running.')
+  await touchSimulatorActivity(c, sessionId)
   const { accessKey } = simulatorConfig(c)
   const response = await fetch(simulatorDeviceUrl(row.url, 'agent-device/rpc'), {
     method: 'POST',
@@ -568,8 +624,10 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
     throw quickError(502, 'simulator_unavailable', payload?.error?.message || `Simulator request failed (${response.status})`, { app_id: appId }, undefined, { alert: false })
   }
   let image: string | undefined
-  if (rpc.params.command === 'screenshot')
+  if (rpc.params.command === 'screenshot') {
     image = await simulatorScreenshot(row.url, accessKey, appId)
+    await touchSimulatorActivity(c, sessionId)
+  }
   return c.json({
     data: {
       id: row.id,
@@ -639,6 +697,7 @@ async function rememberDeviceStop(c: Context, id: string, stoppedAt: string) {
 export async function stopSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const appId = requireAppId(body.app_id)
   const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
+  await touchSimulatorActivity(c, sessionId)
   if (row.status === 'stopped' || row.status === 'errored') {
     return c.json({ data: { id: row.id, url: row.url, status: row.status, platform: row.platform, kind: 'simulator' } })
   }

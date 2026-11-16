@@ -6,7 +6,8 @@ import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logP
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
 
-export const SIMULATOR_MAX_DURATION_MINUTES = 5
+export const SIMULATOR_MAX_DURATION_MINUTES = 40
+export const SIMULATOR_IDLE_TIMEOUT_MINUTES = 5
 
 export const NATIVE_BUILD_TERMINAL_STATUSES = ['succeeded', 'failed', 'expired', 'released', 'cancelled', 'canceled'] as const
 export const NATIVE_BUILD_CONCURRENCY_ERROR = 'native_build_concurrency_limit_exceeded'

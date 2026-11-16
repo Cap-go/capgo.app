@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(15);
+SELECT plan(19);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -12,7 +12,7 @@ VALUES (
 );
 
 INSERT INTO public.simulator_sessions (
-  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, last_activity_at
 )
 VALUES
   (
@@ -22,8 +22,9 @@ VALUES
     'ios',
     'in-progress',
     '6aa76066-55ef-4238-ade6-0b32334a4097',
-    5,
-    now() - interval '2 hours'
+    40,
+    now() - interval '2 hours',
+    now() - interval '2 minutes'
   ),
   (
     '99000000-0000-4000-8000-000000000002',
@@ -32,7 +33,8 @@ VALUES
     'android',
     'in-progress',
     '6aa76066-55ef-4238-ade6-0b32334a4097',
-    5,
+    40,
+    now() - interval '4 minutes',
     now() - interval '4 minutes'
   );
 
@@ -62,7 +64,7 @@ SELECT tests.authenticate_as_service_role();
 SELECT is(
   public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
   1,
-  'only the session past its duration is expired'
+  'only the session past its max duration is expired'
 );
 
 SELECT is(
@@ -84,8 +86,71 @@ SELECT is(
     WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
       AND build_id = '99000000-0000-4000-8000-000000000001'
   ),
+  2400::bigint,
+  'max duration expiry bills the capped open time'
+);
+
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, last_activity_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000004',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'ios',
+  'in-progress',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '10 minutes',
+  now() - interval '10 minutes'
+);
+
+SELECT is(
+  public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+  1,
+  'idle simulators stop after five minutes without activity'
+);
+
+SELECT is(
+  (
+    SELECT build_time_unit
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id = '99000000-0000-4000-8000-000000000004'
+  ),
   300::bigint,
-  'expiry bills the capped open time'
+  'idle expiry bills until activity plus five minutes'
+);
+
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, last_activity_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000005',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'android',
+  'in-progress',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '20 minutes',
+  now() - interval '2 minutes'
+);
+
+SELECT is(
+  public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+  0,
+  'recent activity keeps a simulator alive past five minutes idle'
+);
+
+UPDATE public.simulator_sessions
+SET last_activity_at = now()
+WHERE id = '99000000-0000-4000-8000-000000000005';
+
+SELECT is(
+  public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+  0,
+  'bumping activity resets the idle timer'
 );
 
 SELECT is(
@@ -107,11 +172,11 @@ SELECT is(
       AND build_id = '99000000-0000-4000-8000-000000000001'
   ),
   (
-    SELECT started_at + interval '5 minutes'
+    SELECT started_at + interval '40 minutes'
     FROM public.simulator_sessions
     WHERE id = '99000000-0000-4000-8000-000000000001'
   ),
-  'expired usage is dated when the session ended'
+  'max duration usage is dated when the session ended'
 );
 
 INSERT INTO public.orgs (id, created_by, management_email, name)
@@ -136,7 +201,8 @@ SELECT throws_ok(
 SELECT set_config('capgo.allow_owner_org_transfer', 'false', true);
 
 UPDATE public.simulator_sessions
-SET started_at = now() - interval '2 hours'
+SET started_at = now() - interval '2 hours',
+    last_activity_at = now() - interval '2 hours'
 WHERE id = '99000000-0000-4000-8000-000000000002';
 
 SELECT set_config('capgo.allow_owner_org_transfer', 'true', true);
@@ -168,10 +234,11 @@ SELECT is(
     WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
       AND build_id IN (
         '99000000-0000-4000-8000-000000000001',
-        '99000000-0000-4000-8000-000000000002'
+        '99000000-0000-4000-8000-000000000002',
+        '99000000-0000-4000-8000-000000000004'
       )
   ),
-  2,
+  3,
   'deleting the app keeps the simulator minutes'
 );
 
@@ -233,7 +300,7 @@ VALUES (
 );
 
 INSERT INTO public.simulator_sessions (
-  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, last_activity_at
 )
 VALUES (
   '99000000-0000-4000-8000-000000000003',
@@ -242,7 +309,8 @@ VALUES (
   'android',
   'in-progress',
   '6aa76066-55ef-4238-ade6-0b32334a4097',
-  5,
+  40,
+  now() - interval '1 minute',
   now() - interval '1 minute'
 );
 
