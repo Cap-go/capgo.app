@@ -1,5 +1,5 @@
 BEGIN;
-SELECT plan(20);
+SELECT plan(24);
 SELECT pg_catalog.set_config('capgo.plugin_state_wake_sent', 'on', true);
 SELECT pg_catalog.set_config('capgo.updates_cache_wake_sent', 'on', true);
 INSERT INTO private.settings(name,value) VALUES ('CAPGO_PLUGIN_STATE_SYNC_ENABLED','false')
@@ -40,6 +40,30 @@ SELECT ok(EXISTS(SELECT 1 FROM public.serving_policy_sync_progress WHERE done_at
 SELECT results_eq('SELECT to_jsonb(s) FROM public.plugin_state_sync_state s','SELECT value FROM payload_before','policy tick preserves payload backfill and GC metadata');
 SELECT results_eq('SELECT to_jsonb(s) FROM public.plugin_state_sync_apps s ORDER BY app_id','SELECT value FROM apps_before ORDER BY value->>''app_id''','policy tick never claims full/app coverage');
 SELECT results_eq('SELECT to_jsonb(s) FROM public.plugin_state_sync_pending s ORDER BY id','SELECT value FROM pending_before ORDER BY (value->>''id'')::bigint','policy bootstrap does not enqueue payload work');
+-- Synchronous dispatch failures must not roll back a saved app's durable policy work.
+CREATE TEMP TABLE original_policy_wake AS
+SELECT pg_get_functiondef('public.wake_plugin_state_sync()'::regprocedure) AS definition;
+CREATE OR REPLACE FUNCTION public.wake_plugin_state_sync() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  RAISE EXCEPTION 'Injected policy wake failure';
+END;
+$$;
+DELETE FROM public.serving_policy_sync_pending;
+INSERT INTO public.apps(app_id, name, icon_url, owner_org)
+SELECT 'com.example.policy-wake-failure', 'Policy wake fixture', '', owner_org
+FROM public.apps WHERE app_id='com.example.policy-recovery.00001';
+SELECT is((SELECT count(*)::int FROM public.serving_policy_sync_pending
+  WHERE app_id='com.example.policy-wake-failure'),1,'app insert retains durable policy work when its wake fails');
+UPDATE public.apps SET serving_regions=ARRAY['EU']::text[], serving_region_mode='block'
+WHERE app_id='com.example.policy-recovery.00001';
+SELECT is((SELECT count(*)::int FROM public.serving_policy_sync_pending
+  WHERE app_id='com.example.policy-recovery.00001'),1,'saved restriction retains durable policy work after completed bootstrap and wake failure');
+SELECT is((SELECT serving_region_mode FROM public.apps
+  WHERE app_id='com.example.policy-recovery.00001'),'block','the requested restriction remains saved');
+DO $$ BEGIN EXECUTE (SELECT definition FROM original_policy_wake); END; $$;
+SELECT public.plugin_state_sync_tick();
+SELECT is((SELECT count(*)::int FROM public.claim_serving_policy_sync()),1,'periodic recovery can claim policy work after the wake recovers');
 DELETE FROM public.serving_policy_sync_pending;
 UPDATE public.serving_policy_sync_progress SET done_at=now();
 INSERT INTO public.serving_policy_sync_pending(app_id) VALUES('com.example.policy-recovery.00001');

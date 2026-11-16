@@ -185,7 +185,11 @@ BEGIN
       WHERE (o.app_id, o.serving_regions, o.serving_region_mode)
         IS DISTINCT FROM (n.app_id, n.serving_regions, n.serving_region_mode);
     END IF;
-    PERFORM public.wake_plugin_state_sync();
+    BEGIN
+      PERFORM public.wake_plugin_state_sync();
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'serving policy sync wake failed: %', SQLERRM;
+    END;
   END IF;
   IF NOT public.plugin_state_sync_enabled() THEN
     RETURN NULL;
