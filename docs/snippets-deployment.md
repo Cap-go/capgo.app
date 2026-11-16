@@ -6,10 +6,10 @@ All three production snippets on `capgo.app` are managed by the catalog in
 | Snippet | Source |
 | --- | --- |
 | `plugin_load_balancer` | `cloudflare_workers/snippet/index.js` |
-| `legacy_cli_manifest_warning` | `cloudflare_workers/snippet/legacy_cli_manifest_warning.js` |
-| `inbox_message` | `cloudflare_workers/snippet/inbox_message.js` |
+| `legacy_cli_manifest_warning` | `cloudflare_workers/legacy_cli_manifest_warning/index.js` |
+| `inbox_message` | `cloudflare_workers/inbox_message/index.js` |
 
-The two compatibility snippets preserve the previously deployed behavior. The
+The two existing compatibility snippet sources match the deployed behavior. The
 load balancer builds from the existing readable source, including the cache
 isolation checks for responses served from KV.
 

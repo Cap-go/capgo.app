@@ -3,8 +3,8 @@ export const SNIPPET_ZONE_ID = '7fe39404d772c5a0b4444f5a0475a586'
 export const MAX_SNIPPET_BYTES = 32 * 1024
 export const SNIPPETS = [
   { name: 'plugin_load_balancer', source: 'cloudflare_workers/snippet/index.js' },
-  { name: 'legacy_cli_manifest_warning', source: 'cloudflare_workers/snippet/legacy_cli_manifest_warning.js' },
-  { name: 'inbox_message', source: 'cloudflare_workers/snippet/inbox_message.js' },
+  { name: 'legacy_cli_manifest_warning', source: 'cloudflare_workers/legacy_cli_manifest_warning/index.js' },
+  { name: 'inbox_message', source: 'cloudflare_workers/inbox_message/index.js' },
 ] as const
 
 export interface BuiltSnippet {
