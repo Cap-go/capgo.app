@@ -854,6 +854,9 @@ export async function createAndQueueWebhookDeliveries(
       `INSERT INTO public.webhook_deliveries (webhook_id, org_id, audit_log_id, event_type, request_payload, delivery_version, status)
        SELECT target.webhook_id, target.org_id, NULL, $3, $4::jsonb, $5, 'pending'
        FROM unnest($1::uuid[], $2::uuid[]) AS target(webhook_id, org_id)
+       -- Skip subscriptions deleted since dispatch read them, so one deletion cannot fail
+       -- the foreign key for the whole batch.
+       JOIN public.webhooks AS webhook ON webhook.id = target.webhook_id
        RETURNING id, webhook_id`,
       [targets.map(target => target.webhookId), targets.map(target => target.orgId), eventType, JSON.stringify(requestPayload), deliveryVersion],
     )
