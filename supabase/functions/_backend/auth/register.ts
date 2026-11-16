@@ -1,5 +1,5 @@
-import type { User } from '@supabase/supabase-js'
 import type { Context } from 'hono'
+import type { GotrueUser } from '../utils/gotrue_admin.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
@@ -59,7 +59,7 @@ function isUserAlreadyRegisteredError(err: unknown): boolean {
   return message.includes('already registered') || message.includes('user already exists')
 }
 
-function isEmailConfirmationPending(user: Pick<User, 'email_confirmed_at'> | null | undefined): boolean {
+function isEmailConfirmationPending(user: Pick<GotrueUser, 'email_confirmed_at'> | null | undefined): boolean {
   return Boolean(user) && !user?.email_confirmed_at
 }
 

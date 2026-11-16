@@ -1,4 +1,4 @@
-import type { ConsoleDataClient, ConsoleQuery, FunctionInvokeOptions, RealtimeChannel } from '../../supabase/functions/_backend/utils/console_contract'
+import type { ConsoleDataClient, ConsoleQuery, FunctionInvokeOptions, RealtimeChannel, RealtimeChannelStatus } from '../../supabase/functions/_backend/utils/console_contract'
 import type { Database } from '~/types/database.types'
 import { createConsoleAuthClient, resolveConsoleApiBase } from '~/services/consoleAuth'
 
@@ -173,7 +173,7 @@ export function createConsoleClient(options: { persistSession?: boolean } = {}) 
 
   // One subscription attempt: 'ok' when the server closed a healthy stream,
   // 'retry' on a transient failure, 'stop' when no events backend exists.
-  async function connectEvents(orgId: string, signal: AbortSignal, callback: (status: string) => void, onEvent: (payload: unknown) => void): Promise<'ok' | 'retry' | 'stop'> {
+  async function connectEvents(orgId: string, signal: AbortSignal, callback: (status: RealtimeChannelStatus) => void, onEvent: (payload: unknown) => void): Promise<'ok' | 'retry' | 'stop'> {
     try {
       const token = await bearer()
       const response = await fetch(`${baseURL}/private/console/events?org_id=${encodeURIComponent(orgId)}`, {
@@ -198,7 +198,7 @@ export function createConsoleClient(options: { persistSession?: boolean } = {}) 
     }
   }
 
-  async function pumpEvents(orgId: string, controller: AbortController, callback: (status: string) => void, onEvent: (payload: unknown) => void) {
+  async function pumpEvents(orgId: string, controller: AbortController, callback: (status: RealtimeChannelStatus) => void, onEvent: (payload: unknown) => void) {
     let failures = 0
     while (!controller.signal.aborted) {
       const outcome = await connectEvents(orgId, controller.signal, callback, onEvent)
@@ -216,22 +216,22 @@ export function createConsoleClient(options: { persistSession?: boolean } = {}) 
     const orgId = name.replace(/^cli-events:org:/, '')
     let handler: (message: { payload: unknown }) => void = () => {}
     const controller = new AbortController()
-    const subscription = {
-      on(_kind: string, _filter: unknown, callback: (message: { payload: unknown }) => void) {
+    const subscription: RealtimeChannel = {
+      on(_kind, _filter, callback) {
         handler = callback
         return subscription
       },
-      subscribe(callback: (status: string) => void) {
+      subscribe(callback) {
         void pumpEvents(orgId, controller, callback, payload => handler({ payload }))
         return subscription
       },
-      track: async (_presence: unknown) => 'ok',
+      track: async () => 'ok',
       unsubscribe: async () => {
         controller.abort()
         return 'ok'
       },
     }
-    return subscription as unknown as RealtimeChannel
+    return subscription
   }
 
   async function storageResult<T>(path: string, options: ConsoleInvokeOptions): Promise<{ data: T | null, error: Error | null }> {
