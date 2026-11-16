@@ -649,6 +649,41 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   {
+    slug: 'org-billing-details',
+    path: '/settings/organization/billing',
+    auth: true,
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 1280, height: 1400 })
+      await page.route('**/private/config', route => route.fulfill({ json: { stripeEnabled: true } }))
+      await page.route('**/private/sso/check-enforcement', route => route.fulfill({ json: { allowed: true } }))
+      await page.route('**/private/stripe_past_due', route => route.fulfill({ json: { past_due: false, invoice: null } }))
+      await page.route('**/private/stripe_billing/overview', route => route.fulfill({ json: {
+        publishableKey: '',
+        card: { id: 'pm_visual', brand: 'visa', last4: '4242', expMonth: 12, expYear: 2030 },
+        backupCard: null,
+        subscription: { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: '2030-01-01T00:00:00Z' },
+        invoices: [],
+        openInvoice: null,
+        trialPlan: null,
+      } }))
+      await page.route('**/private/stripe_billing/profile', route => route.fulfill({ json: {
+        name: 'Example Company', email: 'billing@example.com', phone: '',
+        address: { line1: '123 Example Street', line2: '', city: 'Berlin', state: '', postal_code: '10115', country: 'DE' },
+        taxIds: [{ id: 'txi_visual', type: 'eu_vat', value: 'DE123456789', status: 'verified' }],
+      } }))
+      await page.route('**/private/stripe_billing/discounts', route => route.fulfill({ json: {
+        hasSubscription: true, canApply: true,
+        discounts: [{ name: 'Example offer', code: 'EXAMPLE10', percentOff: 10, amountOff: null, currency: null, endsAt: null }],
+      } }))
+      await page.reload()
+      await page.locator('[data-test="billing-subscription"]').waitFor()
+      if (process.env.VISUAL_DIFF_PHASE === 'after') {
+        await page.locator('[data-test="billing-profile-details"]').waitFor()
+        await page.locator('[data-test="billing-promo-form"]').waitFor()
+      }
+    },
+  },
+  {
     slug: 'org-billing-trial-plan-offer',
     path: '/settings/organization/billing',
     auth: true,
