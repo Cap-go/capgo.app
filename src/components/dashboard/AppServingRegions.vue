@@ -30,7 +30,7 @@ async function checkActivation() {
     }
     const published = parseServingPolicy(doc.policy.regions, doc.policy.mode)
     verification.value = published.mode === mode.value
-      && JSON.stringify([...published.regions].sort()) === JSON.stringify([...regions.value].sort())
+      && JSON.stringify([...published.regions].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)) === JSON.stringify([...regions.value].sort((left, right) => left < right ? -1 : left > right ? 1 : 0))
       ? 'active'
       : 'pending'
   }

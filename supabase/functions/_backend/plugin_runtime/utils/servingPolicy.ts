@@ -138,7 +138,7 @@ export async function enforceServingPolicy(c: Context, appId: string) {
 /** Stable policy partition: tightened settings cannot reuse entries filled from disabled replicas. */
 export function servingCachePartition(c: Context) {
   const policy = requestServingPolicy(c)
-  return policy && isRestrictedServingPolicy(policy) ? [...policy.regions].sort().join(',') : null
+  return policy && isRestrictedServingPolicy(policy) ? [...policy.regions].sort((left, right) => left < right ? -1 : left > right ? 1 : 0).join(',') : null
 }
 
 export { ingressHeader as SERVING_INGRESS_HEADER }
