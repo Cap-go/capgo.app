@@ -10,6 +10,7 @@ import {
   getPreviousMonthUtcRange,
   getWeeklyReportRange,
   shouldSendDeployInstallStatsEmail,
+  sumVersionFailures,
   sumVersionInstalls,
   WEEKLY_REPORT_SQL,
 } from '../utils/cron_email_stats.ts'
@@ -258,12 +259,14 @@ async function handleDeployInstallStats(
     const windowStart = new Date(deploy.deployed_at).toISOString()
     const windowEnd = new Date(Date.parse(windowStart) + 24 * 60 * 60 * 1000).toISOString()
     let installs: number
+    let failures: number
     try {
       // This is app-wide bundle activity, including legacy rows without channels.
       const rows = await readStatsVersion(c, appId, windowStart, windowEnd, undefined, { throwOnError: true })
       if (rows.some(row => row.app_id !== appId))
         throw new Error('Analytics returned rows for another app')
       installs = sumVersionInstalls(rows, deploy.version_name, deploy.version_id)
+      failures = sumVersionFailures(rows, deploy.version_name, deploy.version_id)
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'Deploy report analytics unavailable or invalid; deferring email', deployId, error })
@@ -272,7 +275,7 @@ async function handleDeployInstallStats(
       return c.json({ status: 'deferred', reason: 'invalid_or_unavailable_analytics' })
     }
 
-    if (!shouldSendDeployInstallStatsEmail(installs)) {
+    if (!shouldSendDeployInstallStatsEmail(installs, failures)) {
       await pg.query(DEPLOY_REPORT_RELEASE_SQL, claim)
       return c.json({ status: 'deferred', reason: 'not_enough_installs' })
     }
@@ -289,7 +292,7 @@ async function handleDeployInstallStats(
       return c.json({ status: 'skipped', reason: 'deployment_changed_or_claim_consumed' })
 
     delivery.send({
-      report_schema_version: '2',
+      report_schema_version: '3',
       app_id: current.app_id,
       app_name: current.app_name || current.app_id,
       deploy_id: current.id.toString(),
@@ -302,6 +305,7 @@ async function handleDeployInstallStats(
       window_start: windowStart,
       window_end: windowEnd,
       install_count_24h: installs.toString(),
+      failure_count_24h: failures.toString(),
       install_count_is_estimate: c.env.VERSION_USAGE ? 'true' : 'false',
       window_hours: '24',
     })

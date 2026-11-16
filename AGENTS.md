@@ -448,7 +448,8 @@ or edge cache. Still return deleted when the DB row is deleted or a deleted mark
 ### Email Templates
 
 - `supabase/templates/invite_new_user_to_org.html` and `supabase/templates/invite_existing_user_to_org.html` are Bento templates.
-- Every other file in `supabase/templates/` is a Supabase auth or notification template.
+- All files under `supabase/templates/bento/` are also Bento templates, including `deploy_report_24h.html` (Bento template 85726).
+- Other files in `supabase/templates/` are Supabase auth or notification templates.
 - Supabase templates use Supabase template syntax.
 - Bento templates use Bento template syntax.
 - Updating templates in the repository does not upload them anywhere automatically.

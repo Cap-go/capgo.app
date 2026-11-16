@@ -69,6 +69,14 @@ function errorCode(value: unknown): string | undefined {
   return typeof body.error_code === 'string' ? body.error_code : undefined
 }
 
+// `path` is relative to the GoTrue root, e.g. `admin/users` or `.well-known/jwks.json`.
+export function gotrueFetch(c: Context, path: string, init?: RequestInit): Promise<Response> {
+  const goTrue = (c.env as Partial<Bindings> | undefined)?.GOTRUE
+  return goTrue
+    ? goTrue.fetch(`https://gotrue/${path}`, init)
+    : fetch(`${trimTrailingSlashes(getEnv(c, 'SUPABASE_URL'))}/auth/v1/${path}`, init)
+}
+
 async function request(c: Context, method: string, path: string, body?: unknown): Promise<RawResponse> {
   const key = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
   const headers: Record<string, string> = {
@@ -79,14 +87,11 @@ async function request(c: Context, method: string, path: string, body?: unknown)
   if (body !== undefined)
     headers['Content-Type'] = 'application/json;charset=UTF-8'
   const init: RequestInit = { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }
-  const goTrue = (c.env as Partial<Bindings> | undefined)?.GOTRUE
 
   let response: Response
   let text: string
   try {
-    response = goTrue
-      ? await goTrue.fetch(`https://gotrue/${path}`, init)
-      : await fetch(`${trimTrailingSlashes(getEnv(c, 'SUPABASE_URL'))}/auth/v1/${path}`, init)
+    response = await gotrueFetch(c, path, init)
     text = await response.text()
   }
   catch (error) {

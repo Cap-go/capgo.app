@@ -13,6 +13,7 @@ export interface WeeklyInstallStatsResult {
 export interface VersionInstallRow {
   version_name?: string | null
   install?: number | string | null
+  fail?: number | string | null
 }
 
 /** Coerce optional analytics fields used outside the weekly report. */
@@ -94,8 +95,9 @@ export function isInPreviousMonthRange(isoTimestamp: string, now: Date = new Dat
   return isoTimestamp >= startIso && isoTimestamp < endExclusiveIso
 }
 
-export function sumVersionInstalls(
+function sumVersionEvents(
   versionStats: VersionInstallRow[],
+  metric: 'install' | 'fail',
   versionName?: string | null,
   versionId?: number | null,
 ): number {
@@ -111,15 +113,23 @@ export function sumVersionInstalls(
       return false
     })
     .reduce((sum, row) => {
-      const value = row.install
+      const value = row[metric]
       if ((typeof value !== 'number' && typeof value !== 'string')
         || (typeof value === 'string' && !/^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(value.trim())))
-        throw new Error('Missing or malformed install count')
+        throw new Error(`Missing or malformed ${metric} count`)
       const count = Number(value)
       if (!Number.isSafeInteger(count) || count < 0 || !Number.isSafeInteger(sum + count))
-        throw new Error('Invalid install count')
+        throw new Error(`Invalid ${metric} count`)
       return sum + count
     }, 0)
+}
+
+export function sumVersionInstalls(rows: VersionInstallRow[], versionName?: string | null, versionId?: number | null): number {
+  return sumVersionEvents(rows, 'install', versionName, versionId)
+}
+
+export function sumVersionFailures(rows: VersionInstallRow[], versionName?: string | null, versionId?: number | null): number {
+  return sumVersionEvents(rows, 'fail', versionName, versionId)
 }
 
 /** Keep retrying 24h deploy emails while analytics may still be catching up. */
@@ -130,8 +140,10 @@ export function shouldRetryDeployInstallStats(deployedAt: Date, now: Date = new 
   return elapsedMs >= 0 && elapsedMs < retryWindowMs
 }
 
-export function shouldSendDeployInstallStatsEmail(installs: number): boolean {
-  return Number.isSafeInteger(installs) && installs > 1
+export function shouldSendDeployInstallStatsEmail(installs: number, failures = 0): boolean {
+  return Number.isSafeInteger(installs) && installs >= 0
+    && Number.isSafeInteger(failures) && failures >= 0
+    && (installs > 1 || failures > 0)
 }
 
 export interface DeviceVersionAdoptionSummary {

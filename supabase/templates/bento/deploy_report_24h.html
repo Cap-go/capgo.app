@@ -1,0 +1,37 @@
+<!-- Bento template: 85726; event: bundle:install_stats_24h -->
+<!-- Subject: Your bundle’s first 24h report -->
+<p>Hi {{ visitor.first_name | default: "there" | escape }},</p>
+<p>Here is the first day of recorded activity for <strong>{{ event.details.app_name | default: event.details.app_id | escape }}</strong>, bundle <strong>{{ event.details.version_name | escape }}</strong>.</p>
+<ul>
+  <li><strong>Deployment channel:</strong> {{ event.details.channel_name | escape }}</li>
+  {% if event.details.platform %}<li><strong>Deployment platform:</strong> {% if event.details.platform == "all" %}iOS and Android{% else %}{{ event.details.platform | escape }}{% endif %}</li>{% endif %}
+  {% if event.details.window_start and event.details.window_end %}<li><strong>Reporting window (UTC):</strong> {{ event.details.window_start | escape }} to {{ event.details.window_end | escape }} (end exclusive)</li>{% endif %}
+</ul>
+<p><strong>{% if event.details.install_count_is_estimate != "false" %}Estimated{% else %}Recorded{% endif %} events in the first 24 hours</strong></p>
+<table style="border-collapse:collapse; width:100%; max-width:520px; text-align:left; border:1px solid #dbe1e8;">
+  <tr><th scope="row" style="padding:10px; border-bottom:1px solid #dbe1e8;">Install events</th><td style="padding:10px; border-bottom:1px solid #dbe1e8;">{{ event.details.install_count_24h | default: "Unavailable" | escape }}</td></tr>
+  <tr><th scope="row" style="padding:10px;">Failure events</th><td style="padding:10px;">{% if event.details.failure_count_24h != nil %}{{ event.details.failure_count_24h | escape }}{% else %}Unavailable{% endif %}</td></tr>
+</table>
+{% assign failures = event.details.failure_count_24h | plus: 0 %}
+{% if event.details.failure_count_24h == nil %}
+<p>Failure data was not included in this report. Open diagnostics for recent events.</p>
+{% elsif failures > 0 %}
+<p><strong>Failure events were recorded.</strong> Review the affected bundle in diagnostics to investigate the errors before deciding whether to continue or pause the rollout.</p>
+{% else %}
+<p>No failure events were recorded in this window. This does not guarantee an error-free release.</p>
+{% endif %}
+{% if event.details.app_id and event.details.version_name %}
+<p><a href="https://console.capgo.app/app/{{ event.details.app_id | url_encode }}/observe/errors?version={{ event.details.version_name | url_encode }}">Review bundle errors</a></p>
+<p><small>Diagnostics show recent activity; their time window may differ from this report.</small></p>
+{% endif %}
+<p>These are independent event counts for this bundle across the app, including all channels and platforms, not just the deployment shown above. Repeat events can count more than once. They are not unique-device counts, an adoption percentage, or a success rate. Failures can occur after an install event, including during rollback; they are not a separate count of affected devices or rollbacks.</p>
+<p>Analytics can arrive late{% if event.details.install_count_is_estimate != "false" %} and these counts may be estimated from sampled data{% endif %}. This report alone does not establish that a release is healthy.</p>
+<ul>
+  {% if event.details.app_id %}
+  <li><a href="https://console.capgo.app/app/{{ event.details.app_id | url_encode }}">App overview</a></li>
+  {% if event.details.channel_id %}<li><a href="https://console.capgo.app/app/{{ event.details.app_id | url_encode }}/channel/{{ event.details.channel_id | url_encode }}">Channel</a></li>{% endif %}
+  {% if event.details.version_id %}<li><a href="https://console.capgo.app/app/{{ event.details.app_id | url_encode }}/bundle/{{ event.details.version_id | url_encode }}">Bundle</a></li>{% endif %}
+  {% else %}<li><a href="https://console.capgo.app/apps">View your apps</a></li>{% endif %}
+</ul>
+<p>Questions about the report? Reply to this email.</p>
+<p><a href="https://console.capgo.app/settings/account/notifications">Notification settings</a> · <a href="{{ visitor.unsubscribe_url }}">Unsubscribe</a></p>
