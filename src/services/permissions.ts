@@ -115,6 +115,7 @@ interface CacheEntry {
 
 interface PendingCheck {
   check: AtomicCheck
+  promise: Promise<boolean>
   resolve: (allowed: boolean) => void
 }
 
@@ -250,9 +251,17 @@ function enqueueCheck(check: AtomicCheck): Promise<boolean> {
   if (cached && cached.expiresAt > now)
     return cached.promise
 
-  const promise = new Promise<boolean>((resolve) => {
-    pendingChecks.set(key, { check, resolve })
+  // The cache may have been cleared while this check is still queued: reuse the
+  // queued request so every caller of the key settles with the same result.
+  const queued = pendingChecks.get(key)
+  if (queued)
+    return queued.promise
+
+  let resolve!: (allowed: boolean) => void
+  const promise = new Promise<boolean>((res) => {
+    resolve = res
   })
+  pendingChecks.set(key, { check, promise, resolve })
   permissionCache.set(key, { promise, expiresAt: now + PERMISSION_CACHE_TTL_MS })
   if (!flushScheduled) {
     flushScheduled = true

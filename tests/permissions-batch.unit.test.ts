@@ -99,6 +99,16 @@ describe('console permission batching', () => {
     expect(batchCalls()).toHaveLength(1)
   })
 
+  it('settles every caller when the cache is invalidated before the flush', async () => {
+    grantBatch(() => true)
+    const first = checkPermissions('app.read', { appId: 'a' })
+    invalidatePermissionCache()
+    const second = checkPermissions('app.read', { appId: 'a' })
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true])
+    expect(batchCalls()).toHaveLength(1)
+    expect(batchCalls()[0][1].p_checks).toHaveLength(1)
+  })
+
   it('re-checks after invalidatePermissionCache and after the user changes', async () => {
     grantBatch(() => true)
     await checkPermissions('app.read', { appId: 'a' })

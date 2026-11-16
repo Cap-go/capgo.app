@@ -167,9 +167,11 @@ async function copyToast(text: string) {
   }
 }
 
+let channelsLoadId = 0
 async function getChannels() {
   if (!version.value)
     return
+  const loadId = ++channelsLoadId
   channel.value = undefined
   const appId = version.value.app_id
   const { data: dataChannel, error: channelsError } = await capgo
@@ -187,12 +189,16 @@ async function getChannels() {
     return
   }
 
-  channels.value = dataChannel ?? []
-  const promotable = await checkPermissionsBatch(channels.value.map(channel => ({
+  const loadedChannels = dataChannel ?? []
+  channels.value = loadedChannels
+  const promotable = await checkPermissionsBatch(loadedChannels.map(channel => ({
     permissions: 'channel.promote_bundle' as const,
     scope: { appId, channelId: channel.id },
   })))
-  const channelPermissions = channels.value.map((channel, idx) => ({ channelId: channel.id, allowed: promotable[idx] }))
+  // A newer load replaced the channel list while this batch was in flight.
+  if (loadId !== channelsLoadId)
+    return
+  const channelPermissions = loadedChannels.map((channel, idx) => ({ channelId: channel.id, allowed: promotable[idx] }))
   promotableChannelIds.value = new Set(channelPermissions.filter(result => result.allowed).map(result => result.channelId))
   showBundleMetadataInput.value = channels.value.some(c => c.disable_auto_update === 'version_number')
 }
