@@ -3,7 +3,7 @@ import { env } from 'node:process'
 import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { createClient } from '../../tests/sql-data-client'
 import { expect, test } from '../support/commands'
-import { consoleQueryError, consoleQueryJson, consoleQueryPayload, routeConsoleQuery } from '../support/consoleQuery'
+import { consoleQueryError, consoleQueryPayload, forwardConsoleQuery, routeConsoleQuery } from '../support/consoleQuery'
 
 const APP_ID = 'com.example.serving.e2e'
 const regions = ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME']
@@ -73,15 +73,23 @@ test('saves and reloads serving regions and both outside-region modes', async ({
     await expect(europe).toBeChecked()
     await expect(page.getByRole('group', { name: 'Serving regions' })).toBeVisible()
 
-    await routeConsoleQuery(page, 'rbac_check_permission', (route, query) => {
-      if (consoleQueryPayload(query)?.p_permission_key === 'app.update_settings')
-        return route.fulfill(consoleQueryJson(false))
-      return route.fallback()
+    let deniedSettingsChecks = 0
+    await routeConsoleQuery(page, 'rbac_check_permissions', (route, query) => {
+      const checks = consoleQueryPayload(query)?.p_checks ?? []
+      return forwardConsoleQuery(route, (row: { idx: number, allowed: boolean }) => {
+        const check = checks[row.idx]
+        if (check?.permission_key !== 'app.update_settings' || check.app_id !== APP_ID)
+          return row
+        deniedSettingsChecks++
+        return { ...row, allowed: false }
+      })
     })
     await page.reload()
+    await expect.poll(() => deniedSettingsChecks).toBeGreaterThan(0)
     await expect(mode).toBeDisabled()
     for (const region of regions)
       await expect(controls.locator(`input[name="serving-region-${region}"]`)).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Delete app', exact: true })).toBeEnabled()
   }
   finally {
     await admin.from('apps').delete().eq('app_id', APP_ID)
