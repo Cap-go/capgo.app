@@ -1,3 +1,4 @@
+import type Stripe from 'stripe'
 import { mkdir, writeFile } from 'node:fs/promises'
 import pdfMake from 'pdfmake/build/pdfmake'
 import fonts from 'pdfmake/build/vfs_fonts'
@@ -5,7 +6,7 @@ import { invoicePdfDefinition } from '../src/services/invoicePdf'
 import { buildInvoiceDocument } from '../supabase/functions/_backend/utils/invoice_document'
 import { exampleAccount, exampleInvoice, exampleLines, exampleRate } from '../tests/fixtures/invoices/example'
 
-const document = buildInvoiceDocument(exampleInvoice, exampleAccount, exampleLines, [], new Map([[exampleRate.id, exampleRate]]))
+const document = buildInvoiceDocument(exampleInvoice, exampleAccount, exampleLines, [{ type: 'eu_vat', value: 'EE000000000' } as Stripe.TaxId], new Map([[exampleRate.id, exampleRate]]))
 document.notes.push('Illustrative comparison - fictional customer, number and amounts')
 const definition = invoicePdfDefinition(document)
 const pdf = pdfMake.createPdf(definition, undefined, undefined, fonts as unknown as Record<string, string>)
