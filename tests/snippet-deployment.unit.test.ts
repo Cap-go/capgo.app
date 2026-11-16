@@ -8,25 +8,38 @@ import { deploySnippets } from '../scripts/snippet/deploy-snippets'
 
 const snippets = [{ name: 'one', code: 'export default { fetch() {} }\n' }, { name: 'two', code: 'export default { fetch() { return 1 } }\n' }]
 
-function fixture() {
-  const live = new Map(snippets.map(snippet => [snippet.name, 'export default {}\n']))
-  const rules = snippets.map(({ name }) => ({ snippet_name: name, enabled: true, expression: '(http.host eq "example.com")' }))
+function fixture(definitions = snippets) {
+  const live = new Map(definitions.map(snippet => [snippet.name, 'export default {}\n']))
+  const rules = definitions.map(({ name }) => ({ snippet_name: name, enabled: true, expression: '(http.host eq "example.com")', description: `Rule for ${name}` }))
   const calls: { url: string, init?: RequestInit }[] = []
   const writes: string[] = []
+  const ruleWrites: unknown[] = []
   let failUpload = false
   let corruptUpload = false
   let multiModule = false
   let ruleDrift = false
+  let corruptRules = false
+  let failRules = false
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, init })
     expect(url.startsWith(`https://api.cloudflare.com/client/v4/zones/${SNIPPET_ZONE_ID}/snippets`)).toBe(true)
-    expect(init?.headers).toEqual({ Authorization: 'Bearer test-token' })
+    expect(init?.headers).toMatchObject({ Authorization: 'Bearer test-token' })
     expect(init?.redirect).toBe('error')
     const path = new URL(url).pathname.split('/snippets')[1]
     const ok = (result: unknown) => Response.json({ success: true, result })
     if (path === '')
       return ok([...live.keys()].map(snippet_name => ({ snippet_name })))
     if (path === '/snippet_rules') {
+      if (init?.method === 'PUT') {
+        expect(init.headers).toMatchObject({ 'Content-Type': 'application/json' })
+        const body = JSON.parse(init.body as string)
+        ruleWrites.push(body.rules)
+        if (failRules)
+          return new Response('private provider response', { status: 403 })
+        if (!corruptRules)
+          rules.splice(0, rules.length, ...body.rules)
+        return ok(rules)
+      }
       expect(init?.method).toBeUndefined()
       return ok(ruleDrift && writes.length ? [...rules].reverse() : rules)
     }
@@ -47,11 +60,11 @@ function fixture() {
     live.set(name, corruptUpload ? 'wrong code' : await (form.get('files') as File).text())
     return ok({ snippet_name: name })
   })
-  return { live, rules, calls, writes, fetcher, setFail: () => { failUpload = true }, setCorrupt: () => { corruptUpload = true }, setMulti: () => { multiModule = true }, setDrift: () => { ruleDrift = true } }
+  return { definitions, live, rules, calls, writes, ruleWrites, fetcher, setFail: () => { failUpload = true }, setCorrupt: () => { corruptUpload = true }, setMulti: () => { multiModule = true }, setDrift: () => { ruleDrift = true }, setCorruptRules: () => { corruptRules = true }, setFailRules: () => { failRules = true } }
 }
 
-function run(f: ReturnType<typeof fixture>, apply = true) {
-  return deploySnippets({ token: 'test-token', snippets, apply, fetcher: f.fetcher, log: () => {} })
+function run(f: ReturnType<typeof fixture>, apply = true, customDomains?: string[]) {
+  return deploySnippets({ token: 'test-token', snippets: f.definitions, customDomains, apply, fetcher: f.fetcher, log: () => {} })
 }
 
 describe('snippet release deployment', () => {
@@ -136,6 +149,65 @@ describe('snippet release deployment', () => {
     const step = job.steps.find((step: { run?: string }) => step.run === 'bun run deploy:snippets')
     // eslint-disable-next-line no-template-curly-in-string
     expect(step.env.CLOUDFLARE_API_TOKEN).toBe('${{ secrets.CLOUDFLARE_API_TOKEN }}')
+    // eslint-disable-next-line no-template-curly-in-string
+    expect(step.env.SUPABASE_ACCESS_TOKEN).toBe('${{ secrets.SUPABASE_TOKEN }}')
+    expect(step.env.SUPABASE_PROJECT_ID_PROD).toBeUndefined()
     expect(matchesComponent('capgo', ['scripts/snippet/deploy-snippets.ts'])).toBe(true)
+  })
+})
+
+describe('production custom domains in snippet deployment', () => {
+  const domains = ['updates.example.net']
+  const create = () => fixture([{ ...snippets[0], name: 'plugin_load_balancer' }, snippets[1]])
+
+  it.concurrent('adds missing domains after code verification, preserving other rules and manual hosts', async () => {
+    const f = create()
+    f.rules[1].enabled = false
+    const other = structuredClone(f.rules[1])
+    await run(f, true, domains)
+    expect(f.ruleWrites).toHaveLength(1)
+    expect(f.rules[0].expression).toBe('((http.host eq "example.com")) or (http.host eq "updates.example.net")')
+    expect(f.rules[0].description).toBe('Rule for plugin_load_balancer')
+    expect(f.rules[1]).toEqual(other)
+    const rulePut = f.calls.findIndex(call => call.url.endsWith('/snippet_rules') && call.init?.method === 'PUT')
+    expect(f.calls.slice(rulePut).filter(call => call.url.endsWith('/content'))).toEqual([])
+    await run(f, true, domains)
+    expect(f.ruleWrites).toHaveLength(1)
+  })
+
+  it.concurrent('dry run and an empty database do not rewrite any rules', async () => {
+    const f = create()
+    await run(f, false, domains)
+    expect(f.writes).toEqual([])
+    expect(f.ruleWrites).toEqual([])
+    await run(f, true, [])
+    expect(f.ruleWrites).toEqual([])
+  })
+
+  it.concurrent.each(['disabled', 'duplicate', 'missing', 'oversized'] as const)('rejects %s plugin rules before uploading code', async (kind) => {
+    const f = create()
+    if (kind === 'disabled') f.rules[0].enabled = false
+    if (kind === 'duplicate') f.rules.push({ ...f.rules[0] })
+    if (kind === 'missing') f.rules.shift()
+    if (kind === 'oversized') f.rules[0].expression = `http.request.uri.path eq "${'x'.repeat(4090)}"`
+    await expect(run(f, true, domains)).rejects.toThrow()
+    expect(f.writes).toEqual([])
+    expect(f.ruleWrites).toEqual([])
+  })
+
+  it.concurrent.each(['upload', 'concurrent'] as const)('does not change routing after %s failure', async (kind) => {
+    const f = create()
+    if (kind === 'upload') f.setFail()
+    if (kind === 'concurrent') f.setDrift()
+    await expect(run(f, true, domains)).rejects.toThrow()
+    expect(f.ruleWrites).toEqual([])
+  })
+
+  it.concurrent.each(['provider', 'readback'] as const)('fails on routing %s failure', async (kind) => {
+    const f = create()
+    if (kind === 'provider') f.setFailRules()
+    if (kind === 'readback') f.setCorruptRules()
+    await expect(run(f, true, domains)).rejects.toThrow(kind === 'provider' ? 'HTTP 403' : 'routing verification failed')
+    expect(f.ruleWrites).toHaveLength(1)
   })
 })

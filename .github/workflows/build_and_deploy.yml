@@ -604,7 +604,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   # Reconcile every stable release so a missed/failed snippet rollout is retried
-  # even when the next release only changes another component. Rules stay live.
+  # even when the next release only changes another component.
   deploy_snippets:
     needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription, deploy_api, deploy_files, deploy_plugin_regions, deploy_gotrue_worker]
     if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.is_alpha != 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
@@ -631,6 +631,7 @@ jobs:
         run: bun run deploy:snippets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
 
   deploy_native_ios:
     needs: [changes, supabase_deploy, deploy_webapp]
