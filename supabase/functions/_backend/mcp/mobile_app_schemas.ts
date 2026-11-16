@@ -8,12 +8,11 @@ import { APP_TRAITS, CHECKLIST_TOPICS, FRAMEWORK_IDS, MOBILE_FEATURES, NEW_APP_T
 
 const MAX_PACKAGES = 3000
 
+// Each tool describes platforms and packages with its own use of them.
 const platformsInput = z.array(z.enum(PLATFORMS)).min(1).max(2).optional()
-  .describe('Platforms to ship. Omit for both ios and android.')
 const packagesInput = z.record(z.string().min(1).max(214), z.string().max(256))
   .refine(value => Object.keys(value).length <= MAX_PACKAGES, { message: `At most ${MAX_PACKAGES} packages.` })
   .optional()
-  .describe('dependencies and devDependencies from package.json merged into one object of package name to version range, e.g. {"next":"^15.2.0","@capacitor/core":"^8.4.0"}. Detects the framework and the installed Capacitor version. Omit when there is no package.json.')
 const featuresInput = z.array(z.enum(MOBILE_FEATURES)).max(MOBILE_FEATURES.length)
 const traitsInput = z.array(z.enum(APP_TRAITS)).max(APP_TRAITS.length).optional()
   .describe('Product traits that turn on store rules: accounts (users sign up or log in), third_party_login (Google/Facebook/...), digital_goods (subscriptions, credits, premium features), physical_goods, user_generated_content, kids, health_data, location, push, ads_or_tracking, ai_features (user data sent to an AI service), personal_play_account (Google Play personal developer account created after 2023-11-13).')
@@ -21,15 +20,15 @@ const packageManagerInput = z.enum(PACKAGE_MANAGERS).optional()
   .describe('Package manager of the project, from its lockfile. Commands use it for installs; Capacitor and Capgo commands stay npx. Default npm.')
 
 export const planMobileAppInputSchema = z.object({
-  source: z.enum(PLAN_SOURCES).describe('existing_web_app: you have the web app source code. website_only: you only have the URL of a live website. new_app: start a new app from scratch.'),
-  packages: packagesInput,
-  framework: z.enum(FRAMEWORK_IDS).optional().describe('Set only when detection from packages is wrong or there is no package.json. static_html means plain HTML, CSS and JS with no build step.'),
+  source: z.enum(PLAN_SOURCES).describe('Starting point, which decides the first phases: migrating a web app whose source code you can read, a live website known only by its URL (the plan warns that its source code or a static export is needed), or a new app with no code yet (the plan scaffolds a Vite app).'),
+  packages: packagesInput.describe('Installed packages from package.json, with dependencies and devDependencies merged into one name-to-version-range object such as {"next":"^15.2.0","@capacitor/core":"^8.4.0"}. The plan detects the framework and the installed Capacitor version from it, and leaves out installs for packages already listed. Omit when the project has no package.json.'),
+  framework: z.enum(FRAMEWORK_IDS).optional().describe('Web framework of the project, which sets the static build command and the folder Capacitor packages. Omit to detect it from packages; set it only when detection is wrong or there is no package.json. A value that differs from the packages wins, with a warning.'),
   template: z.enum(NEW_APP_TEMPLATES).optional().describe('new_app only: Vite template for the scaffold. Default react.'),
   projectName: z.string().trim().min(1).max(64).optional().describe('new_app only: folder name for the new project. Defaults to the app name.'),
   appName: z.string().trim().min(1).max(64).optional().describe('Name shown under the app icon. Ask the user; defaults from the website domain.'),
   appId: z.string().trim().min(3).max(155).optional().describe('Reverse-domain app ID the user owns, e.g. com.acme.shop. It becomes the iOS bundle identifier and Android applicationId and is permanent once published. Omit to get a suggestion.'),
   websiteUrl: z.string().url().max(2048).optional().describe('Public URL of the website, used to suggest the app name and app ID. Required context for source website_only.'),
-  platforms: platformsInput,
+  platforms: platformsInput.describe('Platforms to publish on. The plan adds only these native projects, run options and store steps. Omit to plan for every supported platform.'),
   features: featuresInput.optional().describe('Native features the app needs, from the user\'s goals and the audit. Each one adds a plugin recommendation; live_updates is always added.'),
   traits: traitsInput,
   packageManager: packageManagerInput,
@@ -49,34 +48,33 @@ export const planMobileAppInputSchema = z.object({
 })
 
 export const recommendPluginsInputSchema = z.object({
-  features: featuresInput.min(1).describe('Native features to support, e.g. ["camera","push_notifications","in_app_purchases"].'),
-  platforms: platformsInput,
+  features: featuresInput.min(1).describe('Device capabilities the app needs, from the user\'s goals or what the web app already does in the browser. Each one returns the plugin that provides it, with its permissions and store rules.'),
+  platforms: platformsInput.describe('Platforms the app ships on; each pick lists the iOS or Android configuration only for these. Omit to include every supported platform.'),
   packageManager: packageManagerInput,
-  packages: packagesInput,
+  packages: packagesInput.describe('Installed packages from package.json, with dependencies and devDependencies merged into one name-to-version-range object. Plugins already listed here are left out of the combined install command. Omit when the project has no package.json.'),
   includeBaseline: z.boolean().optional().describe('Also list the plugins every app needs (@capacitor/app, splash-screen, keyboard). Default true.'),
 })
 
 export const mobileChecklistInputSchema = z.object({
-  topics: z.array(z.enum(CHECKLIST_TOPICS)).min(1).max(CHECKLIST_TOPICS.length).optional().describe('design: native look and feel, safe areas, keyboard, navigation. native: Capacitor project setup. apple_review: App Store rules. google_play: Play Console rules. release: versions, cloud builds, live update policy. Omit for all.'),
-  platforms: platformsInput,
-  traits: traitsInput,
+  topics: z.array(z.enum(CHECKLIST_TOPICS)).min(1).max(CHECKLIST_TOPICS.length).optional().describe('Checklist sections to return, for example only the store sections right before submission. Omit to return every section.'),
+  platforms: platformsInput.describe('Platforms the app will be published on. Rules that apply only to other platforms are left out. Omit to include the rules of every supported platform.'),
+  traits: traitsInput.describe('Product traits of the app, such as user accounts, digital goods or user-generated content. Each one adds the store rules that apply to it; rules for traits you do not pass are listed in skipped_conditional. personal_play_account means a personal Google Play developer account created after 2023-11-13, which must run a closed test before production. Omit when none apply.'),
   includeAllConditional: z.boolean().optional().describe('List rules for every trait, not only the traits passed. Default false.'),
 })
 
 export const mobileReadinessInputSchema = z.object({
-  platforms: platformsInput,
-  packages: packagesInput,
+  platforms: platformsInput.describe('Platforms the app will ship on. Platform-specific checks, such as the iOS app ID rules, iOS purpose strings or the Android target SDK, run only for these. Omit to check every supported platform.'),
+  packages: packagesInput.describe('Installed packages from package.json, with dependencies and devDependencies merged into one name-to-version-range object. Used to compare the installed Capacitor with the latest release, check that the @capacitor packages share one major, find the folder the framework builds to, and detect safe-area UI kits and the Capgo live updates plugin. Omit when there is no package.json; those checks are then reported as unknown.'),
   capacitorConfig: z.object({
-    appId: z.string().max(155).optional().describe('appId from capacitor.config.'),
-    appName: z.string().max(255).optional().describe('appName from capacitor.config.'),
-    webDir: z.string().max(512).optional().describe('webDir from capacitor.config.'),
-    server: z.record(z.string(), z.unknown()).optional().describe('server block from capacitor.config, if any (url, cleartext, ...).'),
-    ios: z.record(z.string(), z.unknown()).optional().describe('ios block from capacitor.config, if any.'),
-    android: z.record(z.string(), z.unknown()).optional().describe('android block from capacitor.config, if any.'),
-    plugins: z.record(z.string(), z.unknown()).optional().describe('plugins block from capacitor.config, if any.'),
+    appId: z.string().max(155).optional().describe('Reverse-domain app ID set in capacitor.config; it becomes the iOS bundle identifier and the Android applicationId. Checked as a valid, final reverse domain, including the iOS rules when iOS ships; a missing value fails the check.'),
+    appName: z.string().max(255).optional().describe('App name set in capacitor.config, shown under the app icon. A missing value fails the app name check.'),
+    webDir: z.string().max(512).optional().describe('Build output folder set in capacitor.config, which Capacitor copies into the native projects. Compared with the folder the detected framework writes; a missing value blocks release.'),
+    server: z.record(z.string(), z.unknown()).optional().describe('server object from capacitor.config, meant for live reload during development. A url there makes the app load a remote page instead of its bundled files and blocks release; cleartext set to true is reported as a warning. Omit when the config has no server object.'),
+    ios: z.record(z.string(), z.unknown()).optional().describe('ios object from capacitor.config. contentInset set to always is flagged when the CSS already pads the safe areas, because the content is then padded twice. Omit when the config has no ios object.'),
+    android: z.record(z.string(), z.unknown()).optional().describe('android object from capacitor.config. The adjustMarginsForEdgeToEdge option is flagged because Capacitor 8 removed it and ignores it. Omit when the config has no android object.'),
   }).optional().describe('Values read from capacitor.config.ts or capacitor.config.json. Omit when the file does not exist yet.'),
   project: z.object({
-    webDirHasIndexHtml: z.boolean().optional().describe('After the production build, webDir contains index.html at its root.'),
+    webDirHasIndexHtml: z.boolean().optional().describe('Whether the production build wrote index.html at the root of webDir. Capacitor opens that file at launch, so false blocks release. Omit until you have run the build.'),
     iosProject: z.boolean().optional().describe('The ios/ folder exists.'),
     androidProject: z.boolean().optional().describe('The android/ folder exists.'),
     viewportMeta: z.string().max(500).optional().describe('content attribute of <meta name="viewport"> in the app\'s index.html.'),

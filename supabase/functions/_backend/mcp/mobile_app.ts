@@ -365,7 +365,6 @@ export interface ReadinessInput {
     server?: Record<string, unknown>
     ios?: Record<string, unknown>
     android?: Record<string, unknown>
-    plugins?: Record<string, unknown>
   }
   project?: {
     webDirHasIndexHtml?: boolean
@@ -542,7 +541,7 @@ function webDirCheck(report: ReadinessReport, webDir: string | undefined, packag
 function configChecks(report: ReadinessReport, input: ReadinessInput, platforms: readonly Platform[]) {
   const config = input.capacitorConfig
   if (!config) {
-    report.add({ id: 'config.present', status: 'unknown', severity: 'blocker', title: 'capacitor.config is valid', detail: 'Pass capacitorConfig (appId, appName, webDir, server, ios, android, plugins from capacitor.config.*).', fix: null, how_to_check: 'Read capacitor.config.ts/json, or run npx cap config --json when available.' })
+    report.add({ id: 'config.present', status: 'unknown', severity: 'blocker', title: 'capacitor.config is valid', detail: 'Pass capacitorConfig (appId, appName, webDir, server, ios and android from capacitor.config.*).', fix: null, how_to_check: 'Read capacitor.config.ts/json, or run npx cap config --json when available.' })
     return
   }
   const problem = config.appId ? appIdProblem(config.appId, platforms) : 'appId is missing.'

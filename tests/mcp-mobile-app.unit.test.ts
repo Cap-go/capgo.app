@@ -15,7 +15,7 @@ import {
   suggestAppId,
 } from '../supabase/functions/_backend/mcp/mobile_app.ts'
 import { CHECKLIST, FRAMEWORK_IDS, MOBILE_FEATURES, SKILL_PURPOSES } from '../supabase/functions/_backend/mcp/mobile_app_catalog.ts'
-import { handleJsonRpcMessage } from '../supabase/functions/_backend/mcp/protocol.ts'
+import { handleJsonRpcMessage, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS_BY_NAME } from '../supabase/functions/_backend/mcp/tools.ts'
 
 const release = { latest: '8.6.2', next: '9.0.0-rc.0', source: 'npm' as const }
@@ -532,6 +532,23 @@ describe('mobile app MCP tools', () => {
       expect(JSON.parse(result.content[0].text)).toEqual(result.structuredContent)
     }
     expect(ctx.calls).toBe(0)
+  })
+
+  it('describes every input field, nested ones included', () => {
+    interface JsonSchema { description?: string, properties?: Record<string, JsonSchema> }
+    const missing: string[] = []
+    const visit = (schema: JsonSchema, path: string) => {
+      for (const [key, field] of Object.entries(schema.properties ?? {})) {
+        if (!field.description?.trim())
+          missing.push(`${path}/${key}`)
+        visit(field, `${path}/${key}`)
+      }
+    }
+    for (const tool of listTools() as Array<{ name: string, inputSchema: JsonSchema }>) {
+      if (mobileTools.includes(tool.name))
+        visit(tool.inputSchema, tool.name)
+    }
+    expect(missing).toEqual([])
   })
 
   it('is read-only and marks the tools that query npm as open-world', () => {
