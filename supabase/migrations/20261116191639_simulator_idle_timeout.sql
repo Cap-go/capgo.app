@@ -145,4 +145,6 @@ $$;
 
 ALTER FUNCTION public.settle_simulator_sessions_before_app_delete() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.settle_simulator_sessions_before_app_delete() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.settle_simulator_sessions_before_app_delete() FROM anon;
+REVOKE ALL ON FUNCTION public.settle_simulator_sessions_before_app_delete() FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.settle_simulator_sessions_before_app_delete() TO service_role;
