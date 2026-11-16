@@ -152,7 +152,7 @@ If you're self-hosting, the key pieces live in a few top-level directories:
   - `supabase/seed.sql` - Local seed data for tests/dev
 - `supabase/schemas/prod.sql` - Production schema dump (reference only)
 - `cloudflare_workers/` - **Optional** Cloudflare Workers deployment (prod traffic)
-  - `cloudflare_workers/snippet/` - Geo routing for replicas
+  - `cloudflare_workers/snippet/` - Geo routing and compatibility snippets ([automatic deployment](docs/snippets-deployment.md))
   - Worker entry points and deploy config live here
 - `src/` - Frontend Vue 3 web console (Vite + Tailwind + DaisyUI)
   - `src/pages/` - File-based routes

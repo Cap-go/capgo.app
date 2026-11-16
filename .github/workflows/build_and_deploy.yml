@@ -603,6 +603,35 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+  # Reconcile every stable release so a missed/failed snippet rollout is retried
+  # even when the next release only changes another component. Rules stay live.
+  deploy_snippets:
+    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription, deploy_api, deploy_files, deploy_plugin_regions, deploy_gotrue_worker]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.is_alpha != 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: Deploy Cloudflare snippets
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+      - name: Deploy and verify all production snippets
+        run: bun run deploy:snippets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
   deploy_native_ios:
     needs: [changes, supabase_deploy, deploy_webapp]
     if: ${{ always() && needs.changes.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && needs.deploy_webapp.result == 'success' && needs.deploy_webapp.outputs.native_build_needed == 'true' }}

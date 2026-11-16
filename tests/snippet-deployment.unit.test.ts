@@ -1,0 +1,141 @@
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
+import { parse } from 'yaml'
+import { matchesComponent } from '../scripts/release-scope'
+import { MAX_SNIPPET_BYTES, SNIPPETS, SNIPPET_ZONE_ID } from '../scripts/snippet/catalog'
+import { deploySnippets } from '../scripts/snippet/deploy-snippets'
+
+const snippets = [{ name: 'one', code: 'export default { fetch() {} }\n' }, { name: 'two', code: 'export default { fetch() { return 1 } }\n' }]
+
+function fixture() {
+  const live = new Map(snippets.map(snippet => [snippet.name, 'export default {}\n']))
+  const rules = snippets.map(({ name }) => ({ snippet_name: name, enabled: true, expression: '(http.host eq "example.com")' }))
+  const calls: { url: string, init?: RequestInit }[] = []
+  const writes: string[] = []
+  let failUpload = false
+  let corruptUpload = false
+  let multiModule = false
+  let ruleDrift = false
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init })
+    expect(url.startsWith(`https://api.cloudflare.com/client/v4/zones/${SNIPPET_ZONE_ID}/snippets`)).toBe(true)
+    expect(init?.headers).toEqual({ Authorization: 'Bearer test-token' })
+    expect(init?.redirect).toBe('error')
+    const path = new URL(url).pathname.split('/snippets')[1]
+    const ok = (result: unknown) => Response.json({ success: true, result })
+    if (path === '')
+      return ok([...live.keys()].map(snippet_name => ({ snippet_name })))
+    if (path === '/snippet_rules') {
+      expect(init?.method).toBeUndefined()
+      return ok(ruleDrift && writes.length ? [...rules].reverse() : rules)
+    }
+    const name = path.split('/')[1]
+    if (path.endsWith('/content')) {
+      const form = new FormData()
+      form.append('files', new File([live.get(name)!], 'main.js'))
+      if (multiModule)
+        form.append('files', new File(['export {}'], 'helper.js'))
+      return new Response(form)
+    }
+    expect(init?.method).toBe('PUT')
+    writes.push(name)
+    if (failUpload)
+      return new Response('private error body must not be logged', { status: 403 })
+    const form = init!.body as FormData
+    expect(form.get('metadata')).toBe(JSON.stringify({ main_module: 'snippet.js' }))
+    live.set(name, corruptUpload ? 'wrong code' : await (form.get('files') as File).text())
+    return ok({ snippet_name: name })
+  })
+  return { live, rules, calls, writes, fetcher, setFail: () => { failUpload = true }, setCorrupt: () => { corruptUpload = true }, setMulti: () => { multiModule = true }, setDrift: () => { ruleDrift = true } }
+}
+
+function run(f: ReturnType<typeof fixture>, apply = true) {
+  return deploySnippets({ token: 'test-token', snippets, apply, fetcher: f.fetcher, log: () => {} })
+}
+
+describe('snippet release deployment', () => {
+  it.concurrent('uploads each module, verifies it, and never changes routing rules', async () => {
+    const f = fixture()
+    await run(f)
+    expect(f.writes).toEqual(['one', 'two'])
+    expect([...f.live.values()]).toEqual(snippets.map(snippet => snippet.code))
+    await run(f)
+    expect(f.writes).toEqual(['one', 'two'])
+  })
+
+  it.concurrent('defaults to reading the complete inventory without any writes', async () => {
+    const f = fixture()
+    await deploySnippets({ token: 'test-token', snippets, fetcher: f.fetcher, log: () => {} })
+    expect(f.writes).toEqual([])
+    expect(f.calls.filter(call => call.url.endsWith('/content'))).toHaveLength(2)
+  })
+
+  it.concurrent.each(['missing', 'extra', 'rule', 'modules'] as const)('fails before any upload for %s drift', async (kind) => {
+    const f = fixture()
+    if (kind === 'missing') f.live.delete('two')
+    if (kind === 'extra') f.live.set('unmanaged', 'export default {}')
+    if (kind === 'rule') f.rules.pop()
+    if (kind === 'modules') f.setMulti()
+    await expect(run(f)).rejects.toThrow()
+    expect(f.writes).toEqual([])
+  })
+
+  it.concurrent('stops on failed uploads without exposing the provider body', async () => {
+    const f = fixture()
+    f.setFail()
+    await expect(run(f)).rejects.toThrow('Cloudflare snippets request failed (HTTP 403)')
+    expect(f.writes).toEqual(['one'])
+  })
+
+  it.concurrent('fails on unsuccessful API envelopes', async () => {
+    await expect(deploySnippets({ token: 'test', snippets, fetcher: async () => Response.json({ success: false }) })).rejects.toThrow('success=false')
+  })
+
+  it.concurrent('fails when upload readback differs', async () => {
+    const f = fixture()
+    f.setCorrupt()
+    await expect(run(f)).rejects.toThrow('verification failed')
+    expect(f.writes).toEqual(['one'])
+  })
+
+  it.concurrent('detects concurrent routing changes without overwriting them', async () => {
+    const f = fixture()
+    f.setDrift()
+    await expect(run(f)).rejects.toThrow('routing rules changed')
+  })
+
+  it.concurrent.each([
+    [],
+    [{ name: 'one', code: '' }],
+    [{ name: '../other', code: 'export {}' }],
+    [{ name: 'one', code: 'é'.repeat(MAX_SNIPPET_BYTES) }],
+    [snippets[0], snippets[0]],
+  ])('rejects invalid build input before network access (%#)', async (invalid) => {
+    const f = fixture()
+    await expect(deploySnippets({ token: 'test', snippets: invalid, fetcher: f.fetcher })).rejects.toThrow()
+    expect(f.fetcher).not.toHaveBeenCalled()
+  })
+
+  it.concurrent('builds all three production snippets within the provider limit', () => {
+    const output = execFileSync('bun', ['scripts/snippet/build-snippets.ts'], { encoding: 'utf8' })
+    for (const snippet of SNIPPETS)
+      expect(output).toContain(`${snippet.name}:`)
+    expect(SNIPPETS).toHaveLength(3)
+  })
+
+  it.concurrent('deploys only stable tested release code after backend success with the CI credential', () => {
+    const workflow = parse(readFileSync('.github/workflows/build_and_deploy.yml', 'utf8'))
+    const job = workflow.jobs.deploy_snippets
+    expect(workflow.on.push.tags).toEqual(['capgo-[0-9]*'])
+    expect(job.if).toContain("needs.changes.outputs.is_alpha != 'true'")
+    expect(job.if).toContain("needs.changes.result == 'success'")
+    expect(job.if).toContain("!contains(needs.*.result, 'failure')")
+    expect(job.if).toContain("!contains(needs.*.result, 'cancelled')")
+    expect(job.needs).toEqual(expect.arrayContaining(['deploy_api', 'deploy_files', 'deploy_plugin_regions', 'deploy_gotrue_worker', 'supabase_deploy']))
+    const step = job.steps.find((step: { run?: string }) => step.run === 'bun run deploy:snippets')
+    // eslint-disable-next-line no-template-curly-in-string
+    expect(step.env.CLOUDFLARE_API_TOKEN).toBe('${{ secrets.CLOUDFLARE_API_TOKEN }}')
+    expect(matchesComponent('capgo', ['scripts/snippet/deploy-snippets.ts'])).toBe(true)
+  })
+})

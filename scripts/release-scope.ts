@@ -34,6 +34,7 @@ export const componentMatchers: Record<Component, RegExp[]> = {
     /^android\//,
     /^assets\//,
     /^cloudflare_workers\//,
+    /^scripts\/snippet\//,
     /^cli\/src\/mcp\/(skill-catalog\.ts|skills\.generated\.json)$/,
     /^configs\.json$/,
     /^deno-env\.d\.ts$/,

@@ -102,6 +102,7 @@ describe('native-aware Capgo release workflow', () => {
       'deploy_translation_worker',
       'deploy_files',
       'deploy_plugin_regions',
+      'deploy_snippets',
       'deploy_native_ios',
       'deploy_native_android',
     ]
