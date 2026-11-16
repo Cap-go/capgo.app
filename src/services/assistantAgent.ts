@@ -1,4 +1,5 @@
 import type { AssistantAction, AssistantCard, AssistantContext, AssistantResponse, AssistantTurn } from '~/services/assistant'
+import { assistantAnalytics } from '~/services/assistantAnalytics'
 import { assistantOpenAIRequest, assistantRequest } from '~/services/assistantHttp'
 import { defaultApiHost } from '~/services/console'
 
@@ -64,9 +65,11 @@ export async function listMcpTools(apikey: string): Promise<McpToolInfo[]> {
 async function callMcpTool(apikey: string, name: string, args: Record<string, unknown>): Promise<{ ok: boolean, text: string }> {
   try {
     const result = await mcpRpc(apikey, 'tools/call', { name, arguments: args }) as { content?: Array<{ text?: string }>, isError?: boolean }
+    assistantAnalytics.toolFinished(name, !result.isError)
     return { ok: !result.isError, text: (result.content ?? []).map(part => part.text ?? '').join('\n') }
   }
   catch (error) {
+    assistantAnalytics.toolFinished(name, false)
     if (error instanceof AssistantUpstreamError)
       throw error
     return { ok: false, text: `Tool failed: ${error instanceof Error ? error.message : String(error)}` }

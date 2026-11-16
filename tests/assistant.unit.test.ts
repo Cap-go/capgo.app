@@ -1,4 +1,5 @@
 import type { McpToolInfo } from '../src/services/assistantAgent.ts'
+import { pushEvent } from '../src/services/posthog'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { nativePlatform, nativeRequest, getSession } = vi.hoisted(() => ({
@@ -7,7 +8,8 @@ const { nativePlatform, nativeRequest, getSession } = vi.hoisted(() => ({
   getSession: vi.fn<() => Promise<{ data: { session: { access_token: string } | null }, error: Error | null }>>(async () => ({ data: { session: { access_token: 'console-session' } }, error: null })),
 }))
 
-vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: nativePlatform }, CapacitorHttp: { request: nativeRequest } }))
+vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: () => 'web', isNativePlatform: nativePlatform }, CapacitorHttp: { request: nativeRequest } }))
+vi.mock('~/services/posthog', () => ({ pushEvent: vi.fn() }))
 vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.test', useConsole: () => ({ auth: { getSession } }) }))
 
 const { tokenizeAssistantText } = await import('../src/utils/assistantText.ts')
@@ -202,6 +204,8 @@ describe('assistant loop in the browser', () => {
     expect(result.reply).toBe('Your channels are here.')
     expect(result.cards).toEqual([{ type: 'link', title: 'Channels', description: undefined, path: '/app/com.example.app/channels' }])
     expect(result.actions).toEqual([{ tool: 'capgo_list_apps', title: 'List apps', ok: true }])
+    expect(pushEvent).toHaveBeenCalledWith('Assistant Tool Finished', expect.any(String), expect.objectContaining({ tool_name: 'capgo_list_apps', outcome: 'success' }))
+    expect(JSON.stringify(vi.mocked(pushEvent).mock.calls)).not.toMatch(/chatgpt-token|capgo-key-1|com.example.app/)
     expect(openai.every(call => call.url === 'https://api.capgo.test/private/assistant/responses' && call.auth === 'Bearer console-session' && call.token === 'chatgpt-token')).toBe(true)
     expect(openai.every(call => call.body.store === false && call.body.stream === true && call.body.model === 'gpt-plan-default')).toBe(true)
     expect(openai[1].body.input.map((item: any) => item.type ?? item.role)).toEqual(['user', 'function_call', 'function_call_output'])
