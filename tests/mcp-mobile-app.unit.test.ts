@@ -334,15 +334,19 @@ describe('mobile readiness', () => {
       expect(item.how_to_check, item.id).toMatch(/\S/)
   })
 
-  it('trusts UI kits that pad safe areas and accepts either purpose key for calendars', () => {
-    const result = checkReadiness({
+  it('trusts UI kits that pad safe areas and needs full calendar access to read events', () => {
+    const readiness = (iosUsageKeys: string[]) => checkReadiness({
       ...readyProject,
       packages: { ...readyProject.packages, '@ionic/vue': '^8.0.0' },
-      project: { ...readyProject.project, safeAreaCss: false, iosUsageKeys: ['NSCalendarsWriteOnlyAccessUsageDescription'] },
+      project: { ...readyProject.project, safeAreaCss: false, iosUsageKeys },
       app: { features: ['calendar', 'share'] },
     }, release)
-    expect(result.checks.find(check => check.id === 'design.safe_areas')).toMatchObject({ status: 'pass' })
-    expect(result.checks.find(check => check.id === 'ios.usage_strings')).toMatchObject({ status: 'pass' })
+    const writeOnly = readiness(['NSCalendarsWriteOnlyAccessUsageDescription'])
+    expect(writeOnly.checks.find(check => check.id === 'design.safe_areas')).toMatchObject({ status: 'pass' })
+    expect(writeOnly.checks.find(check => check.id === 'ios.usage_strings')).toMatchObject({ status: 'fail' })
+    expect(writeOnly.checks.find(check => check.id === 'ios.usage_strings')?.detail).toContain('NSCalendarsFullAccessUsageDescription')
+    const full = readiness(['NSCalendarsFullAccessUsageDescription', 'NSCalendarsUsageDescription'])
+    expect(full.checks.find(check => check.id === 'ios.usage_strings')).toMatchObject({ status: 'pass' })
   })
 
   it('flags Capacitor 8 before 8.5 for the Xcode 27 scene lifecycle', () => {

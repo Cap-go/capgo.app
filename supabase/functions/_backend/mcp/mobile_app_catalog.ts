@@ -568,8 +568,9 @@ export const PLUGINS: Record<MobileFeature, PluginSpec[]> = {
     publisher: 'capacitor',
     purpose: 'Create and read calendar events.',
     docsUrl: official('calendar'),
-    iosUsageKeys: ['NSCalendarsFullAccessUsageDescription or NSCalendarsWriteOnlyAccessUsageDescription'],
+    iosUsageKeys: ['NSCalendarsFullAccessUsageDescription', 'NSCalendarsUsageDescription'],
     androidPermissions: ['android.permission.READ_CALENDAR', 'android.permission.WRITE_CALENDAR'],
+    notes: ['Reading, changing or deleting events needs full access (NSCalendarsFullAccessUsageDescription). An app that only creates events can ship NSCalendarsWriteOnlyAccessUsageDescription instead. NSCalendarsUsageDescription covers devices before iOS 17.'],
     alternatives: ['@capgo/capacitor-calendar (adds iOS reminders).'],
   }],
   health: [{
