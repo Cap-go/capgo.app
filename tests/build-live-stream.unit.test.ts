@@ -146,6 +146,23 @@ describe('buildTimeline', () => {
     expect(timeline.current).toBe(timeline.rows.indexOf(failed!))
   })
 
+  it('blames a generic build phase when the build fails between two steps', () => {
+    const state = feed([
+      step(1, 'project_bundle_download', 'started'),
+      step(2, 'project_bundle_download', 'succeeded'),
+      { type: 'status', id: 3, status: 'failed' },
+    ])
+    const timeline = buildTimeline({ live: state, dbStatus: 'running', machineStarted: true, platform: 'android' })
+    expect(timeline.rows.map(r => [r.key, r.state])).toEqual([
+      ['upload', 'done'],
+      ['machine', 'done'],
+      ['project_bundle_download', 'done'],
+      ['build', 'failed'],
+    ])
+    expect(timeline.current).toBe(3)
+    expect(timeline.progress).toBeLessThan(1)
+  })
+
   it('fails the build phase in status-only mode', () => {
     const timeline = buildTimeline({ live, dbStatus: 'failed', machineStarted: true, platform: 'android' })
     expect(timeline.rows.map(r => r.state)).toEqual(['done', 'done', 'failed'])

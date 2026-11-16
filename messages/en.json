@@ -1059,6 +1059,7 @@
   "build-live-subtitle-running": "Started from your terminal. You can leave this page: the build keeps running.",
   "build-live-subtitle-success": "Built in the Capgo cloud in {duration}.",
   "build-live-success-download": "Download the file, or scan the code to install it on your phone.",
+  "build-live-success-output-unknown": "Your build is done, but we couldn't check where it went. Open the builds list to download it or see its destination.",
   "build-live-success-store-android": "Your build was sent to Google Play. It shows up in the Play Console in a few minutes.",
   "build-live-success-store-ios": "Your build was sent to TestFlight. It shows up in App Store Connect once Apple finishes processing it.",
   "build-live-terminal-requested": "Build requested · {job}",

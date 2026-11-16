@@ -168,6 +168,9 @@ function applyOutcome(rows: TimelineRow[], outcome: BuildOutcome | null) {
   const culprit = rows.find(r => r.state === 'running') ?? rows.find(r => r.state === 'pending')
   if (culprit)
     culprit.state = 'failed'
+  // Failed between two steps: blame a generic build phase, never a step that succeeded.
+  else
+    rows.push({ key: 'build', state: 'failed' })
 }
 
 function currentIndex(rows: TimelineRow[], outcome: BuildOutcome | null): number {

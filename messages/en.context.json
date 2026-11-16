@@ -843,6 +843,7 @@
   "build-live-subtitle-running": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "build-live-subtitle-success": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "build-live-success-download": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "build-live-success-output-unknown": "Used in Capgo web console areas: components/dashboard. Role: message shown after a successful build when the build artifact lookup failed. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "build-live-success-store-android": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "build-live-success-store-ios": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "build-live-terminal-requested": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

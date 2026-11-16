@@ -47,7 +47,11 @@ const statusStale = ref(false)
 // Artifact recovered from the saved build outputs when the stream did not deliver it.
 const savedDownloadUrl = ref('')
 const outputsChecked = ref(false)
+// The saved-output lookup failed: we cannot tell whether the artifact went to a store or to a download.
+const outputsUnknown = ref(false)
 let stopped = false
+// One status read at a time, so an older response can never overwrite a newer (final) row.
+let fetching = false
 let socket: WebSocket | null = null
 let reconnects = 0
 let pollTimer: ReturnType<typeof setInterval> | undefined
@@ -115,14 +119,25 @@ function rowTime(r: { state: string, startedAt?: number, durationMs?: number }) 
 }
 
 async function fetchRow() {
-  const { data, error } = await capgo
-    .from('build_requests')
-    .select('status, created_at, started_at, completed_at, last_error, builder_job_id')
-    .eq('id', props.buildId)
-    .maybeSingle()
+  if (fetching)
+    return
+  fetching = true
+  let result
+  try {
+    result = await capgo
+      .from('build_requests')
+      .select('status, created_at, started_at, completed_at, last_error, builder_job_id')
+      .eq('id', props.buildId)
+      .maybeSingle()
+  }
+  finally {
+    fetching = false
+  }
+  const { data, error } = result
   if (stopped)
     return
-  statusStale.value = !!error
+  // A missing row (deleted, or no longer visible) is as unknown as a failed read.
+  statusStale.value = !!error || !data
   if (error) {
     console.warn('Polling build_requests failed', error)
     return
@@ -136,9 +151,10 @@ async function fetchRow() {
 
 // The stream can end before the page connects: read the saved artifact so the download is not lost.
 async function loadSavedOutput(jobId: string) {
-  const { data } = await invokeCapgoApi<{ outputs?: Record<string, { url: string }> }>(`private/simulator/outputs?app_id=${encodeURIComponent(props.appId)}&job_ids=${encodeURIComponent(jobId)}`, { method: 'GET' })
+  const { data, error } = await invokeCapgoApi<{ outputs?: Record<string, { url: string }> }>(`private/simulator/outputs?app_id=${encodeURIComponent(props.appId)}&job_ids=${encodeURIComponent(jobId)}`, { method: 'GET' })
   if (stopped)
     return
+  outputsUnknown.value = !!error
   savedDownloadUrl.value = data?.outputs?.[jobId]?.url ?? ''
   outputsChecked.value = true
 }
@@ -312,7 +328,7 @@ onUnmounted(stop)
             {{ t('build-live-status-succeeded', { duration: elapsed }) }}
           </span>
           <p class="mt-4 max-w-xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-            {{ downloadUrl ? t('build-live-success-download') : !outputsChecked ? '' : platform === 'ios' ? t('build-live-success-store-ios') : t('build-live-success-store-android') }}
+            {{ downloadUrl ? t('build-live-success-download') : !outputsChecked ? '' : outputsUnknown ? t('build-live-success-output-unknown') : platform === 'ios' ? t('build-live-success-store-ios') : t('build-live-success-store-android') }}
           </p>
           <div class="mt-5 flex flex-wrap gap-3">
             <a v-if="downloadUrl" class="d-btn d-btn-primary gap-2" :href="downloadUrl" target="_blank" rel="noopener noreferrer">

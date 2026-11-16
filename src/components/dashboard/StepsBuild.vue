@@ -173,7 +173,13 @@ function clearWatchers() {
   }
 }
 
+// Bumped on every reset: discovery work started before it must not touch the new flow.
+let flowGen = 0
+// Last build opened on the live page: a later discovery returning it again is not a new build.
+let lastShownBuildId: string | undefined
+
 function resetFlow() {
+  flowGen += 1
   clicked.value = 0
   step.value = 0
   realtimeListener.value = false
@@ -328,16 +334,21 @@ watch(() => props.appId, resetFlow)
 watchEffect(async () => {
   if (step.value === waitStepIndex.value && !realtimeListener.value) {
     const platform = selectedPlatform.value
+    const gen = flowGen
     realtimeListener.value = true
     await organizationStore.awaitInitialLoad()
+    if (gen !== flowGen)
+      return
 
     if (initialCount.value === null) {
+      let count = 0
       try {
-        initialCount.value = await getBuildRequestsCount(platform)
+        count = await getBuildRequestsCount(platform)
       }
-      catch {
-        initialCount.value = 0
-      }
+      catch {}
+      if (gen !== flowGen)
+        return
+      initialCount.value = count
     }
 
     clearWatchers()
@@ -345,9 +356,14 @@ watchEffect(async () => {
     pollTimer.value = window.setInterval(async () => {
       try {
         const current = await getBuildRequestsCount(platform)
+        if (gen !== flowGen || !realtimeListener.value)
+          return
         if (initialCount.value !== null && current > initialCount.value) {
           initialCount.value = current
           const latestId = await getLatestBuildId(platform)
+          if (gen !== flowGen || !realtimeListener.value || (latestId && latestId === lastShownBuildId))
+            return
+          lastShownBuildId = latestId
           step.value += 1
           buildId.value = latestId ?? ''
           realtimeListener.value = false
