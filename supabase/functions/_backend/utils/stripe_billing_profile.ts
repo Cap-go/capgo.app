@@ -54,7 +54,7 @@ export async function getBillingProfile(ctx: InAppBillingContext): Promise<Billi
   ])
   if (customer.deleted)
     throw simpleError('no_customer', 'No customer')
-  return { ...toDetails(customer), taxIds: taxIds.data.map(toTaxId) }
+  return { ...toDetails(customer), currency: customer.currency?.toLowerCase() ?? null, taxIds: taxIds.data.map(toTaxId) }
 }
 
 export async function updateBillingDetails(ctx: InAppBillingContext, value: unknown): Promise<BillingDetails> {

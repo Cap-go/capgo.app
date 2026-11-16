@@ -1,3 +1,4 @@
+import { mkdirSync } from 'node:fs'
 import type { Page, Route } from '@playwright/test'
 import { expect, test } from '../support/commands'
 import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
@@ -19,7 +20,7 @@ type Call = { path: string, body: Record<string, unknown>, authorization: string
 
 async function openBilling(page: Page, options: { discounted?: boolean, rejectUpdate?: boolean, noSubscription?: boolean } = {}) {
   const calls: Call[] = []
-  let profile = { ...structuredClone(details), taxIds: [] as { id: string, type: string, value: string, status: string }[] }
+  let profile = { ...structuredClone(details), currency: 'eur', taxIds: [] as { id: string, type: string, value: string, status: string }[] }
   const discounts = options.discounted ? [currentDiscount] : []
   let orgId = ''
   function capture(route: Route, path: string) {
@@ -75,6 +76,13 @@ function expectScopedCall(call: Call, orgId: string) {
 test.describe('Billing details, tax IDs and applied discounts', () => {
   test('saves invoice identity and address through the authenticated page and HTTP API', async ({ page }) => {
     const { calls, getOrgId } = await openBilling(page)
+    await expect(page.locator('[data-test="billing-currency"]')).toContainText('EUR')
+    await expect(page.locator('[data-test="settings-navigation"] [data-test="settings-switch-section"]')).toHaveCount(1)
+    if (process.env.CAPGO_PR_SCREENSHOTS) {
+      mkdirSync('docs/pr-screenshots/billing-currency', { recursive: true })
+      await page.emulateMedia({ colorScheme: 'dark' })
+      await page.screenshot({ path: 'docs/pr-screenshots/billing-currency/billing-dark.png' })
+    }
     await page.locator('[data-test="billing-edit-details"]').click()
     const dialog = page.getByRole('dialog')
     await expect(dialog.getByLabel('Billing email', { exact: true })).toHaveValue(details.email)
@@ -83,6 +91,8 @@ test.describe('Billing details, tax IDs and applied discounts', () => {
     await dialog.getByLabel('Billing email', { exact: true }).fill('invoices@example.com')
     await dialog.getByLabel('Address line 1', { exact: true }).fill('456 Example Avenue')
     await dialog.getByRole('combobox', { name: 'Country', exact: true }).selectOption('FR')
+    if (process.env.CAPGO_PR_SCREENSHOTS)
+      await page.screenshot({ path: 'docs/pr-screenshots/billing-currency/address-editor.png' })
     await dialog.getByRole('button', { name: 'Save billing details', exact: true }).click()
     await expect(dialog).toBeHidden()
     await expect(page.locator('[data-test="billing-profile-details"]')).toContainText('Updated Example Company')
@@ -158,4 +168,59 @@ test.describe('Billing details, tax IDs and applied discounts', () => {
     await expect(page.locator('[data-test="billing-profile-details"]')).toContainText('Example Company')
     expect(calls).toHaveLength(1)
   })
+})
+
+
+test('credits display the billing currency and block purchases when pricing is unavailable', async ({ page }) => {
+  await openBilling(page)
+  let unavailable = false
+  await page.route('**/private/credits/quote', route => route.fulfill(unavailable ? json({ error: 'credit_currency_unavailable' }, 400) : json({ currency: 'eur', unitAmount: 92, unitPrice: 0.92 })))
+  await page.route('**/private/credits/auto-top-up', route => route.fulfill(json({ enabled: false, threshold: 10, monthlyLimit: 0, monthlyTotal: 0, hasPaymentMethod: true })))
+  await page.goto('/settings/organization/credits')
+  await expect(page.getByText('Billed in EUR', { exact: false })).toBeVisible()
+  await expect(page.getByText('Subtotal: €92.00.', { exact: false })).toBeVisible()
+  await expect(page.locator('[data-test="credits-top-up-submit"]')).toBeEnabled()
+  if (process.env.CAPGO_PR_SCREENSHOTS) {
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await page.screenshot({ path: 'docs/pr-screenshots/billing-currency/credits-eur.png' })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.screenshot({ path: 'docs/pr-screenshots/billing-currency/credits-mobile.png' })
+  }
+  unavailable = true
+  await page.reload()
+  await expect(page.getByText('Could not load prices in your billing currency.', { exact: false })).toBeVisible()
+  await expect(page.locator('[data-test="credits-top-up-submit"]')).toBeDisabled()
+})
+
+
+test('offers USD after the yearly currency limit and requires reviewing prices before retrying', async ({ page }) => {
+  await openBilling(page)
+  const products = ['prod_LQIregjtNduh4q', 'prod_LQIs1Yucml9ChU', 'prod_LQIugvJcPrxhda', 'prod_MH5Jh6ajC9e7ZH', 'prod_VDt1FTF7XJxyMR', 'prod_VDt2cnktX7IDVV', 'prod_VDt2xM7OyLzhqV', 'prod_VDt2pia049SqpU']
+  const prices = Object.fromEntries(products.map(id => [id, { month: { usd: 3900, ars: 20000000 }, year: { usd: 39600, ars: 120000000 } }]))
+  await page.route('**/private/plan_prices**', route => route.fulfill(json({ complete: true, currencies: ['ars', 'usd'], currency: 'ars', lockedCurrency: null, prices, regularPrices: prices, discount: { percent: 30, country: 'AR', currencies: ['ars'] } })))
+  const checkouts: Record<string, unknown>[] = []
+  await page.route('**/private/stripe_checkout', (route) => {
+    checkouts.push(route.request().postDataJSON())
+    return route.fulfill(json({ error: 'checkout_amount_limit', moreInfo: { currency: 'ars', canSwitchToUsd: true } }, 400))
+  })
+  await page.goto('/settings/organization/plans')
+  await page.locator('[data-test="plans-currency-select"]').selectOption('ars')
+  await page.getByRole('button', { name: /Yearly/ }).click()
+  const maker = page.locator('[data-test="plan-card"]').filter({ has: page.getByRole('heading', { name: 'Maker', exact: true }) })
+  await maker.locator('[data-test="plan-action-button"]').click()
+  const alert = page.locator('[data-test="checkout-amount-limit"]')
+  await expect(alert).toContainText('Switch to USD')
+  if (process.env.CAPGO_PR_SCREENSHOTS) {
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await page.screenshot({ path: 'docs/pr-screenshots/billing-currency/checkout-limit.png' })
+  }
+  await alert.getByRole('button', { name: 'Show prices in USD' }).click()
+  await expect(page.locator('[data-test="plans-currency-select"]')).toHaveValue('usd')
+  expect(checkouts).toHaveLength(1)
+  expect(checkouts[0].currency).toBe('ars')
+  expect(checkouts[0].recurrence).toBe('year')
+  await maker.locator('[data-test="plan-action-button"]').click()
+  await expect.poll(() => checkouts.length).toBe(2)
+  expect(checkouts[1].currency).toBe('usd')
+  expect(checkouts[1].standardPrice).toBe(true)
 })

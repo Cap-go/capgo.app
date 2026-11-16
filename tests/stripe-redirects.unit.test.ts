@@ -348,12 +348,24 @@ describe('stripe redirect URL allowlist', () => {
     expect(createSession.mock.calls[0][0]).not.toHaveProperty('ui_mode')
   })
 
+  it.each([null, 'ars'])('returns actionable amount-limit guidance with locked currency %s', async (locked) => {
+    const createSession = vi.fn().mockRejectedValue(new Error("The Checkout Session's total amount due must be no more than $999,999.99."))
+    const mocks = subscriptionCheckoutMocks(locked, { usd: { unit_amount: 1400 }, ars: { unit_amount: 2000000 } })
+    vi.mocked(Stripe).mockImplementation(function () {
+      return { prices: { list: vi.fn().mockResolvedValue({ data: createPriceList('year') }), retrieve: mocks.retrievePrice }, customers: mocks.customers, checkout: { sessions: { create: createSession } } }
+    } as any)
+    const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    await expect(createCheckout(createContext(), 'cus_123', 'year', 'prod_test', '/app/success', '/app/cancel', { currency: 'ars' })).rejects.toMatchObject({ cause: { error: 'checkout_amount_limit', moreInfo: { currency: 'ars', canSwitchToUsd: locked === null } } })
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps the credit session placeholder on embedded one-time checkout', async () => {
     mockedEnv.STRIPE_PUBLISHABLE_KEY = 'pk_test_123'
     const createSession = vi.fn().mockResolvedValue({ id: 'cs_test_456', url: null, client_secret: 'cs_test_456_secret' })
     vi.mocked(Stripe).mockImplementation(function () {
       return {
-        prices: { list: vi.fn().mockResolvedValue({ data: createPriceList('month', 'one_time') }) },
+        prices: { list: vi.fn().mockResolvedValue({ data: createPriceList('month', 'one_time') }), retrieve: vi.fn().mockResolvedValue({ active: true, type: 'one_time', billing_scheme: 'per_unit', currency: 'usd', unit_amount: 100 }) },
+        customers: { retrieve: vi.fn().mockResolvedValue({ currency: 'usd' }) },
         checkout: { sessions: { create: createSession } },
       }
     } as any)
@@ -403,8 +415,10 @@ describe('stripe redirect URL allowlist', () => {
   it('rejects external cancel URLs for one-time checkout', async () => {
     const createSession = vi.fn()
     const stripeClient = {
+      customers: { retrieve: vi.fn().mockResolvedValue({ currency: 'usd' }) },
       prices: {
         list: vi.fn().mockResolvedValue({ data: createPriceList('one_time', 'one_time') }),
+        retrieve: vi.fn().mockResolvedValue({ active: true, type: 'one_time', billing_scheme: 'per_unit', currency: 'usd', unit_amount: 100 }),
       },
       checkout: {
         sessions: {
@@ -513,8 +527,10 @@ describe('stripe redirect URL allowlist', () => {
 
     const createSession = vi.fn().mockResolvedValue({ url: 'https://pay.capgo.test/p/pay' })
     const stripeClient = {
+      customers: { retrieve: vi.fn().mockResolvedValue({ currency: 'usd' }) },
       prices: {
         list: vi.fn().mockResolvedValue({ data: createPriceList('one_time', 'one_time') }),
+        retrieve: vi.fn().mockResolvedValue({ active: true, type: 'one_time', billing_scheme: 'per_unit', currency: 'usd', unit_amount: 100 }),
       },
       checkout: {
         sessions: {

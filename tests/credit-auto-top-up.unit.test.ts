@@ -76,6 +76,8 @@ describe('credit auto top-up invoice', () => {
     const state: { status: string } = { status: 'draft' }
     const payments = { data: mode === 'covered' ? [] : [{ payment: { type: 'payment_intent', payment_intent: 'pi_1' } }] }
     const stripe = {
+      customers: { retrieve: vi.fn(async () => ({ currency: 'eur' })) },
+      prices: { retrieve: vi.fn(async () => ({ active: true, type: 'one_time', billing_scheme: 'per_unit', currency: 'usd', unit_amount: 100, currency_options: { eur: { unit_amount: 92 } } })) },
       invoices: {
         create: vi.fn(async () => ({ id: 'in_1', status: 'draft' })),
         finalizeInvoice: vi.fn(async () => Object.assign(state, { status: mode === 'covered' ? 'paid' : 'open', id: 'in_1', payments })),
@@ -106,6 +108,7 @@ describe('credit auto top-up invoice', () => {
 
     expect(stripe.invoices.create).toHaveBeenCalledWith(expect.objectContaining({
       customer: 'cus_1',
+      currency: 'eur',
       automatic_tax: { enabled: true },
       pending_invoice_items_behavior: 'exclude',
       metadata: expect.objectContaining({ kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }),
@@ -113,6 +116,7 @@ describe('credit auto top-up invoice', () => {
     expect(stripe.invoiceItems.create).toHaveBeenCalledWith(expect.objectContaining({
       invoice: 'in_1',
       pricing: { price: 'price_credits' },
+      currency: 'eur',
       quantity: 25,
     }), expect.anything())
     expect(stripe.paymentIntents.update).toHaveBeenCalledWith('pi_1', { metadata: expect.objectContaining({ kind: AUTO_TOP_UP_KIND }) })

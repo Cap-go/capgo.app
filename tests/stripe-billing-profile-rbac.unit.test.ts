@@ -23,6 +23,7 @@ vi.mock('../supabase/functions/_backend/utils/cancel_save_offer.ts', () => ({}))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile.ts', () => ({
   getBillingProfile: mocks.profile, updateBillingDetails: mocks.update, addBillingTaxId: mocks.add, removeBillingTaxId: mocks.remove,
 }))
+vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile_sync.ts', () => ({ syncBillingProfile: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_discounts.ts', () => ({ getBillingDiscounts: mocks.discounts }))
 const { app } = await import('../supabase/functions/_backend/private/stripe_billing')
 app.onError((_err, c) => c.json({ error: 'rejected' }, 400))

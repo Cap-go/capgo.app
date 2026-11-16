@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
+import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { Hono } from 'hono/tiny'
 import { acceptCancelSaveOffer, declineCancelSaveOffer, parseOfferId, prepareCancelSaveOffer } from '../utils/cancel_save_offer.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
@@ -123,7 +124,9 @@ app.post('/profile', middlewareAuth, async (c) => {
 app.post('/profile/update', middlewareAuth, async (c) => {
   const body = await parseBody<OrgBody & { details?: unknown }>(c)
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
-  return c.json(await updateBillingDetails(ctx, body.details))
+  const details = await updateBillingDetails(ctx, body.details)
+  await syncBillingProfile(c, ctx)
+  return c.json(details)
 })
 
 app.post('/tax-id/add', middlewareAuth, async (c) => {

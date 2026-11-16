@@ -138,6 +138,7 @@ export interface BillingTaxId {
 }
 
 export interface BillingProfile extends BillingDetails {
+  currency: string | null
   taxIds: BillingTaxId[]
 }
 

@@ -77,10 +77,10 @@ export function getFirstTierCreditUnitPricing(steps: CreditPricingStep[]) {
   }, {})
 }
 
-export function formatCreditPriceValue(pricePerUnit: number) {
+export function formatCreditPriceValue(pricePerUnit: number, currency = 'USD') {
   return formatNumber(pricePerUnit, {
     style: 'currency',
-    currency: 'USD',
+    currency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
   })
@@ -92,10 +92,11 @@ export function formatCreditPricingPrice(
   pricePerUnit: number,
   t: Translate,
   unitFactor = 1,
+  currency = 'USD',
 ) {
   const displayPrice = metric === 'mau' ? (pricePerUnit * 1000) / (unitFactor || 1) : pricePerUnit
   return t('credits-pricing-price', {
-    price: formatCreditPriceValue(displayPrice),
+    price: formatCreditPriceValue(displayPrice, currency),
     unit: t(creditPricingUnitLabelKeys[metric]),
   })
 }

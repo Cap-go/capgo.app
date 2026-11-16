@@ -3,6 +3,8 @@ import type { BillingAccount } from './stripe_billing.ts'
 import type { Database } from './supabase.types.ts'
 import Stripe from 'stripe'
 import type { PriceTier } from './country_price_tier.ts'
+import { isCheckoutAmountLimit } from './checkout_limit.ts'
+import { getCreditQuote } from './credit_currency.ts'
 import { FULL_PRICE_TIER, priceTierForCountries } from './country_price_tier.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
@@ -1302,6 +1304,14 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
     saved_payment_method_options: CHECKOUT_SAVED_PAYMENT_METHOD_OPTIONS,
     line_items: lineItems,
     ...(checkoutCurrency ? { currency: checkoutCurrency } : {}),
+  }).catch(async (error: unknown) => {
+    if (!isCheckoutAmountLimit(error))
+      throw error
+    const full = getPriceTier(checkoutPrice.price) === FULL_PRICE_TIER ? checkoutPrice : await loadPlanPrice(FULL_PRICE_TIER)
+    throw simpleError('checkout_amount_limit', 'This total exceeds Stripe’s payment limit for this currency.', {
+      currency: checkoutCurrency ?? checkoutPrice.price.currency,
+      canSwitchToUsd: !customerBilling.currency && full.currencies.includes('usd') && checkoutCurrency !== 'usd',
+    })
   })
   return toCheckoutSessionResult(session, publishableKey)
 }
@@ -1357,7 +1367,10 @@ export async function createOneTimeCheckout(
   const successUrlWithFlag = allowedSuccessUrl.includes('?') ? `${allowedSuccessUrl}&success=true` : `${allowedSuccessUrl}?success=true`
   const publishableKey = getEmbeddedCheckoutPublishableKey(c, billingAccount, embedded)
 
+  const quote = await getCreditQuote(getStripe(c, billingAccount), customerId, priceId, c)
   const session = await getStripe(c, billingAccount).checkout.sessions.create({
+    currency: quote.currency,
+    adaptive_pricing: { enabled: false },
     billing_address_collection: 'auto',
     mode: 'payment',
     customer: customerId,
@@ -1373,7 +1386,7 @@ export async function createOneTimeCheckout(
     invoice_creation: { enabled: true },
     line_items: [
       {
-        price: priceId,
+        ...(quote.priceData ? { price_data: quote.priceData } : { price: priceId }),
         quantity,
         ...(isStripeEmulatorEnabled(c)
           ? {}

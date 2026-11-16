@@ -23,7 +23,7 @@ import { checkPermissions } from '~/services/permissions'
 import { formatPlanAmount, usePlanPrices } from '~/services/planPrices'
 import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getSignupAttributionEventTags } from '~/services/signupAttribution'
-import { startSubscriptionCheckout } from '~/services/stripe'
+import { CheckoutAmountLimitError, startSubscriptionCheckout } from '~/services/stripe'
 import { openSupport } from '~/services/support'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -255,24 +255,41 @@ async function loadEnterpriseScale(orgId: string) {
     enterpriseMauIndex.value = index
 }
 
+const checkoutAmountLimit = ref<{ canSwitchToUsd: boolean } | null>(null)
+
+function showUsdPrices() {
+  setStandardPrice(true)
+  setCurrency('usd')
+  checkoutAmountLimit.value = null
+}
+
 async function startPlanCheckout(plan: Plan, isYear: boolean) {
   if (!plan.stripe_id)
     return null
   // Strip a previous ?success/?cancel so Stripe returns to a clean plans URL.
   const returnUrl = `${globalThis.location.origin}${route.path}`
-  return await startSubscriptionCheckout({
-    priceId: plan.stripe_id,
-    successUrl: `${returnUrl}?success=1`,
-    cancelUrl: `${returnUrl}?cancel=1`,
-    isYear,
-    orgId: currentOrganization.value?.gid ?? '',
-    // Enterprise only: MAU added to the plan quota, billed on the same subscription.
-    extraMau: isEnterprisePlan(plan) ? enterpriseQuote.value?.extraMau : undefined,
-    // Only a currency Stripe sells this plan in; otherwise Checkout uses the price default.
-    currency: amountsFor(plan.stripe_id) ? priceCurrency.value ?? undefined : undefined,
-    // The page shows the full price (opt-out, or a currency the discount is not sold in): checkout sells it.
-    standardPrice: showsStandardPrice(plan.stripe_id),
-  })
+  checkoutAmountLimit.value = null
+  try {
+    return await startSubscriptionCheckout({
+      priceId: plan.stripe_id,
+      successUrl: `${returnUrl}?success=1`,
+      cancelUrl: `${returnUrl}?cancel=1`,
+      isYear,
+      orgId: currentOrganization.value?.gid ?? '',
+      // Enterprise only: MAU added to the plan quota, billed on the same subscription.
+      extraMau: isEnterprisePlan(plan) ? enterpriseQuote.value?.extraMau : undefined,
+      // Only a currency Stripe sells this plan in; otherwise Checkout uses the price default.
+      currency: amountsFor(plan.stripe_id) ? priceCurrency.value ?? undefined : undefined,
+      // The page shows the full price (opt-out, or a currency the discount is not sold in): checkout sells it.
+      standardPrice: showsStandardPrice(plan.stripe_id),
+    })
+  }
+  catch (error) {
+    if (!(error instanceof CheckoutAmountLimitError))
+      throw error
+    checkoutAmountLimit.value = { canSwitchToUsd: error.canSwitchToUsd }
+    return null
+  }
 }
 
 function trackPlanCheckoutStarted(plan: Plan, isYear: boolean, checkoutSource: string) {
@@ -345,7 +362,8 @@ async function openChangePlan(plan: Plan, index: number) {
     const checkoutIsYearly = isCheckoutYearly(plan)
     const session = await startPlanCheckout(plan, checkoutIsYearly)
     if (!session) {
-      toast.error(t('billing-checkout-error'))
+      if (!checkoutAmountLimit.value)
+        toast.error(t('billing-checkout-error'))
     }
     else if (session.kind === 'embedded') {
       embeddedCheckout.value = { ...session, planName: plan.name }
@@ -729,6 +747,12 @@ function buttonStyle(p: Plan) {
             >
               {{ t('yearly') }}
               <span v-if="anyYearlyDiscount" class="py-0.5 px-1.5 text-xs font-bold text-green-600 bg-green-100 rounded-full dark:text-green-400 dark:bg-green-900/30">{{ t('yearly-two-months-free') }}</span>
+            </button>
+          </div>
+          <div v-if="checkoutAmountLimit" role="alert" class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100" data-test="checkout-amount-limit">
+            <p>{{ t(checkoutAmountLimit.canSwitchToUsd ? 'checkout-limit-usd-help' : 'checkout-limit-contact-help') }}</p>
+            <button v-if="checkoutAmountLimit.canSwitchToUsd" type="button" class="d-btn d-btn-sm d-btn-primary mt-3" @click="showUsdPrices">
+              {{ t('checkout-limit-show-usd') }}
             </button>
           </div>
           <!-- Billing currency: only currencies set on the Stripe prices -->
