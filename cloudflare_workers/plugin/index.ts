@@ -15,6 +15,8 @@ import { handleSnippetEdgeStatsMessage } from '../../supabase/functions/_backend
 import { getEnv } from '../../supabase/functions/_backend/plugin_runtime/utils/utils.ts'
 import { version } from '../../supabase/functions/_backend/plugin_runtime/utils/version.ts'
 
+import { servingRegionReaderEpoch } from '../../supabase/functions/_backend/plugin_runtime/utils/servingRegionRollout.js'
+
 const functionName = 'plugin'
 const app = createHono(functionName, version)
 
@@ -61,10 +63,12 @@ app.use('*', async (c, next) => {
 // Public control metadata only; no app payload/replica/cache access.
 app.get('/serving_policy/:appId', async (c) => {
   c.header('Cache-Control', 'no-store')
+  if (!servingRegionReaderEpoch)
+    return c.json({ app_id: c.req.param('appId'), active: false, phase: 'disabled' })
   try {
     const doc = await readServingPolicy(c, c.req.param('appId'))
     const receipt = c.req.raw.cf?.colo ? await signServingIngress(c, doc.app_id) : undefined
-    return c.json({ ...doc, receipt })
+    return c.json({ ...doc, receipt, active: true, epoch: servingRegionReaderEpoch })
   }
   catch {
     return quickError(503, 'serving_policy_unavailable', 'Regional serving policy temporarily unavailable')

@@ -18,7 +18,13 @@ async function checkActivation() {
     if (!response.ok)
       throw new Error('Unavailable')
     const doc = await response.json()
-    if (!doc || typeof doc !== 'object' || !('app_id' in doc) || doc.app_id !== props.appId || !('policy' in doc)
+    if (!doc || typeof doc !== 'object' || !('active' in doc) || !('app_id' in doc) || doc.app_id !== props.appId)
+      throw new Error('Invalid rollout status')
+    if (doc.active === false) {
+      verification.value = 'pending'
+      return
+    }
+    if (!doc || doc.active !== true || typeof doc !== 'object' || !('app_id' in doc) || doc.app_id !== props.appId || !('policy' in doc)
       || !doc.policy || typeof doc.policy !== 'object' || !('regions' in doc.policy) || !('mode' in doc.policy)) {
       throw new Error('Invalid policy')
     }

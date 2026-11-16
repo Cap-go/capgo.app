@@ -22,6 +22,143 @@ ALTER TABLE public.apps
 COMMENT ON COLUMN public.apps.serving_regions IS 'Requested regional plugin metadata reads. Activated by strongly consistent serving-policy publication. Does not restrict global replication or bundle storage.';
 COMMENT ON COLUMN public.apps.serving_region_mode IS 'route accepts all ingress regions; block rejects trusted ingress outside serving_regions. Requested settings remain pending until published.';
 
+-- Policy work is deliberately separate from payload/full-sync bookkeeping.
+CREATE TABLE public.serving_policy_sync_pending (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  app_id text NOT NULL,
+  attempts integer NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+  due_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+  token uuid,
+  leased_until timestamptz
+);
+CREATE INDEX serving_policy_sync_due ON public.serving_policy_sync_pending(due_at, id);
+CREATE INDEX serving_policy_sync_app ON public.serving_policy_sync_pending(app_id);
+CREATE TABLE public.serving_policy_sync_failed (
+  id bigint PRIMARY KEY, app_id text NOT NULL, failed_at timestamptz NOT NULL DEFAULT pg_catalog.now()
+);
+CREATE INDEX serving_policy_sync_failed_app ON public.serving_policy_sync_failed(app_id);
+CREATE TABLE public.serving_policy_sync_progress (
+  id boolean PRIMARY KEY DEFAULT true CHECK(id),
+  epoch text NOT NULL DEFAULT '', after_app text, done_at timestamptz
+);
+INSERT INTO public.serving_policy_sync_progress(id) VALUES(true);
+ALTER TABLE public.serving_policy_sync_pending ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.serving_policy_sync_failed ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.serving_policy_sync_progress ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.serving_policy_sync_pending, public.serving_policy_sync_failed, public.serving_policy_sync_progress FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE FUNCTION public.serving_policy_active_epoch() RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$
+DECLARE v_active text; v_reader text;
+BEGIN
+  SELECT value INTO v_active FROM private.settings WHERE name = 'CAPGO_SERVING_REGIONS_ACTIVE_EPOCH';
+  IF NOT FOUND THEN RETURN NULL; END IF;
+  SELECT value INTO v_reader FROM private.settings WHERE name = 'CAPGO_SERVING_REGIONS_READER_EPOCH';
+  IF v_active IS NULL OR v_active !~ '^[a-zA-Z0-9_-]{8,80}$' OR v_active IS DISTINCT FROM v_reader THEN
+    RAISE EXCEPTION 'Serving policy activation epoch mismatch';
+  END IF;
+  RETURN v_active;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.serving_policy_active_epoch() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.serving_policy_active_epoch() TO service_role;
+
+CREATE FUNCTION public.claim_serving_policy_sync()
+RETURNS TABLE(token uuid, generation text, app_id text, active_epoch text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE v_id bigint; v_app text; v_token uuid := pg_catalog.gen_random_uuid();
+BEGIN
+  IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('serving_policy_sync_claim')) THEN RETURN; END IF;
+  SELECT p.id, p.app_id INTO v_id, v_app FROM public.serving_policy_sync_pending p
+  WHERE p.attempts < 5 AND p.due_at <= pg_catalog.clock_timestamp()
+    AND (p.token IS NULL OR p.leased_until <= pg_catalog.clock_timestamp())
+    AND NOT EXISTS (SELECT 1 FROM public.serving_policy_sync_pending busy
+      WHERE busy.app_id = p.app_id AND busy.token IS NOT NULL AND busy.leased_until > pg_catalog.clock_timestamp())
+  ORDER BY p.due_at, p.id LIMIT 1 FOR UPDATE SKIP LOCKED;
+  IF v_id IS NULL THEN RETURN; END IF;
+  UPDATE public.serving_policy_sync_pending p SET token = v_token,
+    leased_until = pg_catalog.clock_timestamp() + interval '1 minute', attempts = attempts + 1 WHERE p.id = v_id;
+  RETURN QUERY SELECT v_token, pg_catalog.nextval('public.plugin_state_sync_generation'::pg_catalog.regclass)::text,
+    v_app, public.serving_policy_active_epoch();
+END;
+$$;
+REVOKE ALL ON FUNCTION public.claim_serving_policy_sync() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_serving_policy_sync() TO service_role;
+
+CREATE FUNCTION public.ack_serving_policy_sync(p_token uuid, p_ok boolean) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  IF p_ok THEN
+    DELETE FROM public.serving_policy_sync_pending WHERE token = p_token AND leased_until > pg_catalog.clock_timestamp();
+  ELSE
+    UPDATE public.serving_policy_sync_pending SET token = NULL, leased_until = NULL,
+      due_at = pg_catalog.clock_timestamp() + interval '10 seconds'
+    WHERE token = p_token AND leased_until > pg_catalog.clock_timestamp();
+  END IF;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.ack_serving_policy_sync(uuid, boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ack_serving_policy_sync(uuid, boolean) TO service_role;
+
+-- Explicit bounded repair preserves the archive until an operator requests recovery.
+CREATE FUNCTION public.repair_serving_policy_sync(p_limit integer DEFAULT 25) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE v_count integer;
+BEGIN
+  WITH picked AS (SELECT id FROM public.serving_policy_sync_failed ORDER BY id
+    LIMIT GREATEST(1, LEAST(p_limit, 200)) FOR UPDATE SKIP LOCKED),
+  removed AS (DELETE FROM public.serving_policy_sync_failed f USING picked p WHERE f.id = p.id RETURNING f.app_id)
+  INSERT INTO public.serving_policy_sync_pending(app_id) SELECT app_id FROM removed;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  IF v_count > 0 THEN PERFORM public.wake_plugin_state_sync(); END IF;
+  RETURN v_count;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.repair_serving_policy_sync(integer) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.repair_serving_policy_sync(integer) TO service_role;
+
+CREATE FUNCTION public.serving_policy_sync_tick() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE v_after text; v_ids text[]; v_last text; v_done timestamptz;
+  v_epoch text := COALESCE(public.serving_policy_active_epoch(), '');
+BEGIN
+  -- Expired fifth leases (including crashes) are archived before another claim.
+  WITH picked AS (SELECT id FROM public.serving_policy_sync_pending
+    WHERE attempts >= 5 AND (token IS NULL OR leased_until <= pg_catalog.clock_timestamp())
+    ORDER BY id LIMIT 200 FOR UPDATE SKIP LOCKED),
+  removed AS (DELETE FROM public.serving_policy_sync_pending p USING picked e WHERE p.id = e.id RETURNING p.id, p.app_id)
+  INSERT INTO public.serving_policy_sync_failed(id, app_id) SELECT id, app_id FROM removed;
+
+  SELECT after_app, done_at INTO v_after, v_done FROM public.serving_policy_sync_progress WHERE id FOR UPDATE SKIP LOCKED;
+  IF FOUND THEN
+    IF EXISTS (SELECT 1 FROM public.serving_policy_sync_progress WHERE id AND epoch <> v_epoch) THEN
+      v_after := NULL; v_done := NULL;
+      UPDATE public.serving_policy_sync_progress SET epoch = v_epoch, after_app = NULL, done_at = NULL WHERE id;
+    END IF;
+    IF v_done IS NULL AND (SELECT count(*) FROM (SELECT 1 FROM public.serving_policy_sync_pending LIMIT 200) p) < 200 THEN
+      SELECT array_agg(a.app_id ORDER BY a.app_id), max(a.app_id) INTO v_ids, v_last
+      FROM (SELECT app_id FROM public.apps WHERE app_id > COALESCE(v_after, '') ORDER BY app_id LIMIT 100) a;
+      IF v_ids IS NULL THEN
+        UPDATE public.serving_policy_sync_progress SET done_at = pg_catalog.now() WHERE id;
+      ELSE
+        INSERT INTO public.serving_policy_sync_pending(app_id)
+        SELECT candidate FROM unnest(v_ids) candidate
+        WHERE NOT EXISTS (SELECT 1 FROM public.serving_policy_sync_pending p WHERE p.app_id = candidate)
+          AND NOT EXISTS (SELECT 1 FROM public.serving_policy_sync_failed f WHERE f.app_id = candidate);
+        UPDATE public.serving_policy_sync_progress SET after_app = v_last WHERE id;
+      END IF;
+    END IF;
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.serving_policy_sync_pending
+    WHERE attempts < 5 AND due_at <= pg_catalog.clock_timestamp()
+      AND (token IS NULL OR leased_until <= pg_catalog.clock_timestamp())) THEN
+    PERFORM public.wake_plugin_state_sync();
+  END IF;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.serving_policy_sync_tick() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.serving_policy_sync_tick() TO service_role;
+
 CREATE OR REPLACE FUNCTION public.enqueue_plugin_state_sync()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -38,19 +175,19 @@ DECLARE
   v_manifest_apps text[];
   v_manifest_refs text[];
 BEGIN
-  IF NOT public.plugin_state_sync_enabled() THEN
-    IF TG_TABLE_NAME = 'apps' THEN
-      IF TG_OP = 'INSERT' THEN
-        SELECT pg_catalog.array_agg(n.app_id::text) INTO v_app_ids FROM new_rows n;
-      ELSIF TG_OP = 'UPDATE' THEN
-        SELECT pg_catalog.array_agg(n.app_id::text) INTO v_app_ids
-        FROM old_rows o JOIN new_rows n ON n.app_id = o.app_id
-        WHERE (o.serving_regions, o.serving_region_mode) IS DISTINCT FROM (n.serving_regions, n.serving_region_mode);
-      END IF;
-      IF v_app_ids IS NOT NULL THEN
-        PERFORM public.notify_plugin_state_sync('app', v_app_ids);
-      END IF;
+  IF TG_TABLE_NAME = 'apps' THEN
+    IF TG_OP = 'INSERT' THEN
+      INSERT INTO public.serving_policy_sync_pending(app_id)
+      SELECT n.app_id FROM new_rows n;
+    ELSIF TG_OP = 'UPDATE' THEN
+      INSERT INTO public.serving_policy_sync_pending(app_id)
+      SELECT n.app_id FROM old_rows o JOIN new_rows n ON n.id = o.id
+      WHERE (o.app_id, o.serving_regions, o.serving_region_mode)
+        IS DISTINCT FROM (n.app_id, n.serving_regions, n.serving_region_mode);
     END IF;
+    PERFORM public.wake_plugin_state_sync();
+  END IF;
+  IF NOT public.plugin_state_sync_enabled() THEN
     RETURN NULL;
   END IF;
 
@@ -409,3 +546,131 @@ EXCEPTION WHEN OTHERS THEN
   RETURN NULL;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION public.plugin_state_sync_tick()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_batch constant integer := 25;
+  v_max_pending constant integer := 200;
+  v_after text;
+  v_done timestamptz;
+  v_ids text[];
+  v_last text;
+  v_pending integer;
+BEGIN
+  PERFORM public.serving_policy_sync_tick();
+  IF NOT public.plugin_state_sync_enabled() THEN
+    RETURN;
+  END IF;
+
+  -- A crash on the fifth lease must not cause a sixth attempt. Archive
+  -- only a bounded batch and preserve the original key for later repair.
+  WITH exhausted AS (
+    SELECT id FROM public.plugin_state_sync_pending
+    WHERE attempts >= 5 AND (lease_token IS NULL OR leased_until <= pg_catalog.clock_timestamp())
+    ORDER BY id LIMIT 200 FOR UPDATE SKIP LOCKED
+  ), removed AS (
+    DELETE FROM public.plugin_state_sync_pending p USING exhausted e
+    WHERE p.id = e.id RETURNING p.app_id, p.kind, p.ref
+  )
+  INSERT INTO public.plugin_state_sync_failed (app_id, kind, ref, repair_at)
+  SELECT DISTINCT app_id, kind, CASE WHEN kind = 'full' THEN '' ELSE ref END, pg_catalog.now() + interval '1 day'
+  FROM removed
+  ON CONFLICT (app_id, kind, ref) DO NOTHING;
+
+  SELECT count(*) INTO v_pending
+  FROM (SELECT 1 FROM public.plugin_state_sync_pending LIMIT v_max_pending) AS limited;
+
+  IF v_pending < v_max_pending THEN
+    SELECT backfill_after, backfill_done_at INTO v_after, v_done
+    FROM public.plugin_state_sync_state
+    WHERE id
+    FOR UPDATE SKIP LOCKED;
+
+    IF FOUND AND v_done IS NULL THEN
+      SELECT pg_catalog.array_agg(next_apps.app_id ORDER BY next_apps.app_id), MAX(next_apps.app_id)
+      INTO v_ids, v_last
+      FROM (
+        SELECT a.app_id::text AS app_id
+        FROM public.apps a
+        WHERE v_after IS NULL OR a.app_id > v_after
+        ORDER BY a.app_id
+        LIMIT v_batch
+      ) AS next_apps;
+
+      IF v_ids IS NULL THEN
+        UPDATE public.plugin_state_sync_state SET backfill_done_at = pg_catalog.now() WHERE id;
+      ELSE
+        SELECT pg_catalog.array_agg(candidate)
+        INTO v_ids
+        FROM pg_catalog.unnest(v_ids) AS candidate
+        WHERE NOT EXISTS (
+          SELECT 1 FROM public.plugin_state_sync_apps s
+          WHERE s.app_id = candidate AND s.full_synced_at IS NOT NULL
+        )
+          AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = candidate);
+        IF v_ids IS NOT NULL THEN
+          -- Durable enqueue and cursor advancement must succeed together;
+          -- the business-write notification helper swallows insert errors.
+          INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref)
+          SELECT selected.app_id, 'full', '' FROM pg_catalog.unnest(v_ids) AS selected (app_id)
+          ON CONFLICT ON CONSTRAINT plugin_state_sync_pending_producer_job_unique DO NOTHING;
+        END IF;
+        UPDATE public.plugin_state_sync_state SET backfill_after = v_last WHERE id;
+      END IF;
+    END IF;
+
+    SELECT pg_catalog.array_agg(stale.app_id)
+    INTO v_ids
+    FROM (
+      SELECT s.app_id
+      FROM public.plugin_state_sync_apps s
+      WHERE (s.app_synced_at IS NULL OR s.app_synced_at < pg_catalog.now() - interval '1 day')
+        AND EXISTS (SELECT 1 FROM public.apps a WHERE a.app_id = s.app_id)
+        AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_pending p WHERE p.app_id = s.app_id)
+        AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = s.app_id)
+      ORDER BY s.app_synced_at NULLS FIRST
+      LIMIT v_batch
+    ) AS stale;
+    IF v_ids IS NOT NULL THEN
+      PERFORM public.notify_plugin_state_sync('app', v_ids);
+    END IF;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.plugin_state_sync_pending
+    WHERE due_at <= pg_catalog.clock_timestamp()
+      AND (lease_token IS NULL OR leased_until <= pg_catalog.clock_timestamp())
+  ) OR EXISTS (
+    SELECT 1 FROM public.plugin_state_sync_state WHERE id
+      AND gc_due_at <= pg_catalog.clock_timestamp()
+      AND (gc_lease_token IS NULL OR gc_leased_until <= pg_catalog.clock_timestamp())
+  ) THEN
+    PERFORM public.wake_plugin_state_sync();
+  END IF;
+END;
+$$;
+
+
+-- Invoked only after the enforcing build is installed on all ingress paths.
+-- This is an explicit operator attestation, not an automated production action.
+CREATE FUNCTION public.activate_serving_policy_publication(p_epoch text, p_verified jsonb) RETURNS void
+LANGUAGE plpgsql SET search_path = '' AS $$
+BEGIN
+  IF p_epoch !~ '^[a-zA-Z0-9_-]{8,80}$'
+    OR p_epoch IS DISTINCT FROM (SELECT value FROM private.settings WHERE name = 'CAPGO_SERVING_REGIONS_READER_EPOCH')
+    OR NOT COALESCE(p_verified @> '{"EU":true,"NA":true,"SA":true,"OC":true,"AS_INDIA":true,"AS_JAPAN":true,"HK":true,"AF":true,"ME":true,"snippet":true,"deno":true,"warm_cache":true,"colo_attestation":true,"load":true,"keys":true}', false)
+    OR NOT EXISTS (SELECT 1 FROM public.serving_policy_sync_progress WHERE id AND epoch = '' AND done_at IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM public.serving_policy_sync_pending)
+    OR EXISTS (SELECT 1 FROM public.serving_policy_sync_failed) THEN
+    RAISE EXCEPTION 'Serving policy activation prerequisites incomplete';
+  END IF;
+  INSERT INTO private.settings(name, value) VALUES ('CAPGO_SERVING_REGIONS_ACTIVE_EPOCH', p_epoch)
+  ON CONFLICT(name) DO UPDATE SET value = EXCLUDED.value, updated_at = pg_catalog.now();
+END;
+$$;
+REVOKE ALL ON FUNCTION public.activate_serving_policy_publication(text, jsonb) FROM PUBLIC, anon, authenticated, service_role;

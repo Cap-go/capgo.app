@@ -82,6 +82,10 @@ describe('fresh plugin snapshot source transactions', () => {
     let claims = 0
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync(')) {
         expect(client.inTransaction).toBe(true)
         claims++
@@ -113,7 +117,7 @@ describe('fresh plugin snapshot source transactions', () => {
     expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
     expect(claims).toBe(1)
     expect(storage.publishedValue(await pluginStateVersionKey('com.test.freshsnapshot', '1.0.0'))).toMatchObject({ id: 202 })
-    expect(provider.transaction).toHaveBeenCalledTimes(4)
+    expect(provider.transaction).toHaveBeenCalledTimes(6)
     expect(provider.close).toHaveBeenCalledTimes(2)
   })
 
@@ -169,6 +173,10 @@ describe('fresh plugin snapshot source transactions', () => {
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       expect(client.inTransaction).toBe(true)
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('AS estimated_bytes'))
         return { rows: [{ estimated_bytes: 5 * 1024 * 1024 }] }
       if (statement.sql.includes('FROM public.app_versions av'))
@@ -213,6 +221,10 @@ describe('plugin state queue mutation transactions', () => {
     const cachedFirstClaim = claimResult(0)
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync(')) {
         if (!client.inTransaction) {
           // Stop a broken drain quickly after demonstrating replay of an old lease.
@@ -277,6 +289,10 @@ describe('plugin state queue mutation transactions', () => {
     const acknowledgements: unknown[][] = []
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       expect(client.inTransaction).toBe(true)
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'empty' } }] }
@@ -326,6 +342,10 @@ describe('plugin state queue mutation transactions', () => {
     const appId = 'com.test.explicitmutationrepair'
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       expect(client.inTransaction).toBe(true)
       expect(activeTransactions).toBe(1)
       if (statement.sql.includes('public.enqueue_plugin_state_full_sync(')) {
@@ -363,6 +383,10 @@ describe('competing full backfills', () => {
     const continuations: string[] = []
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'ok', lease_token: 'fixture-lease', generation: '1', has_more: false,
           apps: appIds.map(app_id => ({ app_id, jobs: [{ kind: 'full', ref: '' }], attempts: 1 })),
@@ -403,5 +427,50 @@ describe('competing full backfills', () => {
       + storage.pointers.list.mock.calls.length
     expect(operations).toBeLessThanOrEqual(800)
     expect(peakTransactions).toBeLessThanOrEqual(4)
+  })
+})
+
+
+describe('policy-only publication with payload sync disabled', () => {
+  it('retries an R2 failure without reading payload history or acknowledging payload coverage', async () => {
+    const storage = publicationProviders()
+    const appId = 'com.example.policy-only'
+    let claims = 0
+    let available = true
+    const acknowledgements: unknown[][] = []
+    const statements: string[] = []
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      expect(client.inTransaction).toBe(true)
+      const statement = dialect.sqlToQuery(query)
+      statements.push(statement.sql)
+      if (statement.sql.includes('public.claim_serving_policy_sync(')) {
+        if (!available)
+          return { rows: [] }
+        available = false
+        return { rows: [{ token: 'fixture-policy-lease', generation: String(++claims), app_id: appId, active_epoch: null }] }
+      }
+      if (statement.sql.includes('SELECT serving_regions, serving_region_mode FROM public.apps'))
+        return { rows: [{ serving_regions: ['NA'], serving_region_mode: 'block' }] }
+      if (statement.sql.includes('public.ack_serving_policy_sync(')) {
+        acknowledgements.push(statement.params)
+        return { rows: [] }
+      }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: false }] }
+      throw new Error('Unexpected payload query: ' + statement.sql)
+    })
+    storage.pointers.put.mockRejectedValueOnce(new Error('Synthetic R2 outage'))
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const env = { PLUGIN_STATE_POINTERS: storage.pointers }
+    expect(await (await app.request('/', { method: 'POST' }, env)).json()).toEqual({ claims: 1, apps: 0, failed: 1 })
+    available = true // periodic tick recovers the durable job after its cooldown
+    expect(await (await app.request('/', { method: 'POST' }, env)).json()).toEqual({ claims: 1, apps: 1, failed: 0 })
+    expect(acknowledgements).toEqual([['fixture-policy-lease', false], ['fixture-policy-lease', true]])
+    expect(storage.namespace.get).not.toHaveBeenCalled()
+    expect(storage.namespace.put).not.toHaveBeenCalled()
+    expect(storage.namespace.list).not.toHaveBeenCalled()
+    expect(JSON.parse(storage.objects.get('sr1:' + appId)!.body)).toMatchObject({ generation: '2', policy: { mode: 'route', regions: expect.arrayContaining(['EU', 'NA']) } })
+    expect(statements.some(value => /full_synced|app_synced|manifest|app_versions|ack_plugin_state/.test(value))).toBe(false)
   })
 })

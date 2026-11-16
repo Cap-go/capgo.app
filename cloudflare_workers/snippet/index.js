@@ -1,6 +1,8 @@
 import { trustedIngressRegion } from '../../supabase/functions/_backend/plugin_runtime/utils/servingRegionIngress.ts'
 import { parseServingPolicy, isRestrictedServingPolicy } from '../../supabase/functions/_backend/plugin_runtime/utils/servingRegions.ts'
 
+import { servingRegionReaderEpoch } from '../../supabase/functions/_backend/plugin_runtime/utils/servingRegionRollout.js'
+
 // Rules to match requests this Snippet will handle
 // Expression
 // (http.host eq "plugin.usecapgo.com")
@@ -774,7 +776,7 @@ export default {
       endpoint = getEndpointName(url.pathname)
       body = parseJsonBody(requestBody)
       appId = extractAppIdFromRequest(request, url, body)
-      if (appId) {
+      if (appId && servingRegionReaderEpoch) {
         try {
           // One subrequest, before ANY app cache, including synthetic stats.
           budget.used++
@@ -786,7 +788,7 @@ export default {
           if (!policyResponse.ok)
             throw new Error('Policy unavailable')
           const doc = await policyResponse.json()
-          if (doc.f !== 1 || doc.app_id !== appId || !doc.policy || typeof doc.receipt !== 'string')
+          if (doc.active !== true || doc.epoch !== servingRegionReaderEpoch || doc.f !== 1 || doc.app_id !== appId || !doc.policy || typeof doc.receipt !== 'string')
             throw new Error('Invalid policy')
           servingPolicy = parseServingPolicy(doc.policy.regions, doc.policy.mode)
           forwardedHeaders.set('x-capgo-serving-ingress', doc.receipt)

@@ -1,6 +1,7 @@
 import type { R2Bucket } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { ServingPolicy, ServingRegion } from './servingRegions.ts'
+import { servingRegionReaderEpoch } from './servingRegionRollout.js'
 import { quickError } from './hono.ts'
 import { trustedIngressRegion } from './servingRegionIngress.ts'
 import { isRestrictedServingPolicy, parseServingPolicy, servingPolicyKey } from './servingRegions.ts'
@@ -106,6 +107,10 @@ async function ingressRegion(c: Context, appId: string): Promise<ServingRegion |
 }
 
 export async function enforceServingPolicy(c: Context, appId: string) {
+  // An immutable deployment artifact, never a request header/envclient or KV miss.
+  // Disabled releases retain the exact legacy data/cache path without control I/O.
+  if (!servingRegionReaderEpoch)
+    return
   // Shared handlers can call the gate twice without a second store read.
   if (policies.has(c.req.raw))
     return

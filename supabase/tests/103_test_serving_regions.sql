@@ -20,12 +20,13 @@ SELECT throws_ok($$UPDATE public.apps SET serving_regions = ARRAY['EU',NULL] WHE
 SELECT throws_ok($$UPDATE public.apps SET serving_region_mode = 'other' WHERE app_id = 'com.example.serving.sql'$$, '23514', NULL, 'rejects invalid mode');
 SELECT throws_ok($$UPDATE public.apps SET serving_regions = NULL WHERE app_id = 'com.example.serving.sql'$$, '23502', NULL, 'rejects null list');
 DELETE FROM public.plugin_state_sync_pending WHERE app_id = 'com.example.serving.sql';
+DELETE FROM public.serving_policy_sync_pending WHERE app_id = 'com.example.serving.sql';
 DELETE FROM public.updates_cache_purge_pending WHERE app_id = 'com.example.serving.sql';
 UPDATE public.apps SET serving_regions = ARRAY['NA','HK'], serving_region_mode = 'block' WHERE app_id = 'com.example.serving.sql';
 SELECT is((SELECT count(*)::integer FROM public.plugin_state_sync_pending WHERE app_id = 'com.example.serving.sql'), 0, 'unchanged policy does not enqueue state sync');
 SELECT is((SELECT count(*)::integer FROM public.updates_cache_purge_pending WHERE app_id = 'com.example.serving.sql'), 0, 'unchanged policy does not invalidate edge cache');
 UPDATE public.apps SET serving_regions = ARRAY['NA'], serving_region_mode = 'route' WHERE app_id = 'com.example.serving.sql';
-SELECT ok(EXISTS(SELECT 1 FROM public.plugin_state_sync_pending WHERE app_id = 'com.example.serving.sql' AND kind = 'app'), 'policy change enqueues state sync');
+SELECT ok(EXISTS(SELECT 1 FROM public.serving_policy_sync_pending WHERE app_id = 'com.example.serving.sql'), 'policy change enqueues independent policy sync');
 SELECT ok(EXISTS(SELECT 1 FROM public.updates_cache_purge_pending WHERE app_id = 'com.example.serving.sql'), 'policy change invalidates edge cache');
 SELECT * FROM finish();
 ROLLBACK;

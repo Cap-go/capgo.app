@@ -1,4 +1,5 @@
 import { isRestrictedServingPolicy, parseServingPolicy, servingPolicyKey } from '../plugin_runtime/utils/servingRegions.ts'
+import { servingRegionReaderEpoch } from '../plugin_runtime/utils/servingRegionRollout.js'
 import { parseServingPolicyDocument } from '../plugin_runtime/utils/servingPolicy.ts'
 // Writes the KV plugin state (plugin_runtime/utils/pluginState.ts) from the
 // primary database. Statement-level triggers queue what changed in
@@ -248,6 +249,45 @@ function reserveProviderOperation(budget: PublicationBudget) {
   budget.remaining--
 }
 
+/** Strong policy CAS is independent of the KV payload writer and its bindings. */
+export function createServingPolicyPublisher(pointers: PointerStore, generation: string, budget: PublicationBudget) {
+  const reserve = () => reserveProviderOperation(budget)
+  return async (appId: string, regions: unknown, mode: unknown, activeEpoch: string | null = null) => {
+    const policy = parseServingPolicy(regions, mode)
+    if (activeEpoch && activeEpoch !== servingRegionReaderEpoch)
+      throw new Error('Serving policy activation requires ready readers')
+    if (isRestrictedServingPolicy(policy)) {
+      if (!activeEpoch || activeEpoch !== servingRegionReaderEpoch)
+        throw new Error('Serving policy activation requires ready readers')
+      reserve()
+      const readiness = await pointers.get('sr1:ready')
+      const ready: unknown = readiness ? await readiness.json() : null
+      if (!ready || typeof ready !== 'object' || !('f' in ready) || ready.f !== 1 || !('epoch' in ready) || ready.epoch !== activeEpoch)
+        throw new Error('Serving policy activation requires all ingress gates to be ready')
+    }
+    const key = servingPolicyKey(appId)
+    for (let attempt = 0; attempt < MAX_PUBLICATION_ATTEMPTS; attempt++) {
+      reserve()
+      const previous = await pointers.get(key)
+      if (previous) {
+        const current = parseServingPolicyDocument(await previous.json(), appId)
+        if (BigInt(current.generation) >= BigInt(generation))
+          return
+        if (!activeEpoch && isRestrictedServingPolicy(current.policy))
+          throw new Error('Preparation cannot replace an active restrictive policy')
+      }
+      reserve()
+      const written = await pointers.put(key, JSON.stringify({ f: 1, app_id: appId, generation, policy }), {
+        onlyIf: previous ? { etagMatches: previous.etag } : { etagDoesNotMatch: '*' },
+        httpMetadata: { contentType: 'application/json' },
+      })
+      if (written)
+        return
+    }
+    throw new Error('Serving policy publication contention exceeded 5 attempts')
+  }
+}
+
 /** Immutable KV values plus an R2 compare-and-set pointer fence late writers.
  * A lease check alone cannot protect KV after an awaited operation or a lost
  * DB connection. No old generation can replace a newer R2 pointer, even if
@@ -310,31 +350,7 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
     get remaining() { return budget.remaining },
     get changed() { return changed },
     hasPublished: (key: string) => published.has(key),
-    async publishServingPolicy(appId: string, regions: unknown, mode: unknown) {
-      const policy = parseServingPolicy(regions, mode)
-      if (isRestrictedServingPolicy(policy)) {
-        reserve()
-        const readiness = await pointers.get('sr1:ready')
-        const ready: unknown = readiness ? await readiness.json() : null
-        if (!ready || typeof ready !== 'object' || !('f' in ready) || ready.f !== 1)
-          throw new Error('Serving policy activation requires all ingress gates to be ready')
-      }
-      const key = servingPolicyKey(appId)
-      for (let attempt = 0; attempt < MAX_PUBLICATION_ATTEMPTS; attempt++) {
-        reserve()
-        const previous = await pointers.get(key)
-        if (previous && BigInt(parseServingPolicyDocument(await previous.json(), appId).generation) >= BigInt(generation))
-          return
-        reserve()
-        const written = await pointers.put(key, JSON.stringify({ f: 1, app_id: appId, generation, policy }), {
-          onlyIf: previous ? { etagMatches: previous.etag } : { etagDoesNotMatch: '*' },
-          httpMetadata: { contentType: 'application/json' },
-        })
-        if (written)
-          return
-      }
-      throw new Error('Serving policy publication contention exceeded 5 attempts')
-    },
+    publishServingPolicy: createServingPolicyPublisher(pointers, generation, budget),
     async getApp(key: string) {
       const pointer = await readPointer(key)
       if (!pointer?.value.kvKey)
@@ -822,11 +838,6 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
   const appId = item.app_id
   const completed: CompletedKey[] = []
   try {
-    // The policy is independent of the KV read canary and publishes before any full bundle scan.
-    const [policyRow] = await sourceRows<{ serving_regions: unknown, serving_region_mode: unknown }>(source, sql`
-      SELECT serving_regions, serving_region_mode FROM public.apps WHERE app_id = ${appId}`)
-    if (policyRow)
-      await store.publishServingPolicy(appId, policyRow.serving_regions, policyRow.serving_region_mode)
     const refsOf = (kind: ClaimedApp['jobs'][number]['kind']) => item.jobs.filter(job => job.kind === kind).map(job => job.ref).filter(Boolean)
     const fullJobs = item.jobs.filter(job => job.kind === 'full')
     const versionNames = refsOf('version')
@@ -971,7 +982,7 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
   const namespace = getPluginStateStore(c)
   const pointers = getPluginStatePointers(c)
   const result: PluginStateDrainResult = { claims: 0, apps: 0, failed: 0 }
-  if (!namespace || !pointers)
+  if (!pointers)
     return result
   const budget: PublicationBudget = { remaining: PROVIDER_OPERATION_BUDGET }
   const deadline = Date.now() + (options.budgetMs ?? DRAIN_BUDGET_MS)
@@ -979,6 +990,10 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
   let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
     pg = await getPgClient(c)
+    await drainServingPolicies(pg, source, pointers, budget, deadline, result)
+    const [switches] = await mutate(pg, db => rows<{ enabled: boolean }>(db, sql`SELECT public.plugin_state_sync_enabled() AS enabled`))
+    if (!switches?.enabled || !namespace)
+      return result
     let busyRetries = 0
     while (Date.now() < deadline && budget.remaining > 0) {
       const claimed = await claim(pg)
@@ -1059,8 +1074,35 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
   return result
 }
 
+export async function drainServingPolicies(pg: Pg, source: SourceReader, pointers: PointerStore, budget: PublicationBudget, deadline: number, result: PluginStateDrainResult) {
+  while (Date.now() < deadline && budget.remaining >= 8) {
+    const [claim] = await mutate(pg, db => rows<{ token: string, generation: string, app_id: string, active_epoch: string | null }>(db, sql`SELECT * FROM public.claim_serving_policy_sync()`))
+    if (!claim)
+      break
+    result.claims++
+    let ok = false
+    try {
+      const [row] = await sourceRows<{ serving_regions: unknown, serving_region_mode: unknown }>(source, sql`SELECT serving_regions, serving_region_mode FROM public.apps WHERE app_id = ${claim.app_id}`)
+      if (row) {
+        const publish = createServingPolicyPublisher(pointers, claim.generation, budget)
+        // Initialize a legacy baseline during preparation. Activation starts a
+        // separate bounded pass over requested settings; UI remains pending.
+        const policy = claim.active_epoch ? parseServingPolicy(row.serving_regions, row.serving_region_mode) : parseServingPolicy(undefined, undefined)
+        await publish(claim.app_id, policy.regions, policy.mode, claim.active_epoch)
+      }
+      ok = true
+      result.apps++
+    }
+    catch (error) {
+      result.failed++
+      cloudlogErr({ message: 'serving policy sync failed', app_id: claim.app_id, error: serializeError(error) })
+    }
+    await mutate(pg, db => db.execute(sql`SELECT public.ack_serving_policy_sync(${claim.token}::uuid, ${ok})`))
+  }
+}
+
 export function shouldForwardPluginStateSync(c: SyncContext) {
-  return (!getPluginStateStore(c) || !getPluginStatePointers(c))
+  return !getPluginStatePointers(c)
     && Boolean(getEnv(c, 'CLOUDFLARE_FUNCTION_URL'))
     && c.req.header(FORWARDED_HEADER) !== '1'
 }
@@ -1078,7 +1120,7 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
   const body = await parseBody<{ wake?: boolean, drain?: boolean, apps?: unknown } | null>(c).catch(() => null) ?? {}
-  if (!getPluginStateStore(c) || !getPluginStatePointers(c)) {
+  if (!getPluginStatePointers(c)) {
     if (!shouldForwardPluginStateSync(c))
       return c.json({ ...BRES, skipped: true })
     // No KV binding here (Supabase function): the Cloudflare API worker syncs.

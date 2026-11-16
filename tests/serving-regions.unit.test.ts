@@ -4,6 +4,7 @@ import { app as channelSelf } from '../supabase/functions/_backend/plugin_runtim
 import { resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
 import { Hono } from 'hono'
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest'
+import plugin from '../cloudflare_workers/plugin/index.ts'
 import snippet from '../cloudflare_workers/snippet/index.js'
 import { CacheHelper } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
 import { getDatabaseURL } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
@@ -11,6 +12,9 @@ import { enforceServingPolicy, signServingIngress } from '../supabase/functions/
 import { parseServingPolicy, SERVING_REGIONS } from '../supabase/functions/_backend/plugin_runtime/utils/servingRegions.ts'
 import { createPluginStateSyncStore } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
 import { publicationProviders } from './plugin-state-publication-fixture.ts'
+
+const rollout = vi.hoisted(() => ({ epoch: 'staging-test-epoch' as string | null }))
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/servingRegionRollout.js', () => ({ get servingRegionReaderEpoch() { return rollout.epoch } }))
 
 vi.mock('hono/adapter', async (original) => ({ ...await original<typeof import('hono/adapter')>(), getRuntimeKey: () => 'workerd' }))
 const appId = 'com.example.serving'
@@ -43,10 +47,59 @@ function harness(value: () => unknown) {
   return { app, env, get, dataAccess }
 }
 
-beforeEach(() => vi.stubEnv('ENV_NAME', 'capgo_plugin-eu-prod'))
+beforeEach(() => { rollout.epoch = 'staging-test-epoch'; vi.stubEnv('ENV_NAME', 'capgo_plugin-eu-prod') })
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); resetReplicationLagMemory() })
 
 describe('serving policy', () => {
+  it('reports disabled gateway status without R2 or a signing key', async () => {
+    rollout.epoch = null
+    const get = vi.fn(() => { throw new Error('Must not read policy store') })
+    const response = await plugin.fetch(request('/serving_policy/' + appId), { PLUGIN_STATE_POINTERS: { get } })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ app_id: appId, active: false, phase: 'disabled' })
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('fails closed on a policy-store outage before any app data', async () => {
+    const { app, env, get, dataAccess } = harness(() => document())
+    get.mockRejectedValueOnce(new Error('Synthetic provider outage'))
+    expect((await app.fetch(request(), env)).status).toBe(503)
+    expect(dataAccess).not.toHaveBeenCalled()
+  })
+
+  it('fails closed on a Deno gateway failure before any app data', async () => {
+    const { app, env, dataAccess } = harness(() => document())
+    const { PLUGIN_STATE_POINTERS: _binding, ...denoEnv } = env
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ active: false }, { status: 503 })))
+    expect((await app.fetch(request(), denoEnv)).status).toBe(503)
+    expect(dataAccess).not.toHaveBeenCalled()
+  })
+
+  it('preserves legacy routing/cache keys with no policy/key/binding and ignores client activation', async () => {
+    rollout.epoch = null
+    const { app, env, get, dataAccess } = harness(() => { throw new Error('No policies initialized') })
+    const fetcher = vi.fn(() => { throw new Error('No gateway allowed') })
+    vi.stubGlobal('fetch', fetcher)
+    const { PLUGIN_STATE_POINTERS: _pointers, SERVING_REGION_SIGNING_KEY: _key, ...legacyEnv } = env
+    const response = await app.fetch(request('/', 'CDG', { 'x-capgo-serving-regions-enabled': 'true', 'envclient': 'prod', 'x-capgo-serving-ingress': 'fake' }), { ...legacyEnv, SERVING_REGIONS_ENABLED: 'true' })
+    expect(await response.json()).toEqual({ url: 'postgres://eu', key: 'https://plugin.eu.capgo.app/cached' })
+    expect(dataAccess).toHaveBeenCalledOnce()
+    expect(get).not.toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('serves a warm pre-feature snippet cache while disabled with zero gateway calls', async () => {
+    rollout.epoch = null
+    const cache = { match: vi.fn(async () => Response.json({ error: 'on_premise_app' }, { status: 429 })), put: vi.fn(), delete: vi.fn() }
+    vi.stubGlobal('caches', { default: cache })
+    const fetcher = vi.fn(() => { throw new Error('No new dependency allowed') })
+    vi.stubGlobal('fetch', fetcher)
+    const req = new Request('https://plugin.capgo.app/updates', { method: 'POST', body: JSON.stringify({ app_id: appId }) })
+    expect((await snippet.fetch(req)).status).toBe(429)
+    expect(cache.match).toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['POST', '/updates'], ['POST', '/updates/manifest_size'], ['POST', '/plugin/updates'],
     ['POST', '/stats'], ['POST', '/plugin/stats'], ['POST', '/channel_self'],
@@ -136,22 +189,47 @@ describe('serving policy', () => {
     expect((await app.fetch(request('/', 'CDG', { 'x-capgo-serving-ingress': tampered }), env)).status).toBe(503)
   })
 
+  it('fences a delayed policy CAS after a newer publisher wins', async () => {
+    const providers = publicationProviders()
+    providers.objects.set('sr1:ready', { body: JSON.stringify({ f: 1, epoch: rollout.epoch }), etag: 'ready' })
+    const old = createPluginStateSyncStore(providers.namespace, providers.pointers, '1')
+    const latest = createPluginStateSyncStore(providers.namespace, providers.pointers, '2')
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const put = providers.pointers.put.getMockImplementation()!
+    providers.pointers.put.mockImplementation(async (...args) => {
+      if (JSON.parse(args[1]).generation === '1') {
+        entered.resolve()
+        await release.promise
+      }
+      return put(...args)
+    })
+    const delayed = old.publishServingPolicy(appId, [...SERVING_REGIONS], 'route')
+    await entered.promise
+    await latest.publishServingPolicy(appId, ['NA'], 'block', rollout.epoch)
+    release.resolve()
+    await delayed
+    expect(JSON.parse(providers.objects.get('sr1:' + appId)!.body)).toMatchObject({ generation: '2', policy: { regions: ['NA'], mode: 'block' } })
+  })
+
   it('fences an old publisher and requires ingress readiness before restricting', async () => {
     const providers = publicationProviders()
     const old = createPluginStateSyncStore(providers.namespace, providers.pointers, '1')
     const latest = createPluginStateSyncStore(providers.namespace, providers.pointers, '2')
-    await expect(latest.publishServingPolicy(appId, ['NA'], 'route')).rejects.toThrow('ready')
-    providers.objects.set('sr1:ready', { body: '{"f":1}', etag: 'ready' })
-    await latest.publishServingPolicy(appId, ['NA'], 'route')
-    await old.publishServingPolicy(appId, ['EU'], 'route')
+    await expect(latest.publishServingPolicy(appId, ['NA'], 'route', 'staging-test-epoch')).rejects.toThrow('ready')
+    providers.objects.set('sr1:ready', { body: '{"f":1,"epoch":"staging-test-epoch"}', etag: 'ready' })
+    await latest.publishServingPolicy(appId, ['NA'], 'route', 'staging-test-epoch')
+    await old.publishServingPolicy(appId, ['EU'], 'route', 'staging-test-epoch')
     expect(JSON.parse(providers.objects.get('sr1:' + appId)!.body).policy.regions).toEqual(['NA'])
+    const preparation = createPluginStateSyncStore(providers.namespace, providers.pointers, '3')
+    await expect(preparation.publishServingPolicy(appId, [...SERVING_REGIONS], 'route')).rejects.toThrow('Preparation cannot replace')
     expect(providers.namespace.get).not.toHaveBeenCalled()
   })
 
   it('blocks before any snippet cache or backend call after tightening', async () => {
-    const cache = { match: vi.fn(), put: vi.fn(), delete: vi.fn() }
+    const cache = { match: vi.fn(async () => Response.json({ error: 'on_premise_app' }, { status: 429 })), put: vi.fn(), delete: vi.fn() }
     vi.stubGlobal('caches', { default: cache })
-    const fetcher = vi.fn(async () => Response.json({ ...document(['NA'], 'block'), receipt: 'signed' }))
+    const fetcher = vi.fn(async () => Response.json({ ...document(['NA'], 'block'), active: true, epoch: rollout.epoch, receipt: 'signed' }))
     vi.stubGlobal('fetch', fetcher)
     const req = new Request('https://plugin.capgo.app/stats', { method: 'POST', body: JSON.stringify({ app_id: appId, device_id: 'device', action: 'ping' }) })
     Object.defineProperty(req, 'cf', { value: { colo: 'CDG' } })
@@ -167,7 +245,7 @@ describe('serving policy', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: Request | string) => {
       const url = typeof input === 'string' ? input : input.url
       targets.push(url)
-      return url.includes('/serving_policy/') ? Response.json({ ...document(['NA']), receipt: 'signed' }) : Response.json({ error: 'offline' }, { status: 503 })
+      return url.includes('/serving_policy/') ? Response.json({ ...document(['NA']), active: true, epoch: rollout.epoch, receipt: 'signed' }) : Response.json({ error: 'offline' }, { status: 503 })
     }))
     const req = new Request('https://plugin.capgo.app/updates', { method: 'POST', body: JSON.stringify({ app_id: appId }) })
     Object.defineProperty(req, 'cf', { value: { colo: 'CDG' } })
