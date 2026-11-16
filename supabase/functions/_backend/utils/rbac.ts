@@ -103,7 +103,7 @@ function handlePermissionCheckError(
   permission: Permission,
   scope: PermissionScope,
   error: unknown,
-  source: 'checkPermission' | 'checkPermissionPg' | 'checkPermissionInMemberOrgs',
+  source: 'checkPermission' | 'checkPermissionPg' | 'checkPermissionInMemberOrgs' | 'checkPermissionsBatch',
 ): false {
   if (error instanceof HTTPException)
     throw error
@@ -268,6 +268,130 @@ export async function checkPermission(
 }
 
 /**
+ * One permission check inside a batch.
+ */
+export interface PermissionCheck {
+  permission: Permission
+  scope: PermissionScope
+}
+
+/**
+ * Upper bound of entries per public.rbac_check_permissions call (the SQL
+ * function rejects larger arrays). Larger batches are split into several
+ * statements on the same client.
+ */
+export const MAX_PERMISSION_CHECKS_PER_QUERY = 500
+
+/**
+ * Batch variant of checkPermissionPg on an existing Drizzle client: evaluates
+ * every check with public.rbac_check_permissions, which runs
+ * rbac_check_permission_direct per entry with the same principal arguments
+ * checkPermissionPg passes. Results are returned in input order.
+ *
+ * Errors follow checkPermissionPg: transient database errors become 503,
+ * other query failures deny every check of the batch.
+ */
+export async function checkPermissionsBatchPg(
+  c: Context<MiddlewareKeyVariables>,
+  checks: PermissionCheck[],
+  drizzleClient: Pick<ReturnType<typeof getDrizzleClient>, 'execute'>,
+  userId: string,
+  apikeyString?: string | null,
+): Promise<boolean[]> {
+  if (checks.length === 0)
+    return []
+  if (!userId) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'checkPermissionsBatchPg: no userId',
+      count: checks.length,
+    })
+    return checks.map(() => false)
+  }
+
+  const auth = c.get('auth')
+  // Same guard as checkPermission / checkPermissionPg: an RBAC API key without
+  // its plaintext value cannot be evaluated.
+  if (auth?.authType === 'apikey' && auth.apikey?.rbac_id && !apikeyString)
+    return checks.map(() => false)
+
+  const results: boolean[] = []
+  try {
+    for (let start = 0; start < checks.length; start += MAX_PERMISSION_CHECKS_PER_QUERY) {
+      const chunk = checks.slice(start, start + MAX_PERMISSION_CHECKS_PER_QUERY)
+      const payload = chunk.map(({ permission, scope }) => ({
+        permission_key: permission,
+        user_id: userId,
+        org_id: scope.orgId ?? null,
+        app_id: scope.appId ?? null,
+        channel_id: scope.channelId ?? null,
+        apikey: apikeyString ?? null,
+      }))
+      const result = await drizzleClient.execute(
+        sql`SELECT idx, allowed FROM public.rbac_check_permissions(${JSON.stringify(payload)}::jsonb)`,
+      )
+      const allowedByIdx = new Map<number, boolean>()
+      for (const row of result.rows as Array<{ idx: number | string, allowed: boolean | null }>)
+        allowedByIdx.set(Number(row.idx), row.allowed === true)
+      chunk.forEach((_check, idx) => results.push(allowedByIdx.get(idx) ?? false))
+    }
+  }
+  catch (e) {
+    const first = checks[0]
+    handlePermissionCheckError(c, first.permission, first.scope, e, 'checkPermissionsBatch')
+    return checks.map(() => false)
+  }
+
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'checkPermissionsBatchPg: result',
+    count: checks.length,
+    allowedCount: results.filter(Boolean).length,
+    hasApikey: !!apikeyString,
+  })
+  return results
+}
+
+/**
+ * Batch variant of checkPermission(): same principal resolution, one pooled
+ * client and one statement (per MAX_PERMISSION_CHECKS_PER_QUERY entries)
+ * instead of one client per check. Results are returned in input order.
+ */
+export async function checkPermissionsBatch(
+  c: Context<MiddlewareKeyVariables>,
+  checks: PermissionCheck[],
+): Promise<boolean[]> {
+  if (checks.length === 0)
+    return []
+  const auth = c.get('auth')
+  if (!auth?.userId) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'checkPermissionsBatch: no auth',
+      count: checks.length,
+    })
+    return checks.map(() => false)
+  }
+
+  // For hashed keys, apikey.key is null, so we use capgkey from the request header
+  const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
+  let pgClient
+  try {
+    pgClient = await getPgClient(c)
+    return await checkPermissionsBatchPg(c, checks, getDrizzleClient(pgClient), auth.userId, apikeyString)
+  }
+  catch (e) {
+    const first = checks[0]
+    handlePermissionCheckError(c, first.permission, first.scope, e, 'checkPermissionsBatch')
+    return checks.map(() => false)
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
+/**
  * Whether the caller holds an org-scoped permission in ANY organization that
  * `memberUserId` belongs to, evaluated in one query instead of one
  * checkPermission round trip per organization.
@@ -427,12 +551,10 @@ export async function checkPermissions(
   permissions: Permission[],
   scope: PermissionScope,
 ): Promise<boolean> {
-  for (const permission of permissions) {
-    if (!(await checkPermission(c, permission, scope))) {
-      return false
-    }
-  }
-  return true
+  if (permissions.length === 0)
+    return true
+  const results = await checkPermissionsBatch(c, permissions.map(permission => ({ permission, scope })))
+  return results.every(Boolean)
 }
 
 /**
@@ -443,12 +565,10 @@ export async function checkAnyPermission(
   permissions: Permission[],
   scope: PermissionScope,
 ): Promise<boolean> {
-  for (const permission of permissions) {
-    if (await checkPermission(c, permission, scope)) {
-      return true
-    }
-  }
-  return false
+  if (permissions.length === 0)
+    return false
+  const results = await checkPermissionsBatch(c, permissions.map(permission => ({ permission, scope })))
+  return results.some(Boolean)
 }
 
 /**

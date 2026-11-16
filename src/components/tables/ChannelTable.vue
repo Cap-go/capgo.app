@@ -17,7 +17,7 @@ import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { checkPermissions } from '~/services/permissions'
+import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { refetchIfPageOutOfRange } from '~/services/tablePagination'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -282,13 +282,17 @@ async function loadChannelPermissions(rows: Element[], appId: string, requestId:
     return
   }
 
-  const entries = await Promise.all(rows.map(async (row) => {
-    const [canRead, canPromote, canDelete] = await Promise.all([
-      checkPermissions('channel.read', { channelId: row.id }),
-      checkPermissions('channel.promote_bundle', { channelId: row.id }),
-      checkPermissions('channel.delete', { appId, channelId: row.id }),
-    ])
-    return { id: row.id, canRead, canPromote, canDelete }
+  // One batched RPC for every row (3 checks per channel), cached across sorts and searches.
+  const results = await checkPermissionsBatch(rows.flatMap(row => [
+    { permissions: 'channel.read' as const, scope: { channelId: row.id } },
+    { permissions: 'channel.promote_bundle' as const, scope: { channelId: row.id } },
+    { permissions: 'channel.delete' as const, scope: { appId, channelId: row.id } },
+  ]))
+  const entries = rows.map((row, idx) => ({
+    id: row.id,
+    canRead: results[idx * 3],
+    canPromote: results[idx * 3 + 1],
+    canDelete: results[idx * 3 + 2],
   }))
 
   if (requestId !== dataRequestId || appId !== props.appId)

@@ -9,7 +9,7 @@ import { versionedRoute } from '../../utils/api_version.ts'
 import { parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { apikeyPrincipal, queryJson, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
-import { checkPermission } from '../../utils/rbac.ts'
+import { checkPermission, checkPermissionsBatch } from '../../utils/rbac.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { MAX_MANIFEST_ENTRIES } from '../../utils/manifest_limits.ts'
 import { isValidAppId } from '../../utils/utils.ts'
@@ -153,7 +153,6 @@ type CliPlanAction = Database['public']['Enums']['action_type']
 type CliPlanStatus = 'allowed' | 'billing_denied' | 'permission_denied'
 
 const ALL_PLAN_ACTIONS: CliPlanAction[] = ['mau', 'storage', 'bandwidth', 'build_time']
-const ORG_PERMISSION_CHECK_BATCH = 10
 
 interface CliScope {
   org_id?: string
@@ -288,14 +287,12 @@ app.get('/organizations', middlewareKey(), versionedRoute<CliContext>({
       return c.json(organizations as unknown)
 
     // `allowed` tells the CLI which orgs the key may use for this command.
-    const rows: unknown[] = []
-    for (let index = 0; index < organizations.length; index += ORG_PERMISSION_CHECK_BATCH) {
-      const batch = organizations.slice(index, index + ORG_PERMISSION_CHECK_BATCH)
-      rows.push(...await Promise.all(batch.map(async org => ({
-        ...org,
-        allowed: await checkPermission(c, permission as Permission, { orgId: org.gid }),
-      }))))
-    }
+    // One pooled client and one batched statement for every org.
+    const allowed = await checkPermissionsBatch(c, organizations.map(org => ({
+      permission: permission as Permission,
+      scope: { orgId: org.gid },
+    })))
+    const rows = organizations.map((org, idx) => ({ ...org, allowed: allowed[idx] }))
     return c.json(rows)
   },
 }))
@@ -305,9 +302,12 @@ app.post('/permissions', middlewareKey(), versionedRoute<CliContext>({
     const body = await parseJson(c, permissionsBodySchema)
     assertValidAppId(body.app_id)
     const scope = permissionScope(body)
-    const entries = await Promise.all([...new Set(body.permissions)].map(async permission =>
-      [permission, await checkPermission(c, permission as Permission, scope)] as const,
-    ))
+    const permissions = [...new Set(body.permissions)]
+    const allowed = await checkPermissionsBatch(c, permissions.map(permission => ({
+      permission: permission as Permission,
+      scope,
+    })))
+    const entries = permissions.map((permission, idx) => [permission, allowed[idx]] as const)
     return c.json({ permissions: Object.fromEntries(entries) })
   },
 }))

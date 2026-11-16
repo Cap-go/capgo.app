@@ -2,7 +2,9 @@
  * RBAC Permission System - Frontend
  *
  * This module provides the frontend interface to the backend RBAC permission system.
- * It calls the SQL function rbac_check_permission(), backed by role_bindings.
+ * It calls the SQL function rbac_check_permissions(), which evaluates a batch of
+ * rbac_check_permission() / rbac_check_permission_direct() checks in one round trip.
+ * Checks queued in the same task are coalesced and results are cached per session.
  *
  * Usage:
  *   import { checkPermissions } from '~/services/permissions'
@@ -87,48 +89,242 @@ export interface CheckPermissionsOptions {
 }
 
 /**
- * Low-level single-permission check (RPC wrapper).
- * Prefer checkPermissions() for new usage.
+ * Maximum number of checks sent in one rbac_check_permissions call. The SQL
+ * function rejects larger arrays, so bigger batches are split client-side.
+ */
+export const MAX_PERMISSION_CHECKS_PER_RPC = 200
+
+/**
+ * How long a resolved permission stays cached. Org switches, role changes and
+ * sign-out clear the cache explicitly (invalidatePermissionCache); the TTL only
+ * bounds staleness for changes made outside this tab.
+ */
+const PERMISSION_CACHE_TTL_MS = 30_000
+
+interface AtomicCheck {
+  permission: Permission
+  scope: PermissionScope
+  /** Set to check another user; omitted to check the signed-in user. */
+  userId?: string
+}
+
+interface CacheEntry {
+  promise: Promise<boolean>
+  expiresAt: number
+}
+
+interface PendingCheck {
+  check: AtomicCheck
+  resolve: (allowed: boolean) => void
+}
+
+const permissionCache = new Map<string, CacheEntry>()
+let cacheOwnerId: string | null = null
+let pendingChecks = new Map<string, PendingCheck>()
+let flushScheduled = false
+
+function atomicCheckKey(check: AtomicCheck) {
+  return [
+    check.userId ? `user:${check.userId}` : 'self',
+    check.permission,
+    check.scope.orgId ?? '',
+    check.scope.appId ?? '',
+    check.scope.channelId ?? '',
+  ].join('|')
+}
+
+/**
+ * Drop every cached permission result. Call it when the active org, the
+ * caller's role or role bindings change, and on sign-out.
+ */
+export function invalidatePermissionCache() {
+  permissionCache.clear()
+}
+
+function syncCacheOwner(ownerId: string) {
+  if (cacheOwnerId !== ownerId) {
+    permissionCache.clear()
+    cacheOwnerId = ownerId
+  }
+}
+
+/**
+ * Single-check fallback, used only when the batch RPC fails (for example while
+ * the console is deployed ahead of the API that serves rbac_check_permissions).
+ */
+async function runSinglePermissionCheck({ permission, scope, userId }: AtomicCheck): Promise<boolean | null> {
+  const capgo = useConsole()
+  try {
+    const { data, error } = userId
+      // p_app_id / p_channel_id are nullable in SQL for org-scoped checks, but the
+      // generated types mark them required; pass null explicitly for an org-only check.
+      ? await capgo.rpc('rbac_check_permission_direct', {
+          p_permission_key: permission,
+          p_user_id: userId,
+          p_org_id: scope.orgId,
+          p_app_id: scope.appId ?? null,
+          p_channel_id: scope.channelId ?? null,
+        } as unknown as Database['public']['Functions']['rbac_check_permission_direct']['Args'])
+      : await capgo.rpc('rbac_check_permission', {
+          p_permission_key: permission,
+          p_org_id: scope.orgId ?? undefined,
+          p_app_id: scope.appId ?? undefined,
+          p_channel_id: scope.channelId ?? undefined,
+        })
+    if (error) {
+      console.error('[checkPermissions] single RPC error:', error)
+      return null
+    }
+    return data === true
+  }
+  catch (err) {
+    console.error('[checkPermissions] single RPC exception:', err)
+    return null
+  }
+}
+
+/** Resolves one entry per check: true / false, or null when the check errored. */
+async function runPermissionChecks(checks: PendingCheck[]): Promise<Array<boolean | null>> {
+  const capgo = useConsole()
+  try {
+    const { data, error } = await capgo.rpc('rbac_check_permissions', {
+      p_checks: checks.map(({ check }, idx) => ({
+        key: String(idx),
+        permission_key: check.permission,
+        org_id: check.scope.orgId ?? null,
+        app_id: check.scope.appId ?? null,
+        channel_id: check.scope.channelId ?? null,
+        ...(check.userId ? { user_id: check.userId } : {}),
+      })),
+    })
+    if (error)
+      throw error
+
+    const allowedByIdx = new Map<number, boolean>()
+    for (const row of (data ?? []) as Array<{ idx: number, allowed: boolean | null }>)
+      allowedByIdx.set(Number(row.idx), row.allowed === true)
+    return checks.map((_check, idx) => allowedByIdx.get(idx) ?? false)
+  }
+  catch (err) {
+    console.error('[checkPermissions] batch RPC error, falling back to single checks:', err)
+    return Promise.all(checks.map(({ check }) => runSinglePermissionCheck(check)))
+  }
+}
+
+async function flushPendingChecks() {
+  flushScheduled = false
+  const batch = [...pendingChecks.entries()]
+  pendingChecks = new Map()
+
+  for (let start = 0; start < batch.length; start += MAX_PERMISSION_CHECKS_PER_RPC) {
+    const chunk = batch.slice(start, start + MAX_PERMISSION_CHECKS_PER_RPC)
+    try {
+      const results = await runPermissionChecks(chunk.map(([, pending]) => pending))
+      chunk.forEach(([key, pending], idx) => {
+        const allowed = results[idx]
+        // Errors deny, as in the single-check path, and are not cached.
+        if (allowed === null)
+          permissionCache.delete(key)
+        pending.resolve(allowed === true)
+      })
+    }
+    catch (err) {
+      console.error('[checkPermissions] unexpected error:', err)
+      // Errors deny, as in the single-check path, and are not cached.
+      for (const [key, pending] of chunk) {
+        permissionCache.delete(key)
+        pending.resolve(false)
+      }
+    }
+  }
+}
+
+/**
+ * Queue one check. Every check queued in the same task goes out in a single
+ * rbac_check_permissions RPC; repeated checks are served from the cache.
+ */
+function enqueueCheck(check: AtomicCheck): Promise<boolean> {
+  const key = atomicCheckKey(check)
+  const now = Date.now()
+  const cached = permissionCache.get(key)
+  if (cached && cached.expiresAt > now)
+    return cached.promise
+
+  const promise = new Promise<boolean>((resolve) => {
+    pendingChecks.set(key, { check, resolve })
+  })
+  permissionCache.set(key, { promise, expiresAt: now + PERMISSION_CACHE_TTL_MS })
+  if (!flushScheduled) {
+    flushScheduled = true
+    setTimeout(() => {
+      void flushPendingChecks()
+    }, 0)
+  }
+  return promise
+}
+
+function currentUserId(): string | null {
+  const mainStore = useMainStore()
+  const userId = mainStore.user?.id ?? null
+  if (userId)
+    syncCacheOwner(userId)
+  return userId
+}
+
+/**
+ * Low-level single-permission check for the signed-in user.
+ * Prefer checkPermissions() / checkPermissionsBatch() for new usage.
  */
 export async function hasPermission(
   permission: Permission,
   scope: PermissionScope,
 ): Promise<boolean> {
-  const mainStore = useMainStore()
-  const capgo = useConsole()
-
-  // Get current user ID
-  const userId = mainStore.user?.id
-  if (!userId) {
+  if (!currentUserId()) {
     console.warn('[hasPermission] No user ID found')
     return false
   }
+  return enqueueCheck({ permission, scope })
+}
 
-  try {
-    const { data, error } = await capgo.rpc('rbac_check_permission', {
-      p_permission_key: permission,
-      p_org_id: scope.orgId ?? undefined,
-      p_app_id: scope.appId ?? undefined,
-      p_channel_id: scope.channelId ?? undefined,
-    })
+export interface PermissionCheckRequest {
+  permissions: Permission | Permission[]
+  scope: PermissionScope
+  mode?: PermissionCheckMode
+}
 
-    if (error) {
-      console.error('[hasPermission] RPC error:', error)
-      return false
-    }
-
-    return data === true
-  }
-  catch (err) {
-    console.error('[hasPermission] Exception:', err)
+function combine(results: boolean[], mode: PermissionCheckMode) {
+  if (results.length === 0)
     return false
+  return mode === 'any' ? results.some(Boolean) : results.every(Boolean)
+}
+
+/**
+ * Evaluate many permission checks for the signed-in user with one RPC
+ * (split into chunks of MAX_PERMISSION_CHECKS_PER_RPC). Each request behaves
+ * exactly like checkPermissions(request.permissions, request.scope, { mode }).
+ *
+ * @returns one boolean per request, in request order
+ */
+export async function checkPermissionsBatch(requests: PermissionCheckRequest[]): Promise<boolean[]> {
+  if (requests.length === 0)
+    return []
+  if (!currentUserId()) {
+    console.warn('[checkPermissionsBatch] No user ID found')
+    return requests.map(() => false)
   }
+
+  return Promise.all(requests.map(async (request) => {
+    const perms = Array.isArray(request.permissions) ? request.permissions : [request.permissions]
+    const results = await Promise.all(perms.map(permission => enqueueCheck({ permission, scope: request.scope })))
+    return combine(results, request.mode ?? 'all')
+  }))
 }
 
 /**
  * Main permission check function.
  *
- * Calls the SQL function rbac_check_permission(), backed by role_bindings.
+ * Goes through the batched, cached rbac_check_permissions() RPC, which applies
+ * rbac_check_permission() to each check (backed by role_bindings).
  *
  * The backend will:
  * 1. Auto-derive parent scopes (orgId from appId, appId from channelId) if needed
@@ -174,24 +370,8 @@ export async function checkPermissions(
   scope: PermissionScope,
   options: CheckPermissionsOptions = {},
 ): Promise<boolean> {
-  const perms = Array.isArray(permissions) ? permissions : [permissions]
-  if (perms.length === 0)
-    return false
-
-  const mode = options.mode ?? 'all'
-  if (mode === 'any') {
-    for (const perm of perms) {
-      if (await hasPermission(perm, scope))
-        return true
-    }
-    return false
-  }
-
-  for (const perm of perms) {
-    if (!(await hasPermission(perm, scope)))
-      return false
-  }
-  return true
+  const [allowed] = await checkPermissionsBatch([{ permissions, scope, mode: options.mode }])
+  return allowed ?? false
 }
 
 /**
@@ -206,31 +386,31 @@ export async function userHasPermission(
   userId: string,
   scope: PermissionScope,
 ): Promise<boolean> {
-  const capgo = useConsole()
+  const [allowed] = await userHasPermissionsBatch([{ permissions: permission, userId, scope }])
+  return allowed ?? false
+}
 
-  if (!userId || !scope.orgId)
-    return false
+export interface UserPermissionCheckRequest extends PermissionCheckRequest {
+  userId: string
+}
 
-  try {
-    // p_app_id / p_channel_id are nullable in SQL for org-scoped checks, but the
-    // generated types mark them required; pass null explicitly for an org-only check.
-    const { data, error } = await capgo.rpc('rbac_check_permission_direct', {
-      p_permission_key: permission,
-      p_user_id: userId,
-      p_org_id: scope.orgId,
-      p_app_id: scope.appId ?? null,
-      p_channel_id: scope.channelId ?? null,
-    } as unknown as Database['public']['Functions']['rbac_check_permission_direct']['Args'])
-
-    if (error) {
-      console.error('[userHasPermission] RPC error:', error)
+/**
+ * Batch variant of userHasPermission(): one RPC for every member and permission.
+ * A request with several permissions defaults to ANY (the member holds at least one).
+ */
+export async function userHasPermissionsBatch(requests: UserPermissionCheckRequest[]): Promise<boolean[]> {
+  if (requests.length === 0)
+    return []
+  const callerId = currentUserId()
+  return Promise.all(requests.map(async (request) => {
+    if (!callerId || !request.userId || !request.scope.orgId)
       return false
-    }
-
-    return data === true
-  }
-  catch (err) {
-    console.error('[userHasPermission] Exception:', err)
-    return false
-  }
+    const perms = Array.isArray(request.permissions) ? request.permissions : [request.permissions]
+    const results = await Promise.all(perms.map(permission => enqueueCheck({
+      permission,
+      scope: request.scope,
+      userId: request.userId,
+    })))
+    return combine(results, request.mode ?? 'any')
+  }))
 }
