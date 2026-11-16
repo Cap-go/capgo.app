@@ -1,3 +1,4 @@
+import { readServingPolicy, signServingIngress } from '../../supabase/functions/_backend/plugin_runtime/utils/servingPolicy.ts'
 import type { ExecutionContext, MessageBatch } from '@cloudflare/workers-types'
 import type { SnippetEdgeStatsEnv } from '../../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 import { app as channel_self } from '../../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts'
@@ -6,7 +7,7 @@ import { app as updates } from '../../supabase/functions/_backend/plugin_runtime
 import { app as cache_purge_local } from '../../supabase/functions/_backend/plugin_runtime/private/cache_purge_local.ts'
 import { app as latency } from '../../supabase/functions/_backend/plugin_runtime/private/latency.ts'
 import { app as ok } from '../../supabase/functions/_backend/plugin_runtime/public/ok.ts'
-import { createAllCatch, createHono, useCors } from '../../supabase/functions/_backend/plugin_runtime/utils/hono.ts'
+import { createAllCatch, createHono, quickError, useCors } from '../../supabase/functions/_backend/plugin_runtime/utils/hono.ts'
 import { cloudlog } from '../../supabase/functions/_backend/plugin_runtime/utils/logging.ts'
 import { startPluginStateReadMetrics } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts'
 import { parsePluginStateShareBps, pluginStateBucket } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
@@ -55,6 +56,19 @@ app.use('*', async (c, next) => {
     sample_bps: share,
     ...reads,
   })
+})
+
+// Public control metadata only; no app payload/replica/cache access.
+app.get('/serving_policy/:appId', async (c) => {
+  c.header('Cache-Control', 'no-store')
+  try {
+    const doc = await readServingPolicy(c, c.req.param('appId'))
+    const receipt = c.req.raw.cf?.colo ? await signServingIngress(c, doc.app_id) : undefined
+    return c.json({ ...doc, receipt })
+  }
+  catch {
+    return quickError(503, 'serving_policy_unavailable', 'Regional serving policy temporarily unavailable')
+  }
 })
 
 // TODO: deprecated remove when everyone use the new endpoint

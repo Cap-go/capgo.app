@@ -13,6 +13,7 @@ import Pencil from '~icons/heroicons/pencil-square'
 import IconTransfer from '~icons/mingcute/transfer-horizontal-line'
 import IconGearSix from '~icons/ph/gear-six'
 import IconName from '~icons/ph/user'
+import AppServingRegions from '~/components/dashboard/AppServingRegions.vue'
 import AppSetupGuides from '~/components/dashboard/AppSetupGuides.vue'
 import FormCheckbox from '~/components/forms/FormCheckbox.vue'
 import FormField from '~/components/forms/FormField.vue'
@@ -292,12 +293,16 @@ const buildTimeoutMinutesInput = ref<number | string>(Math.trunc(DEFAULT_BUILD_T
 const exposeMetadataInput = ref(false)
 const allowPreviewInput = ref(false)
 const allowDeviceCustomIdInput = ref(false)
+const servingRegionsInput = ref<string[]>([])
+const servingRegionModeInput = ref('route')
 const blockProviderInfraRequestsInput = ref(false)
 const bundleIncompatibleAlertInput = ref<'default' | 'all'>('default')
 const collectInputs = reactive<DeviceDataCollection>(parseAppRowDeviceDataCollection(null))
 const isAppFormVisible = computed(() => !isFirstLoading.value && !isLoading.value)
 
 function seedAppForm() {
+  servingRegionsInput.value = [...(appRef.value?.serving_regions ?? ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME'])]
+  servingRegionModeInput.value = appRef.value?.serving_region_mode ?? 'route'
   appNameInput.value = appRef.value?.name ?? ''
   iosStoreUrlInput.value = appRef.value?.ios_store_url ?? ''
   androidStoreUrlInput.value = appRef.value?.android_store_url ?? ''
@@ -327,6 +332,10 @@ let isSaving = false
 async function onSubmit() {
   if (isSaving || isDeletingApp.value)
     return
+  if (servingRegionsInput.value.length === 0) {
+    toast.error(t('serving-regions-required'))
+    return
+  }
   isSaving = true
   try {
     await submitAppForm()
@@ -385,6 +394,7 @@ async function submit(form: {
   }
 
   try {
+    await updateServingRegions()
     await updateAppName(form.app_name)
   }
   catch (error) {
@@ -742,6 +752,19 @@ async function updateDeviceDataCollection(next: DeviceDataCollection) {
   toast.success(t('changed-device-data-collection'))
   if (appRef.value)
     Object.assign(appRef.value, { device_data_collection: merged })
+}
+
+async function updateServingRegions() {
+  const { error } = await capgo.from('apps').update({
+    serving_regions: servingRegionsInput.value,
+    serving_region_mode: servingRegionModeInput.value,
+  }).eq('app_id', props.appId)
+  if (error)
+    throw error
+  if (appRef.value) {
+    appRef.value.serving_regions = [...servingRegionsInput.value]
+    appRef.value.serving_region_mode = servingRegionModeInput.value
+  }
 }
 
 async function updateBlockProviderInfraRequests(enabled: boolean) {
@@ -1715,6 +1738,7 @@ async function transferAppOwnership() {
                   :label="t('block-provider-infra-requests')"
                   :help="t('block-provider-infra-requests-help')"
                 />
+                <AppServingRegions v-model:regions="servingRegionsInput" v-model:mode="servingRegionModeInput" :disabled="!canUpdateSettings" :app-id="props.appId" />
                 <details
                   id="device-data-collection"
                   class="pt-2 group"

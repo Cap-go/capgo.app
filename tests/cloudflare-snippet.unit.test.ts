@@ -100,6 +100,16 @@ function subrequests(cache: Cache, fetchMock: ReturnType<typeof vi.fn>) {
   return cache.match.mock.calls.length + cache.put.mock.calls.length + cache.delete.mock.calls.length + fetchMock.mock.calls.length
 }
 
+function installFetch(workerFetch: (...args: any[]) => unknown) {
+  vi.stubGlobal('fetch', async (input: Request | string, ...args: unknown[]) => {
+    if (input instanceof Request && new URL(input.url).pathname.startsWith('/serving_policy/')) {
+      const appId = decodeURIComponent(new URL(input.url).pathname.split('/').at(-1)!)
+      return Response.json({ f: 1, app_id: appId, generation: '1', policy: { regions: ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME'], mode: 'route' }, receipt: 'local-test-receipt' })
+    }
+    return workerFetch(input, ...args)
+  })
+}
+
 describe('cloudflare snippet edge answers', () => {
   let cache: Cache
 
@@ -124,7 +134,7 @@ describe('cloudflare snippet edge answers', () => {
       status: 200,
       headers: { 'Content-Type': 'application/json', 'X-Capgo-Edge-Fill': updatesFill },
     }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
 
     const first = await snippet.fetch(buildRequest('/updates', updatesBody()))
     expect(first.headers.get('X-Capgo-Edge-Fill')).toBeNull()
@@ -154,7 +164,7 @@ describe('cloudflare snippet edge answers', () => {
       status: 200,
       headers: { 'X-Capgo-Edge-Fill': updatesFill },
     }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/updates', updatesBody()))
 
     const forwarded = [
@@ -190,7 +200,7 @@ describe('cloudflare snippet edge answers', () => {
       }
       return new Response(JSON.stringify(NO_NEW_BODY), { status: 200, headers: { 'X-Capgo-Edge-Fill': updatesFill } })
     })
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/updates', updatesBody()))
 
     limited = true
@@ -214,7 +224,7 @@ describe('cloudflare snippet edge answers', () => {
       status: 200,
       headers: { 'X-Capgo-Edge-Fill': fillHeader({ v: 3, e: 'stats', actions: ['app_moved_to_foreground'], pa: [15169, 714] }) },
     }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/stats', statsEvent()))
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
@@ -234,7 +244,7 @@ describe('cloudflare snippet edge answers', () => {
     for (const fill of [fillHeader({ e: 'stats', actions: ['app_moved_to_foreground'], pa: [15169] }), fillHeader({ v: 3, e: 'stats', actions: ['app_moved_to_foreground'] })]) {
       cache.store.clear()
       const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'X-Capgo-Edge-Fill': fill } }))
-      vi.stubGlobal('fetch', fetchMock)
+      installFetch( fetchMock)
       await snippet.fetch(buildRequest('/stats', statsEvent()))
       await snippet.fetch(buildRequest('/stats', statsEvent()))
       expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -246,7 +256,7 @@ describe('cloudflare snippet edge answers', () => {
       status: 200,
       headers: { 'X-Capgo-Edge-Fill': fillHeader({ e: 'updates', n: '1.2.3', k: null, cs: false, bps: 1 }) },
     }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     for (let i = 0; i < 5; i++)
       await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: `00000000-0000-4000-8000-00000000001${i}` })))
     expect(fetchMock).toHaveBeenCalledTimes(5)
@@ -260,7 +270,7 @@ describe('cloudflare snippet edge answers', () => {
         headers: { 'X-Capgo-Edge-Fill': statsFill },
       })
     })
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
 
     await snippet.fetch(buildRequest('/stats', [statsEvent(), statsEvent({ action: 'app_moved_to_background' })]))
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -289,7 +299,7 @@ describe('cloudflare snippet edge answers', () => {
 
   it('answers /stats native versions only when the worker parses them', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'X-Capgo-Edge-Fill': statsFill } }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/stats', [statsEvent()]))
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
@@ -339,7 +349,7 @@ describe('cloudflare snippet edge answers', () => {
   it('answers /stats of an app it learned nothing about, outside the learning share', async () => {
     vi.setSystemTime(ANSWER_TIME)
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
 
     const single = statsEvent({ action: 'app_launch_ready' })
     const answered = await snippet.fetch(buildRequest('/stats', single))
@@ -370,7 +380,7 @@ describe('cloudflare snippet edge answers', () => {
   it('sends /stats of provider networks to the worker while nothing is learned', async () => {
     vi.setSystemTime(ANSWER_TIME)
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'provider_infrastructure_request_blocked' }), { status: 429 }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     // Every PROVIDER_INFRA_ASNS network, and a request of unknown network.
     for (const asn of PROVIDER_INFRA_ASNS)
       expect((await snippet.fetch(buildRequest('/stats', statsEvent(), {}, { asn }))).status).toBe(429)
@@ -387,7 +397,7 @@ describe('cloudflare snippet edge answers', () => {
 
   it('sends the learning share of /stats without a fill to the worker', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/stats', statsEvent()))
     expect(fetchMock).toHaveBeenCalledTimes(1)
     // A batch follows its first event: answered when only a later device is sampled...
@@ -407,7 +417,7 @@ describe('cloudflare snippet edge answers', () => {
   it('sends /stats to the worker when the app entry lookup fails', async () => {
     vi.setSystemTime(ANSWER_TIME)
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     cache.match.mockRejectedValueOnce(new Error('cache unavailable'))
     const response = await snippet.fetch(buildRequest('/stats', statsEvent()))
     expect(response.headers.get('X-Capgo-Edge')).toBeNull()
@@ -419,7 +429,7 @@ describe('cloudflare snippet edge answers', () => {
       status: 429,
       headers: { 'Content-Type': 'application/json', 'Retry-After': '600', 'Cache-Control': 'public, max-age=600' },
     }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/stats', statsEvent()))
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
@@ -435,7 +445,7 @@ describe('cloudflare snippet edge answers', () => {
       status: 200,
       headers: { 'X-Capgo-Edge-Fill': statsFill },
     }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
 
     await snippet.fetch(buildRequest('/stats', statsEvent()))
     const answered = await snippet.fetch(buildRequest('/stats', statsEvent({ device_id: OTHER_DEVICE_ID })))
@@ -451,7 +461,7 @@ describe('cloudflare snippet edge answers', () => {
         headers: { 'X-Capgo-Edge-Fill': statsFill },
       })
     })
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/stats', [statsEvent()]))
 
     // Under the 6000 byte body cap, but JSON escaping plus base64 passes 8000.
@@ -469,7 +479,7 @@ describe('cloudflare snippet edge answers', () => {
         return new Response('upstream error', { status: 502 })
       return new Response(JSON.stringify(NO_NEW_BODY), { status: 200, headers: { 'X-Capgo-Edge-Fill': updatesFill } })
     })
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
 
     const response = await snippet.fetch(buildRequest('/updates', updatesBody()))
     expect(response.status).toBe(200)
@@ -491,7 +501,7 @@ describe('cloudflare snippet edge answers', () => {
       const body = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer))
       return noNewWithFill(body.defaultChannel === 'beta' ? fillHeader({ e: 'updates', n: '9.9.9', k: null, cs: true }) : updatesFill)
     })
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/updates', updatesBody()))
     // A channel change purges the app tags.
     cache.store.clear()
@@ -505,7 +515,7 @@ describe('cloudflare snippet edge answers', () => {
   it('replaces the answer of a channel with the newer fill', async () => {
     let served = '1.2.3'
     const fetchMock = vi.fn(async () => noNewWithFill(fillHeader({ e: 'updates', n: served, k: null, cs: true })))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/updates', updatesBody()))
     served = '2.0.0'
     await snippet.fetch(buildRequest('/updates', updatesBody({ version_name: '2.0.0' })))
@@ -523,7 +533,7 @@ describe('cloudflare snippet edge answers', () => {
     const fetchMock = vi.fn(async () => limited
       ? new Response(JSON.stringify({ error: 'on_premise_app' }), { status: 429, headers: { 'Cache-Control': 'private, no-store', 'X-Capgo-Edge-Ip-Limit': String(resetAt) } })
       : noNewWithFill())
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/updates', updatesBody(), {}, { host: 'api.capgo.app' }))
 
     limited = true
@@ -535,7 +545,7 @@ describe('cloudflare snippet edge answers', () => {
 
   it('calls the worker when the IP limit lookup fails', async () => {
     const fetchMock = vi.fn(async () => noNewWithFill())
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/updates', updatesBody()))
     const match = cache.match.getMockImplementation()!
     cache.match.mockImplementation(async (key) => {
@@ -557,7 +567,7 @@ describe('cloudflare snippet edge answers', () => {
         return new Response('upstream error', { status: 502 })
       return new Response(JSON.stringify({ error: 'on_premise_app' }), { status: 429, headers: { 'Cache-Control': 'private, no-store', 'X-Capgo-Edge-Ip-Limit': String(resetAt) } })
     })
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/updates', updatesBody()))
 
     limited = true
@@ -574,7 +584,7 @@ describe('cloudflare snippet edge answers', () => {
     const fetchMock = vi.fn(async (url: unknown) => new URL(String(url)).origin === 'https://plugin.as.capgo.app'
       ? noNewWithFill()
       : new Response('upstream error', { status: 500 }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     const response = await snippet.fetch(buildRequest('/updates', updatesBody(), {}, { colo: 'HKG' }))
     expect(response.status).toBe(200)
     expect(fetchMock.mock.calls.map(([url]) => new URL(String(url)).origin)).toEqual(['https://plugin.hk.capgo.app', 'https://plugin.jp.capgo.app', 'https://plugin.as.capgo.app'])
@@ -583,7 +593,7 @@ describe('cloudflare snippet edge answers', () => {
 
   it('answers only the paths Logpush ships', async () => {
     const fetchMock = vi.fn(async () => noNewWithFill())
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/updates/', updatesBody()))
     await snippet.fetch(buildRequest('/updates/', updatesBody({ device_id: OTHER_DEVICE_ID })))
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -591,7 +601,7 @@ describe('cloudflare snippet edge answers', () => {
 
   it('skips the edge entry for a default channel too long to key on', async () => {
     const fetchMock = vi.fn(async () => noNewWithFill())
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     const body = updatesBody({ defaultChannel: 'x'.repeat(200) })
     await snippet.fetch(buildRequest('/updates', body))
     await snippet.fetch(buildRequest('/updates', { ...body, device_id: OTHER_DEVICE_ID }))
@@ -601,7 +611,7 @@ describe('cloudflare snippet edge answers', () => {
 
   it('ignores fills of the previous format', async () => {
     const fetchMock = vi.fn(async () => noNewWithFill(encodeURIComponent(JSON.stringify({ v: 1, bps: 10000, ttl: 900, tags: 't', e: 'updates', n: '1.2.3', k: null, o: 'org-1', a: true, cs: true }))))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     await snippet.fetch(buildRequest('/updates', updatesBody()))
     await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: OTHER_DEVICE_ID })))
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -642,7 +652,7 @@ describe('cloudflare snippet on-prem fallback', () => {
         return onPremResponse()
       throw new Error(`Unexpected fetch target ${target.href}`)
     })
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
 
     const response = await snippet.fetch(onPremRequest(body))
 
@@ -665,7 +675,7 @@ describe('cloudflare snippet on-prem fallback', () => {
       status: 429,
       headers: { 'X-Plugin-State': 'kv', 'Cache-Control': 'public, max-age=60' },
     }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
     const body = { app_id: 'com.example.canary' }
     const first = await snippet.fetch(onPremRequest(body))
     expect(first.status).toBe(429)
@@ -686,7 +696,7 @@ describe('cloudflare snippet on-prem fallback', () => {
         return onPremResponse()
       throw new Error(`Unexpected fetch target ${target.href}`)
     })
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
 
     const response = await snippet.fetch(onPremRequest({ app_id: 'com.external.app' }))
 
@@ -699,7 +709,7 @@ describe('cloudflare snippet on-prem fallback', () => {
 
   it('passes cloud responses through after a single worker fetch', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
 
     const response = await snippet.fetch(onPremRequest({ app_id: 'com.cloud.valid' }))
 
@@ -716,7 +726,7 @@ describe('cloudflare snippet on-prem fallback', () => {
       'Retry-After': '3600',
       'X-RateLimit-Reset': String(Math.ceil(resetAt / 1000)),
     }, { moreInfo: { rateLimitResetAt: resetAt, retryAfterSeconds: 3600 } }))
-    vi.stubGlobal('fetch', fetchMock)
+    installFetch( fetchMock)
 
     const body = { app_id: 'com.external.app' }
     const first = await snippet.fetch(onPremRequest(body))

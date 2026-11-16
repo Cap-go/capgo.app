@@ -1,3 +1,6 @@
+import { isRestrictedServingPolicy } from './servingRegions.ts'
+import { requestServingPolicy } from './servingPolicy.ts'
+import { quickError } from './hono.ts'
 import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
@@ -398,6 +401,17 @@ function findRegionalReadReplicaRoute(c: Context, dbRegion: string | undefined) 
  * measured more than READ_REPLICA_FALLBACK_LAG_SECONDS behind it.
  */
 function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
+  const policy = requestServingPolicy(c)
+  if (policy && isRestrictedServingPolicy(policy)) {
+    const candidates = READ_REPLICA_ROUTES.filter(route => policy.regions.some(region => region === route.region) && c.env[route.binding])
+    const regional = candidates.find(route => route.region === dbRegion)
+    const selected = regional && !isReplicaTooFarBehind(regional.binding)
+      ? regional
+      : candidates.find(route => !isReplicaTooFarBehind(route.binding))
+    if (!selected)
+      throw quickError(503, 'serving_region_unavailable', 'No allowed regional backend is available')
+    return selected
+  }
   const route = findRegionalReadReplicaRoute(c, dbRegion)
   if (!route || route === EU_READ_REPLICA_ROUTE || !c.env[EU_READ_REPLICA_ROUTE.binding] || !isReplicaTooFarBehind(route.binding))
     return route
@@ -410,7 +424,10 @@ function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
  * their edge cache TTL keeps the regional replica's lag cap.
  */
 export function getReadReplicaBinding(c: Context): string | null {
-  const route = findRegionalReadReplicaRoute(c, getClientDbRegionSB(c))
+  const policy = requestServingPolicy(c)
+  const route = policy && isRestrictedServingPolicy(policy)
+    ? findReadReplicaRoute(c, getClientDbRegionSB(c))
+    : findRegionalReadReplicaRoute(c, getClientDbRegionSB(c))
   if (route)
     return route.binding
   return isLocalWorkerEnv(c) && existInEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL')
@@ -442,6 +459,9 @@ function getLocalReadOnlyDatabaseURL(c: Context): string | null {
 }
 
 export function getDatabaseURL(c: Context, readOnly = false): string {
+  const policy = requestServingPolicy(c)
+  if (!readOnly && policy && isRestrictedServingPolicy(policy))
+    throw quickError(503, 'serving_region_unavailable', 'Legacy server storage is unavailable with regional serving restrictions')
   const dbRegion = getClientDbRegionSB(c)
 
   // For read-only queries, use region to avoid Network latency

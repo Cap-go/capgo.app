@@ -112,6 +112,8 @@ export function activeChannelVersionJoin(
 /** Owner fields of queryAppOwnerPostgres (plan_valid / plan_trial_at are added by the caller). */
 export function getAppOwnerSelect(orgAlias: ReturnType<typeof getOwnerOrgAlias>) {
   return {
+    serving_regions: sql<unknown>`CASE WHEN to_jsonb(${schema.apps}) ? 'serving_regions' THEN to_jsonb(${schema.apps})->'serving_regions' ELSE '["EU","NA","SA","OC","AS_INDIA","AS_JAPAN","HK","AF","ME"]'::jsonb END`,
+    serving_region_mode: sql<unknown>`CASE WHEN to_jsonb(${schema.apps}) ? 'serving_region_mode' THEN to_jsonb(${schema.apps})->'serving_region_mode' ELSE '"route"'::jsonb END`,
     owner_org: schema.apps.owner_org,
     channel_device_count: schema.apps.channel_device_count,
     manifest_bundle_count: schema.apps.manifest_bundle_count,

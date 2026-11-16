@@ -6,6 +6,8 @@ export const disableUpdatePgEnum = pgEnum('disable_update', ['major', 'minor', '
 export const channelUpdatePackagePgEnum = pgEnum('channel_update_package', ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'])
 
 export const apps = pgTable('apps', {
+  serving_regions: text('serving_regions').array().notNull(),
+  serving_region_mode: text('serving_region_mode').notNull(),
   created_at: timestamp('created_at').notNull().defaultNow(),
   app_id: varchar('app_id').notNull(),
   icon_url: varchar('icon_url').notNull(),

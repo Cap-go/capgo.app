@@ -1,3 +1,5 @@
+import { isRestrictedServingPolicy, parseServingPolicy, servingPolicyKey } from '../plugin_runtime/utils/servingRegions.ts'
+import { parseServingPolicyDocument } from '../plugin_runtime/utils/servingPolicy.ts'
 // Writes the KV plugin state (plugin_runtime/utils/pluginState.ts) from the
 // primary database. Statement-level triggers queue what changed in
 // public.plugin_state_sync_pending (migration plugin_kv_state); each wake
@@ -308,6 +310,31 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
     get remaining() { return budget.remaining },
     get changed() { return changed },
     hasPublished: (key: string) => published.has(key),
+    async publishServingPolicy(appId: string, regions: unknown, mode: unknown) {
+      const policy = parseServingPolicy(regions, mode)
+      if (isRestrictedServingPolicy(policy)) {
+        reserve()
+        const readiness = await pointers.get('sr1:ready')
+        const ready: unknown = readiness ? await readiness.json() : null
+        if (!ready || typeof ready !== 'object' || !('f' in ready) || ready.f !== 1)
+          throw new Error('Serving policy activation requires all ingress gates to be ready')
+      }
+      const key = servingPolicyKey(appId)
+      for (let attempt = 0; attempt < MAX_PUBLICATION_ATTEMPTS; attempt++) {
+        reserve()
+        const previous = await pointers.get(key)
+        if (previous && BigInt(parseServingPolicyDocument(await previous.json(), appId).generation) >= BigInt(generation))
+          return
+        reserve()
+        const written = await pointers.put(key, JSON.stringify({ f: 1, app_id: appId, generation, policy }), {
+          onlyIf: previous ? { etagMatches: previous.etag } : { etagDoesNotMatch: '*' },
+          httpMetadata: { contentType: 'application/json' },
+        })
+        if (written)
+          return
+      }
+      throw new Error('Serving policy publication contention exceeded 5 attempts')
+    },
     async getApp(key: string) {
       const pointer = await readPointer(key)
       if (!pointer?.value.kvKey)
@@ -795,6 +822,11 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
   const appId = item.app_id
   const completed: CompletedKey[] = []
   try {
+    // The policy is independent of the KV read canary and publishes before any full bundle scan.
+    const [policyRow] = await sourceRows<{ serving_regions: unknown, serving_region_mode: unknown }>(source, sql`
+      SELECT serving_regions, serving_region_mode FROM public.apps WHERE app_id = ${appId}`)
+    if (policyRow)
+      await store.publishServingPolicy(appId, policyRow.serving_regions, policyRow.serving_region_mode)
     const refsOf = (kind: ClaimedApp['jobs'][number]['kind']) => item.jobs.filter(job => job.kind === kind).map(job => job.ref).filter(Boolean)
     const fullJobs = item.jobs.filter(job => job.kind === 'full')
     const versionNames = refsOf('version')
