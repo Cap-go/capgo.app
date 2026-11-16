@@ -28,7 +28,13 @@ async function getDiscountContext(c: Context, ctx: InAppBillingContext) {
     throw simpleError('billing_unavailable', 'Billing is temporarily unavailable')
   const customerDiscounts = customer.discount ? [customer.discount] : []
   const inherited = subscription.discounts.length ? subscription.discounts : customerDiscounts
-  const discounts = [...inherited, ...subscription.items.data.flatMap(item => item.discounts ?? [])]
+  // Expanding items.data.discounts.source.coupon would exceed Stripe's four-level limit.
+  const discountedItems = await Promise.all(subscription.items.data
+    .filter(item => item.discounts?.length)
+    .map(item => ctx.stripe.subscriptionItems.retrieve(item.id, {
+      expand: ['discounts.source.coupon', 'discounts.promotion_code'],
+    })))
+  const discounts = [...inherited, ...discountedItems.flatMap(item => item.discounts ?? [])]
   return { subscription, discounts }
 }
 
