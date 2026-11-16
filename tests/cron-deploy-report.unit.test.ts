@@ -49,9 +49,9 @@ beforeEach(() => {
   mocks.queryJson.mockResolvedValue([deploy])
   mocks.query.mockResolvedValue({ rows: [] })
   mocks.stats.mockResolvedValue([
-    { app_id: deploy.app_id, version_name: '2.0.0', install: '10' },
-    { app_id: deploy.app_id, version_name: '456', install: 3 },
-    { app_id: deploy.app_id, version_name: 'other', install: 500 },
+    { app_id: deploy.app_id, version_name: '2.0.0', install: '10', fail: '2' },
+    { app_id: deploy.app_id, version_name: '456', install: 3, fail: 1 },
+    { app_id: deploy.app_id, version_name: 'other', install: 500, fail: 1000 },
   ])
 })
 
@@ -63,7 +63,7 @@ describe('24h report sending safeguards', () => {
     expect(mocks.queryJson).toHaveBeenNthCalledWith(2, expect.anything(), DEPLOY_REPORT_CONSUME_SQL, [...claim, 456, '2.0.0', deploy.owner_org, deploy.deployed_at])
     expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'bundle:install_stats_24h', 'deploy_stats_24h', deploy.owner_org, undefined, { requireCompleteRecipients: true })
     expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({
-      report_schema_version: '2', install_count_24h: '13', install_count_is_estimate: 'true',
+      report_schema_version: '3', failure_count_24h: '3', install_count_24h: '13', install_count_is_estimate: 'true',
       window_start: deploy.deployed_at, window_end: '2026-11-11T18:15:00.000Z',
       app_name: deploy.app_name, channel_name: deploy.channel_name, version_name: '2.0.0',
     }))
@@ -110,13 +110,33 @@ describe('24h report sending safeguards', () => {
     expect(mocks.send).not.toHaveBeenCalled()
   })
 
+  it.each([undefined, '', 'NaN', 'Infinity', -1, null, 2.5, Number.MAX_SAFE_INTEGER + 1])('defers invalid failure counts: %s', async (fail) => {
+    mocks.stats.mockResolvedValue([{ app_id: deploy.app_id, version_name: '2.0.0', install: 10, fail }])
+    expect(await (await run()).json()).toMatchObject({ reason: 'invalid_or_unavailable_analytics' })
+    expect(mocks.send).not.toHaveBeenCalled()
+    expect(mocks.query).toHaveBeenCalledWith(DEPLOY_REPORT_RELEASE_SQL, claim)
+  })
+
+  it.each([0, 1])('reports failures even with only %s install events', async (install) => {
+    mocks.stats.mockResolvedValue([{ app_id: deploy.app_id, version_name: '2.0.0', install, fail: 2 }])
+    expect((await run()).status).toBe(200)
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ install_count_24h: String(install), failure_count_24h: '2' }))
+  })
+
+  it('reports a measured zero without claiming release health', async () => {
+    mocks.stats.mockResolvedValue([{ app_id: deploy.app_id, version_name: '2.0.0', install: 10, fail: 0 }])
+    expect((await run()).status).toBe(200)
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ failure_count_24h: '0' }))
+    expect(mocks.send.mock.calls[0][0]).not.toHaveProperty('success_rate')
+  })
+
   it('rejects mixed-app results', async () => {
     mocks.stats.mockResolvedValue([{ app_id: 'com.example.wrong', version_name: '2.0.0', install: 50 }])
     expect(await (await run()).json()).toMatchObject({ status: 'deferred' })
     expect(mocks.send).not.toHaveBeenCalled()
   })
 
-  it.each([{ rows: [] }, { rows: [{ app_id: deploy.app_id, version_name: '2.0.0', install: 1 }] }])('defers insufficient activity', async ({ rows }) => {
+  it.each([{ rows: [] }, { rows: [{ app_id: deploy.app_id, version_name: '2.0.0', install: 1, fail: 0 }] }])('defers insufficient activity', async ({ rows }) => {
     mocks.stats.mockResolvedValue(rows)
     expect(await (await run()).json()).toMatchObject({ reason: 'not_enough_installs' })
     expect(mocks.send).not.toHaveBeenCalled()

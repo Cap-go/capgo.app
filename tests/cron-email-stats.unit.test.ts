@@ -8,6 +8,7 @@ import {
   shouldRetryDeployInstallStats,
   shouldSendDeployInstallStatsEmail,
   summarizeDeviceVersionAdoption,
+  sumVersionFailures,
   sumVersionInstalls,
   toStatNumber,
 } from '../supabase/functions/_backend/utils/cron_email_stats.ts'
@@ -242,5 +243,33 @@ describe('weekly stats invariants (seeded random weeks)', () => {
       for (const field of ['weekly_install', 'weekly_fail', 'weekly_update_checks'] as const)
         assertCleanNumericString(metadata[field], `week ${i} ${field}`)
     }
+  })
+})
+
+
+describe('deployment failure event counts', () => {
+  it.concurrent('sums named and legacy rows without mixing bundles', () => {
+    expect(sumVersionFailures([
+      { version_name: '1.2.3', fail: '2' },
+      { version_name: '123', fail: 3 },
+      { version_name: 'other', fail: 999 },
+    ], '1.2.3', 123)).toBe(5)
+  })
+
+  it.concurrent('rejects failure sum overflow', () => {
+    expect(() => sumVersionFailures([
+      { version_name: '1.2.3', fail: Number.MAX_SAFE_INTEGER },
+      { version_name: '1.2.3', fail: 1 },
+    ], '1.2.3')).toThrow()
+  })
+
+  it.concurrent('requires valid counters and includes failure-only activity', () => {
+    expect(shouldSendDeployInstallStatsEmail(0, 1)).toBe(true)
+    expect(shouldSendDeployInstallStatsEmail(1, 1)).toBe(true)
+    expect(shouldSendDeployInstallStatsEmail(0, 0)).toBe(false)
+    expect(shouldSendDeployInstallStatsEmail(1, 0)).toBe(false)
+    expect(shouldSendDeployInstallStatsEmail(10, -1)).toBe(false)
+    expect(shouldSendDeployInstallStatsEmail(-1, 1)).toBe(false)
+    expect(shouldSendDeployInstallStatsEmail(10, Number.NaN)).toBe(false)
   })
 })
