@@ -435,8 +435,8 @@ watch(
     resetSearchState()
     compareVersionsError.value = false
     compareVersionsLoading.value = false
+    latestCompareVersions.value = []
     if (!props.appId || !props.currentVersionId) {
-      latestCompareVersions.value = []
       preferredCompareVersions.value = []
       liveChannelsByVersion.value = new Map()
       return

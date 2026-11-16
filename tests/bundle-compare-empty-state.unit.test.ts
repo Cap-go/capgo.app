@@ -2,7 +2,7 @@
 
 import type { App } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, nextTick } from 'vue'
+import { createApp, h, nextTick, reactive } from 'vue'
 import { createI18n } from 'vue-i18n'
 import messages from '../messages/en.json'
 import BundleCompareSelect from '../src/components/bundle/BundleCompareSelect.vue'
@@ -40,7 +40,7 @@ afterEach(() => {
 })
 
 function mount(compareMode: 'manifest' | 'dependencies' = 'manifest', onSelect = vi.fn()) {
-  app = createApp(BundleCompareSelect, {
+  const props = reactive({
     appId: 'com.example.compare',
     currentVersionId: 100,
     compareMode,
@@ -52,9 +52,11 @@ function mount(compareMode: 'manifest' | 'dependencies' = 'manifest', onSelect =
     noResultsLabel: 'No matching bundle',
     'onUpdate:modelValue': onSelect,
   })
+  app = createApp({ render: () => h(BundleCompareSelect, props) })
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } }))
   app.component('Spinner', { template: '<span />' })
   app.mount(container)
+  return props
 }
 
 async function settle() {
@@ -122,6 +124,38 @@ describe('bundle comparison empty state', () => {
     await search('1.0')
     expect(container.querySelector('output')?.textContent).toContain(messages['bundle-compare-load-error'])
     expect(container.textContent).not.toContain('No matching bundle')
+  })
+
+  it('removes old options while a new comparison mode loads', async () => {
+    const dependenciesOnly = { id: 99, name: 'dependencies-only', created_at: null, manifest_count: 0, app_id: 'com.example.compare' }
+    const manifestBundle = { ...dependenciesOnly, id: 98, name: 'with-delta-files', manifest_count: 2 }
+    let resolveReplacement!: (value: Response) => void
+    let versionRequests = 0
+    fetchMock.mockImplementation(async (_url, init) => {
+      if (JSON.parse(init.body).name !== 'app_versions')
+        return response()
+      if (++versionRequests === 1)
+        return response([dependenciesOnly])
+      return new Promise<Response>((resolve) => { resolveReplacement = resolve })
+    })
+    const onSelect = vi.fn()
+    const props = mount('dependencies', onSelect)
+    await settle()
+    expect(container.textContent).toContain(dependenciesOnly.name)
+
+    props.compareMode = 'manifest'
+    await settle()
+    expect(container.textContent).toContain(messages.loading)
+    expect(container.textContent).not.toContain(dependenciesOnly.name)
+    expect(container.querySelector('output')).toBeNull()
+    expect(onSelect).not.toHaveBeenCalled()
+
+    resolveReplacement(response([manifestBundle]))
+    await settle()
+    expect(container.textContent).not.toContain(dependenciesOnly.name)
+    const option = [...container.querySelectorAll('button')].find(button => button.textContent?.includes(manifestBundle.name))!
+    option.click()
+    expect(onSelect).toHaveBeenCalledWith(manifestBundle)
   })
 
   it('keeps available bundles selectable', async () => {
