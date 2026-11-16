@@ -11,6 +11,9 @@
   "scripts": {
     "generate:mcp-skills": "bun scripts/generate-mcp-skills.ts",
     "check:mcp-skills": "bun scripts/generate-mcp-skills.ts --check",
+    "build:snippets": "bun scripts/snippet/build-snippets.ts",
+    "deploy:snippets": "bun scripts/snippet/run-deployment.ts --apply",
+    "check:snippets:live": "bun scripts/snippet/run-deployment.ts",
     "build:snippet": "bun scripts/snippet/build-snippet.ts",
     "check:snippet": "bun scripts/snippet/build-snippet.ts --check",
     "readreplicate:setup-source": "bash read_replicate/replicate_setup_source.sh",
