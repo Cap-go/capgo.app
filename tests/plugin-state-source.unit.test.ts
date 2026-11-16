@@ -474,3 +474,46 @@ describe('policy-only publication with payload sync disabled', () => {
     expect(statements.some(value => /full_synced|app_synced|manifest|app_versions|ack_plugin_state/.test(value))).toBe(false)
   })
 })
+
+
+describe('policy and payload failure isolation', () => {
+  it.each(['claim', 'ack'] as const)('continues payload publication after a policy %s failure', async (fault) => {
+    const storage = publicationProviders()
+    const appId = 'com.example.policy-payload-isolation'
+    const statements: string[] = []
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      expect(client.inTransaction).toBe(true)
+      const statement = dialect.sqlToQuery(query)
+      statements.push(statement.sql)
+      if (statement.sql.includes('public.claim_serving_policy_sync(')) {
+        if (fault === 'claim')
+          throw new Error('Synthetic policy epoch mismatch')
+        return { rows: [{ token: 'policy-lease', generation: '1', app_id: appId, active_epoch: null }] }
+      }
+      if (statement.sql.includes('SELECT serving_regions, serving_region_mode FROM public.apps'))
+        return { rows: [{ serving_regions: ['NA'], serving_region_mode: 'block' }] }
+      if (statement.sql.includes('public.ack_serving_policy_sync('))
+        throw new Error('Synthetic policy ACK failure')
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
+      if (statement.sql.includes('public.claim_plugin_state_sync(')) {
+        return { rows: [{ result: { status: 'ok', lease_token: 'payload-lease', generation: '2', has_more: false,
+          apps: [{ app_id: appId, jobs: [{ kind: 'version', ref: '1.0.0' }], attempts: 1 }],
+        } }] }
+      }
+      if (statement.sql.includes('FROM public.app_versions av'))
+        return { rows: [{ id: 202, owner_org: 'fixture-org', name: '1.0.0', deleted: false }] }
+      return { rows: [] }
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    const expectedSuccesses = fault === 'ack' ? 2 : 1
+    expect(await response.json()).toEqual({ claims: expectedSuccesses, apps: expectedSuccesses, failed: 1 })
+    expect(storage.publishedValue(await pluginStateVersionKey(appId, '1.0.0'))).toMatchObject({ id: 202 })
+    expect(statements.filter(value => value.includes('public.claim_plugin_state_sync('))).toHaveLength(1)
+    expect(statements.filter(value => value.includes('public.ack_plugin_state_sync_progress('))).toHaveLength(1)
+    expect(statements.filter(value => value.includes('public.claim_serving_policy_sync('))).toHaveLength(1)
+    expect(provider.log).toHaveBeenCalledWith(expect.objectContaining({ message: 'serving policy sync drain failed' }))
+  })
+})

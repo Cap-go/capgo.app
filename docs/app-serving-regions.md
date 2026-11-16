@@ -4,8 +4,8 @@ Apps request a unique nonempty subset of the nine existing backend regions:
 EU, NA, SA, OC, AS_INDIA, AS_JAPAN, HK, AF and ME. Existing/new apps default
 to all nine and Route. Both fields remain optional in the public update API;
 omitting them preserves saved settings. Existing app.update_settings RLS and
-API permissions apply, including the onboarding-only mutation guard. The immutable
-CHECK helper runs once per changed app row over at most nine input elements; it
+API permissions apply, including the onboarding-only mutation guard. The builtin
+CHECK expression validates each changed app row over at most nine input elements; it
 reads no tables and adds no lookup to RLS or unfiltered request queries.
 
 ## What is enforced

@@ -1,5 +1,5 @@
 BEGIN;
-SELECT plan(26);
+SELECT plan(37);
 SELECT pg_catalog.set_config('capgo.plugin_state_wake_sent', 'on', true);
 SELECT pg_catalog.set_config('capgo.updates_cache_wake_sent', 'on', true);
 SELECT is((SELECT count(*)::int FROM pg_policies
@@ -51,26 +51,32 @@ SELECT results_eq('SELECT to_jsonb(s) FROM public.plugin_state_sync_state s','SE
 SELECT results_eq('SELECT to_jsonb(s) FROM public.plugin_state_sync_apps s ORDER BY app_id','SELECT value FROM apps_before ORDER BY value->>''app_id''','policy tick never claims full/app coverage');
 SELECT results_eq('SELECT to_jsonb(s) FROM public.plugin_state_sync_pending s ORDER BY id','SELECT value FROM pending_before ORDER BY (value->>''id'')::bigint','policy bootstrap does not enqueue payload work');
 -- Synchronous dispatch failures must not roll back a saved app's durable policy work.
+CREATE TEMP SEQUENCE policy_wake_failures;
 CREATE TEMP TABLE original_policy_wake AS
 SELECT pg_get_functiondef('public.wake_plugin_state_sync()'::regprocedure) AS definition;
 CREATE OR REPLACE FUNCTION public.wake_plugin_state_sync() RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 BEGIN
+  PERFORM pg_catalog.nextval('pg_temp.policy_wake_failures');
   RAISE EXCEPTION 'Injected policy wake failure';
 END;
 $$;
 DELETE FROM public.serving_policy_sync_pending;
+SELECT pg_catalog.set_config('capgo.plugin_state_wake_sent', 'off', true);
 INSERT INTO public.apps(app_id, name, icon_url, owner_org)
 SELECT 'com.example.policy-wake-failure', 'Policy wake fixture', '', owner_org
 FROM public.apps WHERE app_id='com.example.policy-recovery.00001';
 SELECT is((SELECT count(*)::int FROM public.serving_policy_sync_pending
   WHERE app_id='com.example.policy-wake-failure'),1,'app insert retains durable policy work when its wake fails');
+SELECT is((SELECT (CASE WHEN is_called THEN last_value ELSE 0 END)::int FROM pg_temp.policy_wake_failures),1,'insert attempted the throwing wake');
+SELECT pg_catalog.set_config('capgo.plugin_state_wake_sent', 'off', true);
 UPDATE public.apps SET serving_regions=ARRAY['EU']::text[], serving_region_mode='block'
 WHERE app_id='com.example.policy-recovery.00001';
 SELECT is((SELECT count(*)::int FROM public.serving_policy_sync_pending
   WHERE app_id='com.example.policy-recovery.00001'),1,'saved restriction retains durable policy work after completed bootstrap and wake failure');
 SELECT is((SELECT serving_region_mode FROM public.apps
   WHERE app_id='com.example.policy-recovery.00001'),'block','the requested restriction remains saved');
+SELECT is((SELECT (CASE WHEN is_called THEN last_value ELSE 0 END)::int FROM pg_temp.policy_wake_failures),2,'policy update attempted the throwing wake');
 DO $$ BEGIN EXECUTE (SELECT definition FROM original_policy_wake); END; $$;
 SELECT public.plugin_state_sync_tick();
 SELECT is((SELECT count(*)::int FROM public.claim_serving_policy_sync()),1,'periodic recovery can claim policy work after the wake recovers');
@@ -97,5 +103,50 @@ SELECT public.ack_serving_policy_sync((SELECT token FROM public.claim_serving_po
 SELECT is((SELECT count(*)::int FROM public.serving_policy_sync_pending),0,'successful policy ACK deletes only leased policy work');
 SELECT throws_ok($$SELECT public.activate_serving_policy_publication('test-epoch', '{}'::jsonb)$$,'P0001',NULL,'activation refuses missing ingress/readiness prerequisites');
 SELECT ok(NOT has_function_privilege('service_role','public.activate_serving_policy_publication(text,jsonb)','EXECUTE'),'ordinary publisher cannot acknowledge deployment activation');
+-- Count attempted dispatches without network I/O; sequences also survive failed wake subtransactions.
+CREATE TEMP SEQUENCE policy_review_wake_calls;
+CREATE OR REPLACE FUNCTION public.wake_plugin_state_sync() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  PERFORM pg_catalog.nextval('pg_temp.policy_review_wake_calls');
+END;
+$$;
+SELECT pg_catalog.set_config('capgo.plugin_state_wake_sent', 'off', true);
+UPDATE public.apps SET name=name WHERE app_id='com.example.policy-recovery.00001';
+SELECT is((SELECT (CASE WHEN is_called THEN last_value ELSE 0 END)::int FROM pg_temp.policy_review_wake_calls),0,'unrelated app updates add no policy wake');
+SELECT setval('pg_temp.policy_review_wake_calls',1,false);
+SELECT pg_catalog.set_config('capgo.plugin_state_wake_sent', 'off', true);
+INSERT INTO public.apps(app_id,name,icon_url,owner_org)
+SELECT app_id,name,icon_url,owner_org FROM public.apps WHERE false;
+SELECT is((SELECT (CASE WHEN is_called THEN last_value ELSE 0 END)::int FROM pg_temp.policy_review_wake_calls),0,'empty app inserts add no policy wake');
+SELECT setval('pg_temp.policy_review_wake_calls',1,false);
+SELECT pg_catalog.set_config('capgo.plugin_state_wake_sent', 'off', true);
+DELETE FROM public.apps WHERE app_id='com.example.policy-review-missing';
+SELECT is((SELECT (CASE WHEN is_called THEN last_value ELSE 0 END)::int FROM pg_temp.policy_review_wake_calls),0,'empty app deletes add no policy wake');
+SELECT setval('pg_temp.policy_review_wake_calls',1,false);
+SELECT pg_catalog.set_config('capgo.plugin_state_wake_sent', 'on', true);
+UPDATE public.apps SET serving_region_mode='route' WHERE app_id='com.example.policy-recovery.00001';
+SELECT is((SELECT (CASE WHEN is_called THEN last_value ELSE 0 END)::int FROM pg_temp.policy_review_wake_calls),0,'policy changes honor an earlier transaction wake');
+INSERT INTO private.settings(name,value) VALUES ('CAPGO_PLUGIN_STATE_SYNC_ENABLED','true')
+ON CONFLICT(name) DO UPDATE SET value=EXCLUDED.value;
+SELECT setval('pg_temp.policy_review_wake_calls',1,false);
+SELECT pg_catalog.set_config('capgo.plugin_state_wake_sent', 'off', true);
+UPDATE public.apps SET serving_region_mode='block' WHERE app_id='com.example.policy-recovery.00001';
+SELECT is((SELECT (CASE WHEN is_called THEN last_value ELSE 0 END)::int FROM pg_temp.policy_review_wake_calls),1,'policy and payload changes share one transaction wake');
+-- A policy epoch transition must fail closed without preventing existing payload maintenance.
+INSERT INTO private.settings(name,value) VALUES
+  ('CAPGO_SERVING_REGIONS_ACTIVE_EPOCH','active-old-epoch'),
+  ('CAPGO_SERVING_REGIONS_READER_EPOCH','reader-new-epoch')
+ON CONFLICT(name) DO UPDATE SET value=EXCLUDED.value;
+SELECT throws_ok($$SELECT * FROM public.claim_serving_policy_sync()$$,'P0001',NULL,'mismatched policy epochs remain fail closed');
+SELECT is((SELECT max(attempts) FROM public.serving_policy_sync_pending),0,'failed policy claim retains its attempt and lease state');
+DELETE FROM public.plugin_state_sync_pending;
+DELETE FROM public.plugin_state_sync_failed WHERE app_id='com.example.policy-recovery.00001';
+INSERT INTO public.plugin_state_sync_pending(app_id,kind,ref,attempts)
+VALUES('com.example.policy-recovery.00001','app','',5);
+SELECT lives_ok($$SELECT public.plugin_state_sync_tick()$$,'policy configuration failure does not abort the payload tick');
+SELECT ok(EXISTS(SELECT 1 FROM public.plugin_state_sync_failed WHERE app_id='com.example.policy-recovery.00001' AND kind='app')
+  AND NOT EXISTS(SELECT 1 FROM public.plugin_state_sync_pending WHERE app_id='com.example.policy-recovery.00001' AND kind='app'),
+  'payload tick still archives its exhausted job during a policy configuration failure');
 SELECT * FROM finish();
 ROLLBACK;

@@ -441,7 +441,7 @@ function getReadOnlyDatabaseURL(c: Context, dbRegion: string | undefined): strin
     return null
 
   if (selectedRoute.region !== dbRegion)
-    cloudlog({ requestId: c.get('requestId'), message: 'Regional read replica too far behind, reading from EU replica', dbRegion })
+    cloudlog({ requestId: c.get('requestId'), message: 'Reading from an alternate regional replica', dbRegion, selectedRegion: selectedRoute.region })
   setDatabaseSource(c, selectedRoute.binding)
   return c.env[selectedRoute.binding].connectionString
 }

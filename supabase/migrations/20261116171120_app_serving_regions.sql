@@ -182,22 +182,28 @@ DECLARE
   v_version_refs text[];
   v_manifest_apps text[];
   v_manifest_refs text[];
+  v_policy_count integer := 0;
 BEGIN
   IF TG_TABLE_NAME = 'apps' THEN
     IF TG_OP = 'INSERT' THEN
       INSERT INTO public.serving_policy_sync_pending(app_id)
       SELECT n.app_id FROM new_rows n;
+      GET DIAGNOSTICS v_policy_count = ROW_COUNT;
     ELSIF TG_OP = 'UPDATE' THEN
       INSERT INTO public.serving_policy_sync_pending(app_id)
       SELECT n.app_id FROM old_rows o JOIN new_rows n ON n.id = o.id
       WHERE (o.app_id, o.serving_regions, o.serving_region_mode)
         IS DISTINCT FROM (n.app_id, n.serving_regions, n.serving_region_mode);
+      GET DIAGNOSTICS v_policy_count = ROW_COUNT;
     END IF;
-    BEGIN
-      PERFORM public.wake_plugin_state_sync();
-    EXCEPTION WHEN OTHERS THEN
-      RAISE WARNING 'serving policy sync wake failed: %', SQLERRM;
-    END;
+    IF v_policy_count > 0 AND pg_catalog.current_setting('capgo.plugin_state_wake_sent', true) IS DISTINCT FROM 'on' THEN
+      PERFORM pg_catalog.set_config('capgo.plugin_state_wake_sent', 'on', true);
+      BEGIN
+        PERFORM public.wake_plugin_state_sync();
+      EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING 'serving policy sync wake failed: %', SQLERRM;
+      END;
+    END IF;
   END IF;
   IF NOT public.plugin_state_sync_enabled() THEN
     RETURN NULL;
@@ -574,7 +580,11 @@ DECLARE
   v_last text;
   v_pending integer;
 BEGIN
-  PERFORM public.serving_policy_sync_tick();
+  BEGIN
+    PERFORM public.serving_policy_sync_tick();
+  EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'serving policy sync tick failed: %', SQLERRM;
+  END;
   IF NOT public.plugin_state_sync_enabled() THEN
     RETURN;
   END IF;

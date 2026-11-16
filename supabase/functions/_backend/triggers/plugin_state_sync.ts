@@ -990,7 +990,13 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
   let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
     pg = await getPgClient(c)
-    await drainServingPolicies(pg, source, pointers, budget, deadline, result)
+    try {
+      await drainServingPolicies(pg, source, pointers, budget, deadline, result)
+    }
+    catch (error) {
+      result.failed++
+      cloudlogErr({ requestId: c.get('requestId'), message: 'serving policy sync drain failed', error: serializeError(error) })
+    }
     const [switches] = await mutate(pg, db => rows<{ enabled: boolean }>(db, sql`SELECT public.plugin_state_sync_enabled() AS enabled`))
     if (!switches?.enabled || !namespace)
       return result

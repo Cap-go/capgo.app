@@ -91,7 +91,7 @@ async function ingressRegion(c: Context, appId: string): Promise<ServingRegion |
     return trustedIngressRegion(c.req.raw.cf?.colo)
   const separator = receipt.lastIndexOf('.')
   const parts = [receipt.slice(0, separator), receipt.slice(separator + 1)]
-  if (parts.length !== 2 || !/^[0-9a-f]{64}$/.test(parts[1]))
+  if (separator <= 0 || !/^[0-9a-f]{64}$/.test(parts[1]))
     throw new Error('Invalid ingress receipt')
   const payload = decodeURIComponent(parts[0])
   const bytes = Uint8Array.from({ length: 32 }, (_, index) => Number.parseInt(parts[1].slice(index * 2, index * 2 + 2), 16))
@@ -140,5 +140,3 @@ export function servingCachePartition(c: Context) {
   const policy = requestServingPolicy(c)
   return policy && isRestrictedServingPolicy(policy) ? [...policy.regions].sort((left, right) => left < right ? -1 : left > right ? 1 : 0).join(',') : null
 }
-
-export { ingressHeader as SERVING_INGRESS_HEADER }
