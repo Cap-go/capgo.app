@@ -101,6 +101,25 @@ describe('worker pool', () => {
     expect(started.length).toBeLessThan(10)
   })
 
+  it('waits for running tasks to settle before rejecting with the first error', async () => {
+    let releaseSlow: () => void = () => {}
+    let slowSettled = false
+    const pool = runWorkerPool(2, 2, async (index) => {
+      if (index === 0)
+        throw new Error('first')
+      await new Promise<void>((resolve) => { releaseSlow = resolve })
+      slowSettled = true
+      throw new Error('second')
+    })
+    let rejected = false
+    pool.catch(() => { rejected = true })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(rejected).toBe(false)
+    releaseSlow()
+    await expect(pool).rejects.toThrow('first')
+    expect(slowSettled).toBe(true)
+  })
+
   it('resolves an empty pool and bounds CPU concurrency', async () => {
     expect(await runWorkerPool(0, 4, async () => 1)).toEqual([])
     expect(defaultCpuConcurrency()).toBeGreaterThanOrEqual(1)

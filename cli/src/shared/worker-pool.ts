@@ -17,8 +17,10 @@ export function defaultCpuConcurrency(max = 16): number {
  * flight. A worker picks the next index as soon as it is free, so one slow task
  * never holds back the others (unlike fixed `Promise.all` batches).
  *
- * The first failure rejects the returned promise and stops new tasks from
- * starting; tasks already running are left to settle.
+ * The first failure stops new tasks from starting. The returned promise rejects
+ * with that first error only once every running task has settled, so caller
+ * cleanup (e.g. disposing the delta payload cache) never races a task that is
+ * still in flight.
  */
 export function runWorkerPool<T>(
   count: number,
@@ -35,6 +37,19 @@ export function runWorkerPool<T>(
     let active = 0
     let completed = 0
     let failed = false
+    let firstError: unknown
+
+    const settle = () => {
+      if (failed) {
+        if (active === 0)
+          reject(firstError)
+        return
+      }
+      if (completed === count)
+        resolve(results)
+      else
+        launch()
+    }
 
     const launch = () => {
       while (!failed && active < limit && nextIndex < count) {
@@ -51,18 +66,14 @@ export function runWorkerPool<T>(
           results[index] = value
           active--
           completed++
-          if (failed)
-            return
-          if (completed === count)
-            resolve(results)
-          else
-            launch()
+          settle()
         }, (error) => {
           active--
-          if (failed)
-            return
-          failed = true
-          reject(error)
+          if (!failed) {
+            failed = true
+            firstError = error
+          }
+          settle()
         })
       }
     }
