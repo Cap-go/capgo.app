@@ -1,4 +1,5 @@
 // Direct Postgres access for admin scripts that used to go through PostgREST.
+import { readFileSync } from 'node:fs'
 import pg from 'pg'
 
 const DB_URL_ENV_KEYS = ['MAIN_SUPABASE_DB_URL', 'DATABASE_URL', 'SUPABASE_DB_URL', 'SUPABASE_DB_DIRECT_URL'] as const
@@ -32,16 +33,18 @@ export function getDatabaseUrl(env: Record<string, string | undefined>): string 
   throw new Error(`Missing Postgres URL. Set one of: ${DB_URL_ENV_KEYS.join(', ')}`)
 }
 
-// Supabase's pooler presents a certificate signed by Supabase's own CA, so a
-// remote connection is encrypted without CA verification, like the other admin
-// scripts. `sslmode` is dropped from the URL because pg lets it override `ssl`.
+// Supabase's database and pooler certificates are signed by Supabase's own root
+// CA (Dashboard > Database > SSL), so remote connections verify against it.
+// `sslmode` is dropped from the URL because pg lets it override `ssl`.
+const SUPABASE_CA = readFileSync(new URL('./supabase-prod-ca-2021.crt', import.meta.url), 'utf8')
+
 export async function connectScriptDb(databaseUrl: string): Promise<pg.Client> {
   const url = new URL(databaseUrl)
   const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
   url.searchParams.delete('sslmode')
   const client = new pg.Client({
     connectionString: url.toString(),
-    ssl: local ? false : { rejectUnauthorized: false },
+    ssl: local ? false : { ca: SUPABASE_CA },
     types: postgrestLikeTypes,
   })
   await client.connect()

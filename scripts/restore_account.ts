@@ -41,11 +41,12 @@ interface ToDeleteAccount {
 }
 
 async function main() {
-  // Supabase's pooler certificate is signed by Supabase's own CA (see scripts/script_db.ts).
+  // Remote connections verify against Supabase's root CA (see scripts/script_db.ts).
+  const ca = Deno.readTextFileSync(new URL('./supabase-prod-ca-2021.crt', import.meta.url))
   const url = new URL(databaseUrl)
   url.searchParams.delete('sslmode')
   const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
-  const db = new pg.Client({ connectionString: url.toString(), ssl: local ? false : { rejectUnauthorized: false } })
+  const db = new pg.Client({ connectionString: url.toString(), ssl: local ? false : { ca } })
   await db.connect()
 
   // Get all accounts pending deletion
