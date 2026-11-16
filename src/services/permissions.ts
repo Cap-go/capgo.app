@@ -271,21 +271,6 @@ function currentUserId(): string | null {
   return userId
 }
 
-/**
- * Low-level single-permission check for the signed-in user.
- * Prefer checkPermissions() / checkPermissionsBatch() for new usage.
- */
-export async function hasPermission(
-  permission: Permission,
-  scope: PermissionScope,
-): Promise<boolean> {
-  if (!currentUserId()) {
-    console.warn('[hasPermission] No user ID found')
-    return false
-  }
-  return enqueueCheck({ permission, scope })
-}
-
 export interface PermissionCheckRequest {
   permissions: Permission | Permission[]
   scope: PermissionScope
