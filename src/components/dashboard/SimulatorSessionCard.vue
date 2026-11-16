@@ -16,6 +16,8 @@ const sessions = computed(() => runningSimulators(props.appId))
 const recent = ref<SimulatorSummary[]>([])
 const limits = ref({ idle: 5, max: 40 })
 const error = ref('')
+// Sessions stopped from this card: the list may still report them running for a while.
+const stoppedHere = new Set<string>()
 // While a simulator runs, check every 30 seconds: one that stopped by itself leaves the list.
 const REFRESH_MS = 30_000
 let timer: ReturnType<typeof setInterval> | undefined
@@ -52,7 +54,7 @@ async function loadSessions() {
       return false
     recent.value = payload.data
     limits.value = { idle: payload.idle_minutes ?? limits.value.idle, max: payload.max_minutes ?? limits.value.max }
-    applySimulatorList(appId, payload.data, epoch)
+    applySimulatorList(appId, payload.data, epoch, stoppedHere)
     return true
   }
   catch {
@@ -146,6 +148,7 @@ async function stop(id: string) {
     const payload = await response.json().catch(() => undefined) as { message?: string, error?: string } | undefined
     if (!response.ok)
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-stop'))
+    stoppedHere.add(id)
     forgetSimulator(props.appId, id)
     void loadSessions()
   }

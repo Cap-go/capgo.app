@@ -63,6 +63,12 @@ describe('running simulator sessions', () => {
       { id: '7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5', platform: 'ios', status: 'in-progress', url: 'https://ios-emulator.capgo.app/s/other-tab/', started_at: null, finished_at: null, build_time_seconds: null, billable_seconds: null },
     ])
     expect(runningSimulators(appId)).toEqual([{ id: '7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5', url: 'https://ios-emulator.capgo.app/s/other-tab/' }])
+    // A stale list still reports a session this tab stopped as running.
+    forgetSimulator(appId, '7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5')
+    applySimulatorList(appId, [
+      { id: '7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5', platform: 'ios', status: 'in-progress', url: 'https://ios-emulator.capgo.app/s/other-tab/', started_at: null, finished_at: null, build_time_seconds: null, billable_seconds: null },
+    ], simulatorEpoch(), new Set(['7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5']))
+    expect(runningSimulators(appId)).toEqual([])
     const epoch = simulatorEpoch()
     clearSimulatorSessions()
     applySimulatorList(appId, [{ id: '8c2f1e40-3d61-40ac-9e55-2d907f4c33e6', platform: 'ios', status: 'in-progress', url: 'https://ios-emulator.capgo.app/s/late/', started_at: null, finished_at: null, build_time_seconds: null, billable_seconds: null }], epoch)

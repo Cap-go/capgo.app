@@ -636,8 +636,9 @@ export async function listSimulators(c: Context, body: SimulatorBody, userId: st
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator settlement failed before listing', appId, error })
   }
-  // Read from the primary: the settlement above just wrote these rows.
-  const rows = await queryWrite<SimulatorListRow>(c, `
+  // A cached read (up to a minute old): the console polls this list, and a row settled just now
+  // shows up stopped on a later poll.
+  const rows = await queryRead<SimulatorListRow>(c, `
     SELECT s.id, s.platform, s.status, s.url, s.started_at, s.finished_at,
            l.build_time_unit, l.billable_seconds
     FROM public.simulator_sessions s

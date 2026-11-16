@@ -72,11 +72,12 @@ export interface SimulatorSummary {
 }
 
 // The server knows about sessions started in other tabs, and about devices that stopped by themselves.
-export function applySimulatorList(appId: string, list: SimulatorSummary[], epoch = sessionEpoch) {
+// The list can be up to a minute old: a session this tab just stopped is never shown running again.
+export function applySimulatorList(appId: string, list: SimulatorSummary[], epoch = sessionEpoch, stopped: ReadonlySet<string> = new Set()) {
   if (epoch !== sessionEpoch)
     return
   for (const item of list) {
-    if (item.status === 'in-progress')
+    if (item.status === 'in-progress' && !stopped.has(item.id))
       rememberSimulator(appId, { id: item.id, url: item.url ?? '' }, epoch)
     else
       forgetSimulator(appId, item.id)

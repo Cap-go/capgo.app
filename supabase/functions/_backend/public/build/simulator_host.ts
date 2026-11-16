@@ -129,8 +129,9 @@ export async function recordStoppedSimulatorDevices(c: Context, orgId: string): 
     return
   const origin = trimTrailingSlashes(getEnv(c, 'SIMULATOR_ORIGIN') || DEFAULT_SIMULATOR_ORIGIN)
   try {
-    // Bounded by simulator_sessions_owner_active_idx: at most the org's builder slots.
-    const running = await queryWrite<{ id: string, emulator_id: string }>(c, `
+    // Bounded by simulator_sessions_owner_active_idx: at most the org's builder slots. A cached
+    // read: a stale row only costs one host lookup, and rememberDeviceStop keeps the first stop.
+    const running = await queryRead<{ id: string, emulator_id: string }>(c, `
       SELECT id, emulator_id
       FROM public.simulator_sessions
       WHERE owner_org = $1
