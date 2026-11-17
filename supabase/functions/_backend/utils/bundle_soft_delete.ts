@@ -1,3 +1,8 @@
+import type { Context } from 'hono'
+import type { MiddlewareKeyVariables } from './hono.ts'
+import type { PgClient } from './pg.ts'
+import { HTTPException } from 'hono/http-exception'
+import { beginWriteTransaction, checkoutPgClient, logPgError, releasePgClient } from './pg.ts'
 import { setRequestApikeyHeader } from './pg_rls.ts'
 
 /**
@@ -65,5 +70,55 @@ export async function retryOnDeadlock<T>(fn: () => Promise<T>, attempts = 3): Pr
       if ((error as { code?: string } | null)?.code !== DEADLOCK_SQLSTATE || attempt >= attempts)
         throw error
     }
+  }
+}
+
+/** Bundles per soft-delete transaction: keeps each transaction (and its lifecycle locks) bounded. */
+export const BUNDLE_DELETE_BATCH_SIZE = 200
+
+/**
+ * Soft-deletes one batch in a single transaction. Each bundle's lifecycle lock (taken through
+ * `lock_channel_bundle_lifecycle`, like channel promotion) is held while the channel links
+ * are checked and the rows updated, so a concurrent promotion either commits first and keeps
+ * its bundle, or waits and then sees it deleted. With `ignoreChannel`, linked bundles are
+ * deleted too and the unlink_channels_from_deleted_version trigger clears their links.
+ * Returns the deleted ids.
+ */
+export async function softDeleteBundleBatch(
+  c: Context<MiddlewareKeyVariables>,
+  pgClient: PgClient,
+  effectiveApikey: string,
+  appId: string,
+  ids: number[],
+  ignoreChannel: boolean,
+  logLabel: string,
+): Promise<number[]> {
+  let dbClient: Awaited<ReturnType<typeof checkoutPgClient>> | null = null
+  let transactionStarted = false
+  try {
+    dbClient = await checkoutPgClient(pgClient)
+    await beginWriteTransaction(dbClient)
+    transactionStarted = true
+    await lockBundleLifecycles(dbClient, ids)
+    const deleted = await softDeleteLockedBundles(dbClient, effectiveApikey, appId, ids, ignoreChannel)
+    await dbClient.query('COMMIT')
+    return deleted
+  }
+  catch (error) {
+    if (dbClient && transactionStarted) {
+      try {
+        await dbClient.query('ROLLBACK')
+      }
+      catch {
+        // Preserve the original error when rollback itself fails.
+      }
+    }
+    if (error instanceof HTTPException)
+      throw error
+    logPgError(c, logLabel, error)
+    throw error
+  }
+  finally {
+    releasePgClient(pgClient, dbClient)
   }
 }

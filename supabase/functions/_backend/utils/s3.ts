@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { Database } from '../utils/supabase.types.ts'
+import { createHash } from 'node:crypto'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getManifestStorageCandidateKeys } from './manifest_encoding.ts'
@@ -233,27 +234,145 @@ async function moveObjectToTrash(c: Context, fileId: string) {
   }
 }
 
-async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<number> {
-  const client = initS3(c)
-  let deletedCount = 0
+/** S3 DeleteObjects (and R2) accept at most this many keys per request. */
+export const DELETE_OBJECTS_MAX_KEYS = 1_000
+// Per-key fallback when a server rejects DeleteObjects: bounded parallel DELETEs.
+const SINGLE_DELETE_CONCURRENCY = 16
 
-  for await (const object of client.listObjects({ prefix })) {
-    try {
-      await client.deleteObject(object.key)
-      deletedCount += 1
-    }
-    catch (error) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'deleteObjectsWithPrefix item failed',
-        prefix,
-        key: object.key,
-        error,
-      })
-    }
+export interface PrefixDeleteResult {
+  /** Objects removed in this call. */
+  deleted: number
+  /** Keys whose delete failed; a later call lists and retries them. */
+  failed: number
+  /** True when the prefix was listed to the end and every delete succeeded. */
+  done: boolean
+}
+
+function escapeXml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('\'', '&apos;')
+}
+
+function unescapeXml(value: string) {
+  return value
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&apos;', '\'')
+    .replaceAll('&amp;', '&')
+}
+
+export function buildDeleteObjectsBody(keys: string[]) {
+  const objects = keys.map(key => `<Object><Key>${escapeXml(key)}</Key></Object>`).join('')
+  return `<?xml version="1.0" encoding="UTF-8"?><Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Quiet>true</Quiet>${objects}</Delete>`
+}
+
+/** Keys reported in the `<Error>` entries of a DeleteObjects response; NoSuchKey counts as deleted. */
+export function parseDeleteObjectsErrors(xml: string): string[] {
+  const failed: string[] = []
+  for (const match of xml.matchAll(/<Error>([\s\S]*?)<\/Error>/g)) {
+    const entry = match[1]
+    const key = /<Key>([\s\S]*?)<\/Key>/.exec(entry)?.[1]
+    const code = /<Code>([\s\S]*?)<\/Code>/.exec(entry)?.[1]
+    if (key !== undefined && code !== 'NoSuchKey')
+      failed.push(unescapeXml(key))
   }
+  return failed
+}
 
-  return deletedCount
+async function deleteKeysOneByOne(c: Context, client: ReturnType<typeof initS3>, keys: string[]): Promise<string[]> {
+  const failed: string[] = []
+  for (let i = 0; i < keys.length; i += SINGLE_DELETE_CONCURRENCY) {
+    await Promise.all(keys.slice(i, i + SINGLE_DELETE_CONCURRENCY).map(async (key) => {
+      try {
+        await client.deleteObject(key)
+      }
+      catch (error) {
+        if (isMissingObjectError(error))
+          return
+        failed.push(key)
+        cloudlog({ requestId: c.get('requestId'), message: 'deleteObjectsWithPrefix item failed', key, error: serializeStorageError(error) })
+      }
+    }))
+  }
+  return failed
+}
+
+/**
+ * Deletes up to DELETE_OBJECTS_MAX_KEYS keys with one DeleteObjects request.
+ * Returns the keys that could not be deleted. A server that rejects the batch
+ * request gets bounded parallel single-key DELETEs instead.
+ */
+async function deleteObjectKeys(c: Context, keys: string[], client = initS3(c, { serverSide: true })): Promise<string[]> {
+  if (keys.length === 0)
+    return []
+  if (keys.length > DELETE_OBJECTS_MAX_KEYS)
+    throw new Error(`deleteObjectKeys accepts at most ${DELETE_OBJECTS_MAX_KEYS} keys`)
+
+  const body = buildDeleteObjectsBody(keys)
+  try {
+    const headers = new Headers({
+      'Content-Type': 'application/xml',
+      'Content-MD5': createHash('md5').update(body).digest('base64'),
+    })
+    const response = await client.makeRequest({
+      method: 'POST',
+      objectName: '',
+      query: { delete: '' },
+      headers,
+      payload: body,
+      statusCode: 200,
+      returnBody: true,
+    })
+    return parseDeleteObjectsErrors(await response.text())
+  }
+  catch (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'DeleteObjects failed, falling back to single deletes', count: keys.length, error: serializeStorageError(error) })
+    return deleteKeysOneByOne(c, client, keys)
+  }
+}
+
+/**
+ * Deletes every object under `prefix`, one listing page (up to 1,000 keys) and
+ * one DeleteObjects request at a time. With a `deadline` (epoch ms) it stops
+ * before starting another page once that has passed and reports `done: false`,
+ * leaving the rest for a later call.
+ */
+async function deleteObjectsWithPrefix(c: Context, prefix: string, options: { deadline?: number } = {}): Promise<PrefixDeleteResult> {
+  // An empty prefix would target the whole bucket.
+  if (!prefix || prefix === '/')
+    throw new Error('deleteObjectsWithPrefix requires a non-empty prefix')
+  const client = initS3(c, { serverSide: true })
+  let deleted = 0
+  let failed = 0
+  let continuationToken: string | undefined
+
+  while (true) {
+    if (options.deadline !== undefined && Date.now() >= options.deadline)
+      return { deleted, failed, done: false }
+
+    const iterator = client.listObjectsGrouped({ prefix, pageSize: DELETE_OBJECTS_MAX_KEYS, maxResults: DELETE_OBJECTS_MAX_KEYS, continuationToken })
+    const keys: string[] = []
+    let page = await iterator.next()
+    while (!page.done) {
+      if (page.value.type === 'Object')
+        keys.push(page.value.key)
+      page = await iterator.next()
+    }
+    const nextToken = page.value ?? undefined
+
+    const failedKeys = await deleteObjectKeys(c, keys, client)
+    deleted += keys.length - failedKeys.length
+    failed += failedKeys.length
+
+    if (!nextToken)
+      return { deleted, failed, done: failed === 0 }
+    continuationToken = nextToken
+  }
 }
 
 async function checkIfExist(c: Context, fileId: string | null) {
@@ -850,6 +969,7 @@ export const s3 = {
   getSizeDiagnostics,
   moveObjectToTrash,
   deleteObjectsWithPrefix,
+  deleteObjectKeys,
   checkIfExist,
   getSignedUrl,
   getUploadUrl,
