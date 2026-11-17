@@ -1048,7 +1048,7 @@ SELECT public.close_orphaned_storage_lifetimes();
 -- Live bundles restored before this migration kept their closed lifetime (one
 -- upload and one removal event per bundle back then): each one whose size is
 -- known again gets a new lifetime from its restore (its last update, never
--- before the removal).
+-- before the removal), also when only its removal was recorded.
 CREATE OR REPLACE FUNCTION public.backfill_missing_storage_lifetimes()
 RETURNS bigint
 LANGUAGE sql
@@ -1066,12 +1066,13 @@ AS $$
     JOIN public.app_versions_meta meta ON meta.id = versions.id
     WHERE NOT versions.deleted
       AND meta.size > 0
+      -- No event at all: a bundle with a removal is handled below (a new
+      -- lifetime from its restore), whether or not its upload was recorded.
       AND NOT EXISTS (
         SELECT 1
         FROM public.version_meta existing
         WHERE existing.app_id = versions.app_id
           AND existing.version_id = versions.id
-          AND existing.size > 0
       )
     ON CONFLICT DO NOTHING
     RETURNING 1
@@ -1081,7 +1082,6 @@ AS $$
       event.app_id,
       event.version_id,
       event.lifetime,
-      pg_catalog.bool_or(event.size > 0) OVER lifetime_events AS has_upload,
       pg_catalog.min(event.timestamp) FILTER (WHERE event.size < 0) OVER lifetime_events AS removed_at
     FROM public.version_meta event
     WINDOW lifetime_events AS (PARTITION BY event.app_id, event.version_id, event.lifetime)
@@ -1100,7 +1100,7 @@ AS $$
     JOIN latest ON latest.app_id = versions.app_id AND latest.version_id = versions.id
     WHERE NOT versions.deleted
       AND meta.size > 0
-      AND latest.has_upload
+      -- Closed, with or without a recorded upload event (its write could fail).
       AND latest.removed_at IS NOT NULL
     ON CONFLICT DO NOTHING
     RETURNING 1

@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(65);
+SELECT plan(66);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -867,6 +867,13 @@ INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
 SELECT TIMESTAMP '2026-01-02 00:00:00', live_app, 9100311, 600 FROM gbh_ctx
 UNION ALL
 SELECT TIMESTAMP '2026-01-05 00:00:00', live_app, 9100311, -600 FROM gbh_ctx;
+-- Same, when only its removal was recorded (the upload event write failed).
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider, updated_at)
+SELECT 9100312, live_app, '9.8.8', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', TIMESTAMPTZ '2026-01-09 00:00:00+00' FROM gbh_ctx;
+INSERT INTO public.app_versions_meta (id, app_id, checksum, size)
+SELECT 9100312, live_app, 'restored-removal-only', 700 FROM gbh_ctx;
+INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+SELECT TIMESTAMP '2026-01-05 00:00:00', live_app, 9100312, -700 FROM gbh_ctx;
 SELECT public.backfill_missing_storage_lifetimes();
 
 SELECT
@@ -874,6 +881,13 @@ SELECT
         (SELECT array_agg(ARRAY[lifetime::text, size::text, timestamp::text] ORDER BY lifetime, size) FROM public.version_meta WHERE version_id = 9100311),
         ARRAY[ARRAY['0', '-600', '2026-01-05 00:00:00'], ARRAY['0', '600', '2026-01-02 00:00:00'], ARRAY['1', '600', '2026-01-08 00:00:00']],
         'a bundle restored before the migration is stored again from its restore'
+    );
+
+SELECT
+    is(
+        (SELECT array_agg(ARRAY[lifetime::text, size::text, timestamp::text] ORDER BY lifetime, size) FROM public.version_meta WHERE version_id = 9100312),
+        ARRAY[ARRAY['0', '-700', '2026-01-05 00:00:00'], ARRAY['1', '700', '2026-01-09 00:00:00']],
+        'also when only its removal was recorded'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.
