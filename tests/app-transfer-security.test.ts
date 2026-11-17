@@ -93,6 +93,8 @@ describe('app transfer security', () => {
   afterAll(async () => {
     const capgo = getSupabaseClient()
 
+    await executeSQL('DELETE FROM public.daily_storage_hourly WHERE app_id = $1', [appId])
+    await executeSQL('DELETE FROM public.daily_storage_hourly_refreshes WHERE app_id = $1', [appId])
     await resetAppData(appId)
     await capgo.from('org_users').delete().eq('org_id', destinationOrgId).eq('user_id', USER_ID)
     await capgo.from('orgs').delete().eq('id', destinationOrgId)
@@ -133,30 +135,75 @@ describe('app transfer security', () => {
   })
 
   it('still allows the approved transfer_app RPC to move ownership consistently', async () => {
-    // A running storage refresh of the former owner holds a share lock on the app row
-    // (replace_app_storage_hourly). The transfer must wait for it and record its time after,
-    // so the former owner's billed hours never extend past transferred_at.
+    // A storage refresh of the former owner is running: replace_app_storage_hourly holds a share
+    // lock on the app row and has written the former owner's rows and watermark. The transfer must
+    // wait for it and record its time after, so those hours never extend past transferred_at and
+    // the new owner's refresh still finalizes the former owner (its watermark is older).
     const refresh = new Client({ connectionString: POSTGRES_URL })
     await refresh.connect()
-    let refreshCommittedAt = 0
+    const today = new Date().toISOString().slice(0, 10)
+    let refreshWrittenAt = 0
     try {
       await refresh.query('BEGIN')
-      await refresh.query('SELECT 1 FROM public.apps WHERE app_id = $1 FOR SHARE', [appId])
+      const [{ written_at }] = (await refresh.query<{ written_at: string }>(
+        `SELECT pg_catalog.clock_timestamp()::text AS written_at,
+           public.replace_app_storage_hourly(
+             p_app_id => $1::varchar,
+             p_owner_org => $2::uuid,
+             p_cycle_start_day => $3::date,
+             p_cycle_end_day => ($3::date + 30),
+             p_end_exclusive_day => ($3::date + 30),
+             p_segment_start => '-infinity'::timestamptz,
+             p_rows => pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('cycle_start', $3::text, 'date', $3::text, 'storage_byte_hours', 1000)),
+             p_written_at => pg_catalog.clock_timestamp(),
+             p_require_current_owner => true
+           )`,
+        [appId, ORG_ID, today],
+      )).rows
+      refreshWrittenAt = Date.parse(written_at)
+
+      // .then() sends the request now: the RPC builder is lazy.
       const transferPromise = authClient.rpc('transfer_app', {
         p_app_id: appId,
         p_new_org_id: destinationOrgId,
-      })
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      const [{ committed_at }] = (await refresh.query<{ committed_at: string }>('SELECT pg_catalog.clock_timestamp()::text AS committed_at')).rows
-      await refresh.query('COMMIT')
-      refreshCommittedAt = Date.parse(committed_at)
+      }).then(result => result)
 
+      // The transfer is blocked on the refresh's lock.
+      let waiting = false
+      for (let attempt = 0; attempt < 50 && !waiting; attempt++) {
+        const { rows } = await refresh.query<{ waiting: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1 FROM pg_catalog.pg_stat_activity
+             WHERE pid <> pg_catalog.pg_backend_pid()
+               AND wait_event_type = 'Lock'
+               AND query ILIKE '%transfer_app%'
+           ) AS waiting`,
+        )
+        waiting = rows[0]?.waiting ?? false
+        if (!waiting)
+          await new Promise(resolve => setTimeout(resolve, 100))
+      }
+      expect(waiting).toBe(true)
+
+      await refresh.query('COMMIT')
       const transferResult = await transferPromise
       expect(transferResult.error).toBeNull()
     }
     finally {
       await refresh.end()
     }
+
+    const storageRows = await executeSQL<{ owner_org: string, storage_byte_hours: number }>(
+      'SELECT owner_org, storage_byte_hours FROM public.daily_storage_hourly WHERE app_id = $1',
+      [appId],
+    )
+    // The former owner's refresh committed before the transfer; the new owner has no hours yet.
+    expect(storageRows.map(row => [row.owner_org, Number(row.storage_byte_hours)])).toEqual([[ORG_ID, 1000]])
+    const [watermark] = await executeSQL<{ written_at: string }>(
+      'SELECT written_at::text FROM public.daily_storage_hourly_refreshes WHERE app_id = $1 AND owner_org = $2::uuid',
+      [appId, ORG_ID],
+    )
+    expect(watermark).toBeDefined()
 
     const capgo = getSupabaseClient()
     const { data: appRow, error: appError } = await capgo
@@ -178,8 +225,11 @@ describe('app transfer security', () => {
 
     expect(appRow.owner_org).toBe(destinationOrgId)
     expect(appRow.transfer_history ?? []).toHaveLength(1)
+    // Recorded after the lock, so later than every hour and the watermark the former owner's
+    // refresh wrote (now() would be the transaction start, before the refresh committed).
     const transferredAt = Date.parse(String((appRow.transfer_history![0] as { transferred_at: string }).transferred_at))
-    expect(transferredAt).toBeGreaterThanOrEqual(refreshCommittedAt)
+    expect(transferredAt).toBeGreaterThan(refreshWrittenAt)
+    expect(transferredAt).toBeGreaterThan(Date.parse(watermark.written_at))
     expect(versionRows.length).toBeGreaterThan(0)
     expect(versionRows.every(version => version.owner_org === destinationOrgId)).toBe(true)
   })
