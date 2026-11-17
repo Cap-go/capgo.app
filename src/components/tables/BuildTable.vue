@@ -54,6 +54,9 @@ const savedOutputs = ref<Record<string, { url: string, kind: string, expires_at:
 // Until the lookup answers, a succeeded build without output is unknown, not "not saved".
 const savedOutputsReady = ref(false)
 let savedOutputsKey = ''
+// Failed saved-output lookups in a row: a few retries continue even once no build runs.
+const OUTPUT_RETRIES = 3
+const outputsFailures = ref(0)
 // The build whose details replace the table (live progress, result, download, error).
 const openedBuild = shallowRef<Element | null>(null)
 // The opened build as the latest refresh sees it: its job id and status move after the click.
@@ -265,6 +268,7 @@ async function reload() {
   savedOutputs.value = {}
   savedOutputsReady.value = false
   savedOutputsKey = ''
+  outputsFailures.value = 0
   openedBuild.value = null
   nextStepsDismissed.value = isBuildNextStepsDismissed(props.appId)
   platformBuildCounts.value = { ios: 0, android: 0 }
@@ -373,6 +377,7 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean, silen
     savedOutputs.value = {}
     savedOutputsReady.value = true
     savedOutputsKey = key
+    outputsFailures.value = 0
     return
   }
   try {
@@ -384,12 +389,13 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean, silen
       headers: { authorization: `Bearer ${token}` },
     })
     if (!response.ok)
-      return
+      throw new Error(`saved outputs lookup failed (${response.status})`)
     const body = await response.json() as { outputs?: Record<string, { url: string, kind: string, expires_at: string }> }
     if (current()) {
       savedOutputs.value = body.outputs ?? {}
       savedOutputsReady.value = true
       savedOutputsKey = key
+      outputsFailures.value = 0
     }
   }
   catch {
@@ -398,6 +404,7 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean, silen
       savedOutputs.value = {}
       savedOutputsReady.value = false
       savedOutputsKey = ''
+      outputsFailures.value++
     }
   }
 }
@@ -545,8 +552,11 @@ function retryBuild() {
 // Shown once the app has a succeeded build, until dismissed on this browser.
 const nextStepsBuild = computed<Element | undefined>(() => nextStepsDismissed.value || currentPage.value !== 1 || search.value ? undefined : latestSucceededBuild(elements.value) as Element | undefined)
 
+// The latest successful build has a file to download now: otherwise the action only opens its details.
+const nextStepsHasFile = computed(() => !!nextStepsBuild.value && savedBuildState(nextStepsBuild.value, savedOutputFor(nextStepsBuild.value), savedBuildNow.value) === 'available')
+
 function nextStepInstall() {
-  track('Build Next Step Clicked', { action: 'install' })
+  track('Build Next Step Clicked', { action: nextStepsHasFile.value ? 'install' : 'details' })
   if (nextStepsBuild.value)
     openBuild(nextStepsBuild.value)
 }
@@ -576,7 +586,8 @@ function stopAutoRefresh() {
   refreshTimer = undefined
 }
 
-watch(hasActiveBuild, (active) => {
+// Refresh while a build runs, and for a few ticks after a failed saved-output lookup.
+watch(() => hasActiveBuild.value || (outputsFailures.value > 0 && outputsFailures.value <= OUTPUT_RETRIES), (active) => {
   stopAutoRefresh()
   if (!active)
     return
@@ -784,11 +795,11 @@ watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
         <div class="grid gap-4 mt-4 md:grid-cols-3">
           <div class="flex flex-col items-start gap-2 p-4 border rounded-lg border-slate-200 dark:border-white/10">
             <p class="text-sm text-slate-600 dark:text-slate-300">
-              {{ t('build-next-steps-install-hint') }}
+              {{ nextStepsHasFile ? t('build-next-steps-install-hint') : t('build-next-steps-view-hint') }}
             </p>
             <button type="button" class="mt-auto d-btn d-btn-sm d-btn-primary gap-2" data-test="build-next-steps-install" @click="nextStepInstall">
-              <IconDownload class="w-4 h-4" />
-              {{ t('build-next-steps-install') }}
+              <IconDownload v-if="nextStepsHasFile" class="w-4 h-4" />
+              {{ nextStepsHasFile ? t('build-next-steps-install') : t('build-next-steps-view') }}
             </button>
           </div>
           <div v-if="hasCurrentIpa(nextStepsBuild)" class="flex flex-col items-start gap-2 p-4 border rounded-lg border-slate-200 dark:border-white/10">

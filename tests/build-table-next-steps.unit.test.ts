@@ -260,4 +260,36 @@ describe('builds table after a successful build', () => {
     vi.advanceTimersByTime(10_000)
     await vi.waitFor(() => expect(mocks.buildQueries).toBe(before + 2))
   })
+
+  it('retries a failed saved-output lookup after the last build ended', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    mocks.builds = [running]
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementation(async () => new Response(JSON.stringify({ outputs: { job_2: { url: 'https://dl.example.test/app.apk', kind: 'android_apk', expires_at: '2999-01-01T00:00:00Z' } } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    mocks.builds = [{ ...running, status: 'succeeded' }]
+    vi.advanceTimersByTime(10_000)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    vi.advanceTimersByTime(10_000)
+    await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-download"]')).not.toBeNull())
+    const calls = fetchMock.mock.calls.length
+    vi.advanceTimersByTime(30_000)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(fetchMock.mock.calls.length).toBe(calls)
+  })
+
+  it('offers build details instead of a download when no file is saved', async () => {
+    mocks.builds = [succeeded]
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: {} }), { status: 200 })))
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-not-saved"]')).not.toBeNull())
+    const action = host.querySelector('[data-test="build-next-steps-install"]') as HTMLButtonElement
+    expect(action.textContent).toContain('build-next-steps-view')
+    action.click()
+    expect(mocks.sendEvent).toHaveBeenCalledWith(expect.objectContaining({ event: 'Build Next Step Clicked', nonPersonTags: expect.objectContaining({ action: 'details' }) }))
+  })
 })

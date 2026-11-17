@@ -4551,6 +4551,8 @@
   "build-next-steps-subtitle": "Your {platform} build finished. Here is what to do next.",
   "build-next-steps-install": "Download or install",
   "build-next-steps-install-hint": "Get the file, or scan a QR code to install it on your phone.",
+  "build-next-steps-view": "View build details",
+  "build-next-steps-view-hint": "Open the build to see its result and where it was sent.",
   "build-next-steps-simulator": "Test in simulator",
   "build-next-steps-simulator-hint": "Run this build in a cloud iOS simulator from your browser.",
   "build-next-steps-live-updates": "Ship updates instantly",

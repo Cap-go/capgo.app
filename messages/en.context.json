@@ -3777,6 +3777,8 @@
   "build-next-steps-subtitle": "Used in Capgo web console areas: components/tables. Role: banner sentence; {platform} is iOS or Android. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "build-next-steps-install": "Used in Capgo web console areas: components/tables. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "build-next-steps-install-hint": "Used in Capgo web console areas: components/tables. Role: help sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "build-next-steps-view": "Used in Capgo web console areas: components/tables. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "build-next-steps-view-hint": "Used in Capgo web console areas: components/tables. Role: help sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "build-next-steps-simulator": "Used in Capgo web console areas: components/tables. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "build-next-steps-simulator-hint": "Used in Capgo web console areas: components/tables. Role: help sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "build-next-steps-live-updates": "Used in Capgo web console areas: components/tables. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
