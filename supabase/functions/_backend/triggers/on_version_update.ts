@@ -357,8 +357,12 @@ async function deleteVersionDatabaseState(c: Context, pg: PgClient, record: Data
   try {
     data = await queryJsonOne<{ size: number }>(pg, 'SELECT size FROM public.app_versions_meta WHERE id = $1', [record.id])
   }
-  catch {
-    data = null
+  catch (error) {
+    // Storage is billed from version_meta: acknowledging the deletion without its removal event
+    // would bill the bundle forever. A read failure fails the job so the queue retries; only a
+    // missing row (no size to remove) is skipped below.
+    cloudlog({ requestId: c.get('requestId'), message: 'error reading version meta', error, id: record.id })
+    throw simpleError('cannot_read_version_meta', 'Cannot read version metadata for deleted version', { id: record.id }, error)
   }
   if (!data) {
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot find version meta', id: record.id })

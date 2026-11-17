@@ -176,6 +176,19 @@ describe('deleted version storage boundaries', () => {
     expect(moveObjectToTrash).not.toHaveBeenCalled()
   })
 
+  it('fails the job when the version metadata cannot be read', async () => {
+    pgQuery.mockImplementation(async (query: string) => {
+      if (query.includes('SELECT deleted'))
+        return { rows: [{ deleted: true, deleted_at: null }] }
+      if (query.includes('SELECT size FROM public.app_versions_meta'))
+        throw new Error('connection reset')
+      return { rows: [], rowCount: 0 }
+    })
+    await expect(deleteIt(createContext(), createVersion())).rejects.toThrow()
+    expect(createStatsMeta).not.toHaveBeenCalled()
+    expect(moveObjectToTrash).not.toHaveBeenCalled()
+  })
+
   it('treats an already zero size as recorded', async () => {
     createStatsMeta.mockResolvedValue({ error: 'size is 0' })
     const response = await deleteIt(createContext(), createVersion())

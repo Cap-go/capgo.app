@@ -311,8 +311,8 @@ GRANT EXECUTE ON FUNCTION public.get_org_storage_usage(uuid) TO authenticated, s
 -- keeps bundles but has no other activity stopped accruing billed hours. Such
 -- apps of billable orgs (active subscription or usage credits) are queued too,
 -- at most once a day: while they store a bundle, and once more after a bundle
--- event (such as the last bundle's removal) newer than their last refresh, so
--- the hours up to that removal are recorded.
+-- event (such as the last bundle's removal) newer than their last storage
+-- refresh's cutoff, so the hours up to that removal are recorded.
 CREATE OR REPLACE FUNCTION public.process_cron_stats_jobs()
 RETURNS void
 LANGUAGE plpgsql
@@ -366,10 +366,21 @@ BEGIN
               AND stored.deleted = false
           )
           OR EXISTS (
+            -- Compared with the latest storage refresh's cutoff (taken before
+            -- it read version_meta), not stats_updated_at (its completion):
+            -- a removal while a refresh was running still gets refreshed.
             SELECT 1
             FROM public.version_meta event
             WHERE event.app_id = a.app_id
-              AND (s.stats_updated_at IS NULL OR event.timestamp > s.stats_updated_at)
+              AND event.timestamp > COALESCE(
+                (
+                  SELECT pg_catalog.timezone('UTC', max(refresh.written_at))
+                  FROM public.daily_storage_hourly_refreshes refresh
+                  WHERE refresh.app_id = a.app_id
+                    AND refresh.owner_org = a.owner_org
+                ),
+                '-infinity'::timestamp
+              )
           )
         )
     )

@@ -491,9 +491,14 @@ SELECT
 -- stats_jobs refreshes an idle app once more after its last bundle is removed.
 INSERT INTO public.apps (app_id, icon_url, name, owner_org, user_id)
 SELECT 'com.test.gbhours.lastbundle', '', 'GB hours last bundle', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid FROM gbh_ctx;
+-- The removal (1 day ago) happened while the last refresh was running: after
+-- its storage cutoff (watermark, 2 days ago) but before it completed
+-- (stats_updated_at, 21 hours ago). It must still be refreshed once more.
 INSERT INTO public.app_stats_refresh_state (app_id, owner_org, stats_updated_at)
-SELECT 'com.test.gbhours.lastbundle', org_id, pg_catalog.timezone('UTC', now()) - interval '2 days' FROM gbh_ctx
+SELECT 'com.test.gbhours.lastbundle', org_id, pg_catalog.timezone('UTC', now()) - interval '21 hours' FROM gbh_ctx
 ON CONFLICT (app_id) DO UPDATE SET stats_updated_at = EXCLUDED.stats_updated_at, stats_refresh_requested_at = NULL;
+INSERT INTO public.daily_storage_hourly_refreshes (app_id, owner_org, cycle_start, segment_start, written_at)
+SELECT 'com.test.gbhours.lastbundle', org_id, CURRENT_DATE - 10, '-infinity', now() - interval '2 days' FROM gbh_ctx;
 INSERT INTO public.version_meta (timestamp, app_id, version_id, size) VALUES
 (pg_catalog.timezone('UTC', now()) - interval '40 days', 'com.test.gbhours.lastbundle', 9100201, 100),
 (pg_catalog.timezone('UTC', now()) - interval '1 day', 'com.test.gbhours.lastbundle', 9100201, -100);
