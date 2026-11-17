@@ -111,5 +111,33 @@ test.describe('channel change impact preview (isolated app)', () => {
     await page.getByRole('button', { name: /^1\.9\.3/ }).click()
     await expect(page.locator('[data-test="channel-change-rollout-note"]')).toHaveText('Ends the progressive rollout: 1.9.3 is no longer limited to a share of devices.', { timeout: 15000 })
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+
+    // Starting a configured rollout uses the same rollout confirm, and only
+    // enables the target the user saw.
+    const readRollout = async () => (await executeSQL<{ rollout_enabled: boolean, rollout_version: number | null }>(`SELECT rollout_enabled, rollout_version FROM public.channels WHERE id = $1`, [channelId]))[0]
+    const confirmButton = page.locator('[data-test="channel-change-confirm"]')
+    await executeSQL(`UPDATE public.channels SET rollout_enabled = false WHERE id = $1`, [channelId])
+    await page.reload()
+    await dismissSupportPrompt(page)
+    await page.locator('[data-test="rollout-enable"]').click({ timeout: 30000 })
+    await expect(page.locator('h3').filter({ hasText: 'Roll out 1.9.3 to 50% of production?' })).toBeVisible({ timeout: 15000 })
+    await expect(confirmButton).toBeEnabled({ timeout: 15000 })
+    await confirmButton.click()
+    await expect.poll(async () => (await readRollout()).rollout_enabled, { timeout: 15000 }).toBe(true)
+
+    // Another session switches the target while the confirm is open: nothing is enabled.
+    const [otherTarget] = await executeSQL<{ id: number }>(`SELECT id FROM public.app_versions WHERE app_id = $1 AND name = '2.0.0'`, [appId])
+    await executeSQL(`UPDATE public.channels SET rollout_enabled = false WHERE id = $1`, [channelId])
+    await page.reload()
+    await dismissSupportPrompt(page)
+    await page.locator('[data-test="rollout-enable"]').click({ timeout: 30000 })
+    await expect(page.locator('h3').filter({ hasText: 'Roll out 1.9.3 to 50% of production?' })).toBeVisible({ timeout: 15000 })
+    await expect(confirmButton).toBeEnabled({ timeout: 15000 })
+    await executeSQL(`UPDATE public.channels SET rollout_version = $2 WHERE id = $1`, [channelId, otherTarget.id])
+    await confirmButton.click()
+    await expect(page.getByText('The rollout target changed while you were confirming, so the rollout was not enabled.', { exact: false })).toBeVisible({ timeout: 15000 })
+    const stale = await readRollout()
+    expect(stale.rollout_enabled).toBe(false)
+    expect(Number(stale.rollout_version)).toBe(Number(otherTarget.id))
   })
 })

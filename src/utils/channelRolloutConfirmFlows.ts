@@ -28,14 +28,16 @@ export interface ChannelRolloutConfirmFlowsDeps {
   stableBundleName: () => string
   rolloutPercentageText: () => string
   saveChannelChange: (key: string, value: unknown) => Promise<boolean | void>
-  saveChannelChanges: (changes: Record<string, unknown>) => Promise<boolean>
+  /** With `guard`, the write only applies while the channel still targets that rollout bundle. */
+  saveChannelChanges: (changes: Record<string, unknown>, guard?: { rolloutVersion: number }) => Promise<boolean>
   askUpdateNotificationAfterBundleChange: () => Promise<void>
   openSelectRolloutVersion: () => Promise<void>
   /**
    * Starting the configured rollout: the shared impact confirm (who gets the
-   * rollout target first, native-package warning). Resolves true when confirmed.
+   * rollout target first, native-package warning). Resolves with the rollout
+   * target the user confirmed, or null.
    */
-  confirmRolloutStart: () => Promise<boolean>
+  confirmRolloutStart: () => Promise<number | null>
 }
 
 function formatRolloutPercentageLabel(percentage: number) {
@@ -196,8 +198,11 @@ export function createChannelRolloutConfirmFlows(deps: ChannelRolloutConfirmFlow
       await deps.openSelectRolloutVersion()
       return
     }
-    if (await deps.confirmRolloutStart())
-      await deps.saveChannelChange('rollout_enabled', true)
+    // Only the target the user saw gets enabled: if another session changed it
+    // meanwhile, the guarded write saves nothing.
+    const targetId = await deps.confirmRolloutStart()
+    if (targetId != null)
+      await deps.saveChannelChanges({ rollout_enabled: true }, { rolloutVersion: targetId })
   }
 
   async function rollbackRollout() {

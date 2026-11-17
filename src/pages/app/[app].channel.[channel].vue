@@ -291,7 +291,12 @@ async function getDefaultUploadChannel() {
   defaultUploadChannel.value = data?.default_upload_channel ?? null
 }
 
-async function saveChannelChanges(update: ChannelUpdate) {
+/**
+ * Save channel columns. With `guard`, the write only applies while the channel
+ * still targets that rollout bundle: a confirm the user answered for target A
+ * never enables a target B set meanwhile by another session.
+ */
+async function saveChannelChanges(update: ChannelUpdate, guard?: { rolloutVersion: number }) {
   const changesStableVersion = Object.prototype.hasOwnProperty.call(update, 'version')
   const changesRolloutVersion = Object.prototype.hasOwnProperty.call(update, 'rollout_version')
   // Unlinking rollout_version (including disable) requires promote_bundle — matches refresh_channel_rollout_id.
@@ -322,13 +327,23 @@ async function saveChannelChanges(update: ChannelUpdate) {
   // change was made for, even if the page switches channel meanwhile.
   const channelId = id.value
   try {
-    const { error } = await capgo
+    let request = capgo
       .from('channels')
       .update(update)
       .eq('id', channelId)
+    if (guard)
+      request = request.eq('rollout_version', guard.rolloutVersion)
+    const { data: updated, error } = await request.select('id')
     if (error) {
       toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-update-channel'))
       console.error('no channel update', error)
+      return false
+    }
+    if (guard && !updated?.length) {
+      // The rollout target changed after the user confirmed: nothing was saved.
+      toast.error(t('channel-rollout-target-changed'))
+      if (id.value === channelId)
+        await getChannel(true)
       return false
     }
 
@@ -948,17 +963,19 @@ async function enableRollout() {
 
 /**
  * Starting a configured rollout shows the same impact confirm as picking a
- * rollout target: who gets it first and the native-package warning.
+ * rollout target: who gets it first and the native-package warning. Resolves
+ * with the rollout target the user confirmed, or null.
  */
-async function confirmRolloutStart() {
+async function confirmRolloutStart(): Promise<number | null> {
   if (!channel.value?.rollout_version)
-    return false
+    return null
   const confirmedChannelId = channel.value.id
-  const target = await loadBundleNativePackagesForLink({ app_id: channel.value.app_id, id: channel.value.rollout_version })
+  const targetId = channel.value.rollout_version
+  const target = await loadBundleNativePackagesForLink({ app_id: channel.value.app_id, id: targetId })
   if (!target)
-    return false
+    return null
   const result = await confirmVersionLink(target, true, confirmedChannelId)
-  return !!result?.confirmed && stillOnChannel(confirmedChannelId)
+  return result?.confirmed && stillOnChannel(confirmedChannelId) ? targetId : null
 }
 
 function syncRolloutSettingsDraft() {
@@ -1626,7 +1643,7 @@ async function copyCurlCommand() {
               {{ channel.version.comment }}
             </InfoRow>
             <InfoRow v-if="showRolloutEnableRow" :label="t('progressive-rollout')" :value="t('disabled')">
-              <button type="button" class="d-btn d-btn-sm d-btn-outline" :disabled="rolloutEnableDisabled" @pointerenter="warmChannelImpact" @focus="warmChannelImpact" @click="enableRollout()">
+              <button type="button" class="d-btn d-btn-sm d-btn-outline" data-test="rollout-enable" :disabled="rolloutEnableDisabled" @pointerenter="warmChannelImpact" @focus="warmChannelImpact" @click="enableRollout()">
                 {{ t('enable') }}
               </button>
             </InfoRow>
