@@ -22,13 +22,13 @@ BEGIN
   -- Reset relevant tables to provide a clean slate for cache assertions
   TRUNCATE TABLE public.app_metrics_cache;
   TRUNCATE TABLE public.daily_mau;
-  TRUNCATE TABLE public.daily_storage;
+  TRUNCATE TABLE public.daily_storage_hourly;
   TRUNCATE TABLE public.daily_bandwidth;
   TRUNCATE TABLE public.daily_version;
 
   INSERT INTO public.daily_mau (app_id, date, mau) VALUES (test_app, test_start, 5);
   INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES (test_app, test_start, 0);
-  INSERT INTO public.daily_storage (app_id, date, storage) VALUES (test_app, test_start, 0);
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours) VALUES (test_app, test_org, test_start, 0);
 
   SELECT COALESCE(SUM(mau), 0)
   INTO initial_mau

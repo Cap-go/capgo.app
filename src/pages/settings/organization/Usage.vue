@@ -9,13 +9,14 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import CreditsCta from '~/components/CreditsCta.vue'
 import PageLoader from '~/components/PageLoader.vue'
-import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/console'
+import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getUsageCreditDeductions } from '~/services/console'
 import { bytesToGb } from '~/services/conversion'
 import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
 import { formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { observeEventsForPlan } from '~/services/observePlanAllowance'
+import { billableStorageBytes, includedStorageGbHours } from '~/services/storageUsage'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
@@ -154,8 +155,14 @@ async function getUsage(orgId: string) {
   const totalMau = relevantUsage.reduce((acc, entry) => acc + (entry.mau ?? 0), 0)
   const totalBandwidthBytes = relevantUsage.reduce((acc, entry) => acc + (entry.bandwidth ?? 0), 0)
   const totalBandwidth = bytesToGb(totalBandwidthBytes)
-  const totalStorageBytes = await getTotalStorage(orgId)
-  const totalStorage = bytesToGb(totalStorageBytes)
+  // Storage is billed in GB-hours over the cycle. The plan includes its GB x hours-in-cycle,
+  // and overage is priced on the average stored (byte-hours / hours), like get_total_metrics.
+  const cycleStart = organizationStore.currentOrganization?.subscription_start ?? billingStart?.toISOString() ?? dayjs().subtract(30, 'day').toISOString()
+  const cycleEnd = organizationStore.currentOrganization?.subscription_end ?? dayjs(cycleStart).add(1, 'month').toISOString()
+  const totalStorageByteHours = relevantUsage.reduce((acc, entry) => acc + (entry.storage_byte_hours ?? 0), 0)
+  const totalStorageBytes = billableStorageBytes(totalStorageByteHours, cycleStart, cycleEnd)
+  const totalStorage = bytesToGb(totalStorageByteHours, 2)
+  const includedStorage = currentPlan ? includedStorageGbHours(currentPlan.storage, cycleStart, cycleEnd) : 0
   const totalBuildTime = relevantUsage.reduce((acc, entry) => acc + (entry.build_time_seconds ?? 0), 0)
 
   detailPlanUsage = maybeDeriveMissingUsagePercents({
@@ -165,6 +172,7 @@ async function getUsage(orgId: string) {
     totalBuildTime,
     totalMau,
     totalStorage,
+    includedStorage,
   })
 
   // Extra MAU is priced on the global MAU tiers, like the Stripe item. null = price unavailable.
@@ -201,6 +209,7 @@ async function getUsage(orgId: string) {
     totalMau,
     totalBandwidth,
     totalStorage,
+    includedStorage,
     totalBuildTime,
     detailPlanUsage,
     cycle: {
@@ -270,7 +279,10 @@ function maybeDeriveMissingUsagePercents(params: {
   currentPlan: Plan | undefined
   totalMau: number
   totalBandwidth: number
+  /** GB-hours used in the cycle. */
   totalStorage: number
+  /** GB-hours the plan includes for the cycle. */
+  includedStorage: number
   totalBuildTime: number
 }) {
   const {
@@ -280,6 +292,7 @@ function maybeDeriveMissingUsagePercents(params: {
     totalBuildTime,
     totalMau,
     totalStorage,
+    includedStorage,
   } = params
 
   if (!currentPlan || (
@@ -295,7 +308,7 @@ function maybeDeriveMissingUsagePercents(params: {
   const fallback = {
     mau_percent: percent(totalMau, currentPlan.mau),
     bandwidth_percent: percent(totalBandwidth, currentPlan.bandwidth),
-    storage_percent: percent(totalStorage, currentPlan.storage),
+    storage_percent: percent(totalStorage, includedStorage),
     build_time_percent: percent(totalBuildTime, currentPlan.build_time_unit),
   }
 
@@ -540,11 +553,11 @@ function nextRunDate() {
           <div class="space-y-1 text-sm">
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('used-in-period') }}</span>
-              <span class="font-medium text-gray-900 dark:text-white">{{ formatNumberValue(planUsage?.totalStorage) }} GB</span>
+              <span class="font-medium text-gray-900 dark:text-white">{{ formatNumberValue(planUsage?.totalStorage) }} {{ t('units-gb-hours') }}</span>
             </div>
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('included-in-plan') }}</span>
-              <span>{{ formatNumberValue(planUsage?.currentPlan?.storage) }} GB</span>
+              <span>{{ formatNumberValue(planUsage?.includedStorage, { maximumFractionDigits: 0 }) }} {{ t('units-gb-hours') }}</span>
             </div>
           </div>
         </div>

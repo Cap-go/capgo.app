@@ -25,7 +25,7 @@ import {
   onPremStats,
 } from './plugin_stats.ts'
 import { normalizeStatsInsightDate, normalizeStatsInsightNumber, sortStatsInsightTotals } from './statsInsights.ts'
-import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, readBandwidthUsageSB, readChannelDefaultPlatformsSB, readChannelDeviceOverrideIdsSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
+import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, readBandwidthUsageSB, readChannelDefaultPlatformsSB, readChannelDeviceOverrideIdsSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsVersionSB, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
 import { DEFAULT_LIMIT } from './types.ts'
 import { backgroundTask, getEnv, isInternalVersionName } from './utils.ts'
@@ -180,11 +180,6 @@ export function readStatsBandwidth(c: Context, app_id: string, start_date: strin
     return readBandwidthUsageSB(c, app_id, start_date, end_date)
   assertAnalyticsEngineReadConfig(c, 'bandwidth usage')
   return readBandwidthUsageCF(c, app_id, start_date, end_date, { throwOnError: true })
-}
-
-export function readStatsStorage(c: Context, app_id: string, start_date: string, end_date: string) {
-  // No cloudflare implementation, postgrest is enough
-  return readStatsStorageSB(c, app_id, start_date, end_date)
 }
 
 export function readStatsVersion(c: Context, app_id: string, start_date: string, end_date: string, channel?: VersionUsageChannel | string, options: VersionUsageChannelFilterOptions = {}): Promise<VersionUsage[]> {

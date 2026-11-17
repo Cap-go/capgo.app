@@ -3,12 +3,12 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { PgClient } from '../utils/pg.ts'
 import { Hono } from 'hono/tiny'
 import { middlewareAPISecret, parseBody, simpleError, useCors } from '../utils/hono.ts'
-import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { isTransientDatabaseError } from '../utils/pg_errors.ts'
 import { queryJson } from '../utils/pg_rls.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError, isRetryablePostgrestResult, isRetryablePostgrestStatus, retryWithBackoff } from '../utils/retry.ts'
-import { readStatsBandwidth, readStatsMau, readStatsStorage, readStatsVersion } from '../utils/stats.ts'
+import { readStatsBandwidth, readStatsMau, readStatsVersion } from '../utils/stats.ts'
 
 interface DataToGet {
   appId?: string
@@ -74,7 +74,6 @@ interface StorageHourlyCalculationResult {
   rows: StorageHourlyRow[]
   skippedMissingAddition: number
   skippedInvalidInterval: number
-  error?: string
 }
 
 type StorageIntervalSkipReason = 'missingAddition' | 'invalidInterval' | 'outsideCycle'
@@ -350,25 +349,30 @@ async function refreshStorageHourly(
   }
 
   const deleteRange = getStorageDailyDeleteRange(cycleInfo.subscription_anchor_start, cycleInfo.subscription_anchor_end)
-  await runSupabaseResultWithRetry(c, 'delete_daily_storage_hourly', async () => {
+  // One statement, so billing reads never see the cycle between the delete and the upsert.
+  await runSupabaseResultWithRetry(c, 'replace_daily_storage_hourly', async () => {
     await pg.query(
-      'DELETE FROM public.daily_storage_hourly WHERE app_id = $1 AND date >= $2::date AND date < $3::date',
-      [appId, deleteRange.startDay, deleteRange.endExclusiveDay],
+      `WITH new_rows AS (
+         SELECT r.app_id, r.owner_org, r.date, r.storage_byte_hours, r.updated_at
+         FROM pg_catalog.jsonb_to_recordset($4::jsonb)
+           AS r(app_id varchar, owner_org uuid, date date, storage_byte_hours double precision, updated_at timestamptz)
+       ),
+       removed AS (
+         DELETE FROM public.daily_storage_hourly dsh
+         WHERE dsh.app_id = $1
+           AND dsh.date >= $2::date
+           AND dsh.date < $3::date
+           AND NOT EXISTS (SELECT 1 FROM new_rows WHERE new_rows.date = dsh.date)
+       )
+       INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours, updated_at)
+       SELECT new_rows.app_id, new_rows.owner_org, new_rows.date, new_rows.storage_byte_hours, new_rows.updated_at
+       FROM new_rows
+       ON CONFLICT (app_id, date) DO UPDATE SET
+         owner_org = EXCLUDED.owner_org,
+         storage_byte_hours = EXCLUDED.storage_byte_hours,
+         updated_at = EXCLUDED.updated_at`,
+      [appId, deleteRange.startDay, deleteRange.endExclusiveDay, JSON.stringify(calculation.rows)],
     )
-    return { data: null, error: null }
-  })
-
-  if (calculation.rows.length === 0)
-    return calculation
-
-  await runSupabaseResultWithRetry(c, 'upsert_daily_storage_hourly', async () => {
-    await upsertRows(pg, 'daily_storage_hourly', {
-      app_id: 'varchar',
-      owner_org: 'uuid',
-      date: 'date',
-      storage_byte_hours: 'double precision',
-      updated_at: 'timestamptz',
-    }, ['app_id', 'date'], calculation.rows)
     return { data: null, error: null }
   })
 
@@ -456,15 +460,12 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
   let mau = await readStatsMau(c, appId, startDate, endDate)
   // get bandwidth
   let bandwidth = await readStatsBandwidth(c, appId, startDate, endDate)
-  // get storage
-  let storage = await readStatsStorage(c, appId, startDate, endDate)
   let versionUsage = await readStatsVersion(c, appId, startDate, endDate)
 
   if (body.todayOnly) {
     // take only the last day
     mau = mau.slice(-1)
     bandwidth = bandwidth.slice(-1)
-    storage = storage.slice(-1)
     // version usage has one row per (date, version): keep every version of the last day
     const lastVersionDate = versionUsage.at(-1)?.date
     versionUsage = versionUsage.filter(v => v.date === lastVersionDate)
@@ -531,10 +532,9 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
 
   cloudlog({ requestId: c.get('requestId'), message: 'mau', mauLength: mau.length, mauCount: mau.reduce((acc, curr) => acc + curr.mau, 0), mau: JSON.stringify(mau) })
   cloudlog({ requestId: c.get('requestId'), message: 'bandwidth', bandwidthLength: bandwidth.length, bandwidthCount: bandwidth.reduce((acc, curr) => acc + curr.bandwidth, 0), bandwidth: JSON.stringify(bandwidth) })
-  cloudlog({ requestId: c.get('requestId'), message: 'storage', storageLength: storage.length, storageCount: storage.reduce((acc, curr) => acc + curr.storage, 0), storage: JSON.stringify(storage) })
   cloudlog({ requestId: c.get('requestId'), message: 'versionUsage', versionUsageLength: resolvedVersionUsage.length, versionUsageCount: resolvedVersionUsage.reduce((acc, curr) => acc + curr.get + curr.fail + curr.install + curr.uninstall, 0), versionUsage: JSON.stringify(resolvedVersionUsage) })
 
-  // save to daily_mau, daily_bandwidth and daily_storage
+  // save to daily_mau, daily_bandwidth and daily_version
   // Note: daily_version upsert uses type cast because auto-generated types are stale
   // (migration adds version_name column but types haven't been regenerated)
   await Promise.all([
@@ -544,10 +544,6 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
     }),
     runSupabaseResultWithRetry(c, 'upsert_daily_bandwidth', async () => {
       await upsertRows(pg, 'daily_bandwidth', { app_id: 'varchar', date: 'date', bandwidth: 'bigint' }, ['app_id', 'date'], bandwidth)
-      return { data: null, error: null }
-    }),
-    runSupabaseResultWithRetry(c, 'upsert_daily_storage', async () => {
-      await upsertRows(pg, 'daily_storage', { app_id: 'varchar', date: 'date', storage: 'bigint' }, ['app_id', 'date'], storage)
       return { data: null, error: null }
     }),
     runSupabaseResultWithRetry(c, 'upsert_daily_version', async () => {
@@ -564,24 +560,14 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
     }),
   ])
 
-  let storageHourly: StorageHourlyCalculationResult
-  try {
-    storageHourly = await refreshStorageHourly(c, pg, appId, orgId, cycleInfo, body.currentHour)
-  }
-  catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to refresh shadow hourly storage', appId, orgId, error })
-    storageHourly = {
-      rows: [],
-      skippedMissingAddition: 0,
-      skippedInvalidInterval: 0,
-      error: 'storage_hourly_refresh_failed',
-    }
-  }
+  // Storage is billed from these byte-hours: a failure must fail the job so the
+  // queue retries it, instead of leaving the cycle under-counted.
+  const storageHourly = await refreshStorageHourly(c, pg, appId, orgId, cycleInfo, body.currentHour)
 
-  cloudlog({ requestId: c.get('requestId'), message: 'stats saved', mauLength: mau.length, bandwidthLength: bandwidth.length, storageLength: storage.length, versionUsageLength: versionUsage.length })
+  cloudlog({ requestId: c.get('requestId'), message: 'stats saved', mauLength: mau.length, bandwidthLength: bandwidth.length, storageHourlyLength: storageHourly.rows.length, versionUsageLength: versionUsage.length })
   await syncAppStatsRefresh(c, pg, appId)
 
-  return c.json({ status: 'Stats saved', mau, bandwidth, storage, storageHourly, versionUsage })
+  return c.json({ status: 'Stats saved', mau, bandwidth, storageHourly, versionUsage })
 }
 
 export const cronStatAppTestUtils = {

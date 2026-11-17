@@ -811,7 +811,7 @@ DECLARE
   demo_org_id uuid := '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid;
 BEGIN
   -- Truncate all tables
-  TRUNCATE TABLE public.daily_mau, public.daily_bandwidth, public.daily_storage, public.daily_version, public.storage_usage, public.version_usage, public.device_usage, public.bandwidth_usage, public.devices, public.stats;
+  TRUNCATE TABLE public.daily_mau, public.daily_bandwidth, public.daily_storage_hourly, public.daily_version, public.storage_usage, public.version_usage, public.device_usage, public.bandwidth_usage, public.devices, public.stats;
 
   -- Generate a random UUID
   random_uuid := gen_random_uuid();
@@ -835,7 +835,7 @@ BEGIN
   INSERT INTO public.stats (created_at, action, device_id, version_name, app_id, metadata) VALUES
     (NOW(), 'webview_javascript_error'::"public"."stats_action", '44444444-4444-4444-4444-444444444444', '1.0.0', 'com.demo.app', '{"message":"Uncaught ReferenceError: foo is not defined","error_type":"javascript_error","href":"capacitor://localhost/index.html"}'::jsonb);
 
-  -- Seed data for daily_mau, daily_bandwidth, and daily_storage
+  -- Seed data for daily_mau, daily_bandwidth, and daily_storage_hourly
   curr_date := start_date::DATE;
   WHILE curr_date <= end_date::DATE LOOP
     random_mau := FLOOR(RANDOM() * 1000) + 1;
@@ -844,7 +844,7 @@ BEGIN
 
     INSERT INTO public.daily_mau (app_id, date, mau) VALUES ('com.demo.app', curr_date, random_mau);
     INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES ('com.demo.app', curr_date, random_bandwidth);
-    INSERT INTO public.daily_storage (app_id, date, storage) VALUES ('com.demo.app', curr_date, random_storage);
+    INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours) VALUES ('com.demo.app', demo_org_id, curr_date, random_storage);
 
     curr_date := curr_date + INTERVAL '1 day';
   END LOOP;
@@ -1158,7 +1158,7 @@ BEGIN
   -- Delete existing data for the specified app_id in dependency order
   DELETE FROM public.daily_mau WHERE app_id = p_app_id;
   DELETE FROM public.daily_bandwidth WHERE app_id = p_app_id;
-  DELETE FROM public.daily_storage WHERE app_id = p_app_id;
+  DELETE FROM public.daily_storage_hourly WHERE app_id = p_app_id;
   DELETE FROM public.daily_version WHERE app_id = p_app_id;
   DELETE FROM public.daily_build_time WHERE app_id = p_app_id;
   DELETE FROM public.storage_usage WHERE app_id = p_app_id;
@@ -1217,7 +1217,7 @@ BEGIN
     random_mau := FLOOR(RANDOM() * 1000) + 1; random_bandwidth := FLOOR(RANDOM() * 1000000000) + 1; random_storage := FLOOR(RANDOM() * 1000000000) + 1;
     INSERT INTO public.daily_mau (app_id, date, mau) VALUES (p_app_id, curr_date, random_mau);
     INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES (p_app_id, curr_date, random_bandwidth);
-    INSERT INTO public.daily_storage (app_id, date, storage) VALUES (p_app_id, curr_date, random_storage);
+    INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours) VALUES (p_app_id, org_id, curr_date, random_storage);
     INSERT INTO public.daily_build_time (app_id, date, build_time_unit, build_count)
     VALUES (p_app_id, curr_date, FLOOR(RANDOM() * 7200) + 300, FLOOR(RANDOM() * 10) + 1);
     INSERT INTO public.daily_version (date, app_id, version_id, version_name, get, fail, install, uninstall)
@@ -1705,7 +1705,7 @@ BEGIN
   DELETE FROM public.version_usage WHERE app_id = ANY (v_apps);
   DELETE FROM public.daily_mau WHERE app_id = ANY (v_apps);
   DELETE FROM public.daily_bandwidth WHERE app_id = ANY (v_apps);
-  DELETE FROM public.daily_storage WHERE app_id = ANY (v_apps);
+  DELETE FROM public.daily_storage_hourly WHERE app_id = ANY (v_apps);
   DELETE FROM public.daily_version WHERE app_id = ANY (v_apps);
 
   -- ------------------------------------------------------------------
@@ -1973,10 +1973,10 @@ BEGIN
     GROUP BY 1, 2
   ) inst ON inst.app_id = days.app_id AND inst.date = days.date;
 
-  -- Storage: bundles kept in R2 on each day.
-  INSERT INTO public.daily_storage (app_id, date, storage)
-  SELECT a.app_id, day.d::date,
-    COALESCE((
+  -- Storage: byte-hours of the bundles kept in R2 on each day (stored all day).
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours)
+  SELECT a.app_id, apps.owner_org, day.d::date,
+    24 * COALESCE((
       SELECT SUM(avm.size) FROM public.app_versions av
       JOIN public.app_versions_meta avm ON avm.id = av.id
       WHERE av.app_id = a.app_id
@@ -1984,6 +1984,7 @@ BEGIN
         AND (av.deleted_at IS NULL OR av.deleted_at::date > day.d::date)
     ), 0)
   FROM pg_catalog.unnest(v_apps) AS a(app_id)
+  JOIN public.apps ON apps.app_id = a.app_id
   CROSS JOIN pg_catalog.generate_series(v_today - 59, v_today, interval '1 day') AS day(d);
 
   -- ------------------------------------------------------------------

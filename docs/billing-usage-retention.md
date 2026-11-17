@@ -6,8 +6,8 @@ through custom `updateUrl` / `statsUrl` plugin settings never reaches Capgo and
 is out of scope.
 
 Usage is stored per `app_id` in the daily tables (`daily_mau`,
-`daily_bandwidth`, `daily_build_time`). These tables have no foreign key to
-`apps`, so their rows outlive the app. The behaviors below are intentional:
+`daily_bandwidth`, `daily_build_time`, `daily_storage_hourly`). These tables
+have no foreign key to `apps`, so their rows outlive the app. The behaviors below are intentional:
 they prevent resetting or hiding billable usage by deleting, recreating or
 moving an app. Do not "fix" them without a product decision.
 
@@ -21,6 +21,24 @@ moving an app. Do not "fix" them without a product decision.
 - `delete_old_deleted_apps` purges `deleted_apps` rows older than 35 days, then
   purges the daily usage rows of those app IDs unless the app ID is live again
   or still held by another `deleted_apps` row.
+
+## Storage is billed in GB-hours
+
+Storage usage is the byte-hours each app's bundles were stored, per UTC day, in
+`daily_storage_hourly` (`cron_stat_app` rebuilds the current cycle from
+`version_meta` on every stats refresh). The billed value is the average stored
+over the cycle, `get_org_storage_billable_bytes`:
+
+```
+billable bytes = sum(storage_byte_hours in the cycle) / hours in the cycle
+```
+
+So a plan with `storage` = 2 GB includes 2 GB x hours-in-cycle GB-hours.
+Deleting bundles stops new hours from accruing but never removes hours already
+used in the cycle, and the billed value only grows during a cycle. Unlike the
+other daily tables, rows are attributed by `daily_storage_hourly.owner_org`
+(the org that owned the app when the hours were used), which is kept for
+deleted apps until `delete_old_deleted_apps` purges them.
 
 ## Recreating a deleted app ID within 35 days
 

@@ -1251,27 +1251,6 @@ export type Database = {
         }
         Relationships: []
       }
-      daily_storage: {
-        Row: {
-          app_id: string
-          date: string
-          id: number
-          storage: number
-        }
-        Insert: {
-          app_id: string
-          date: string
-          id?: number
-          storage: number
-        }
-        Update: {
-          app_id?: string
-          date?: string
-          id?: number
-          storage?: number
-        }
-        Relationships: []
-      }
       daily_storage_hourly: {
         Row: {
           app_id: string
@@ -1298,13 +1277,6 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
-          {
-            foreignKeyName: "daily_storage_hourly_app_id_fkey"
-            columns: ["app_id"]
-            isOneToOne: false
-            referencedRelation: "apps"
-            referencedColumns: ["app_id"]
-          },
           {
             foreignKeyName: "daily_storage_hourly_owner_org_fkey"
             columns: ["owner_org"]
@@ -4414,6 +4386,15 @@ export type Database = {
         Args: { apikey: string; app_id: string }
         Returns: string
       }
+      get_org_storage_billable_bytes: {
+        Args: {
+          p_end_date: string
+          p_hours?: number
+          p_org_id: string
+          p_start_date: string
+        }
+        Returns: number
+      }
       get_org_user_access_rbac: {
         Args: { p_org_id: string; p_user_id: string }
         Returns: {
@@ -5113,14 +5094,6 @@ export type Database = {
           devices: number
           platform: string
           version_build: string
-        }[]
-      }
-      read_storage_usage: {
-        Args: { p_app_id: string; p_period_end: string; p_period_start: string }
-        Returns: {
-          app_id: string
-          date: string
-          storage: number
         }[]
       }
       read_version_usage: {

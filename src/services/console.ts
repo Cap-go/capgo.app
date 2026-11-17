@@ -410,18 +410,6 @@ export async function getAllDashboard(orgId: string, startDate?: string, endDate
   }
 }
 
-export async function getTotalStorage(orgId?: string): Promise<number> {
-  if (!orgId)
-    return 0
-  const { data, error } = await useConsole()
-    .rpc('get_total_storage_size_org', { org_id: orgId })
-    .single()
-  if (error)
-    throw new Error(error.message)
-
-  return data ?? 0
-}
-
 // Canonical frontend platform-admin verification.
 // Use this only for platform-rights checks in the UI flow; no other path should use
 // user-id based admin function checks from the browser.

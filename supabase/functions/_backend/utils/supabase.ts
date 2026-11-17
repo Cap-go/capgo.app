@@ -1400,7 +1400,7 @@ export function trackLogsSB(c: Context, app_id: string, device_id: string, actio
   }, 'trackLogsSB error')
 }
 
-type UsageRpc = 'read_device_usage' | 'read_bandwidth_usage' | 'read_storage_usage' | 'read_version_usage'
+type UsageRpc = 'read_device_usage' | 'read_bandwidth_usage' | 'read_version_usage'
 type UsageRpcRows<F extends UsageRpc> = Database['public']['Functions'][F]['Returns']
 
 /**
@@ -1427,10 +1427,6 @@ export function readDeviceUsageSB(c: Context, app_id: string, period_start: stri
 
 export function readBandwidthUsageSB(c: Context, app_id: string, period_start: string, period_end: string) {
   return readUsageRpc(c, 'read_bandwidth_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
-}
-
-export function readStatsStorageSB(c: Context, app_id: string, period_start: string, period_end: string) {
-  return readUsageRpc(c, 'read_storage_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 }
 
 export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string, options: { throwOnError?: boolean } = {}): Promise<VersionUsage[]> {
