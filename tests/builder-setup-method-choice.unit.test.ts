@@ -31,13 +31,13 @@ vi.mock('~/services/console', () => {
 const command = 'npx @capgo/cli@latest build init -a ak_1234567890abcdef3f9a'
 const cleanups: Array<() => void> = []
 
-function onboarding(started: Partial<Record<'ios' | 'android', string>> = {}) {
+function onboarding(started: Partial<Record<'ios' | 'android', string>> = {}, completed: Array<'ios' | 'android'> = []) {
   return { setup: {
     todo_list_version: 4,
     builder_todo_list_version: '1',
     paths: ['builder'],
     selected_path: 'builder',
-    steps: { builder: Object.fromEntries((['ios', 'android'] as const).map(platform => [platform, Object.fromEntries(BUILDER_STEP_IDS[platform].map(id => [id, { status: started[platform] === id ? 'done' : 'pending' }]))])) },
+    steps: { builder: Object.fromEntries((['ios', 'android'] as const).map(platform => [platform, Object.fromEntries(BUILDER_STEP_IDS[platform].map(id => [id, { status: completed.includes(platform) || started[platform] === id ? 'done' : 'pending' }]))])) },
   } }
 }
 
@@ -73,6 +73,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanups.splice(0).forEach(cleanup => cleanup())
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 describe('Builder setup method choice', () => {
@@ -119,6 +120,25 @@ describe('Builder setup method choice', () => {
     mocks.manualFirst.value = true
     await nextTick()
     expect(find('builder-method-ai')?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps a click on the already selected AI card over a manual preference loaded later', async () => {
+    const { find } = mount()
+    find('builder-method-ai')!.click()
+    mocks.manualFirst.value = true
+    await nextTick()
+    expect(find('builder-method-ai')?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('still adds the second platform after the first one completed', async () => {
+    vi.useFakeTimers()
+    const { find } = mount(onboarding({}, ['ios']))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(find('builder-platform-android')).toBeNull()
+    mocks.onboarding = onboarding({ android: 'start_setup' }, ['ios'])
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(find('builder-platform-android')).not.toBeNull()
+    expect(find('builder-platform-ios')?.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('shows the steps of the platform the CLI or assistant started', async () => {

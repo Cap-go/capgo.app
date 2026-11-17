@@ -229,10 +229,12 @@ onMounted(() => {
   void refreshOnboarding()
   void refreshLatestBuild()
   refreshTimer = setInterval(() => {
-    if (document.visibilityState !== 'visible' || props.active === false || completed.value)
+    if (document.visibilityState !== 'visible' || props.active === false)
       return
+    // Keep reading progress after one platform completes so the other platform can still appear.
     void refreshOnboarding()
-    void refreshLatestBuild()
+    if (!completed.value)
+      void refreshLatestBuild()
   }, 5000)
 })
 
@@ -263,9 +265,11 @@ function selectPlatform(platform: BuilderPlatform) {
 }
 
 function selectMethod(next: BuilderSetupMethod) {
-  if (method.value === next)
-    return
+  const previous = method.value
+  // Record every click so a preference loaded later cannot override it.
   pickedMethod.value = next
+  if (previous === next)
+    return
   emit('methodSelected', next)
   void setupMethod.rememberSetupMethod(next === 'terminal' ? 'manual' : 'ai')
 }
