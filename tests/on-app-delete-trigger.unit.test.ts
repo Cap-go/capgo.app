@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const appExists = { value: false }
-const pgQuery = vi.fn(async (sql: string, _params?: unknown[]) => {
-  // The SQL function returns NULL instead of queueing when the app id exists again in the org.
-  if (sql.includes('queue_app_storage_cleanup_pass'))
-    return { rows: [{ msg_id: appExists.value ? null : '42' }], rowCount: 1 }
+async function defaultPgQuery(sql: string, _params?: unknown[]) {
+  // The SQL functions decide on the primary whether the app id exists again in the org.
+  if (sql.includes('begin_app_storage_cleanup_pass'))
+    return { rows: [{ claimed: !appExists.value }], rowCount: 1 }
+  if (sql.includes('finish_app_storage_cleanup_pass')) {
+    const done = (_params as unknown[])[3] as boolean
+    return { rows: [{ msg_id: done || appExists.value ? null : '42' }], rowCount: 1 }
+  }
   return { rows: [], rowCount: 0 }
-})
+}
+const pgQuery = vi.fn(defaultPgQuery)
 const cleanupStarted = vi.fn()
 const deleteObjectsWithPrefix = vi.fn()
 const removeImageFolder = vi.fn()
@@ -67,7 +72,7 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', async () => {
   }
 })
 
-const { app, MAX_STORAGE_CLEANUP_PASSES, STORAGE_CLEANUP_BUDGET_MS, STORAGE_CLEANUP_REQUEUE_DELAY_SECONDS } = await import('../supabase/functions/_backend/triggers/on_app_delete.ts')
+const { app, MAX_STORAGE_CLEANUP_PASSES, STORAGE_CLEANUP_BUDGET_MS, STORAGE_CLEANUP_LEASE_SECONDS, STORAGE_CLEANUP_REQUEUE_DELAY_SECONDS } = await import('../supabase/functions/_backend/triggers/on_app_delete.ts')
 
 const record = {
   app_id: 'com.test.delete',
@@ -88,13 +93,19 @@ function sqlStatements() {
   return pgQuery.mock.calls.map(([sql]) => sql)
 }
 
+function finishCalls() {
+  return pgQuery.mock.calls.filter(([sql]) => sql.includes('finish_app_storage_cleanup_pass'))
+}
+
+/** finish calls that asked for a next pass (done = false). */
 function requeueCalls() {
-  return pgQuery.mock.calls.filter(([sql]) => sql.includes('queue_app_storage_cleanup_pass'))
+  return finishCalls().filter(([, params]) => (params as unknown[])[3] === false)
 }
 
 describe('on_app_delete trigger', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    pgQuery.mockImplementation(defaultPgQuery)
     appExists.value = false
     vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
     deleteObjectsWithPrefix.mockResolvedValue({ deleted: 3, failed: 0, done: true })
@@ -111,7 +122,10 @@ describe('on_app_delete trigger', () => {
     expect(pgQuery.mock.calls.find(([sql]) => sql.includes('INSERT INTO public.deleted_apps'))?.[1])
       .toEqual(['com.test.delete', '2026-01-01T00:00:00.000Z', 'org-1', '[]'])
     expect(cleanupStarted).toHaveBeenCalledOnce()
-    expect(statements.indexOf(inserts[0])).toBe(0)
+    // The pass is claimed before anything else, then deleted_apps is recorded.
+    expect(statements[0]).toContain('begin_app_storage_cleanup_pass')
+    expect(pgQuery.mock.calls[0][1]).toEqual(['com.test.delete', 'org-1', 0, STORAGE_CLEANUP_LEASE_SECONDS])
+    expect(statements.indexOf(inserts[0])).toBe(1)
     expect(statements.filter(sql => sql.startsWith('DELETE FROM public.'))).toHaveLength(9)
     expect(statements).toContain('DELETE FROM public.app_versions WHERE app_id = $1')
   })
@@ -127,7 +141,8 @@ describe('on_app_delete trigger', () => {
     expect(options.deadline).toBeGreaterThanOrEqual(before + STORAGE_CLEANUP_BUDGET_MS)
     expect(options.deadline).toBeLessThanOrEqual(Date.now() + STORAGE_CLEANUP_BUDGET_MS)
     expect(removeImageFolder).toHaveBeenCalledWith(expect.anything(), 'org/org-1/com.test.delete', { deadline: options.deadline })
-    expect(requeueCalls()).toHaveLength(0)
+    // An empty prefix clears the cleanup state instead of queueing a pass.
+    expect(finishCalls().map(([, params]) => params)).toEqual([['com.test.delete', 'org-1', 0, true, STORAGE_CLEANUP_REQUEUE_DELAY_SECONDS, STORAGE_CLEANUP_LEASE_SECONDS]])
   })
 
   it('requeues a delayed follow-up pass when the deadline leaves objects behind', async () => {
@@ -136,16 +151,9 @@ describe('on_app_delete trigger', () => {
     const response = await sendTrigger()
 
     expect(response.status).toBe(200)
-    const calls = requeueCalls()
-    expect(calls).toHaveLength(1)
-    const [appId, ownerOrg, message, delay] = calls[0][1] as [string, string, string, number]
-    expect(appId).toBe('com.test.delete')
-    expect(ownerOrg).toBe('org-1')
-    expect(delay).toBe(STORAGE_CLEANUP_REQUEUE_DELAY_SECONDS)
-    expect(JSON.parse(message)).toEqual({
-      function_name: 'on_app_delete',
-      payload: { type: 'DELETE', table: 'apps', schema: 'public', record: null, old_record: record, storage_cleanup_pass: 1 },
-    })
+    expect(requeueCalls().map(([, params]) => params)).toEqual([
+      ['com.test.delete', 'org-1', 0, false, STORAGE_CLEANUP_REQUEUE_DELAY_SECONDS, STORAGE_CLEANUP_LEASE_SECONDS],
+    ])
   })
 
   it('a follow-up pass only continues storage cleanup', async () => {
@@ -158,7 +166,7 @@ describe('on_app_delete trigger', () => {
     expect(statements.some(sql => sql.includes('INSERT INTO public.deleted_apps'))).toBe(false)
     expect(statements.some(sql => sql.startsWith('DELETE FROM public.'))).toBe(false)
     expect(deleteObjectsWithPrefix).toHaveBeenCalledOnce()
-    expect(JSON.parse(requeueCalls()[0][1]![2] as string).payload.storage_cleanup_pass).toBe(4)
+    expect((requeueCalls()[0][1] as unknown[])[2]).toBe(3)
   })
 
   it('stops requeuing after the pass budget', async () => {
@@ -167,6 +175,7 @@ describe('on_app_delete trigger', () => {
     await sendTrigger({ storage_cleanup_pass: MAX_STORAGE_CLEANUP_PASSES - 1 })
 
     expect(requeueCalls()).toHaveLength(0)
+    expect(finishCalls()).toHaveLength(1)
     expect(cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'app storage cleanup gave up after max passes' }))
   })
 
@@ -178,16 +187,44 @@ describe('on_app_delete trigger', () => {
     expect(requeueCalls()).toHaveLength(1)
   })
 
-  it('stops the chain when the database reports the app id was recreated in the org', async () => {
+  it('deletes nothing when the database reports the app id was recreated in the org', async () => {
     appExists.value = true
-    deleteObjectsWithPrefix.mockResolvedValue({ deleted: 500, failed: 0, done: false })
 
     const response = await sendTrigger({ storage_cleanup_pass: 2 })
 
     expect(response.status).toBe(200)
     // The guard is decided by the SQL function on the primary, never by a separate cached read.
     expect(sqlStatements().some(sql => sql.includes('FROM public.apps'))).toBe(false)
-    expect(requeueCalls()).toHaveLength(1)
-    expect(cloudlogErr).not.toHaveBeenCalled()
+    expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
+    expect(removeImageFolder).not.toHaveBeenCalled()
+    expect(finishCalls()).toHaveLength(0)
+  })
+
+  it('fails the message when the pass cannot be claimed, so the queue retries it', async () => {
+    pgQuery.mockImplementationOnce(async () => {
+      throw new Error('db unavailable')
+    })
+
+    const response = await sendTrigger()
+
+    expect(response.status).toBeGreaterThanOrEqual(500)
+    expect(sqlStatements().some(sql => sql.includes('INSERT INTO public.deleted_apps'))).toBe(false)
+    expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
+  })
+
+  it('keeps the claimed state for the sweeper when finishing the pass fails', async () => {
+    deleteObjectsWithPrefix.mockResolvedValue({ deleted: 500, failed: 0, done: false })
+    pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('begin_app_storage_cleanup_pass'))
+        return { rows: [{ claimed: true }], rowCount: 1 }
+      if (sql.includes('finish_app_storage_cleanup_pass'))
+        throw new Error('db unavailable')
+      return { rows: [], rowCount: 0 }
+    })
+
+    const response = await sendTrigger({ storage_cleanup_pass: 1 })
+
+    expect(response.status).toBe(200)
+    expect(cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'error finishing app storage cleanup pass' }))
   })
 })
