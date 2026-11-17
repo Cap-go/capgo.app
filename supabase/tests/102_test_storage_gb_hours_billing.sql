@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(45);
+SELECT plan(47);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -633,6 +633,20 @@ SELECT
         (SELECT count(*)::int FROM public.version_meta WHERE version_id = 9100303 AND size > 0),
         1,
         'a bundle with an upload event keeps only that one'
+    );
+
+-- A late upload event of a bundle deleted meanwhile closes at once.
+SELECT
+    ok(
+        public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100305, 900),
+        'a late upload event of a deleted bundle is recorded'
+    );
+
+SELECT
+    is(
+        (SELECT array_agg(size ORDER BY size) FROM public.version_meta WHERE version_id = 9100305),
+        ARRAY[-900::bigint, 900::bigint],
+        'and closed in the same transaction, so it accrues no byte-hours'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.

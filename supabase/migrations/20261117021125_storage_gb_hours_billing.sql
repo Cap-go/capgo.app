@@ -862,6 +862,101 @@ GRANT EXECUTE ON FUNCTION public.backfill_missing_storage_lifetimes() TO service
 
 SELECT public.backfill_missing_storage_lifetimes();
 
+-- An upload event can arrive after its bundle was deleted: the upload job was
+-- still reading the size when the deletion job found no lifetime to close.
+-- The version row is locked (FOR SHARE) so a deletion cannot commit in between,
+-- and a positive event for a version already deleted is closed in the same
+-- transaction, so a removed bundle never accrues byte-hours.
+CREATE OR REPLACE FUNCTION public.upsert_version_meta(p_app_id character varying, p_version_id bigint, p_size bigint)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_owner_org uuid;
+  v_existing_count integer;
+  v_deleted boolean;
+  v_added_at timestamp;
+BEGIN
+  IF p_size = 0 THEN
+    RETURN FALSE;
+  END IF;
+
+  SELECT owner_org
+  INTO v_owner_org
+  FROM public.apps
+  WHERE app_id = p_app_id
+  LIMIT 1;
+
+  IF v_owner_org IS NULL THEN
+    RETURN FALSE;
+  END IF;
+
+  SELECT av.deleted
+  INTO v_deleted
+  FROM public.app_versions av
+  WHERE av.app_id = p_app_id
+    AND av.id = p_version_id
+  FOR SHARE;
+
+  IF NOT FOUND THEN
+    RETURN FALSE;
+  END IF;
+
+  IF COALESCE(current_setting('role', true), '') NOT IN ('service_role', 'postgres')
+    AND COALESCE(session_user, current_user) NOT IN ('service_role', 'postgres')
+    AND NOT public.rbac_check_permission_request(
+      public.rbac_perm_app_upload_bundle(),
+      v_owner_org,
+      p_app_id,
+      NULL::bigint
+    )
+  THEN
+    RETURN FALSE;
+  END IF;
+
+  IF p_size > 0 THEN
+    SELECT COUNT(*) INTO v_existing_count
+    FROM public.version_meta
+    WHERE public.version_meta.app_id = p_app_id
+      AND public.version_meta.version_id = p_version_id
+      AND public.version_meta.size > 0;
+  ELSE
+    SELECT COUNT(*) INTO v_existing_count
+    FROM public.version_meta
+    WHERE public.version_meta.app_id = p_app_id
+      AND public.version_meta.version_id = p_version_id
+      AND public.version_meta.size < 0;
+  END IF;
+
+  IF v_existing_count > 0 THEN
+    RETURN FALSE;
+  END IF;
+
+  INSERT INTO public.version_meta (app_id, version_id, size)
+  VALUES (p_app_id, p_version_id, p_size)
+  RETURNING timestamp INTO v_added_at;
+
+  -- A late upload event of a deleted bundle: close its lifetime at once.
+  IF p_size > 0 AND COALESCE(v_deleted, false) THEN
+    INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+    VALUES (v_added_at, p_app_id, p_version_id, -p_size)
+    ON CONFLICT DO NOTHING;
+  END IF;
+
+  RETURN TRUE;
+EXCEPTION
+  WHEN unique_violation THEN
+    RETURN FALSE;
+END;
+$$;
+
+ALTER FUNCTION public.upsert_version_meta(character varying, bigint, bigint) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.upsert_version_meta(character varying, bigint, bigint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.upsert_version_meta(character varying, bigint, bigint) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.upsert_version_meta(character varying, bigint, bigint) TO service_role;
+
 -- ---------------------------------------------------------------------------
 -- 3. Org billing metrics read storage from byte-hours
 -- ---------------------------------------------------------------------------
