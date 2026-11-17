@@ -575,6 +575,18 @@ export async function syncSimulatorSessionFromHost(
   if (!host)
     return 'skipped'
   const working: SimulatorRow = { ...row }
+  if (host.lastActivityAt) {
+    const updated = await queryWrite<{ last_activity_at: string }>(c, `
+      UPDATE public.simulator_sessions
+      SET last_activity_at = $2::timestamptz,
+          updated_at = now()
+      WHERE id = $1::uuid
+        AND status = 'in-progress'
+        AND (last_activity_at IS NULL OR last_activity_at < $2::timestamptz)
+      RETURNING last_activity_at
+    `, [row.id, host.lastActivityAt])
+    working.last_activity_at = updated[0]?.last_activity_at ?? host.lastActivityAt
+  }
   if (hostEmulatorSessionTerminal(host.status)) {
     const stoppedAt = host.finishedAt ?? new Date().toISOString()
     working.device_stopped_at = await rememberDeviceStop(c, row.id, stoppedAt)
@@ -583,16 +595,6 @@ export async function syncSimulatorSessionFromHost(
   }
   if (!host.lastActivityAt)
     return 'skipped'
-  const updated = await queryWrite<{ last_activity_at: string }>(c, `
-    UPDATE public.simulator_sessions
-    SET last_activity_at = $2::timestamptz,
-        updated_at = now()
-    WHERE id = $1::uuid
-      AND status = 'in-progress'
-      AND (last_activity_at IS NULL OR last_activity_at < $2::timestamptz)
-    RETURNING last_activity_at
-  `, [row.id, host.lastActivityAt])
-  working.last_activity_at = updated[0]?.last_activity_at ?? host.lastActivityAt
   if (simulatorSessionPastExpiry(working)) {
     await finalizeExpiredSimulatorSession(c, { orgId: context.orgId, userId: context.userId, appId: row.app_id, row: working })
     return 'finalized'

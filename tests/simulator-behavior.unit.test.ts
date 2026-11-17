@@ -222,6 +222,53 @@ describe('simulator idle behavior', () => {
     expect(pgState.queries.some(query => query.includes('SET updated_at = now()'))).toBe(true)
   })
 
+  it('refreshes lastActivityAt before settling a host-stopped session', async () => {
+    const hostFinishedAt = '2026-11-17T10:05:00.000Z'
+    const hostLastActivityAt = '2026-11-17T10:04:00.000Z'
+    const staleRow = {
+      ...liveRow,
+      started_at: '2026-11-17T09:30:00.000Z',
+      last_activity_at: '2026-11-17T09:55:00.000Z',
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      data: {
+        id: 'emu-1',
+        url: 'https://host.test/s/emu-1/',
+        status: 'stopped',
+        finishedAt: hostFinishedAt,
+        lastActivityAt: hostLastActivityAt,
+      },
+    }), { status: 200 })))
+    const { syncSimulatorSessionFromHost, simulatorBillingEndInstant } = await import('../supabase/functions/_backend/public/build/simulator.ts')
+    const result = await syncSimulatorSessionFromHost(context, staleRow, { orgId, userId: staleRow.requested_by })
+    expect(result).toBe('finalized')
+    const refreshIdx = pgState.queries.findIndex(query => query.includes('last_activity_at = $2'))
+    const stopIdx = pgState.queries.findIndex(query => query.includes('device_stopped_at = COALESCE'))
+    expect(refreshIdx).toBeGreaterThanOrEqual(0)
+    expect(stopIdx).toBeGreaterThan(refreshIdx)
+    const billEnd = simulatorBillingEndInstant(
+      staleRow.started_at,
+      hostLastActivityAt,
+      Date.parse(hostFinishedAt),
+    )
+    expect(recordBuildTimeMock).toHaveBeenCalledWith(
+      expect.anything(),
+      orgId,
+      staleRow.requested_by,
+      staleRow.id,
+      'ios',
+      expect.any(Number),
+      billEnd,
+      staleRow.app_id,
+    )
+    const staleBillEnd = simulatorBillingEndInstant(
+      staleRow.started_at,
+      staleRow.last_activity_at,
+      Date.parse(hostFinishedAt),
+    )
+    expect(billEnd).toBeGreaterThan(staleBillEnd)
+  })
+
   it('settles a host-stopped session using the host finishedAt', async () => {
     const hostFinishedAt = '2026-11-17T10:05:00.000Z'
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
