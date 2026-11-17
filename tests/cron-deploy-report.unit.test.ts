@@ -208,6 +208,26 @@ describe('org-batched weekly/monthly reports', () => {
   const orgB = '00000000-0000-4000-8000-00000000000b'
   const batch = (type: string, appIds: unknown) => run({ type, appIds, orgId: orgA, appId: undefined })
 
+  it('uses the producer window anchor when the message is consumed on a later day', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-02-02T00:05:00Z'))
+    try {
+      mocks.queryJson.mockResolvedValue([])
+      expect((await run({ type: 'weekly_install_stats', appIds: ['app.a1'], orgId: orgA, appId: undefined, windowAnchor: '2026-01-31T23:59:00+00:00' })).status).toBe(200)
+      expect(mocks.queryJson).toHaveBeenLastCalledWith(expect.anything(), WEEKLY_REPORT_BATCH_SQL, [['app.a1'], '2026-01-24', '2026-01-31'])
+      expect((await run({ type: 'monthly_create_stats', appIds: ['app.a1'], orgId: orgA, appId: undefined, windowAnchor: '2026-01-31T23:59:00+00:00' })).status).toBe(200)
+      expect(mocks.queryJson).toHaveBeenLastCalledWith(expect.anything(), expect.any(String), [['app.a1'], '2025-12-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects an invalid window anchor', async () => {
+    expect((await run({ type: 'weekly_install_stats', appIds: ['app.a1'], orgId: orgA, appId: undefined, windowAnchor: 'not-a-date' })).status).toBe(500)
+    expect(mocks.queryJson).not.toHaveBeenCalled()
+  })
+
   it('resolves recipients once per org and emails only apps with installs or failures', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-01-03T12:30:00Z'))

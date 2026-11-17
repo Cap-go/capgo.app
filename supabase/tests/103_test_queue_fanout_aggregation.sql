@@ -5,7 +5,7 @@ BEGIN;
 
 SELECT set_config('request.jwt.claim.role', 'service_role', true);
 
-SELECT plan(19);
+SELECT plan(20);
 
 -- Seed messages (and anything committed earlier) are not part of this test.
 SELECT public.process_channel_device_counts_queue(100000);
@@ -90,10 +90,39 @@ SELECT is(
     'multi-row delete queues one negative message'
 );
 
+-- Record every apps row update so the test can check the consumer writes
+-- each app once per batch, not once per message.
+CREATE TEMP TABLE fanout_app_updates (app_id text NOT NULL);
+
+CREATE FUNCTION tests.fanout_record_app_update() RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO fanout_app_updates (app_id) VALUES (NEW.app_id);
+  RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER fanout_record_app_update
+AFTER UPDATE ON public.apps
+FOR EACH ROW EXECUTE FUNCTION tests.fanout_record_app_update();
+
 SELECT is(
     public.process_channel_device_counts_queue(1000),
     2::bigint,
     'consumer reports the messages it applied'
+);
+
+DROP TRIGGER fanout_record_app_update ON public.apps;
+
+SELECT is(
+    (
+        SELECT count(*)
+        FROM fanout_app_updates
+        WHERE app_id = (SELECT app_id FROM fanout_apps WHERE name = 'q2')
+    ),
+    1::bigint,
+    'consumer updates the app row once for both messages'
 );
 
 SELECT is(

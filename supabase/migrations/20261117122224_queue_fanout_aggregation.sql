@@ -247,6 +247,7 @@ BEGIN
         'email', org_apps.management_email,
         'orgId', org_apps.org_id,
         'appIds', org_apps.app_ids,
+        'windowAnchor', now(),
         'type', 'weekly_install_stats'
       )
     )
@@ -303,6 +304,7 @@ BEGIN
         'email', org_apps.management_email,
         'orgId', org_apps.org_id,
         'appIds', org_apps.app_ids,
+        'windowAnchor', now(),
         'type', 'monthly_create_stats'
       )
     )

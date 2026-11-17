@@ -69,10 +69,12 @@ app.post('/', middlewareAPISecret, async (c) => {
     totalFails,
     failPercentage,
     reportDate,
+    windowAnchor,
   } = await parseBody<{
     email: string
     appId?: string
     appIds?: unknown
+    windowAnchor?: unknown
     orgId?: string
     type: string
     deployId?: number
@@ -119,9 +121,12 @@ app.post('/', middlewareAPISecret, async (c) => {
     if (!isStringArray(appIds) || appIds.length === 0) {
       throw simpleError('invalid_appIds', 'Invalid appIds', { email, type })
     }
+    // Use the producer's clock so the report window matches the one that
+    // selected these apps, even when the message is consumed on a later day.
+    const anchor = parseWindowAnchor(windowAnchor)
     return type === 'weekly_install_stats'
-      ? await handleWeeklyInstallStatsBatch(c, appIds)
-      : await handleMonthlyCreateStatsBatch(c, appIds)
+      ? await handleWeeklyInstallStatsBatch(c, appIds, anchor)
+      : await handleMonthlyCreateStatsBatch(c, appIds, anchor)
   }
 
   // All other types require appId
@@ -255,6 +260,15 @@ async function sendMonthlyCreateStats(c: Context, pg: PgClient, appId: string) {
   return c.json(BRES)
 }
 
+export function parseWindowAnchor(value: unknown): Date {
+  if (value === undefined || value === null)
+    return new Date()
+  const anchor = typeof value === 'string' ? new Date(value) : null
+  if (!anchor || Number.isNaN(anchor.getTime()))
+    throw simpleError('invalid_windowAnchor', 'Invalid windowAnchor', { windowAnchor: value })
+  return anchor
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(item => typeof item === 'string' && item.length > 0)
 }
@@ -276,8 +290,8 @@ async function sendOrgReports(c: Context, eventName: string, preferenceKey: 'wee
     deliveries.get(orgId)?.send(metadata)
 }
 
-async function handleWeeklyInstallStatsBatch(c: Context, appIds: string[]) {
-  const range = getWeeklyReportRange()
+async function handleWeeklyInstallStatsBatch(c: Context, appIds: string[], anchor: Date) {
+  const range = getWeeklyReportRange(anchor)
   const pg = await getPgClient(c)
   let rows: WeeklyInstallStatsBatchRow[]
   try {
@@ -300,8 +314,8 @@ async function handleWeeklyInstallStatsBatch(c: Context, appIds: string[]) {
   return c.json(BRES)
 }
 
-async function handleMonthlyCreateStatsBatch(c: Context, appIds: string[]) {
-  const { startIso, endExclusiveIso, monthName } = getPreviousMonthUtcRange()
+async function handleMonthlyCreateStatsBatch(c: Context, appIds: string[], anchor: Date) {
+  const { startIso, endExclusiveIso, monthName } = getPreviousMonthUtcRange(anchor)
   const pg = await getPgClient(c)
   let rows: MonthlyCreateStatsBatchRow[]
   try {
