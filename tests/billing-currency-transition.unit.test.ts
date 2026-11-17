@@ -129,7 +129,12 @@ it('recreates scoped discounts and automatically removes them at their original 
   const end = 1896134400
   sub.discounts = [{ id: 'di_scoped', subscription: sub.id, end, source: { coupon: { id: 'coupon_original', duration: 'repeating', percent_off: 25, name: 'Existing offer' } } }]
   sub.items.data[0].discounts = [{ id: 'di_item', subscription_item: 'si_old', end: null, source: { coupon: { id: 'coupon_item', duration: 'forever', percent_off: 5 } } }]
-  stripe.coupons.retrieve.mockRejectedValue({ code: 'resource_missing' })
+  stripe.coupons.retrieve.mockImplementation(async (id) => {
+    const coupon = [sub.discounts[0].source.coupon, sub.items.data[0].discounts[0].source.coupon].find(coupon => coupon.id === id)
+    if (!coupon)
+      throw Object.assign(new Error('No such coupon'), { code: 'resource_missing' })
+    return coupon
+  })
   stripe.coupons.create.mockImplementation(async params => params)
   await previewCurrencyTransition({} as any, ctx, sub, 'usd')
   expect(stripe.invoices.createPreview).toHaveBeenCalledWith(expect.objectContaining({
@@ -164,7 +169,11 @@ it('does not create again after a schedule response was lost before its subscrip
 
 it('keeps the original expiry when a customer changes currency again', async () => {
   sub.discounts = [{ id: 'di_second', subscription: sub.id, end: null, source: { coupon: { id: 'currency_di_first_usd', duration: 'forever', percent_off: 25, metadata: { capgo_discount_end: '1896134400' } } } }]
-  stripe.coupons.retrieve.mockRejectedValue({ code: 'resource_missing' })
+  stripe.coupons.retrieve.mockImplementation(async (id) => {
+    if (id !== sub.discounts[0].source.coupon.id)
+      throw Object.assign(new Error('No such coupon'), { code: 'resource_missing' })
+    return sub.discounts[0].source.coupon
+  })
   stripe.coupons.create.mockImplementation(async params => params)
   await completeCurrencyTransition({} as any, ctx, sub)
   expect(stripe.subscriptionSchedules.create.mock.calls[0][0].phases[0].end_date).toBe(1896134400)

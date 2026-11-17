@@ -3,6 +3,42 @@ import { expect, it, vi } from 'vitest'
 import { currencyScheduleCancelAt, replacementDiscounts, updateCurrencyDiscountSchedule } from '../supabase/functions/_backend/utils/billing_currency_discounts'
 
 it.each([
+  { kind: 'percentage', scope: 'subscription' },
+  { kind: 'percentage', scope: 'item' },
+  { kind: 'fixed', scope: 'subscription' },
+  { kind: 'fixed', scope: 'item' },
+])('loads omitted product restrictions before copying an expanded $kind $scope coupon', async ({ kind, scope }) => {
+  const source = {
+    id: 'coupon_plan_only', duration: 'forever',
+    percent_off: kind === 'percentage' ? 25 : null,
+    amount_off: kind === 'fixed' ? 1000 : null, currency: kind === 'fixed' ? 'usd' : null,
+    // The subscription response includes amounts but not product restrictions.
+    currency_options: kind === 'fixed' ? { eur: { amount_off: 900 } } : undefined,
+  }
+  const stripe = { coupons: {
+    retrieve: vi.fn(async (id: string, params: Stripe.CouponRetrieveParams = {}) => {
+      if (id !== source.id)
+        throw Object.assign(new Error('No such coupon'), { code: 'resource_missing' })
+      return { ...source, ...(params.expand?.includes('applies_to') ? { applies_to: { products: ['prod_plan'] } } : {}) }
+    }),
+    create: vi.fn(async (params: Stripe.CouponCreateParams) => params),
+  } }
+  const discount = {
+    id: 'di_plan_only', end: null, source: { coupon: source },
+    ...(scope === 'subscription' ? { subscription: 'sub_example' } : { subscription_item: 'si_example' }),
+  } as Stripe.Discount
+  await replacementDiscounts(stripe as any, [discount], 'eur', 1893456000, false)
+  const params = stripe.coupons.create.mock.calls[0][0]
+  expect(params.applies_to).toEqual({ products: ['prod_plan'] })
+  expect(params.applies_to?.products).not.toContain('prod_extra_mau')
+  expect(stripe.coupons.retrieve).toHaveBeenCalledWith(source.id, { expand: ['currency_options', 'applies_to'] }, expect.anything())
+  if (kind === 'percentage')
+    expect(params.percent_off).toBe(25)
+  else
+    expect(params).toMatchObject({ amount_off: 1000, currency: 'usd', currency_options: { eur: { amount_off: 900 } } })
+})
+
+it.each([
   { scope: 'subscription', finite: false, sourceForm: 'expanded' },
   { scope: 'subscription', finite: true, sourceForm: 'id' },
   { scope: 'item', finite: false, sourceForm: 'unexpanded' },
@@ -63,6 +99,21 @@ it.each([
   expect(stripe.coupons.create).toHaveBeenCalledTimes(2)
   await expect(replacementDiscounts(stripe as any, [nextDiscount], 'jpy', startsAt + 86400, false)).rejects.toMatchObject({ cause: { error: 'billing_discount_currency' } })
   expect(stripe.coupons.create).toHaveBeenCalledTimes(2)
+})
+
+it('does not create an unrestricted coupon when loading its original terms fails', async () => {
+  const stripe = { coupons: {
+    retrieve: vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('No prepared coupon'), { code: 'resource_missing' }))
+      .mockRejectedValueOnce(new Error('Original coupon unavailable')),
+    create: vi.fn(),
+  } }
+  const discount = {
+    id: 'di_plan_only', end: null, subscription: 'sub_example',
+    source: { coupon: { id: 'coupon_plan_only', percent_off: 25, duration: 'forever' } },
+  } as Stripe.Discount
+  await expect(replacementDiscounts(stripe as any, [discount], 'eur', 1893456000, false)).rejects.toThrow('Original coupon unavailable')
+  expect(stripe.coupons.create).not.toHaveBeenCalled()
 })
 
 it.each([true, false])('preserves expiry and billing anchor when cancel is %s on a replacement schedule', async (cancel) => {

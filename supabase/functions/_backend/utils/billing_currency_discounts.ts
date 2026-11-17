@@ -40,8 +40,9 @@ export async function replacementDiscounts(stripe: Stripe, discounts: Array<stri
         throw error
     }
     if (!copied) {
-      // Expanded discount objects can still omit a coupon's currency options.
-      if (!coupon.percent_off && !coupon.currency_options && typeof source !== 'string')
+      // Even expanded coupons omit product restrictions unless requested. Reload
+      // all economic terms before cloning a percentage or fixed-amount offer.
+      if (typeof source !== 'string')
         coupon = await stripe.coupons.retrieve(coupon.id, { expand: ['currency_options', 'applies_to'] }, billingRequestOptions)
       const amount = coupon.currency === currency ? coupon.amount_off : coupon.currency_options?.[currency]?.amount_off
       if (!coupon.percent_off && !amount)
