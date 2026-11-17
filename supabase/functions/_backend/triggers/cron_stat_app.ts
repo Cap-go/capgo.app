@@ -466,6 +466,40 @@ async function finalizePreviousCycle(
   })
 }
 
+/**
+ * After a transfer, the former owner's refreshes stop: records its hours from its last refresh up
+ * to the transfer, in the former owner's billing cycle that contains it. Runs from the new owner's
+ * refreshes and from the deletion finalizer (an app deleted before its first refresh there).
+ */
+async function finalizeFormerOwner(
+  c: Context,
+  pg: PgClient,
+  events: VersionMetaStorageRow[],
+  options: { appId: string, ownerOrg: string, ownership: StorageOwnership, calculationEndMs: number, writtenAt: string },
+) {
+  const { transferredAt, transferredFrom, formerOwnedSince } = options.ownership
+  if (!transferredAt || !transferredFrom || transferredFrom === options.ownerOrg)
+    return
+  const transferredAtMs = parseTimestampMs(transferredAt)
+  if (transferredAtMs > options.calculationEndMs || options.calculationEndMs - transferredAtMs >= STORAGE_FINALIZE_WINDOW_MS)
+    return
+  const formerCycle = (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_former_owner_cycle', async () => ({
+    data: await readCycleBefore(pg, transferredFrom, transferredAt),
+    error: null,
+  }))).data
+  if (!formerCycle?.cycle_start || !formerCycle.cycle_end)
+    return
+  await replaceCycleStorageHourly(c, pg, events, {
+    appId: options.appId,
+    ownerOrg: transferredFrom,
+    cycleStart: formerCycle.cycle_start,
+    cycleEnd: formerCycle.cycle_end,
+    currentHour: transferredAt,
+    accrualStart: formerOwnedSince,
+    writtenAt: options.writtenAt,
+  })
+}
+
 async function refreshStorageHourly(
   c: Context,
   pg: PgClient,
@@ -495,11 +529,6 @@ async function refreshStorageHourly(
     writtenAt,
   })
 
-  const readCycle = async (orgId: string, before: string) => (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_storage_cycle', async () => ({
-    data: await readCycleBefore(pg, orgId, before),
-    error: null,
-  }))).data
-
   await finalizePreviousCycle(c, pg, events, {
     appId,
     ownerOrg,
@@ -509,26 +538,7 @@ async function refreshStorageHourly(
     writtenAt,
   })
 
-  // After a transfer, the former owner's refreshes stop: record its hours from its last refresh
-  // up to the transfer, in the former owner's billing cycle that contains it.
-  const { transferredAt, transferredFrom } = ownership
-  if (transferredAt && transferredFrom && transferredFrom !== ownerOrg) {
-    const transferredAtMs = parseTimestampMs(transferredAt)
-    if (transferredAtMs <= calculationEndMs && calculationEndMs - transferredAtMs < STORAGE_FINALIZE_WINDOW_MS) {
-      const formerCycle = await readCycle(transferredFrom, transferredAt)
-      if (formerCycle?.cycle_start && formerCycle.cycle_end) {
-        await replaceCycleStorageHourly(c, pg, events, {
-          appId,
-          ownerOrg: transferredFrom,
-          cycleStart: formerCycle.cycle_start,
-          cycleEnd: formerCycle.cycle_end,
-          currentHour: transferredAt,
-          accrualStart: ownership.formerOwnedSince,
-          writtenAt,
-        })
-      }
-    }
-  }
+  await finalizeFormerOwner(c, pg, events, { appId, ownerOrg, ownership, calculationEndMs, writtenAt })
 
   return calculation
 }
@@ -540,17 +550,41 @@ interface DeletedAppRecord {
   transfer_history?: unknown[] | null
 }
 
-/** When the app's last owner got it: its creation or its last transfer to that org. */
-export function deletedAppOwnedSince(record: DeletedAppRecord): string | null {
-  const times: number[] = []
-  if (record.created_at)
-    times.push(parseTimestampMs(record.created_at))
+interface TransferEntry {
+  transferred_at?: string
+  transferred_from?: string
+  transferred_to?: string
+}
+
+function latestTransferTo(record: DeletedAppRecord, orgId: string | null | undefined, beforeMs = Number.POSITIVE_INFINITY) {
+  let latest: { at: number, from: string | null } | null = null
   for (const entry of record.transfer_history ?? []) {
-    const transfer = entry as { transferred_at?: string, transferred_to?: string } | null
-    if (transfer?.transferred_at && transfer.transferred_to === record.owner_org)
-      times.push(parseTimestampMs(transfer.transferred_at))
+    const transfer = entry as TransferEntry | null
+    if (!transfer?.transferred_at || transfer.transferred_to !== orgId)
+      continue
+    const at = parseTimestampMs(transfer.transferred_at)
+    if (at < beforeMs && (!latest || at > latest.at))
+      latest = { at, from: transfer.transferred_from ?? null }
   }
+  return latest
+}
+
+function maxIso(...values: Array<number | null | undefined>): string | null {
+  const times = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
   return times.length > 0 ? new Date(Math.max(...times)).toISOString() : null
+}
+
+/** Who owned the deleted app and since when, from the record's creation and transfer history. */
+export function deletedAppOwnership(record: DeletedAppRecord): StorageOwnership {
+  const createdMs = record.created_at ? parseTimestampMs(record.created_at) : null
+  const lastTransfer = latestTransferTo(record, record.owner_org)
+  const formerTransfer = lastTransfer?.from ? latestTransferTo(record, lastTransfer.from, lastTransfer.at) : null
+  return {
+    ownedSince: maxIso(createdMs, lastTransfer?.at),
+    transferredAt: lastTransfer ? new Date(lastTransfer.at).toISOString() : null,
+    transferredFrom: lastTransfer?.from ?? null,
+    formerOwnedSince: lastTransfer ? maxIso(createdMs, formerTransfer?.at) : null,
+  }
 }
 
 /**
@@ -574,23 +608,33 @@ async function readAppDeletedAt(pg: PgClient, appId: string, fallback: string): 
  * Records a deleted app's storage hours from its last refresh up to the deletion, in its owner's
  * billing cycle: cron_stat_app skips apps that no longer exist, so that interval would be lost.
  */
-export async function finalizeDeletedAppStorageHourly(c: Context, pg: PgClient, record: DeletedAppRecord, processedAt: string) {
+export async function finalizeDeletedAppStorageHourly(
+  c: Context,
+  pg: PgClient,
+  record: DeletedAppRecord,
+  processedAt: string,
+  occurredAt?: string | null,
+) {
   if (!record.owner_org)
     return null
   const writtenAt = new Date().toISOString()
-  const deletedAt = await readAppDeletedAt(pg, record.app_id, processedAt)
-  const events = await readVersionMetaStorageRows(pg, record.app_id, processedAt)
+  // The trigger event's time is the deletion. Older messages have none: fall back to the latest
+  // lifetime closed by close_app_storage_lifetimes.
+  const deletedAt = occurredAt ?? await readAppDeletedAt(pg, record.app_id, processedAt)
+  const deletedAtMs = parseTimestampMs(deletedAt)
+  // Only events up to the deletion: a recreated app ID's events belong to the new incarnation.
+  const events = await readVersionMetaStorageRows(pg, record.app_id, new Date(deletedAtMs + 1).toISOString())
   const cycle = await readCycleBefore(pg, record.owner_org, deletedAt)
   if (!cycle?.cycle_start || !cycle.cycle_end)
     return null
-  const accrualStart = deletedAppOwnedSince(record)
+  const ownership = deletedAppOwnership(record)
   const calculation = await replaceCycleStorageHourly(c, pg, events, {
     appId: record.app_id,
     ownerOrg: record.owner_org,
     cycleStart: cycle.cycle_start,
     cycleEnd: cycle.cycle_end,
     currentHour: deletedAt,
-    accrualStart,
+    accrualStart: ownership.ownedSince,
     writtenAt,
   })
   // Deleted soon after a rollover: the previous cycle's last hours are only recorded here.
@@ -598,10 +642,12 @@ export async function finalizeDeletedAppStorageHourly(c: Context, pg: PgClient, 
     appId: record.app_id,
     ownerOrg: record.owner_org,
     cycleStart: cycle.cycle_start,
-    calculationEndMs: parseTimestampMs(deletedAt),
-    accrualStart,
+    calculationEndMs: deletedAtMs,
+    accrualStart: ownership.ownedSince,
     writtenAt,
   })
+  // Deleted soon after a transfer: the former owner's last hours are only recorded here.
+  await finalizeFormerOwner(c, pg, events, { appId: record.app_id, ownerOrg: record.owner_org, ownership, calculationEndMs: deletedAtMs, writtenAt })
   return calculation
 }
 

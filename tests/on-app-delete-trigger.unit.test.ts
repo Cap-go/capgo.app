@@ -38,6 +38,8 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
     triggerValidator: () => async (c: any, next: () => Promise<void>) => {
       const body = await c.req.json()
       c.set('webhookBody', body.record)
+      if (body.occurred_at)
+        c.set('webhookOccurredAt', body.occurred_at)
       await next()
     },
   }
@@ -214,6 +216,63 @@ describe('on_app_delete trigger', () => {
         ['2026-02-01', [{ cycle_start: '2026-02-01', date: '2026-02-01', storage_byte_hours: 600 }]],
         // The previous cycle up to its end: all of January 31st.
         ['2026-01-01', [{ cycle_start: '2026-01-01', date: '2026-01-31', storage_byte_hours: 2400 }]],
+      ])
+    }
+    finally {
+      pgQuery.mockReset()
+      pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+      vi.useRealTimers()
+    }
+  })
+
+  it('finalizes up to the event time and the former owner after a transfer, ignoring a recreated app', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-12T00:00:00.000Z'))
+    try {
+      pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('max(timestamp) AS deleted_at'))
+          throw new Error('the event time must be used, not the closing events')
+        if (sql.includes('FROM public.version_meta')) {
+          const until = Date.parse(String(params?.[1]))
+          const all = [
+            { timestamp: '2026-01-10T00:00:00.000Z', version_id: 1, size: 100 },
+            { timestamp: '2026-01-10T12:00:00.000Z', version_id: 1, size: -100 },
+            // A recreated app ID's bundle, after the deletion.
+            { timestamp: '2026-01-11T00:00:00.000Z', version_id: 2, size: 999 },
+          ]
+          const rows = all.filter(row => Date.parse(row.timestamp) < until)
+          return { rows, rowCount: rows.length } as any
+        }
+        if (sql.includes('billing_cycle_for_anchor'))
+          return { rows: [{ cycle_start: '2026-01-01T00:00:00.000Z', cycle_end: '2026-02-01T00:00:00.000Z' }], rowCount: 1 } as any
+        return { rows: [], rowCount: 0 }
+      })
+
+      const response = await app.request('http://local/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'DELETE',
+          table: 'apps',
+          occurred_at: '2026-01-10T12:00:00.000Z',
+          record: {
+            app_id: 'com.test.delete',
+            owner_org: 'org-new',
+            created_at: '2026-01-01T00:00:00.000Z',
+            transfer_history: [{ transferred_at: '2026-01-10T06:00:00.000Z', transferred_from: 'org-old', transferred_to: 'org-new' }],
+          },
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const replaced = pgQuery.mock.calls
+        .filter(([sql]) => sql.includes('replace_app_storage_hourly'))
+        .map(([, params]) => [params?.[1], params?.[5], JSON.parse(params?.[7] as string)])
+      expect(replaced).toEqual([
+        // The new owner, from the transfer to the deletion: 6 hours.
+        ['org-new', '2026-01-10T06:00:00.000Z', [{ cycle_start: '2026-01-01', date: '2026-01-10', storage_byte_hours: 600 }]],
+        // The former owner, up to the transfer: 6 hours.
+        ['org-old', '2026-01-01T00:00:00.000Z', [{ cycle_start: '2026-01-01', date: '2026-01-10', storage_byte_hours: 600 }]],
       ])
     }
     finally {

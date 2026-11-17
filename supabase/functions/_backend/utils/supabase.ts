@@ -293,6 +293,8 @@ export interface DeletePayload<T extends keyof Database['public']['Tables']> {
   schema: string
   record: null
   old_record: Database['public']['Tables'][T]['Row']
+  /** When the row was deleted, set by trigger_http_queue_post_to_function. */
+  occurred_at?: string
 }
 
 export function supabaseClient(c: Context, jwt: string) {

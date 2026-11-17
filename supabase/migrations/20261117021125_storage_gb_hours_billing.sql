@@ -355,6 +355,75 @@ AFTER DELETE ON public.apps
 FOR EACH ROW EXECUTE FUNCTION public.close_app_storage_lifetimes();
 
 -- ---------------------------------------------------------------------------
+-- 2f. Trigger messages carry when the change happened
+-- ---------------------------------------------------------------------------
+-- on_app_delete finalizes a deleted app's storage hours up to the deletion.
+-- The queue can run it much later, after the app ID was recreated, so the
+-- deletion time must come from the event itself. Additive payload field:
+-- handlers that do not read it are unchanged.
+CREATE OR REPLACE FUNCTION "public"."trigger_http_queue_post_to_function"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  payload jsonb;
+  record_payload jsonb;
+  old_record_payload jsonb;
+  function_type text;
+BEGIN
+  function_type := CASE
+    WHEN NULLIF(TG_ARGV[1], '') IS NULL THEN 'cloudflare'
+    WHEN pg_catalog.lower(TG_ARGV[1]) = 'supabase' THEN 'cloudflare'
+    ELSE TG_ARGV[1]
+  END;
+
+  record_payload := pg_catalog.to_jsonb(NEW);
+  old_record_payload := pg_catalog.to_jsonb(OLD);
+
+  -- app_versions fat columns can be multi-MB. Never enqueue them; handlers reload when needed.
+  IF TG_TABLE_NAME = 'app_versions' THEN
+    IF record_payload IS NOT NULL THEN
+      record_payload := record_payload - 'manifest' - 'native_packages';
+    END IF;
+    IF old_record_payload IS NOT NULL THEN
+      old_record_payload := old_record_payload - 'manifest' - 'native_packages';
+    END IF;
+
+    -- Skip queue fan-out only for dual-storage reclaim: non-null manifest -> NULL.
+    -- native_packages is stripped from payloads, so compare it explicitly.
+    IF TG_OP = 'UPDATE'
+      AND OLD.manifest IS NOT NULL
+      AND NEW.manifest IS NULL
+      AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+      AND (record_payload - 'updated_at') IS NOT DISTINCT FROM (old_record_payload - 'updated_at')
+    THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+
+  payload := pg_catalog.jsonb_build_object(
+    'function_name', TG_ARGV[0],
+    'function_type', function_type,
+    'payload', pg_catalog.jsonb_build_object(
+      'old_record', old_record_payload,
+      'record', record_payload,
+      'type', TG_OP,
+      'table', TG_TABLE_NAME,
+      'schema', TG_TABLE_SCHEMA,
+      'occurred_at', pg_catalog.clock_timestamp()
+    )
+  );
+
+  IF TG_ARGV[0] IS NOT NULL THEN
+    PERFORM "pgmq"."send"(TG_ARGV[0], payload);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION "public"."trigger_http_queue_post_to_function"() OWNER TO "postgres";
+
+-- ---------------------------------------------------------------------------
 -- 3. Org billing metrics read storage from byte-hours
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.calculate_org_metrics_cache_entry(

@@ -86,11 +86,11 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
   try {
     pg = await getPgClient(c)
     // Storage is billed in GB-hours: record the hours since the last stats refresh up to the
-    // deletion (the time close_app_storage_lifetimes closed the bundles, not this handler's clock).
+    // deletion (the trigger event's time, not this handler's clock).
     // cron_stat_app no longer refreshes the app once it is gone, so a failure fails the job and the
     // queue retries it. It runs first and is idempotent, so a retry never duplicates deleted_apps.
     try {
-      await finalizeDeletedAppStorageHourly(c, pg, record, new Date().toISOString())
+      await finalizeDeletedAppStorageHourly(c, pg, record, new Date().toISOString(), c.get('webhookOccurredAt'))
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'error finalizing deleted app storage hours', error, app_id: record.app_id })
