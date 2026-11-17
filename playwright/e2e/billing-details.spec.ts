@@ -109,7 +109,7 @@ test.describe('Billing details, tax IDs and applied discounts', () => {
     expectScopedCall(calls[0], getOrgId())
     expect(calls[0].body.taxId).toEqual({ type: 'eu_vat', value: 'DE123456789' })
     await dialog.getByRole('button', { name: 'Remove tax ID', exact: true }).click()
-    await expect(dialog).toContainText('Remove this tax ID from future invoices?')
+    await expect(dialog).toContainText('Remove this tax ID from your billing profile?')
     expect(calls).toHaveLength(1)
     await dialog.getByRole('button', { name: 'Remove tax ID', exact: true }).click()
     await expect(dialog).not.toContainText('DE123456789')

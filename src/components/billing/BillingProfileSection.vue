@@ -109,6 +109,7 @@ async function addTax() {
     if (!disposed && profile.value) {
       profile.value.taxIds = [...profile.value.taxIds.filter(item => item.id !== taxId.id), taxId]
       taxValue.value = ''
+      emit('detailsSaved')
     }
   }
   catch {
@@ -130,6 +131,7 @@ async function removeTax(id: string) {
     if (!disposed && profile.value) {
       profile.value.taxIds = profile.value.taxIds.filter(item => item.id !== id)
       removing.value = null
+      emit('detailsSaved')
     }
   }
   catch {

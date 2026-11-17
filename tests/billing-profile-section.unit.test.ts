@@ -117,7 +117,7 @@ describe('billing details editor', () => {
     remove().click()
     await settle()
     expect(mocks.remove).not.toHaveBeenCalled()
-    expect(document.querySelector('dialog')?.textContent).toContain('Remove this tax ID from future invoices?')
+    expect(document.querySelector('dialog')?.textContent).toContain('Remove this tax ID from your billing profile?')
     remove().click()
     await settle()
     expect(mocks.remove).toHaveBeenCalledWith('org_example', 'txi_example')

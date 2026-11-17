@@ -101,14 +101,25 @@ export async function getInvoiceDocument(ctx: InAppBillingContext, invoiceId: un
     throw simpleError('unsupported_invoice_issuer', 'This invoice has a different issuer')
   let documentInvoice = invoice
   if (billingDetails === 'current') {
-    // Only the authorized customer's saved name/address can replace the printed details.
-    // Never overwrite the invoice's tax identity, dates, amounts or numbering.
+    // Read current billing identity from the authorized customer, never the request.
+    // Printing a new tax ID must not change the issued tax treatment or amounts.
     const customer = await ctx.stripe.customers.retrieve(ctx.customerId)
     if (customer.deleted)
       throw simpleError('no_customer', 'No customer')
     if (!customer.address?.line1 || !customer.address.country)
       throw simpleError('missing_billing_address', 'Save a billing address before regenerating an invoice')
-    documentInvoice = { ...invoice, customer_name: customer.name ?? invoice.customer_name, customer_address: customer.address }
+    const customerTaxIds: NonNullable<Stripe.Invoice['customer_tax_ids']> = []
+    for await (const taxId of ctx.stripe.customers.listTaxIds(ctx.customerId, { limit: 100 })) {
+      if (customerTaxIds.length >= 100)
+        throw simpleError('too_many_billing_tax_ids', 'Contact support to regenerate this invoice')
+      customerTaxIds.push({ type: taxId.type, value: taxId.value })
+    }
+    documentInvoice = {
+      ...invoice,
+      customer_name: customer.name ?? invoice.customer_name,
+      customer_address: customer.address,
+      customer_tax_ids: customerTaxIds,
+    }
   }
   const lines: Stripe.InvoiceLineItem[] = []
   for await (const line of ctx.stripe.invoices.listLineItems(invoiceId, { limit: 100 })) {

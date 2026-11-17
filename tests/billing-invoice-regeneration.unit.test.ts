@@ -7,10 +7,10 @@ import messages from '../messages/en.json'
 import BillingInvoices from '../src/components/billing/BillingInvoices.vue'
 import BillingProfileSection from '../src/components/billing/BillingProfileSection.vue'
 
-const mocks = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn(), invoice: vi.fn(), download: vi.fn(), error: vi.fn() }))
+const mocks = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn(), addTax: vi.fn(), removeTax: vi.fn(), invoice: vi.fn(), download: vi.fn(), error: vi.fn() }))
 vi.mock('~/services/stripe', () => ({
   getBillingProfile: mocks.load, updateBillingDetails: mocks.save, getInvoiceDocument: mocks.invoice,
-  addBillingTaxId: vi.fn(), removeBillingTaxId: vi.fn(), formatStripeAmount: () => '€14.64',
+  addBillingTaxId: mocks.addTax, removeBillingTaxId: mocks.removeTax, formatStripeAmount: () => '€14.64',
 }))
 vi.mock('~/services/permissions', () => ({ checkPermissions: vi.fn().mockResolvedValue(true) }))
 vi.mock('~/services/date', () => ({ formatLocalDate: (date: string) => date }))
@@ -83,6 +83,49 @@ describe('correcting an invoice address', () => {
     await click('[data-test="billing-download-invoice"]')
     await vi.waitFor(() => expect(mocks.download).toHaveBeenLastCalledWith({ number: invoice.number, customer: [details.address.line1] }, 'org_example'))
     expect(mocks.invoice).toHaveBeenLastCalledWith('org_example', invoice.id, 'issued')
+  })
+  it('replaces a VAT number, then offers regeneration with the saved billing details', async () => {
+    const oldTaxId = { id: 'txi_old', type: 'eu_vat', value: 'IT00000000000', status: 'verified' }
+    const newTaxId = { id: 'txi_new', type: 'eu_vat', value: 'IT00000000001', status: 'pending' }
+    mocks.load.mockResolvedValue({ ...structuredClone(details), taxIds: [oldTaxId] })
+    mocks.addTax.mockResolvedValue(newTaxId)
+    mocks.removeTax.mockResolvedValue(undefined)
+    mocks.invoice.mockResolvedValue({ number: invoice.number, customer: [newTaxId.value] })
+    await mount()
+    await click('[data-test="billing-manage-tax"]')
+    const input = document.querySelector<HTMLInputElement>('input[name="taxValue"]')!
+    input.value = newTaxId.value
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    document.querySelector('[data-test="billing-tax-form"]')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await settle()
+    expect(mocks.addTax).toHaveBeenCalledWith('org_example', { type: 'eu_vat', value: newTaxId.value })
+    expect(checkbox().checked).toBe(true)
+    const removeOld = () => Array.from(document.querySelectorAll<HTMLButtonElement>('dialog li button')).find(button => button.textContent?.trim() === 'Remove tax ID')!
+    removeOld().click()
+    await settle()
+    expect(mocks.removeTax).not.toHaveBeenCalled()
+    removeOld().click()
+    await settle()
+    expect(mocks.removeTax).toHaveBeenCalledWith('org_example', oldTaxId.id)
+    expect(document.querySelector('dialog')?.textContent).not.toContain(oldTaxId.value)
+    Array.from(document.querySelectorAll<HTMLButtonElement>('dialog button')).find(button => button.textContent?.trim() === 'Done')!.click()
+    await settle()
+    await click('[data-test="billing-download-invoice"]')
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledWith({ number: invoice.number, customer: [newTaxId.value] }, 'org_example'))
+    expect(mocks.invoice).toHaveBeenCalledWith('org_example', invoice.id, 'current')
+  })
+  it('keeps the issued-details selection when saving a VAT number fails', async () => {
+    mocks.addTax.mockRejectedValue(new Error('Invalid tax ID'))
+    await mount()
+    await click('[data-test="billing-manage-tax"]')
+    const input = document.querySelector<HTMLInputElement>('input[name="taxValue"]')!
+    input.value = 'EXAMPLE'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    document.querySelector('[data-test="billing-tax-form"]')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await settle()
+    expect(checkbox().checked).toBe(false)
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not add the tax ID')
+    expect(mocks.invoice).not.toHaveBeenCalled()
   })
   it('does not select new details when saving the address fails', async () => {
     mocks.save.mockRejectedValueOnce(new Error('save failed'))

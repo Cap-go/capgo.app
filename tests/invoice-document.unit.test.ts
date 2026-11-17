@@ -10,7 +10,7 @@ function document(overrides: Partial<Stripe.Invoice> = {}) {
 function context(invoice = exampleInvoice, lines = exampleLines) {
   const stripe = {
     invoices: { retrieve: vi.fn().mockResolvedValue(invoice), listLineItems: vi.fn().mockImplementation(async function* () { yield* lines }) },
-    customers: { retrieve: vi.fn().mockResolvedValue({ id: 'cus_example', name: 'Updated Example Company', address: { line1: '456 Example Avenue', line2: null, city: 'Paris', state: null, postal_code: '75001', country: 'FR' } }), update: vi.fn() },
+    customers: { retrieve: vi.fn().mockResolvedValue({ id: 'cus_example', name: 'Updated Example Company', address: { line1: '456 Example Avenue', line2: null, city: 'Paris', state: null, postal_code: '75001', country: 'FR' } }), listTaxIds: vi.fn().mockImplementation(async function* () { yield { type: 'eu_vat', value: 'FR00000000000' } }), update: vi.fn() },
     accounts: { retrieve: vi.fn().mockResolvedValue(exampleAccount) },
     taxIds: { retrieve: vi.fn() },
     taxRates: { retrieve: vi.fn().mockResolvedValue(exampleRate) },
@@ -62,14 +62,17 @@ describe('owned invoice documents', () => {
     expect(stripe.taxRates.retrieve).toHaveBeenCalledWith('txr_example')
     expect(result.lines[0].tax).toBe('22%')
   })
-  it.concurrent('regenerates only the name and address, preserving all issued financial and tax details', async () => {
+  it.concurrent('regenerates the saved billing identity including VAT number without changing issued tax treatment or amounts', async () => {
     const invoice = { ...exampleInvoice, customer_tax_ids: [{ type: 'eu_vat' as const, value: 'IT00000000000' }] }
     const { ctx, stripe } = context(invoice)
     const issued = await getInvoiceDocument(ctx, 'in_example')
     expect(stripe.customers.retrieve).not.toHaveBeenCalled()
+    expect(stripe.customers.listTaxIds).not.toHaveBeenCalled()
     const current = await getInvoiceDocument(ctx, 'in_example', 'current')
     expect(stripe.customers.retrieve).toHaveBeenCalledWith('cus_example')
-    expect(current.customer).toEqual(['Updated Example Company', '456 Example Avenue', '75001 Paris', 'France', 'billing@example.com', 'IT VAT IT00000000000'])
+    expect(current.customer).toEqual(['Updated Example Company', '456 Example Avenue', '75001 Paris', 'France', 'billing@example.com', 'FR VAT FR00000000000'])
+    expect(stripe.customers.listTaxIds).toHaveBeenCalledWith('cus_example', { limit: 100 })
+    expect(invoice.customer_tax_ids).toEqual([{ type: 'eu_vat', value: 'IT00000000000' }])
     expect({ ...current, customer: [] }).toEqual({ ...issued, customer: [] })
     expect(stripe.customers.update).not.toHaveBeenCalled()
     expect(invoice.customer_address).toEqual(exampleInvoice.customer_address)
@@ -79,12 +82,40 @@ describe('owned invoice documents', () => {
     const { ctx, stripe } = context({ ...exampleInvoice, customer: 'cus_other' })
     await expect(getInvoiceDocument(ctx, 'in_example', 'current')).rejects.toThrow()
     expect(stripe.customers.retrieve).not.toHaveBeenCalled()
+    expect(stripe.customers.listTaxIds).not.toHaveBeenCalled()
   })
   it.concurrent.each([{ deleted: true }, { address: null }, { address: { line1: '456 Example Avenue' } }])('rejects unavailable or incomplete current billing addresses', async (customer) => {
     const { ctx, stripe } = context()
     stripe.customers.retrieve.mockResolvedValue(customer)
     await expect(getInvoiceDocument(ctx, 'in_example', 'current')).rejects.toThrow()
     expect(stripe.invoices.listLineItems).not.toHaveBeenCalled()
+  })
+  it.concurrent('reflects removed tax IDs without changing the original invoice or its reverse-charge treatment', async () => {
+    const invoice = { ...exampleInvoice, customer_tax_ids: [{ type: 'eu_vat' as const, value: 'IT00000000000' }], customer_tax_exempt: 'reverse' as const }
+    const { ctx, stripe } = context(invoice)
+    stripe.customers.listTaxIds.mockImplementation(async function* () {})
+    const current = await getInvoiceDocument(ctx, 'in_example', 'current')
+    expect(current.customer).not.toContain('IT VAT IT00000000000')
+    expect(current.notes).toContain('Tax to be paid on reverse charge basis.')
+    expect((await getInvoiceDocument(ctx, 'in_example')).customer).toContain('IT VAT IT00000000000')
+  })
+  it.concurrent('reads every saved tax ID and fails explicitly if the bounded list is exceeded', async () => {
+    const { ctx, stripe } = context()
+    stripe.customers.listTaxIds.mockImplementation(async function* () {
+      yield { type: 'eu_vat', value: 'FR00000000000' }
+      yield { type: 'gb_vat', value: 'GB000000000' }
+    })
+    expect((await getInvoiceDocument(ctx, 'in_example', 'current')).customer).toEqual(expect.arrayContaining(['FR VAT FR00000000000', 'GB VAT GB000000000']))
+    stripe.customers.listTaxIds.mockImplementation(async function* () {
+      for (let i = 0; i < 101; i++)
+        yield { type: 'eu_vat', value: `EXAMPLE${i}` }
+    })
+    await expect(getInvoiceDocument(ctx, 'in_example', 'current')).rejects.toThrow()
+  })
+  it.concurrent('does not fall back to the old VAT number when current tax IDs cannot be read', async () => {
+    const { ctx, stripe } = context()
+    stripe.customers.listTaxIds.mockImplementation(() => { throw new Error('Stripe unavailable') })
+    await expect(getInvoiceDocument(ctx, 'in_example', 'current')).rejects.toThrow('Stripe unavailable')
   })
   it.concurrent('defaults to issued details and rejects unsupported selectors', () => {
     expect(parseInvoiceBillingDetails(undefined)).toBe('issued')

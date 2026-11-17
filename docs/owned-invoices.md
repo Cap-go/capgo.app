@@ -27,8 +27,8 @@ By default, customer identity, address, tax IDs, descriptions, periods, discount
 credits, taxes, totals, and payment status come from the invoice record. Seller
 contact and address come from the issuing Stripe account; seller tax IDs are those
 referenced by the invoice. Changing a billing profile leaves the issued invoice
-record intact. Customers can explicitly regenerate its PDF using the current saved billing name and
-address; see below. Updating the seller's account address can
+record intact. Customers can explicitly regenerate its PDF using the current
+saved billing name, address and tax IDs; see below. Updating the seller's account address can
 change its address on a regenerated PDF, so retain previously issued documents
 when changing legal details. Existing account routing and invoice-history scope
 are unchanged; this does not merge historical invoices between Stripe entities.
@@ -37,25 +37,29 @@ The renderer embeds Inter 4.1 (SIL Open Font License; see `public/invoice/INTER-
 Additional script fonts are not bundled. The PDF rendering regression covers
 accented names, long descriptions, and automatic multi-page layout.
 
-## Correcting an older invoice address
+## Correcting billing details on an older invoice
 
 1. Open Billing, edit the billing details, and save the corrected name and address.
-2. **Use current billing name and address** is selected after a successful save.
+   To replace a VAT/tax number, add the new number in **Manage tax IDs**, then
+   remove the old number.
+2. **Use current billing details** is selected after a successful save or tax ID change.
    It can also be selected later in the Invoices section.
 3. Select **Regenerate PDF** on the invoice. Clear the checkbox to download a PDF
    with the originally issued details instead.
 
 The API accepts `billingDetails: 'issued' | 'current'` (default `issued`). Current
 mode requires both `org.read_invoices` and `org.read_billing`. It checks invoice
-ownership, then reads the authorized customer's saved name and address directly
-from the server-selected Stripe account. It never accepts replacement addresses
+ownership, then reads the authorized customer's saved name, address and tax IDs
+directly from the server-selected Stripe account. It never accepts replacement addresses
 or customer IDs from the download request. A deleted customer or incomplete
 current address fails explicitly instead of silently downloading an old address.
 
-Only the printed customer name and address change. The original invoice number,
-dates, billing email, tax IDs, tax treatment, line items, payments and totals stay
-as issued. This creates a corrected PDF, without issuing a second invoice or
-changing Stripe's finalized record. Tax corrections are a separate billing task.
+Only the printed customer name, address and tax IDs change. Removed tax IDs are
+omitted and newly saved IDs are included. Verification status does not imply a
+new tax exemption: the original invoice number, dates, billing email, tax
+treatment, line items, payments and totals stay as issued. This creates a corrected PDF, without issuing a second invoice or
+changing Stripe's finalized record. Recalculating VAT or issuing a tax refund
+is a separate billing task.
 
 ## Comparison
 
