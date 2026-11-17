@@ -456,8 +456,9 @@ SECURITY DEFINER
 SET search_path TO ''
 AS $$
 BEGIN
-  INSERT INTO public.version_meta (app_id, version_id, size)
-  SELECT added.app_id, added.version_id, -added.size
+  -- clock_timestamp(): the deletion's statement time, not the transaction start.
+  INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+  SELECT GREATEST(added.timestamp, pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())), added.app_id, added.version_id, -added.size
   FROM public.version_meta added
   WHERE added.app_id = OLD.app_id
     AND added.size > 0
@@ -492,8 +493,9 @@ SECURITY DEFINER
 SET search_path TO ''
 AS $$
 BEGIN
-  INSERT INTO public.version_meta (app_id, version_id, size)
-  SELECT added.app_id, added.version_id, -added.size
+  -- clock_timestamp(): the deletion's statement time, not the transaction start.
+  INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+  SELECT GREATEST(added.timestamp, pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())), added.app_id, added.version_id, -added.size
   FROM public.version_meta added
   WHERE added.app_id = OLD.app_id
     AND added.version_id = OLD.id
@@ -532,7 +534,8 @@ AS $$
 BEGIN
   INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
   SELECT
-    GREATEST(added.timestamp, pg_catalog.timezone('UTC', pg_catalog.now())),
+    -- The soft deletion's statement time (now() is the transaction start).
+    GREATEST(added.timestamp, pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())),
     added.app_id, added.version_id, -added.size
   FROM public.version_meta added
   WHERE added.app_id = NEW.app_id
@@ -1017,7 +1020,7 @@ BEGIN
     RETURN FALSE;
   END IF;
 
-  v_event_at := pg_catalog.timezone('UTC', LEAST(COALESCE(p_timestamp, pg_catalog.now()), pg_catalog.now()));
+  v_event_at := pg_catalog.timezone('UTC', LEAST(COALESCE(p_timestamp, pg_catalog.clock_timestamp()), pg_catalog.clock_timestamp()));
 
   IF p_size < 0 THEN
     -- A removal never precedes the bundle's upload event.
@@ -1037,7 +1040,7 @@ BEGIN
   IF p_size > 0 AND COALESCE(v_deleted, false) THEN
     INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
     VALUES (
-      GREATEST(v_added_at, pg_catalog.timezone('UTC', LEAST(COALESCE(v_deleted_at, pg_catalog.now()), pg_catalog.now()))),
+      GREATEST(v_added_at, pg_catalog.timezone('UTC', LEAST(COALESCE(v_deleted_at, pg_catalog.clock_timestamp()), pg_catalog.clock_timestamp()))),
       p_app_id,
       p_version_id,
       -p_size

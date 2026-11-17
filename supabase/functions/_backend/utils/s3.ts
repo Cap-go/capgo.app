@@ -362,6 +362,8 @@ interface SizeKeyDiagnostic {
   finalSize: number
   head: {
     error?: ReturnType<typeof serializeStorageError>
+    /** When the object was written (upload completion), from the same HEAD. */
+    lastModified?: string
     rawSize?: unknown
     size: number
     success: boolean
@@ -376,6 +378,8 @@ export interface StorageSizeDiagnostics {
   candidates: SizeKeyDiagnostic[]
   endpoint: string
   fileId: string
+  /** When the selected object was written (upload completion), if storage returned it. */
+  lastModified?: string | null
   selectedCandidateKey: string | null
   size: number
 }
@@ -483,7 +487,10 @@ async function getSizeForKey(c: Context, client: ReturnType<typeof initS3>, file
       headers: { 'Accept-Encoding': 'identity' },
     })
     size = Number.isFinite(file.size) ? file.size : 0
-    diagnostic.head = { rawSize: file.size, size, success: true }
+    const lastModified = file.lastModified instanceof Date && Number.isFinite(file.lastModified.getTime())
+      ? file.lastModified.toISOString()
+      : undefined
+    diagnostic.head = { lastModified, rawSize: file.size, size, success: true }
     cloudlog({
       requestId: c.get('requestId'),
       message: 'getSize head result',
@@ -547,6 +554,7 @@ async function getSizeDiagnostics(c: Context, fileId: string): Promise<StorageSi
     if (candidate.finalSize > 0) {
       diagnostics.selectedCandidateKey = candidateKey
       diagnostics.size = candidate.finalSize
+      diagnostics.lastModified = candidate.head.lastModified ?? null
       if (candidateKey !== fileId) {
         cloudlog({
           requestId: c.get('requestId'),
@@ -573,6 +581,12 @@ async function getSizeDiagnostics(c: Context, fileId: string): Promise<StorageSi
 async function getSize(c: Context, fileId: string) {
   const diagnostics = await getSizeDiagnostics(c, fileId)
   return diagnostics.size
+}
+
+/** The stored object's size and when it was written (upload completion; null if unknown). */
+async function getSizeAndUploadedAt(c: Context, fileId: string): Promise<{ size: number, uploadedAt: string | null }> {
+  const diagnostics = await getSizeDiagnostics(c, fileId)
+  return { size: diagnostics.size, uploadedAt: diagnostics.lastModified ?? null }
 }
 
 async function getObject(c: Context, fileId: string): Promise<Response | null> {
@@ -840,6 +854,7 @@ export const s3 = {
   listObjectPage,
   listObjectMetadataPage,
   getSize,
+  getSizeAndUploadedAt,
   deleteObject,
   statObject,
   putObject,

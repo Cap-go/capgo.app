@@ -12,7 +12,7 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
   getPath: vi.fn(async () => 'orgs/org-1/apps/com.test.repair/1.0.0.zip'),
-  s3: { getSize: vi.fn(async () => 2048) },
+  s3: { getSizeAndUploadedAt: vi.fn(async () => ({ size: 2048, uploadedAt: '2026-01-02T03:04:05.000Z' })) },
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -61,9 +61,10 @@ describe('cron_clear_versions storage event', () => {
     const response = await repair()
     expect(response.status).toBe(200)
     const event = pgQuery.mock.calls.find(([sql]) => sql.includes('upsert_version_meta'))
-    expect(event?.[1]).toEqual(['com.test.repair', 77, 2048])
-    // Recorded at the bundle's upload (its version creation), not the repair.
-    expect(event?.[0]).toContain('p_timestamp => (SELECT app_versions.created_at FROM public.app_versions WHERE app_versions.id = $2::bigint)')
+    // Recorded when the upload completed (the stored object's Last-Modified), not at the repair
+    // nor at the version creation.
+    expect(event?.[1]).toEqual(['com.test.repair', 77, 2048, '2026-01-02T03:04:05.000Z'])
+    expect(event?.[0]).toContain('p_timestamp => $4::timestamptz')
   })
 
   it('fails the job when the event cannot be recorded', async () => {

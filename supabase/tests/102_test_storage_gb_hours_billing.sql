@@ -748,9 +748,9 @@ SELECT 9100308, live_app, '9.9.2', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097
 SELECT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100308, 300, TIMESTAMPTZ '2999-01-01 00:00:00+00');
 
 SELECT
-    is(
-        (SELECT timestamp FROM public.version_meta WHERE version_id = 9100308 AND size > 0),
-        pg_catalog.timezone('UTC', pg_catalog.now()),
+    ok(
+        (SELECT timestamp FROM public.version_meta WHERE version_id = 9100308 AND size > 0)
+        BETWEEN pg_catalog.timezone('UTC', pg_catalog.now()) AND pg_catalog.timezone('UTC', pg_catalog.clock_timestamp()),
         'a future event time is capped at now'
     );
 
@@ -759,13 +759,16 @@ INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_p
 SELECT 9100309, live_app, '9.9.1', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2' FROM gbh_ctx;
 INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
 SELECT TIMESTAMP '2026-01-02 00:00:00', live_app, 9100309, 400 FROM gbh_ctx;
+SELECT set_config('gbh.before_soft_delete', pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())::text, true);
 UPDATE public.app_versions SET deleted = true WHERE id = 9100309;
+SELECT set_config('gbh.after_soft_delete', pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())::text, true);
+SELECT set_config('gbh.soft_removal', (SELECT timestamp::text FROM public.version_meta WHERE version_id = 9100309 AND size < 0), true);
 
 SELECT
-    is(
-        (SELECT timestamp FROM public.version_meta WHERE version_id = 9100309 AND size < 0),
-        pg_catalog.timezone('UTC', pg_catalog.now()),
-        'a soft deletion closes the bundle lifetime in its transaction'
+    ok(
+        current_setting('gbh.soft_removal')::timestamp
+        BETWEEN current_setting('gbh.before_soft_delete')::timestamp AND current_setting('gbh.after_soft_delete')::timestamp,
+        'a soft deletion closes the bundle lifetime at its statement time, in its transaction'
     );
 
 DELETE FROM public.app_versions WHERE id = 9100309;
@@ -773,7 +776,7 @@ DELETE FROM public.app_versions WHERE id = 9100309;
 SELECT
     is(
         (SELECT array_agg(timestamp) FROM public.version_meta WHERE version_id = 9100309 AND size < 0),
-        ARRAY[pg_catalog.timezone('UTC', pg_catalog.now())],
+        ARRAY[current_setting('gbh.soft_removal')::timestamp],
         'a later hard deletion keeps the soft deletion time'
     );
 
