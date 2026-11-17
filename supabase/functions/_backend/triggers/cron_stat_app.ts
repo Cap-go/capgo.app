@@ -372,6 +372,8 @@ async function replaceCycleStorageHourly(
 
   const deleteRange = getStorageDailyDeleteRange(options.cycleStart, options.cycleEnd)
   const cycleEndDay = formatUtcDay(floorToDay(parseTimestampMs(options.cycleEnd)))
+  // Rows written by a newer refresh (a later updated_at) are never deleted or overwritten by this one.
+  const writtenAt = calculation.rows[0]?.updated_at ?? new Date().toISOString()
   // One statement, so billing reads never see the cycle between the delete and the upsert.
   // Only this org's rows of this cycle are replaced: hours of a former owner of the app ID and
   // the other cycles' parts of the boundary days stay untouched. Rows with a later cycle_start
@@ -391,6 +393,7 @@ async function replaceCycleStorageHourly(
            AND dsh.cycle_start < GREATEST($5::date, $3::date + 1)
            AND dsh.date >= $3::date
            AND dsh.date < $4::date
+           AND dsh.updated_at <= $7::timestamptz
            AND NOT EXISTS (
              SELECT 1 FROM new_rows
              WHERE new_rows.cycle_start = dsh.cycle_start AND new_rows.date = dsh.date
@@ -401,8 +404,9 @@ async function replaceCycleStorageHourly(
        FROM new_rows
        ON CONFLICT (app_id, owner_org, cycle_start, date) DO UPDATE SET
          storage_byte_hours = EXCLUDED.storage_byte_hours,
-         updated_at = EXCLUDED.updated_at`,
-      [options.appId, options.ownerOrg, deleteRange.startDay, deleteRange.endExclusiveDay, cycleEndDay, JSON.stringify(calculation.rows)],
+         updated_at = EXCLUDED.updated_at
+       WHERE public.daily_storage_hourly.updated_at <= EXCLUDED.updated_at`,
+      [options.appId, options.ownerOrg, deleteRange.startDay, deleteRange.endExclusiveDay, cycleEndDay, JSON.stringify(calculation.rows), writtenAt],
     )
     return { data: null, error: null }
   })
