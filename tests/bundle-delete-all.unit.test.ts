@@ -6,7 +6,6 @@ const db = vi.hoisted(() => ({
   linked: new Set<number>(),
   transactions: [] as { statements: string[], lockedIds: number[], updatedIds: number[] }[],
   failUpdate: null as null | (() => Error | null),
-  pageQueries: 0,
 }))
 
 function makeTx() {
@@ -17,8 +16,15 @@ function makeTx() {
     query: vi.fn(async (text: string, params: unknown[] = []) => {
       tx.statements.push(text)
       if (text.includes('lock_channel_bundle_lifecycle')) {
-        tx.lockedIds.push(...(params[0] as number[]))
-        return { rows: [] }
+        // Candidates are selected inside the write transaction, then locked in id order.
+        const [, afterId, limit] = params as [string, number, number]
+        const ids = [...db.versions.entries()]
+          .filter(([id, deleted]) => !deleted && id > afterId)
+          .map(([id]) => id)
+          .sort((a, b) => a - b)
+          .slice(0, limit)
+        tx.lockedIds.push(...ids)
+        return { rows: ids.map(id => ({ id: String(id) })) }
       }
       if (text.includes('UPDATE public.app_versions')) {
         const error = db.failUpdate?.()
@@ -42,18 +48,9 @@ function makeTx() {
   }
 }
 
+// Any standalone read on the pool could be served stale by the query cache: none is allowed.
 const pool = {
-  query: vi.fn(async (text: string, params: unknown[] = []) => {
-    if (text.includes('SELECT id FROM public.app_versions')) {
-      db.pageQueries++
-      const [, afterId, limit] = params as [string, number, number]
-      const ids = [...db.versions.entries()]
-        .filter(([id, deleted]) => !deleted && id > afterId)
-        .map(([id]) => id)
-        .sort((a, b) => a - b)
-        .slice(0, limit)
-      return { rows: ids.map(id => ({ id: String(id) })) }
-    }
+  query: vi.fn(async (text: string) => {
     throw new Error(`unexpected pool query: ${text}`)
   }),
 }
@@ -83,7 +80,7 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
 }))
 
 const { BUNDLE_DELETE_BATCH_SIZE } = await import('../supabase/functions/_backend/utils/bundle_soft_delete.ts')
-const { DELETE_ALL_PAGE_SIZE, deleteBundle } = await import('../supabase/functions/_backend/public/bundle/delete.ts')
+const { deleteBundle } = await import('../supabase/functions/_backend/public/bundle/delete.ts')
 
 const APP_ID = 'com.example.deleteall'
 
@@ -107,12 +104,10 @@ describe('DELETE /bundle without a version', () => {
     vi.clearAllMocks()
     db.transactions = []
     db.failUpdate = null
-    db.pageQueries = 0
   })
 
   it('soft-deletes every unlinked bundle in bounded, locked batches', async () => {
-    const total = DELETE_ALL_PAGE_SIZE + 250
-    seed(total, [7, DELETE_ALL_PAGE_SIZE + 3], [9])
+    seed(1_250, [7, 1_003], [9])
 
     const response = await deleteBundle(createContext(), { app_id: APP_ID }, { key: 'key-1' } as any)
 
@@ -120,12 +115,13 @@ describe('DELETE /bundle without a version', () => {
     expect(await response.json()).toEqual({ status: 'ok' })
     // Same result as the old single UPDATE: everything but the channel-linked bundles is deleted.
     const remaining = [...db.versions.entries()].filter(([, deleted]) => !deleted).map(([id]) => id)
-    expect(remaining).toEqual([7, DELETE_ALL_PAGE_SIZE + 3])
+    expect(remaining).toEqual([7, 1_003])
 
-    // No single transaction touches more than one batch, and each locks before it updates.
-    expect(db.transactions.length).toBe(Math.ceil((DELETE_ALL_PAGE_SIZE - 1) / BUNDLE_DELETE_BATCH_SIZE) + Math.ceil(251 / BUNDLE_DELETE_BATCH_SIZE))
-    for (const tx of db.transactions) {
-      expect(tx.lockedIds.length).toBeGreaterThan(0)
+    // 1,249 active bundles: 7 full batches, then one empty transaction that ends the scan.
+    const batches = db.transactions.filter(tx => tx.lockedIds.length > 0)
+    expect(batches).toHaveLength(Math.ceil(1_249 / BUNDLE_DELETE_BATCH_SIZE))
+    expect(db.transactions).toHaveLength(batches.length + 1)
+    for (const tx of batches) {
       expect(tx.lockedIds.length).toBeLessThanOrEqual(BUNDLE_DELETE_BATCH_SIZE)
       const lockIndex = tx.statements.findIndex(sql => sql.includes('lock_channel_bundle_lifecycle'))
       const updateIndex = tx.statements.findIndex(sql => sql.includes('UPDATE public.app_versions'))
@@ -133,8 +129,11 @@ describe('DELETE /bundle without a version', () => {
       expect(lockIndex).toBeLessThan(updateIndex)
       expect(tx.statements.at(-1)).toBe('COMMIT')
     }
-    // Keyset pages: the ids query never re-reads from the start.
-    expect(db.pageQueries).toBe(2)
+    // Keyset scan: every candidate is locked once, linked ones included, never re-read.
+    const locked = batches.flatMap(tx => tx.lockedIds)
+    expect(new Set(locked).size).toBe(locked.length)
+    expect(locked).toContain(7)
+    expect(pool.query).not.toHaveBeenCalled()
     expect(withRlsContext).not.toHaveBeenCalled()
   })
 
@@ -152,7 +151,7 @@ describe('DELETE /bundle without a version', () => {
 
     expect(response.status).toBe(200)
     expect([...db.versions.values()].every(Boolean)).toBe(true)
-    expect(db.transactions.map(tx => tx.statements.at(-1))).toEqual(['ROLLBACK', 'COMMIT'])
+    expect(db.transactions.map(tx => tx.statements.at(-1))).toEqual(['ROLLBACK', 'COMMIT', 'COMMIT'])
   })
 
   it('keeps the cannot_delete_all_version error when a batch fails', async () => {
@@ -170,6 +169,7 @@ describe('DELETE /bundle without a version', () => {
     const response = await deleteBundle(createContext(), { app_id: APP_ID }, { key: 'key-1' } as any)
 
     expect(response.status).toBe(200)
-    expect(db.transactions).toHaveLength(0)
+    expect(db.transactions).toHaveLength(1)
+    expect(db.transactions[0].updatedIds).toEqual([])
   })
 })

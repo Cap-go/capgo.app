@@ -4,7 +4,7 @@ import type { PgQueryClient } from '../../utils/pg.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { CAPGO_API_2026_10_22, resolveCapgoApiVersion } from '../../utils/api_version.ts'
-import { BUNDLE_DELETE_BATCH_SIZE, lockBundleLifecycles, retryOnDeadlock, softDeleteBundleBatch, softDeleteLockedBundles } from '../../utils/bundle_soft_delete.ts'
+import { BUNDLE_DELETE_BATCH_SIZE, lockBundleLifecycles, retryOnDeadlock, softDeleteLockedBundles, softDeleteNextActiveBundles } from '../../utils/bundle_soft_delete.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -132,16 +132,14 @@ async function deleteBundleByNameInTransaction(
   return { status: 'deleted', id }
 }
 
-// Bundle ids read per keyset page; each page is soft-deleted in BUNDLE_DELETE_BATCH_SIZE batches.
-export const DELETE_ALL_PAGE_SIZE = 1_000
-
 /**
  * DELETE /bundle without a version: soft-deletes every active bundle of the app except the
- * ones a channel targets. Ids are read in keyset pages and deleted in bounded batches, each its
- * own transaction holding the bundles' lifecycle locks (the same path as POST /bundle/cleanup),
- * so per-row triggers never run for the whole app in one transaction and a concurrent channel
- * promotion either keeps its bundle or sees it deleted. Authorization is the bundle.delete check
- * in deleteBundle.
+ * ones a channel targets, in keyset batches of BUNDLE_DELETE_BATCH_SIZE. Each batch selects,
+ * locks (lifecycle locks, like POST /bundle/cleanup and channel promotion) and soft-deletes its
+ * bundles in one write transaction, so per-row triggers never run for the whole app in one
+ * transaction, a concurrent promotion either keeps its bundle or sees it deleted, and the
+ * candidates never come from a cached read. Authorization is the bundle.delete check in
+ * deleteBundle.
  */
 export async function deleteAllBundles(c: Context<MiddlewareKeyVariables>, appId: string, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<number> {
   const effectiveApikey = apikey.key ?? c.get('capgkey')
@@ -153,25 +151,12 @@ export async function deleteAllBundles(c: Context<MiddlewareKeyVariables>, appId
   try {
     let afterId = 0
     while (true) {
-      const page = await pgClient.query<{ id: string | number }>(
-        `SELECT id FROM public.app_versions
-         WHERE app_id = $1 AND deleted = false AND id > $2
-         ORDER BY id
-         LIMIT $3`,
-        [appId, afterId, DELETE_ALL_PAGE_SIZE],
-      )
-      const ids = page.rows.map(row => Number(row.id))
-      if (!ids.length)
+      // A batch is its own transaction, so retrying a deadlock victim is safe.
+      const batch = await retryOnDeadlock(() => softDeleteNextActiveBundles(c, pgClient, effectiveApikey, appId, afterId, BUNDLE_DELETE_BATCH_SIZE, 'delete_all_bundles'))
+      if (batch.lastId === null)
         break
-      for (let i = 0; i < ids.length; i += BUNDLE_DELETE_BATCH_SIZE) {
-        const batch = ids.slice(i, i + BUNDLE_DELETE_BATCH_SIZE)
-        // Linked bundles are skipped under the lock; retrying a deadlock victim batch is safe.
-        const deleted = await retryOnDeadlock(() => softDeleteBundleBatch(c, pgClient, effectiveApikey, appId, batch, false, 'delete_all_bundles'))
-        deletedCount += deleted.length
-      }
-      afterId = ids.at(-1)!
-      if (ids.length < DELETE_ALL_PAGE_SIZE)
-        break
+      deletedCount += batch.deleted.length
+      afterId = batch.lastId
     }
   }
   catch (error) {

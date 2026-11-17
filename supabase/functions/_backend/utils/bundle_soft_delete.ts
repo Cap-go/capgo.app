@@ -77,32 +77,24 @@ export async function retryOnDeadlock<T>(fn: () => Promise<T>, attempts = 3): Pr
 export const BUNDLE_DELETE_BATCH_SIZE = 200
 
 /**
- * Soft-deletes one batch in a single transaction. Each bundle's lifecycle lock (taken through
- * `lock_channel_bundle_lifecycle`, like channel promotion) is held while the channel links
- * are checked and the rows updated, so a concurrent promotion either commits first and keeps
- * its bundle, or waits and then sees it deleted. With `ignoreChannel`, linked bundles are
- * deleted too and the unlink_channels_from_deleted_version trigger clears their links.
- * Returns the deleted ids.
+ * Runs `fn` in its own write transaction on a connection checked out of `pgClient`: COMMIT on
+ * success, ROLLBACK (and a pg error log under `logLabel`) on failure.
  */
-export async function softDeleteBundleBatch(
+async function inBundleWriteTransaction<T>(
   c: Context<MiddlewareKeyVariables>,
   pgClient: PgClient,
-  effectiveApikey: string,
-  appId: string,
-  ids: number[],
-  ignoreChannel: boolean,
   logLabel: string,
-): Promise<number[]> {
+  fn: (tx: TxClient) => Promise<T>,
+): Promise<T> {
   let dbClient: Awaited<ReturnType<typeof checkoutPgClient>> | null = null
   let transactionStarted = false
   try {
     dbClient = await checkoutPgClient(pgClient)
     await beginWriteTransaction(dbClient)
     transactionStarted = true
-    await lockBundleLifecycles(dbClient, ids)
-    const deleted = await softDeleteLockedBundles(dbClient, effectiveApikey, appId, ids, ignoreChannel)
+    const result = await fn(dbClient)
     await dbClient.query('COMMIT')
-    return deleted
+    return result
   }
   catch (error) {
     if (dbClient && transactionStarted) {
@@ -121,4 +113,63 @@ export async function softDeleteBundleBatch(
   finally {
     releasePgClient(pgClient, dbClient)
   }
+}
+
+/**
+ * Soft-deletes one batch in a single transaction. Each bundle's lifecycle lock (taken through
+ * `lock_channel_bundle_lifecycle`, like channel promotion) is held while the channel links
+ * are checked and the rows updated, so a concurrent promotion either commits first and keeps
+ * its bundle, or waits and then sees it deleted. With `ignoreChannel`, linked bundles are
+ * deleted too and the unlink_channels_from_deleted_version trigger clears their links.
+ * Returns the deleted ids.
+ */
+export function softDeleteBundleBatch(
+  c: Context<MiddlewareKeyVariables>,
+  pgClient: PgClient,
+  effectiveApikey: string,
+  appId: string,
+  ids: number[],
+  ignoreChannel: boolean,
+  logLabel: string,
+): Promise<number[]> {
+  return inBundleWriteTransaction(c, pgClient, logLabel, async (tx) => {
+    await lockBundleLifecycles(tx, ids)
+    return softDeleteLockedBundles(tx, effectiveApikey, appId, ids, ignoreChannel)
+  })
+}
+
+/**
+ * Soft-deletes the next `limit` active bundles of `appId` with an id above `afterId`, keeping
+ * channel-linked ones. The candidates are selected and locked inside the write transaction (in
+ * id order, like lockBundleLifecycles), never from a separate read, which the query cache could
+ * serve stale. `lastId` is the highest candidate id (null when none is left): pass it as the
+ * next `afterId`, since skipped linked bundles stay active.
+ */
+export function softDeleteNextActiveBundles(
+  c: Context<MiddlewareKeyVariables>,
+  pgClient: PgClient,
+  effectiveApikey: string,
+  appId: string,
+  afterId: number,
+  limit: number,
+  logLabel: string,
+): Promise<{ lastId: number | null, deleted: number[] }> {
+  return inBundleWriteTransaction(c, pgClient, logLabel, async (tx) => {
+    const locked = await tx.query<{ id: string | number }>(
+      `SELECT t.id, public.lock_channel_bundle_lifecycle(t.id, NULL)
+       FROM (
+         SELECT id FROM public.app_versions
+         WHERE app_id = $1 AND deleted = false AND id > $2
+         ORDER BY id
+         LIMIT $3
+       ) AS t
+       ORDER BY t.id`,
+      [appId, afterId, limit],
+    )
+    const ids = locked.rows.map(row => Number(row.id))
+    if (!ids.length)
+      return { lastId: null, deleted: [] }
+    const deleted = await softDeleteLockedBundles(tx, effectiveApikey, appId, ids, false)
+    return { lastId: ids.at(-1)!, deleted }
+  })
 }
