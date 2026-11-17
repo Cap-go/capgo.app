@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { updateCurrencyDiscountSchedule } from '../supabase/functions/_backend/utils/billing_currency_discounts'
+import { currencyScheduleCancelAt, updateCurrencyDiscountSchedule } from '../supabase/functions/_backend/utils/billing_currency_discounts'
 
 it.each([true, false])('preserves expiry and billing anchor when cancel is %s on a replacement schedule', async (cancel) => {
   const now = Math.floor(Date.now() / 1000)
@@ -23,4 +23,22 @@ it.each([true, false])('preserves expiry and billing anchor when cancel is %s on
   expect(update.phases[0]).toMatchObject({ start_date: now - 86400, end_date: cancel ? periodEnd : end, billing_cycle_anchor: 'automatic', discounts: [{ discount: 'di_current' }] })
   if (!cancel)
     expect(update.phases[1].discounts).toEqual([])
+})
+
+it.each([
+  { status: 'active', subscription: 'sub_other', end_behavior: 'cancel', metadata: { capgo_currency_replaces: 'sub_old' } },
+  { status: 'active', subscription: 'sub_example', end_behavior: 'cancel', metadata: {} },
+  { status: 'released', subscription: 'sub_example', end_behavior: 'cancel', metadata: { capgo_currency_replaces: 'sub_old' } },
+])('does not infer cancellation from a foreign or inactive schedule: %j', async (schedule) => {
+  const stripe = { subscriptionSchedules: { retrieve: vi.fn(async () => ({ ...schedule, phases: [{ end_date: 1893456000 }] })) } }
+  expect(await currencyScheduleCancelAt(stripe as any, { id: 'sub_example', schedule: 'sched_example' } as any)).toBeNull()
+})
+
+it('refuses to rebuild a discount schedule if its paid period renewed after confirmation', async () => {
+  const stripe = {
+    subscriptions: { retrieve: vi.fn(async () => ({ schedule: 'sched_owned', items: { data: [{ current_period_end: 1896134400 }] } })) },
+    subscriptionSchedules: { retrieve: vi.fn(async () => ({ status: 'active', current_phase: { start_date: 1893456000 }, metadata: { capgo_currency_replaces: 'sub_old' } })), update: vi.fn() },
+  }
+  await expect(updateCurrencyDiscountSchedule(stripe as any, 'sub_example', true, async () => {}, 1893456000)).rejects.toThrow('updated renewal date')
+  expect(stripe.subscriptionSchedules.update).not.toHaveBeenCalled()
 })

@@ -22,7 +22,7 @@ vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
 }))
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({ getActiveSubscriptionId: async () => 'sub_example', syncSubscriptionData: async () => {} }))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile_sync.ts', () => ({ syncBillingProfile: state.sync }))
-vi.mock('../supabase/functions/_backend/utils/billing_currency_discounts.ts', () => ({ updateCurrencyDiscountSchedule: async () => false }))
+vi.mock('../supabase/functions/_backend/utils/billing_currency_discounts.ts', () => ({ updateCurrencyDiscountSchedule: async () => false, currencyScheduleCancelAt: async () => null }))
 vi.mock('../supabase/functions/_backend/utils/stripe_trial_plan.ts', () => ({ releaseTrialPlanSchedule: async () => {} }))
 
 beforeEach(() => {

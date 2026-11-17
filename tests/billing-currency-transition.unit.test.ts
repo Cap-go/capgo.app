@@ -169,3 +169,31 @@ it('keeps the original expiry when a customer changes currency again', async () 
   await completeCurrencyTransition({} as any, ctx, sub)
   expect(stripe.subscriptionSchedules.create.mock.calls[0][0].phases[0].end_date).toBe(1896134400)
 })
+
+it('keeps a subscription-specific legacy source ahead of the customer default card', async () => {
+  sub.default_payment_method = null
+  sub.default_source = 'card_original'
+  stripe.customers.retrieve.mockResolvedValue({ invoice_settings: { default_payment_method: 'pm_other' } })
+  await completeCurrencyTransition({} as any, ctx, sub)
+  const params = stripe.subscriptions.create.mock.calls[0][0]
+  expect(params.default_source).toBe('card_original')
+  expect(params.default_payment_method).toBeUndefined()
+})
+
+it('rejects a phased legacy-source replacement in the preview before canceling or charging', async () => {
+  sub.default_payment_method = null
+  sub.default_source = 'card_original'
+  sub.discounts = [{ id: 'di_finite', subscription: null, subscription_item: null, end: 1896134400 }]
+  stripe.customers.retrieve.mockResolvedValue({ invoice_settings: { default_payment_method: 'pm_other' } })
+  await expect(previewCurrencyTransition({} as any, ctx, sub, 'usd')).rejects.toMatchObject({ cause: { error: 'billing_currency_payment_method_required' } })
+  await expect(completeCurrencyTransition({} as any, ctx, sub)).rejects.toMatchObject({ cause: { error: 'billing_currency_payment_method_required' } })
+  expect(stripe.subscriptionSchedules.create).not.toHaveBeenCalled()
+  expect(stripe.subscriptions.create).not.toHaveBeenCalled()
+  expect(stripe.customers.update).not.toHaveBeenCalled()
+})
+
+it('binds the confirmation token to the exact renewal boundary', async () => {
+  const original = await previewCurrencyTransition({} as any, ctx, sub, 'usd')
+  sub.items.data[0].current_period_end += 86400
+  expect((await previewCurrencyTransition({} as any, ctx, sub, 'usd')).quoteId).not.toBe(original.quoteId)
+})

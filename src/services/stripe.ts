@@ -489,3 +489,12 @@ export function changeBillingCurrency(orgId: string, currency: string, confirmed
 export function previewBillingCurrency(orgId: string, currency: string) {
   return callBilling<BillingCurrencyPreview>('currency/preview', { orgId, currency })
 }
+
+export async function billingCurrencyErrorMessage(error: unknown, fallback: 'billing-currency-preview-error' | 'billing-currency-save-error') {
+  if (error instanceof FunctionsHttpError) {
+    const body = await error.context.clone().json().catch(() => null) as { error?: string } | null
+    if (body?.error === 'billing_currency_payment_method_required')
+      return i18n.global.t('billing-currency-update-card')
+  }
+  return i18n.global.t(fallback)
+}

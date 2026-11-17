@@ -4644,6 +4644,7 @@
   "billing-currency-load-error": "Could not load billing currencies. Please retry.",
   "billing-currency-save-error": "Could not change currency. Reload and try again. If a trial plan is scheduled, cancel it in Billing first. Any outstanding subscription payment must be resolved before changing currency.",
   "billing-currency-regional-requirement": "A regional discount requires a credit card issued in the same eligible country as your billing address and payment in that country’s eligible currency. Otherwise, standard prices apply.",
+  "billing-currency-update-card": "Update your saved card in Payment method, then try changing currency again. Your current subscription stays active.",
   "billing-currency-preview-error": "Could not load the renewal estimate. Select the currency again to retry.",
   "billing-currency-renewal-estimate": "Estimated renewal: {amount} / {interval}",
   "billing-currency-year": "year",

@@ -60,7 +60,7 @@ export async function replacementDiscounts(stripe: Stripe, discounts: Array<stri
 // Keep cancellation/resume self-service while an automatic replacement's discount
 // schedule is still active. Rebuild only our own schedule, preserving the invoice
 // anchor and original discount expiry instead of releasing an indefinite coupon.
-export async function updateCurrencyDiscountSchedule(stripe: Stripe, subscriptionId: string, cancel: boolean, assertHeld: () => Promise<void> = async () => {}): Promise<boolean> {
+export async function updateCurrencyDiscountSchedule(stripe: Stripe, subscriptionId: string, cancel: boolean, assertHeld: () => Promise<void> = async () => {}, expectedPeriodEnd?: number): Promise<boolean> {
   const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['discounts.source.coupon', 'items.data.discounts'] }, billingRequestOptions)
   const scheduleId = typeof subscription.schedule === 'string' ? subscription.schedule : subscription.schedule?.id
   if (!scheduleId)
@@ -70,6 +70,8 @@ export async function updateCurrencyDiscountSchedule(stripe: Stripe, subscriptio
     return false
   const now = Math.floor(Date.now() / 1000)
   const periodEnd = Math.max(...subscription.items.data.map(item => item.current_period_end))
+  if (expectedPeriodEnd !== undefined && periodEnd !== expectedPeriodEnd)
+    throw simpleError('billing_currency_quote_changed', 'Review the updated renewal date and confirm the currency change again.')
   const describe = async (discounts: Array<string | Stripe.Discount>) => Promise.all(discounts.map(async (discount) => {
     if (typeof discount === 'string')
       throw simpleError('billing_discount_unavailable', 'Could not load the current discount. Please retry.')
@@ -100,4 +102,16 @@ export async function updateCurrencyDiscountSchedule(stripe: Stripe, subscriptio
   await assertHeld()
   await stripe.subscriptionSchedules.update(scheduleId, { end_behavior: cancel ? 'cancel' : 'release', phases, proration_behavior: 'none' }, billingRequestOptions)
   return true
+}
+
+// Stripe only mirrors a schedule cancellation onto cancel_at in its final phase.
+export async function currencyScheduleCancelAt(stripe: Stripe, subscription: Stripe.Subscription): Promise<number | null> {
+  const scheduleId = typeof subscription.schedule === 'string' ? subscription.schedule : subscription.schedule?.id
+  if (!scheduleId)
+    return null
+  const schedule = await stripe.subscriptionSchedules.retrieve(scheduleId, {}, billingRequestOptions)
+  const owner = typeof schedule.subscription === 'string' ? schedule.subscription : schedule.subscription?.id
+  if (!schedule.metadata?.capgo_currency_replaces || schedule.status !== 'active' || schedule.end_behavior !== 'cancel' || owner !== subscription.id)
+    return null
+  return schedule.phases.at(-1)?.end_date ?? null
 }

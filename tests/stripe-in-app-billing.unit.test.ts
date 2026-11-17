@@ -33,6 +33,7 @@ async function expectSubscriptionLookupUnknown(promise: Promise<unknown>) {
 
 const {
   createCardSetupIntent,
+  getSubscriptionSummary,
   getSavedCards,
   parseCancelComment,
   parseCancelFeedback,
@@ -529,4 +530,32 @@ describe('payOpenInvoice', () => {
     await expectSubscriptionLookupUnknown(payOpenInvoice(createContext(), createBillingContext(stripe)))
     expect(stripe.invoices.pay).toHaveBeenCalledTimes(1)
   })
+})
+
+it('exposes a multi-phase replacement cancellation before Stripe sets cancel_at, and clears it on resume', async () => {
+  const stripe = { ...createStripe(), subscriptionSchedules: { retrieve: vi.fn(), update: vi.fn() } }
+  mockActiveSubscription('sub_123')
+  const periodEnd = Math.floor(Date.now() / 1000) + 30 * 86400
+  const discountEnd = periodEnd - 15 * 86400
+  stripe.subscriptions.retrieve.mockResolvedValue({
+    id: 'sub_123', status: 'active', currency: 'eur', schedule: 'sched_owned', cancel_at_period_end: false, cancel_at: null,
+    metadata: { capgo_currency_transition: 'usd' }, discounts: [],
+    items: { data: [{ price: { id: 'price_example' }, current_period_end: periodEnd }] },
+  })
+  const schedule = {
+    id: 'sched_owned', status: 'active', subscription: 'sub_123', end_behavior: 'cancel',
+    metadata: { capgo_currency_replaces: 'sub_previous' }, current_phase: { start_date: periodEnd - 30 * 86400 },
+    phases: [{ end_date: discountEnd }, { end_date: periodEnd }],
+  }
+  stripe.subscriptionSchedules.retrieve.mockResolvedValue(schedule)
+  stripe.subscriptionSchedules.update.mockImplementation(async (_id, params) => Object.assign(schedule, params))
+  stripe.subscriptions.update.mockImplementation(async (_id, params) => {
+    const subscription = await stripe.subscriptions.retrieve()
+    return Object.assign(subscription, params)
+  })
+  expect(await getSubscriptionSummary(createContext(), createBillingContext(stripe))).toMatchObject({
+    cancelAt: new Date(periodEnd * 1000).toISOString(), pendingCurrency: 'usd',
+  })
+  expect(await resumeSubscription(createContext(), createBillingContext(stripe))).toMatchObject({ cancelAt: null })
+  expect(await getSubscriptionSummary(createContext(), createBillingContext(stripe))).not.toHaveProperty('pendingCurrency')
 })

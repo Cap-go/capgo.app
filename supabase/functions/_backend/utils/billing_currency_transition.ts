@@ -22,7 +22,7 @@ async function replacementParams(c: Context, ctx: InAppBillingContext, subscript
   const customer = await ctx.stripe.customers.retrieve(ctx.customerId, { expand: ['invoice_settings.default_payment_method'] })
   if (customer.deleted)
     throw simpleError('no_customer', 'No customer')
-  const paymentMethodId = id(subscription.default_payment_method) ?? id(customer.invoice_settings.default_payment_method)
+  const paymentMethodId = id(subscription.default_payment_method) ?? (subscription.default_source ? undefined : id(customer.invoice_settings.default_payment_method))
   const paymentMethod = paymentMethodId ? await ctx.stripe.paymentMethods.retrieve(paymentMethodId) : null
   const country = customer.address?.country
   const eligible = !!country && paymentMethodCountry(paymentMethod) === country && currencyForCountry(country) === currency
@@ -58,6 +58,10 @@ async function replacementParams(c: Context, ctx: InAppBillingContext, subscript
     metadata: { ...metadata, [CURRENCY_REPLACES_KEY]: subscription.id },
   }
   const ends = [...new Set([...discounts, ...itemDiscounts.flat()].flatMap(discount => discount.end ? [discount.end] : []))].sort((a, b) => a - b)
+  // Schedules cannot pin a legacy default_source. Refuse in the preview before
+  // canceling the current plan, rather than silently charging another saved card.
+  if (ends.length && subscription.default_source && !paymentMethodId)
+    throw simpleError('billing_currency_payment_method_required', 'Update your saved card in Payment method before changing currency.')
   if (ends.length > 9)
     throw simpleError('billing_discount_unavailable', 'Too many discount expiration dates to schedule this change.')
   const phases: Stripe.SubscriptionScheduleCreateParams.Phase[] = [...ends, null].map((end, index) => {
@@ -76,8 +80,8 @@ async function replacementParams(c: Context, ctx: InAppBillingContext, subscript
 
 }
 
+// Use the caller's expanded snapshot so the quote and saved renewal date agree.
 export async function previewCurrencyTransition(c: Context, ctx: InAppBillingContext, subscription: Stripe.Subscription, currency: string): Promise<BillingCurrencyPreview> {
-  subscription = await ctx.stripe.subscriptions.retrieve(subscription.id, { expand: ['discounts.source.coupon.currency_options', 'items.data.discounts'] }, billingRequestOptions)
   const { params, phases } = await replacementParams(c, ctx, subscription, currency)
   const endsAt = Math.max(...subscription.items.data.map(item => item.current_period_end))
   const invoice = await ctx.stripe.invoices.createPreview({

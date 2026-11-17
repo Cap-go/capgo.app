@@ -1,4 +1,4 @@
-import { updateCurrencyDiscountSchedule } from './billing_currency_discounts.ts'
+import { currencyScheduleCancelAt, updateCurrencyDiscountSchedule } from './billing_currency_discounts.ts'
 import { billingRequestOptions, withBillingProfileLock } from './billing_profile_lock.ts'
 import { clearCurrencyTransition, CURRENCY_TRANSITION_KEY } from './billing_currency_transition.ts'
 import { BILLING_CURRENCY_KEY } from './billing_currency.ts'
@@ -213,11 +213,12 @@ export async function getSubscriptionSummary(c: Context, ctx: InAppBillingContex
   try {
     const subscription = await ctx.stripe.subscriptions.retrieve(subscriptionId)
     const periodEnd = Math.max(0, ...subscription.items.data.map(item => item.current_period_end ?? 0))
+    const cancelAt = subscription.cancel_at ?? await currencyScheduleCancelAt(ctx.stripe, subscription)
     return {
-      ...((subscription.cancel_at_period_end || subscription.cancel_at) && subscription.metadata?.[CURRENCY_TRANSITION_KEY] ? { pendingCurrency: subscription.metadata[CURRENCY_TRANSITION_KEY] } : {}),
+      ...((subscription.cancel_at_period_end || cancelAt) && subscription.metadata?.[CURRENCY_TRANSITION_KEY] ? { pendingCurrency: subscription.metadata[CURRENCY_TRANSITION_KEY] } : {}),
       status: subscription.status,
       cancelAtPeriodEnd: subscription.cancel_at_period_end,
-      cancelAt: toIso(subscription.cancel_at),
+      cancelAt: toIso(cancelAt),
       currentPeriodEnd: toIso(periodEnd),
     }
   }
@@ -435,6 +436,7 @@ export async function scheduleSubscriptionCancel(c: Context, ctx: InAppBillingCo
     await assertHeld()
     const scheduled = await updateCurrencyDiscountSchedule(ctx.stripe, subscriptionId, true, assertHeld)
     await releaseTrialPlanSchedule(c, ctx.stripe, subscriptionId)
+    await assertHeld()
     await ctx.stripe.subscriptions.update(subscriptionId, {
       ...(scheduled ? {} : { cancel_at_period_end: true }),
       metadata: clearCurrencyTransition,

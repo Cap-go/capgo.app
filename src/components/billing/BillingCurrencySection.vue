@@ -3,7 +3,7 @@ import type { BillingCurrencyPreview, BillingCurrencyState } from '../../../supa
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { checkPermissions } from '~/services/permissions'
-import { changeBillingCurrency, formatStripeAmount, getBillingCurrencyState, previewBillingCurrency } from '~/services/stripe'
+import { billingCurrencyErrorMessage, changeBillingCurrency, formatStripeAmount, getBillingCurrencyState, previewBillingCurrency } from '~/services/stripe'
 import BillingModal from './BillingModal.vue'
 
 const props = defineProps<{ orgId: string }>()
@@ -70,9 +70,10 @@ async function loadPreview() {
     if (!disposed && run === previewRun)
       preview.value = result
   }
-  catch {
+  catch (cause) {
+    const message = await billingCurrencyErrorMessage(cause, 'billing-currency-preview-error')
     if (!disposed && run === previewRun)
-      error.value = t('billing-currency-preview-error')
+      error.value = message
   }
   finally {
     if (run === previewRun)
@@ -94,7 +95,7 @@ async function save() {
       emit('changed')
     }
   }
-  catch { error.value = t('billing-currency-save-error') }
+  catch (cause) { error.value = await billingCurrencyErrorMessage(cause, 'billing-currency-save-error') }
   finally { busy.value = false }
 }
 </script>

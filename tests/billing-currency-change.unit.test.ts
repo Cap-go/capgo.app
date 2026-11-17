@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectiveBillingCurrency } from '../supabase/functions/_backend/utils/billing_currency'
 import { changeBillingCurrency, getBillingCurrencyState } from '../supabase/functions/_backend/utils/stripe_billing_currency'
 
-const mocks = vi.hoisted(() => ({ eligibility: vi.fn(), plans: vi.fn(), sync: vi.fn(), syncSubscription: vi.fn(), query: vi.fn() }))
+const mocks = vi.hoisted(() => ({ eligibility: vi.fn(), plans: vi.fn(), sync: vi.fn(), syncSubscription: vi.fn(), query: vi.fn(), preview: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
   authPrincipal: vi.fn(), queryJsonOne: mocks.eligibility, servicePrincipal: {}, queryJson: mocks.plans,
   withRlsContext: (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({ query: mocks.query }),
@@ -11,20 +11,21 @@ vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({ syncSubscript
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile_sync.ts', () => ({ syncBillingProfile: mocks.sync }))
 vi.mock('../supabase/functions/_backend/utils/billing_currency_transition.ts', () => ({
   CURRENCY_TRANSITION_KEY: 'capgo_currency_transition', CURRENCY_TRANSITION_END_KEY: 'capgo_currency_transition_end',
-  previewCurrencyTransition: async () => ({ quoteId: 'quote_example' }),
+  previewCurrencyTransition: mocks.preview,
 }))
 const customer = { id: 'cus_example', currency: 'eur', metadata: {} as Record<string, string> }
 const stripe = {
   customers: { retrieve: vi.fn(), update: vi.fn() },
   prices: { retrieve: vi.fn() },
   subscriptions: { list: vi.fn(), update: vi.fn(), retrieve: vi.fn() },
-  subscriptionSchedules: { list: vi.fn() },
+  subscriptionSchedules: { list: vi.fn(), retrieve: vi.fn(), update: vi.fn() },
   checkout: { sessions: { list: vi.fn(), expire: vi.fn() } },
 }
 const ctx = { stripe, customerId: customer.id, billingAccount: 'us' } as any
 const sub = { id: 'sub_example', status: 'active', currency: 'eur', cancel_at_period_end: false, items: { data: [{ current_period_end: 1893456000 }] } }
 beforeEach(() => {
   vi.resetAllMocks()
+  mocks.preview.mockResolvedValue({ quoteId: 'quote_example' })
   mocks.eligibility.mockResolvedValue({ trial: false, plan_name: 'Team' })
   customer.metadata = {}
   stripe.customers.retrieve.mockResolvedValue(customer)
@@ -55,10 +56,10 @@ describe('self-service billing currency', () => {
   it('ends at the paid period boundary and exposes the pending currency', async () => {
     stripe.subscriptions.list.mockResolvedValue({ data: [sub] })
     stripe.subscriptions.update.mockImplementation(async () => {
-      stripe.subscriptions.list.mockResolvedValue({ data: [{ ...sub, cancel_at_period_end: true, metadata: { capgo_currency_transition: 'usd' } }] })
+      stripe.subscriptions.list.mockResolvedValue({ data: [{ ...sub, cancel_at: 1893456000, metadata: { capgo_currency_transition: 'usd' } }] })
     })
     const result = await changeBillingCurrency({} as any, ctx, 'usd', sub.id, 'quote_example')
-    expect(stripe.subscriptions.update).toHaveBeenCalledWith(sub.id, { cancel_at_period_end: true, proration_behavior: 'none', metadata: { capgo_currency_transition: 'usd', capgo_currency_transition_end: '1893456000' } })
+    expect(stripe.subscriptions.update).toHaveBeenCalledWith(sub.id, { cancel_at: 1893456000, proration_behavior: 'none', metadata: { capgo_currency_transition: 'usd', capgo_currency_transition_end: '1893456000' } }, expect.anything())
     expect(result).toMatchObject({ currency: 'eur', pendingCurrency: 'usd', endsAt: '2030-01-01T00:00:00.000Z' })
     expect(mocks.syncSubscription).toHaveBeenCalled()
   })
@@ -147,4 +148,28 @@ it('rechecks live subscriptions after closing a concurrent checkout', async () =
   stripe.subscriptions.list.mockResolvedValueOnce({ data: [], has_more: false }).mockResolvedValueOnce({ data: [sub], has_more: false })
   await expect(changeBillingCurrency({} as any, ctx, 'usd', null)).rejects.toThrow('checkout completed')
   expect(stripe.customers.update).not.toHaveBeenCalled()
+})
+
+it('rejects a renewal that changes the confirmed date while checkouts are expiring', async () => {
+  stripe.subscriptions.list.mockResolvedValue({ data: [sub] })
+  stripe.checkout.sessions.list.mockResolvedValue({ data: [{ id: 'cs_pending' }], has_more: false })
+  stripe.checkout.sessions.expire.mockImplementation(async () => {
+    stripe.subscriptions.retrieve.mockResolvedValue({ ...sub, items: { data: [{ current_period_end: 1896134400 }] } })
+    mocks.preview.mockResolvedValue({ quoteId: 'renewed_quote' })
+  })
+  await expect(changeBillingCurrency({} as any, ctx, 'usd', sub.id, 'quote_example')).rejects.toThrow('updated renewal')
+  expect(mocks.preview).toHaveBeenCalledWith(expect.anything(), ctx, expect.objectContaining({ items: { data: [{ current_period_end: 1896134400 }] } }), 'usd')
+  expect(stripe.subscriptions.update).not.toHaveBeenCalled()
+  expect(stripe.customers.update).not.toHaveBeenCalled()
+})
+
+it('reports a repeat currency change before the cancellation schedule enters its final phase', async () => {
+  stripe.subscriptions.list.mockResolvedValue({ data: [{ ...sub, schedule: 'sched_owned', metadata: { capgo_currency_transition: 'usd' } }] })
+  stripe.subscriptionSchedules.retrieve.mockResolvedValue({
+    status: 'active', subscription: sub.id, end_behavior: 'cancel', metadata: { capgo_currency_replaces: 'sub_previous' },
+    phases: [{ end_date: 1890000000 }, { end_date: 1893456000 }],
+  })
+  expect(await getBillingCurrencyState({} as any, ctx)).toMatchObject({ pendingCurrency: 'usd', endsAt: new Date(1893456000000).toISOString() })
+  stripe.subscriptionSchedules.retrieve.mockResolvedValue({ status: 'active', subscription: sub.id, end_behavior: 'release', metadata: { capgo_currency_replaces: 'sub_previous' } })
+  expect((await getBillingCurrencyState({} as any, ctx)).pendingCurrency).toBeNull()
 })
