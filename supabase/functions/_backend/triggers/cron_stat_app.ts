@@ -74,6 +74,8 @@ interface VersionMetaStorageRow {
   timestamp: string | Date
   version_id: number
   size: number
+  /** Stored interval of the bundle (a restored bundle starts the next one); 0 when omitted. */
+  lifetime?: number
 }
 
 interface StorageVersionLifetime {
@@ -192,13 +194,15 @@ function applyStorageEvent(current: StorageVersionLifetime, event: VersionMetaSt
     current.removedAt = timestamp
 }
 
+/** One lifetime per bundle and stored interval (a restored bundle has several). */
 function collectStorageVersionLifetimes(events: VersionMetaStorageRow[]) {
-  const versions = new Map<number, StorageVersionLifetime>()
+  const versions = new Map<string, StorageVersionLifetime>()
   for (const event of events) {
     const timestamp = parseTimestampMs(event.timestamp)
-    const current = versions.get(event.version_id) ?? {}
+    const key = `${event.version_id}:${event.lifetime ?? 0}`
+    const current = versions.get(key) ?? {}
     applyStorageEvent(current, event, timestamp)
-    versions.set(event.version_id, current)
+    versions.set(key, current)
   }
   return versions
 }
@@ -294,7 +298,7 @@ export function calculateStorageHourlyRowsFromLifetimes(
   }
 }
 
-/** Storage lifetime of one bundle, as folded from its version_meta rows. */
+/** One stored interval (lifetime) of a bundle, as folded from its version_meta rows. */
 export interface VersionStorageLifetimeRow {
   version_id: number | string
   added_at: string | Date | null
@@ -303,8 +307,9 @@ export interface VersionStorageLifetimeRow {
 }
 
 /**
- * One row per bundle of the app: first addition (time and size) and first
- * removal before $2, the same fold as collectStorageVersionLifetimes. Bundles
+ * One row per bundle of the app and stored interval (a restored bundle has
+ * several lifetimes): first addition (time and size) and first removal before
+ * $2, the same fold as collectStorageVersionLifetimes. Bundles
  * removed more than a day before the cycle start ($3) would be skipped as
  * outside the cycle anyway, so they are not returned; the one-day margin keeps
  * that true whatever timezone the driver parses timestamps in. Bundles without
@@ -319,7 +324,7 @@ export const VERSION_STORAGE_LIFETIMES_SQL = `
   FROM public.version_meta vm
   WHERE vm.app_id = $1
     AND vm.timestamp < $2::timestamp
-  GROUP BY vm.version_id
+  GROUP BY vm.version_id, vm.lifetime
   HAVING NOT (
     pg_catalog.bool_or(vm.size > 0)
     AND COALESCE(pg_catalog.min(vm.timestamp) FILTER (WHERE vm.size < 0) < $3::timestamp - INTERVAL '1 day', false)

@@ -3954,6 +3954,7 @@ export type Database = {
       version_meta: {
         Row: {
           app_id: string
+          lifetime: number
           recorded_at: string
           size: number
           timestamp: string
@@ -3961,6 +3962,7 @@ export type Database = {
         }
         Insert: {
           app_id: string
+          lifetime?: number
           recorded_at?: string
           size: number
           timestamp?: string
@@ -3968,6 +3970,7 @@ export type Database = {
         }
         Update: {
           app_id?: string
+          lifetime?: number
           recorded_at?: string
           size?: number
           timestamp?: string

@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(56);
+SELECT plan(62);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -720,6 +720,10 @@ SELECT 9100306, live_app, '9.9.4', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097
 UNION ALL
 SELECT 9100307, live_app, '9.9.3', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', true, TIMESTAMPTZ '2026-01-01 00:00:00+00', TIMESTAMPTZ '2026-01-06 00:00:00+00' FROM gbh_ctx;
 SELECT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100306, 100, TIMESTAMPTZ '2026-01-02 00:00:00+00');
+-- Deleted without the soft-deletion trigger, as if its removal had not been recorded.
+ALTER TABLE public.app_versions DISABLE TRIGGER close_soft_deleted_version_storage_lifetime;
+UPDATE public.app_versions SET deleted = true WHERE id = 9100306;
+ALTER TABLE public.app_versions ENABLE TRIGGER close_soft_deleted_version_storage_lifetime;
 -- A removal processed late is recorded at the deletion; one dated before the upload is clamped.
 SELECT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100306, -100, TIMESTAMPTZ '2026-01-01 00:00:00+00');
 
@@ -778,6 +782,58 @@ SELECT
         (SELECT array_agg(timestamp) FROM public.version_meta WHERE version_id = 9100309 AND size < 0),
         ARRAY[current_setting('gbh.soft_removal')::timestamp],
         'a later hard deletion keeps the soft deletion time'
+    );
+
+-- A restored bundle is stored again from its restore, in a new lifetime; the
+-- deleted interval is not billed.
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider)
+SELECT 9100310, live_app, '9.9.0', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2' FROM gbh_ctx;
+INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+SELECT TIMESTAMP '2026-01-02 00:00:00', live_app, 9100310, 500 FROM gbh_ctx;
+UPDATE public.app_versions SET deleted = true WHERE id = 9100310;
+
+SELECT
+    ok(
+        NOT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100310, 500, TIMESTAMPTZ '2026-01-02 00:00:00+00'),
+        'an upload event of a bundle still deleted starts no new lifetime'
+    );
+
+UPDATE public.app_versions SET deleted = false WHERE id = 9100310;
+SELECT set_config('gbh.after_restore', pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())::text, true);
+-- The restored object's Last-Modified is still the original upload.
+SELECT
+    ok(
+        public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100310, 500, TIMESTAMPTZ '2026-01-02 00:00:00+00'),
+        'the upload event of a restored bundle is recorded'
+    );
+
+SELECT
+    is(
+        (SELECT array_agg(ARRAY[lifetime::text, size::text] ORDER BY lifetime, size) FROM public.version_meta WHERE version_id = 9100310),
+        ARRAY[ARRAY['0', '-500'], ARRAY['0', '500'], ARRAY['1', '500']],
+        'in a new lifetime, keeping the first one closed'
+    );
+
+SELECT
+    ok(
+        (SELECT timestamp FROM public.version_meta WHERE version_id = 9100310 AND lifetime = 1)
+        >= (SELECT timestamp FROM public.version_meta WHERE version_id = 9100310 AND lifetime = 0 AND size < 0),
+        'starting at the restore, not at the original upload'
+    );
+
+SELECT
+    ok(
+        NOT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100310, -500),
+        'a removal processed after the restore does not close the restored lifetime'
+    );
+
+UPDATE public.app_versions SET deleted = true WHERE id = 9100310;
+
+SELECT
+    is(
+        (SELECT array_agg(ARRAY[lifetime::text, size::text] ORDER BY lifetime, size) FROM public.version_meta WHERE version_id = 9100310),
+        ARRAY[ARRAY['0', '-500'], ARRAY['0', '500'], ARRAY['1', '-500'], ARRAY['1', '500']],
+        'deleting it again closes the restored lifetime'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.

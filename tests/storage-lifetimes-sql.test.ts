@@ -22,6 +22,7 @@ interface MetaRow {
   timestamp: string
   version_id: number
   size: number
+  lifetime?: number
 }
 
 const rows: MetaRow[] = [
@@ -50,6 +51,10 @@ const rows: MetaRow[] = [
   // Added inside the cycle, removed after the calculation end.
   { version_id: 10, size: 1000, timestamp: '2026-03-10T00:00:00Z' },
   { version_id: 10, size: -1000, timestamp: '2026-03-28T00:00:00Z' },
+  // Deleted, then restored: billed in both stored intervals, not while deleted.
+  { version_id: 11, size: 1100, timestamp: '2026-03-01T00:00:00Z', lifetime: 0 },
+  { version_id: 11, size: -1100, timestamp: '2026-03-04T00:00:00Z', lifetime: 0 },
+  { version_id: 11, size: 1100, timestamp: '2026-03-08T00:00:00Z', lifetime: 1 },
 ]
 
 const options = { appId, ownerOrg, cycleStart, cycleEnd, currentHour }
@@ -68,15 +73,15 @@ describe('cron_stat_app storage lifetimes SQL fold', () => {
 
   it('matches the JS fold of every version_meta row', async () => {
     await executeSQL(
-      `INSERT INTO public.version_meta (app_id, version_id, size, timestamp)
-        SELECT $1, r.version_id, r.size, r.timestamp
-        FROM jsonb_to_recordset($2::jsonb) AS r(version_id bigint, size bigint, timestamp timestamp)`,
-      [appId, JSON.stringify(rows.map(row => ({ ...row, timestamp: row.timestamp.replace('Z', '') })))],
+      `INSERT INTO public.version_meta (app_id, version_id, size, timestamp, lifetime)
+        SELECT $1, r.version_id, r.size, r.timestamp, r.lifetime
+        FROM jsonb_to_recordset($2::jsonb) AS r(version_id bigint, size bigint, timestamp timestamp, lifetime integer)`,
+      [appId, JSON.stringify(rows.map(row => ({ ...row, lifetime: row.lifetime ?? 0, timestamp: row.timestamp.replace('Z', '') })))],
     )
 
     // Previous query: every row of the app before the calculation end.
     const events = await executeSQL<MetaRow>(
-      `SELECT timestamp, version_id, size FROM public.version_meta
+      `SELECT timestamp, version_id, size, lifetime FROM public.version_meta
         WHERE app_id = $1 AND timestamp < $2::timestamp
         ORDER BY version_id, timestamp`,
       [appId, currentHour],
@@ -93,6 +98,11 @@ describe('cron_stat_app storage lifetimes SQL fold', () => {
 
     // Bundles 1 (removed a year before the cycle) and 9 (after the end) are not returned.
     const returnedVersions = lifetimeRows.map(row => Number(row.version_id)).sort((a, b) => a - b)
-    expect(returnedVersions).toEqual([2, 3, 4, 5, 6, 7, 8, 10])
+    expect(returnedVersions).toEqual([2, 3, 4, 5, 6, 7, 8, 10, 11, 11])
+
+    // The restored bundle: 3 days before its deletion, then from the restore to the calculation end.
+    const restored = calculateStorageHourlyRows(events.filter(event => Number(event.version_id) === 11), options)
+    const restoredByteHours = restored.rows.reduce((sum, row) => sum + Number(row.storage_byte_hours), 0)
+    expect(restoredByteHours).toBe(1100 * (3 * 24 + 12 * 24 + 5))
   })
 })

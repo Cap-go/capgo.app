@@ -343,6 +343,25 @@ ALTER COLUMN recorded_at SET DEFAULT pg_catalog.timezone('UTC', pg_catalog.clock
 COMMENT ON COLUMN public.version_meta.recorded_at IS
 'When the event was written (UTC). timestamp is when it happened: a late removal is dated at the deletion. Storage refreshes are re-queued for events recorded after (or up to 1 hour before) their cutoff.';
 
+-- A bundle can be stored, deleted and restored (within the restore window):
+-- each stored interval is a lifetime, numbered from 0, with at most one upload
+-- (positive) and one removal (negative) event. A restored bundle starts a new
+-- lifetime at the restore, so the deleted interval is not billed and the
+-- restored one is. Existing rows are lifetime 0 (a constant default: no
+-- rewrite). The one-event-per-bundle unique indexes become per lifetime.
+ALTER TABLE public.version_meta
+ADD COLUMN IF NOT EXISTS lifetime integer NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN public.version_meta.lifetime IS
+'Stored interval of the bundle, from 0: a restored bundle starts the next one. At most one upload (size > 0) and one removal (size < 0) event per lifetime.';
+
+CREATE UNIQUE INDEX IF NOT EXISTS unique_app_version_lifetime_positive
+ON public.version_meta USING btree (app_id, version_id, lifetime) WHERE (size > 0);
+CREATE UNIQUE INDEX IF NOT EXISTS unique_app_version_lifetime_negative
+ON public.version_meta USING btree (app_id, version_id, lifetime) WHERE (size < 0);
+DROP INDEX IF EXISTS public.unique_app_version_positive;
+DROP INDEX IF EXISTS public.unique_app_version_negative;
+
 CREATE OR REPLACE FUNCTION public.process_cron_stats_jobs()
 RETURNS void
 LANGUAGE plpgsql
@@ -516,8 +535,8 @@ SET search_path TO ''
 AS $$
 BEGIN
   -- clock_timestamp(): the deletion's statement time, not the transaction start.
-  INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
-  SELECT GREATEST(added.timestamp, pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())), added.app_id, added.version_id, -added.size
+  INSERT INTO public.version_meta (timestamp, app_id, version_id, size, lifetime)
+  SELECT GREATEST(added.timestamp, pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())), added.app_id, added.version_id, -added.size, added.lifetime
   FROM public.version_meta added
   WHERE added.app_id = OLD.app_id
     AND added.size > 0
@@ -526,6 +545,7 @@ BEGIN
       FROM public.version_meta removed
       WHERE removed.app_id = added.app_id
         AND removed.version_id = added.version_id
+        AND removed.lifetime = added.lifetime
         AND removed.size < 0
     )
   ON CONFLICT DO NOTHING;
@@ -553,8 +573,8 @@ SET search_path TO ''
 AS $$
 BEGIN
   -- clock_timestamp(): the deletion's statement time, not the transaction start.
-  INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
-  SELECT GREATEST(added.timestamp, pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())), added.app_id, added.version_id, -added.size
+  INSERT INTO public.version_meta (timestamp, app_id, version_id, size, lifetime)
+  SELECT GREATEST(added.timestamp, pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())), added.app_id, added.version_id, -added.size, added.lifetime
   FROM public.version_meta added
   WHERE added.app_id = OLD.app_id
     AND added.version_id = OLD.id
@@ -564,6 +584,7 @@ BEGIN
       FROM public.version_meta removed
       WHERE removed.app_id = added.app_id
         AND removed.version_id = added.version_id
+        AND removed.lifetime = added.lifetime
         AND removed.size < 0
     )
   ON CONFLICT DO NOTHING;
@@ -591,11 +612,11 @@ SECURITY DEFINER
 SET search_path TO ''
 AS $$
 BEGIN
-  INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+  INSERT INTO public.version_meta (timestamp, app_id, version_id, size, lifetime)
   SELECT
     -- The soft deletion's statement time (now() is the transaction start).
     GREATEST(added.timestamp, pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())),
-    added.app_id, added.version_id, -added.size
+    added.app_id, added.version_id, -added.size, added.lifetime
   FROM public.version_meta added
   WHERE added.app_id = NEW.app_id
     AND added.version_id = NEW.id
@@ -605,6 +626,7 @@ BEGIN
       FROM public.version_meta removed
       WHERE removed.app_id = added.app_id
         AND removed.version_id = added.version_id
+        AND removed.lifetime = added.lifetime
         AND removed.size < 0
     )
   ON CONFLICT DO NOTHING;
@@ -901,7 +923,7 @@ SECURITY DEFINER
 SET search_path TO ''
 AS $$
   WITH open_lifetimes AS (
-    SELECT added.app_id, added.version_id, added.size, added.timestamp AS added_at
+    SELECT added.app_id, added.version_id, added.size, added.lifetime, added.timestamp AS added_at
     FROM public.version_meta added
     WHERE added.size > 0
       AND NOT EXISTS (
@@ -909,6 +931,7 @@ AS $$
         FROM public.version_meta removed
         WHERE removed.app_id = added.app_id
           AND removed.version_id = added.version_id
+          AND removed.lifetime = added.lifetime
           AND removed.size < 0
       )
   ),
@@ -917,6 +940,7 @@ AS $$
       open_lifetimes.app_id,
       open_lifetimes.version_id,
       open_lifetimes.size,
+      open_lifetimes.lifetime,
       open_lifetimes.added_at,
       CASE
         WHEN versions.id IS NOT NULL THEN
@@ -930,12 +954,13 @@ AS $$
     WHERE versions.id IS NULL OR versions.deleted
   ),
   closed AS (
-    INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+    INSERT INTO public.version_meta (timestamp, app_id, version_id, size, lifetime)
     SELECT
       GREATEST(orphaned.added_at, COALESCE(pg_catalog.timezone('UTC', orphaned.deleted_at), orphaned.added_at)),
       orphaned.app_id,
       orphaned.version_id,
-      -orphaned.size
+      -orphaned.size,
+      orphaned.lifetime
     FROM orphaned
     ON CONFLICT DO NOTHING
     RETURNING 1
@@ -1000,7 +1025,9 @@ SELECT public.backfill_missing_storage_lifetimes();
 -- The version row is locked (FOR SHARE) so a deletion cannot commit in between,
 -- and a positive event for a version already deleted is closed at its last
 -- server-side update (the deletion or later) in the same transaction, so a
--- removed bundle stops accruing byte-hours.
+-- removed bundle stops accruing byte-hours. A bundle restored after its
+-- removal starts a new lifetime at the restore; a removal of a bundle that is
+-- live again (restored before the removal job ran) is skipped.
 DROP FUNCTION IF EXISTS public.upsert_version_meta(character varying, bigint, bigint);
 
 CREATE OR REPLACE FUNCTION public.upsert_version_meta(
@@ -1016,7 +1043,9 @@ SET search_path = ''
 AS $$
 DECLARE
   v_owner_org uuid;
-  v_existing_count integer;
+  v_lifetime integer;
+  v_lifetime_added_at timestamp;
+  v_lifetime_removed_at timestamp;
   v_deleted boolean;
   v_deleted_at timestamptz;
   v_event_at timestamp;
@@ -1061,48 +1090,69 @@ BEGIN
     RETURN FALSE;
   END IF;
 
-  IF p_size > 0 THEN
-    SELECT COUNT(*) INTO v_existing_count
-    FROM public.version_meta
-    WHERE public.version_meta.app_id = p_app_id
-      AND public.version_meta.version_id = p_version_id
-      AND public.version_meta.size > 0;
-  ELSE
-    SELECT COUNT(*) INTO v_existing_count
-    FROM public.version_meta
-    WHERE public.version_meta.app_id = p_app_id
-      AND public.version_meta.version_id = p_version_id
-      AND public.version_meta.size < 0;
-  END IF;
+  -- The bundle's latest stored interval and its events (lifetime 0 before any).
+  SELECT COALESCE(max(event.lifetime), 0)
+  INTO v_lifetime
+  FROM public.version_meta event
+  WHERE event.app_id = p_app_id
+    AND event.version_id = p_version_id;
 
-  IF v_existing_count > 0 THEN
-    RETURN FALSE;
-  END IF;
+  SELECT
+    min(event.timestamp) FILTER (WHERE event.size > 0),
+    min(event.timestamp) FILTER (WHERE event.size < 0)
+  INTO v_lifetime_added_at, v_lifetime_removed_at
+  FROM public.version_meta event
+  WHERE event.app_id = p_app_id
+    AND event.version_id = p_version_id
+    AND event.lifetime = v_lifetime;
 
   v_event_at := pg_catalog.timezone('UTC', LEAST(COALESCE(p_timestamp, pg_catalog.clock_timestamp()), pg_catalog.clock_timestamp()));
 
-  IF p_size < 0 THEN
+  IF p_size > 0 THEN
+    -- Already stored and not removed since: nothing to record.
+    IF v_lifetime_added_at IS NOT NULL AND v_lifetime_removed_at IS NULL THEN
+      RETURN FALSE;
+    END IF;
+    IF v_lifetime_added_at IS NOT NULL THEN
+      -- The interval was closed: only a restored (live again) bundle is stored
+      -- again, from its restore (the last server-side update), never from the
+      -- original upload: the deleted interval is not billed.
+      IF COALESCE(v_deleted, false) THEN
+        RETURN FALSE;
+      END IF;
+      v_lifetime := v_lifetime + 1;
+      v_event_at := GREATEST(
+        v_event_at,
+        v_lifetime_removed_at,
+        pg_catalog.timezone('UTC', LEAST(COALESCE(v_deleted_at, pg_catalog.clock_timestamp()), pg_catalog.clock_timestamp()))
+      );
+    END IF;
+  ELSE
+    IF v_lifetime_removed_at IS NOT NULL THEN
+      RETURN FALSE;
+    END IF;
+    -- A removal processed after the bundle was restored would close the
+    -- restored interval: only a bundle still deleted is removed.
+    IF NOT COALESCE(v_deleted, false) THEN
+      RETURN FALSE;
+    END IF;
     -- A removal never precedes the bundle's upload event.
-    SELECT GREATEST(v_event_at, max(added.timestamp))
-    INTO v_event_at
-    FROM public.version_meta added
-    WHERE added.app_id = p_app_id
-      AND added.version_id = p_version_id
-      AND added.size > 0;
+    v_event_at := GREATEST(v_event_at, v_lifetime_added_at);
   END IF;
 
-  INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
-  VALUES (v_event_at, p_app_id, p_version_id, p_size)
+  INSERT INTO public.version_meta (timestamp, app_id, version_id, size, lifetime)
+  VALUES (v_event_at, p_app_id, p_version_id, p_size, v_lifetime)
   RETURNING timestamp INTO v_added_at;
 
   -- A late upload event of a deleted bundle: close its lifetime at the deletion.
   IF p_size > 0 AND COALESCE(v_deleted, false) THEN
-    INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+    INSERT INTO public.version_meta (timestamp, app_id, version_id, size, lifetime)
     VALUES (
       GREATEST(v_added_at, pg_catalog.timezone('UTC', LEAST(COALESCE(v_deleted_at, pg_catalog.clock_timestamp()), pg_catalog.clock_timestamp()))),
       p_app_id,
       p_version_id,
-      -p_size
+      -p_size,
+      v_lifetime
     )
     ON CONFLICT DO NOTHING;
   END IF;

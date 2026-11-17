@@ -356,10 +356,10 @@ function storageRemovalTime(c: Context): string | null {
 async function closeVersionStorageLifetime(c: Context, pg: PgClient, record: Database['public']['Tables']['app_versions']['Row']) {
   try {
     await pg.query(
-      `INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+      `INSERT INTO public.version_meta (timestamp, app_id, version_id, size, lifetime)
        SELECT
          GREATEST(added.timestamp, pg_catalog.timezone('UTC', LEAST(COALESCE($3::timestamptz, pg_catalog.now()), pg_catalog.now()))),
-         added.app_id, added.version_id, -added.size
+         added.app_id, added.version_id, -added.size, added.lifetime
        FROM public.version_meta added
        WHERE added.app_id = $1
          AND added.version_id = $2
@@ -368,7 +368,14 @@ async function closeVersionStorageLifetime(c: Context, pg: PgClient, record: Dat
            SELECT 1 FROM public.version_meta removed
            WHERE removed.app_id = added.app_id
              AND removed.version_id = added.version_id
+             AND removed.lifetime = added.lifetime
              AND removed.size < 0
+         )
+         -- A bundle restored before this job ran is stored again: its new lifetime stays open.
+         AND NOT EXISTS (
+           SELECT 1 FROM public.app_versions live
+           WHERE live.id = added.version_id
+             AND NOT live.deleted
          )
        ON CONFLICT DO NOTHING`,
       [record.app_id, record.id, storageRemovalTime(c)],
