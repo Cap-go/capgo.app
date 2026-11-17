@@ -433,6 +433,39 @@ async function replaceCycleStorageHourly(
   return calculation
 }
 
+/**
+ * Shortly after a rollover, records the previous cycle's hours up to its end: the interval between
+ * its last refresh and the rollover is only recorded then. Used by live refreshes and by the
+ * deletion finalizer (an app deleted before its first refresh of the new cycle).
+ */
+async function finalizePreviousCycle(
+  c: Context,
+  pg: PgClient,
+  events: VersionMetaStorageRow[],
+  options: { appId: string, ownerOrg: string, cycleStart: string, calculationEndMs: number, accrualStart: string | null, writtenAt: string },
+) {
+  const cycleStartMs = parseTimestampMs(options.cycleStart)
+  if (options.calculationEndMs - cycleStartMs >= STORAGE_FINALIZE_WINDOW_MS)
+    return
+  const previous = (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_previous_storage_cycle', async () => ({
+    data: await readCycleBefore(pg, options.ownerOrg, options.cycleStart),
+    error: null,
+  }))).data
+  // Only a previous cycle that ends exactly where this one starts (a plan change can move the anchor).
+  if (!previous?.cycle_start || !previous.cycle_end || parseTimestampMs(previous.cycle_end) !== cycleStartMs)
+    return
+  await replaceCycleStorageHourly(c, pg, events, {
+    appId: options.appId,
+    ownerOrg: options.ownerOrg,
+    cycleStart: previous.cycle_start,
+    cycleEnd: previous.cycle_end,
+    // Never past the calculation's own end (a backfill with an earlier currentHour).
+    currentHour: new Date(Math.min(parseTimestampMs(previous.cycle_end), options.calculationEndMs)).toISOString(),
+    accrualStart: options.accrualStart,
+    writtenAt: options.writtenAt,
+  })
+}
+
 async function refreshStorageHourly(
   c: Context,
   pg: PgClient,
@@ -467,23 +500,14 @@ async function refreshStorageHourly(
     error: null,
   }))).data
 
-  const cycleStartMs = parseTimestampMs(cycleStart)
-  if (calculationEndMs - cycleStartMs < STORAGE_FINALIZE_WINDOW_MS) {
-    const previous = await readCycle(ownerOrg, cycleStart)
-    // Only a previous cycle that ends exactly where this one starts (a plan change can move the anchor).
-    if (previous?.cycle_start && previous.cycle_end && parseTimestampMs(previous.cycle_end) === cycleStartMs) {
-      await replaceCycleStorageHourly(c, pg, events, {
-        appId,
-        ownerOrg,
-        cycleStart: previous.cycle_start,
-        cycleEnd: previous.cycle_end,
-        // Never past this refresh's own end (a backfill with an earlier currentHour).
-        currentHour: new Date(Math.min(parseTimestampMs(previous.cycle_end), calculationEndMs)).toISOString(),
-        accrualStart: ownership.ownedSince,
-        writtenAt,
-      })
-    }
-  }
+  await finalizePreviousCycle(c, pg, events, {
+    appId,
+    ownerOrg,
+    cycleStart,
+    calculationEndMs,
+    accrualStart: ownership.ownedSince,
+    writtenAt,
+  })
 
   // After a transfer, the former owner's refreshes stop: record its hours from its last refresh
   // up to the transfer, in the former owner's billing cycle that contains it.
@@ -559,15 +583,26 @@ export async function finalizeDeletedAppStorageHourly(c: Context, pg: PgClient, 
   const cycle = await readCycleBefore(pg, record.owner_org, deletedAt)
   if (!cycle?.cycle_start || !cycle.cycle_end)
     return null
-  return replaceCycleStorageHourly(c, pg, events, {
+  const accrualStart = deletedAppOwnedSince(record)
+  const calculation = await replaceCycleStorageHourly(c, pg, events, {
     appId: record.app_id,
     ownerOrg: record.owner_org,
     cycleStart: cycle.cycle_start,
     cycleEnd: cycle.cycle_end,
     currentHour: deletedAt,
-    accrualStart: deletedAppOwnedSince(record),
+    accrualStart,
     writtenAt,
   })
+  // Deleted soon after a rollover: the previous cycle's last hours are only recorded here.
+  await finalizePreviousCycle(c, pg, events, {
+    appId: record.app_id,
+    ownerOrg: record.owner_org,
+    cycleStart: cycle.cycle_start,
+    calculationEndMs: parseTimestampMs(deletedAt),
+    accrualStart,
+    writtenAt,
+  })
+  return calculation
 }
 
 async function syncAppStatsRefresh(

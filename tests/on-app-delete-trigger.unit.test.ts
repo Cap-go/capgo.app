@@ -173,4 +173,53 @@ describe('on_app_delete trigger', () => {
       pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
     }
   })
+
+  it('also finalizes the previous cycle when the app is deleted right after a rollover', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-02-01T12:00:00.000Z'))
+    try {
+      pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('max(timestamp) AS deleted_at'))
+          return { rows: [{ deleted_at: '2026-02-01T06:00:00.000Z' }], rowCount: 1 } as any
+        if (sql.includes('FROM public.version_meta'))
+          return { rows: [
+            { timestamp: '2026-01-31T00:00:00.000Z', version_id: 1, size: 100 },
+            { timestamp: '2026-02-01T06:00:00.000Z', version_id: 1, size: -100 },
+          ], rowCount: 2 } as any
+        if (sql.includes('billing_cycle_for_anchor')) {
+          const before = new Date(String(params?.[1])).getTime()
+          return before <= Date.parse('2026-02-01T00:00:00.000Z')
+            ? { rows: [{ cycle_start: '2026-01-01T00:00:00.000Z', cycle_end: '2026-02-01T00:00:00.000Z' }], rowCount: 1 } as any
+            : { rows: [{ cycle_start: '2026-02-01T00:00:00.000Z', cycle_end: '2026-03-01T00:00:00.000Z' }], rowCount: 1 } as any
+        }
+        return { rows: [], rowCount: 0 }
+      })
+
+      const response = await app.request('http://local/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'DELETE',
+          table: 'apps',
+          record: { app_id: 'com.test.delete', owner_org: 'org-1', created_at: '2026-01-01T00:00:00.000Z', transfer_history: [] },
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const replaced = pgQuery.mock.calls
+        .filter(([sql]) => sql.includes('replace_app_storage_hourly'))
+        .map(([, params]) => [params?.[2], JSON.parse(params?.[7] as string)])
+      expect(replaced).toEqual([
+        // The deletion's cycle: 6 hours on February 1st.
+        ['2026-02-01', [{ cycle_start: '2026-02-01', date: '2026-02-01', storage_byte_hours: 600 }]],
+        // The previous cycle up to its end: all of January 31st.
+        ['2026-01-01', [{ cycle_start: '2026-01-01', date: '2026-01-31', storage_byte_hours: 2400 }]],
+      ])
+    }
+    finally {
+      pgQuery.mockReset()
+      pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+      vi.useRealTimers()
+    }
+  })
 })
