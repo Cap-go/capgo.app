@@ -58,6 +58,6 @@ export function createAssistantAnalytics(
 }
 
 export const assistantAnalytics = createAssistantAnalytics(
-  (event, properties) => pushEvent(event, getConsoleApiHost, properties),
+  (event, properties) => pushEvent(event, getConsoleApiHost(), properties),
   Capacitor.getPlatform(),
 )
