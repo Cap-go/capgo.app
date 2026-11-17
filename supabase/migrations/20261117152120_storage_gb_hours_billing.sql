@@ -897,6 +897,25 @@ BEGIN
       RAISE;
   END;
 
+  -- The former owner's storage hours up to the transfer are recorded by a
+  -- refresh under the new owner (it finalizes former owners). stats_jobs may
+  -- never schedule an idle app of an org without billing, and jobs queued for
+  -- the former owner are skipped once it no longer owns the app: queue one
+  -- now (delivered at commit). A refresh is idempotent, so a duplicate is
+  -- harmless.
+  PERFORM pgmq.send(
+    'cron_stat_app',
+    pg_catalog.jsonb_build_object(
+      'function_name', 'cron_stat_app',
+      'function_type', 'cloudflare',
+      'payload', pg_catalog.jsonb_build_object(
+        'appId', p_app_id,
+        'orgId', p_new_org_id,
+        'todayOnly', false
+      )
+    )
+  );
+
 END;
 $$;
 

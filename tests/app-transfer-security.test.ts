@@ -259,6 +259,19 @@ describe('app transfer security', () => {
 
     expect(appRow.owner_org).toBe(destinationOrgId)
     expect(appRow.transfer_history ?? []).toHaveLength(1)
+    // The transfer queues a refresh under the new owner, which records the former owner's hours up
+    // to the transfer even when the scheduler would never pick this app (queued, or already consumed).
+    const [queued] = await executeSQL<{ count: number }>(
+      `SELECT count(*)::int AS count FROM (
+         SELECT message FROM pgmq.q_cron_stat_app
+         UNION ALL
+         SELECT message FROM pgmq.a_cron_stat_app
+       ) job
+       WHERE job.message->'payload'->>'appId' = $1
+         AND job.message->'payload'->>'orgId' = $2`,
+      [appId, destinationOrgId],
+    )
+    expect(queued.count).toBeGreaterThan(0)
     // Recorded after the lock, so later than every hour and the watermark the former owner's
     // refresh wrote (now() would be the transaction start, before the refresh committed).
     // Compared in the database: these instants can share a millisecond, JS Dates drop microseconds.
