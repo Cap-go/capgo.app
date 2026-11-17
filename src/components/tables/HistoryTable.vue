@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
+import { createHistoryContextLoader } from '~/services/historyContext'
 import { checkPermissions } from '~/services/permissions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
@@ -81,13 +82,13 @@ const total = ref(0)
 const currentVersionId = ref<number | null>(null)
 
 // Fetch current channel's version_id (only relevant for channel mode)
-async function fetchCurrentVersion() {
+async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promise<boolean> {
   // Skip if in bundle mode
   if (props.bundleId)
-    return
+    return true
 
   if (!props.channelId)
-    return
+    return true
 
   try {
     const { data, error } = await capgo
@@ -98,13 +99,16 @@ async function fetchCurrentVersion() {
 
     if (error) {
       console.error('Error fetching current version:', error)
-      return
+      return false
     }
 
-    currentVersionId.value = data.version
+    if (isCurrent())
+      currentVersionId.value = data.version
+    return true
   }
   catch (error) {
     console.error('Error fetching current version:', error)
+    return false
   }
 }
 
@@ -213,12 +217,21 @@ async function openOneVersion(item: DeployHistory) {
   router.push(`/app/${props.appId}/bundle/${item.version_id}`)
 }
 
-async function fetchDeployHistory() {
+// Members and the current bundle load once per scope (see historyContext.ts).
+const historyContext = createHistoryContextLoader({
+  scopeKey: () => JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null, props.bundleId ?? null]),
+  loadCurrentVersion: fetchCurrentVersion,
+  loadMembers: () => organizationStore.getMembers(),
+  applyMembers: (loaded) => {
+    members.value = loaded
+  },
+})
+
+async function fetchDeployHistory(options: { refreshCurrentVersion?: boolean } = {}) {
   loading.value = true
   try {
     deployHistory.value.length = 0
-    await fetchCurrentVersion()
-    members.value = await organizationStore.getMembers()
+    await historyContext.load(options)
 
     if (isBundleMode.value) {
       // Bundle mode: fetch both assignments and removals
@@ -528,6 +541,6 @@ watch([() => props.channelId, () => props.bundleId, () => props.appId], () => {
     @update:search="search = $event"
     @update:current-page="page = $event"
     @update:columns="columns = $event"
-    @reload="fetchDeployHistory"
+    @reload="fetchDeployHistory({ refreshCurrentVersion: true })"
   />
 </template>

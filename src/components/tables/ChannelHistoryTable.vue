@@ -6,6 +6,7 @@ import { toast } from 'vue-sonner'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
+import { createHistoryContextLoader } from '~/services/historyContext'
 import { checkPermissions } from '~/services/permissions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
@@ -109,9 +110,9 @@ function formatValue(field: string, value: unknown): string {
 }
 
 // Fetch current channel's version_id
-async function fetchCurrentVersion() {
+async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promise<boolean> {
   if (!props.channelId)
-    return
+    return true
 
   try {
     const { data, error } = await capgo
@@ -122,13 +123,16 @@ async function fetchCurrentVersion() {
 
     if (error) {
       console.error('Error fetching current version:', error)
-      return
+      return false
     }
 
-    currentVersionId.value = data.version
+    if (isCurrent())
+      currentVersionId.value = data.version
+    return true
   }
   catch (error) {
     console.error('Error fetching current version:', error)
+    return false
   }
 }
 
@@ -220,12 +224,21 @@ async function openDetails(item: HistoryEntry) {
   selectedEntry.value = null
 }
 
-async function fetchHistory() {
+// Members and the current bundle load once per scope (see historyContext.ts).
+const historyContext = createHistoryContextLoader({
+  scopeKey: () => JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null]),
+  loadCurrentVersion: fetchCurrentVersion,
+  loadMembers: () => organizationStore.getMembers(),
+  applyMembers: (loaded) => {
+    members.value = loaded
+  },
+})
+
+async function fetchHistory(options: { refreshCurrentVersion?: boolean } = {}) {
   loading.value = true
   try {
     historyEntries.value = []
-    await fetchCurrentVersion()
-    members.value = await organizationStore.getMembers()
+    await historyContext.load(options)
 
     // Without a search, page audit rows in the database: each meaningful row maps to
     // one or two entries. Searching matches derived text (bundle names, labels,
@@ -464,7 +477,7 @@ watch([search, page], () => {
     @update:search="search = $event"
     @update:current-page="page = $event"
     @update:columns="columns = $event"
-    @reload="fetchHistory"
+    @reload="fetchHistory({ refreshCurrentVersion: true })"
   />
 
   <!-- Details Modal Content -->

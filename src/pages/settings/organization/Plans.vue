@@ -19,6 +19,7 @@ import { ENTERPRISE_MAU_STOPS, formatMau, getOrgExtraMau, quoteEnterpriseScale }
 import { formatNumberValue, getFormatLocale } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { observeEventsForPlan } from '~/services/observePlanAllowance'
+import { organizationBillingKey } from '~/services/organizationWatchKeys'
 import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
 import { checkPermissions } from '~/services/permissions'
 import { formatPlanAmount, usePlanPrices } from '~/services/planPrices'
@@ -522,7 +523,11 @@ async function findBillableFallbackOrg() {
   }
   return undefined
 }
-watch(currentOrganization, async (newOrg, prevOrg) => {
+// Rerun on organization switch or billing change, not when the store swaps in a
+// refreshed copy of the same organization (logo load, unrelated settings save).
+watch(() => organizationBillingKey(currentOrganization.value), async (_key, previousKey) => {
+  const newOrg = currentOrganization.value
+  const prevOrgId = previousKey ? (JSON.parse(previousKey) as string[])[0] : undefined
   if (newOrg) {
     // Viewing plans requires read_billing; update_billing is only for checkout actions.
     const hasReadBillingPermission = await checkPermissions('org.read_billing', { orgId: newOrg.gid })
@@ -547,10 +552,10 @@ watch(currentOrganization, async (newOrg, prevOrg) => {
         ],
       })
       await dialogStore.onDialogDismiss()
-      if (!prevOrg)
+      if (!prevOrgId)
         router.push('/apps')
       else
-        organizationStore.setCurrentOrganization(prevOrg.gid)
+        organizationStore.setCurrentOrganization(prevOrgId)
       return
     }
   }
