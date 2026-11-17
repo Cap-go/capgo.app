@@ -1897,8 +1897,9 @@ async function scheduleOpenAIFirstPayment(c: Context, org: Org, paidAt: string, 
     planId,
     stripeEvent: c.get('stripeEvent'),
   }, {
-    loadUser: userId => withAdminPg(c, async pg => singleRowOrNull((await pg.query<{ id: string, email: string, first_name: string | null, last_name: string | null, country: string | null }>(
-      'SELECT id, email, first_name, last_name, country FROM public.users WHERE id = $1 LIMIT 2',
+    loadUser: userId => withAdminPg(c, async pg => singleRowOrNull((await pg.query<{ id: string, email: string, first_name: string | null, last_name: string | null, country: string | null, oppref: unknown }>(
+      `SELECT u.id, u.email, u.first_name, u.last_name, u.country, a.raw_user_meta_data->'oppref' AS oppref
+       FROM public.users u LEFT JOIN auth.users a ON a.id = u.id WHERE u.id = $1 LIMIT 2`,
       [userId],
     )).rows)),
     // Short, single-shot requests: the helper retries, inside the background budget.

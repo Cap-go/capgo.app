@@ -3,6 +3,7 @@ import type { GotrueUser } from '../utils/gotrue_admin.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
+import { normalizeOpenAIClickReference } from '../../shared/openai-click-reference.ts'
 import { checkRegistrationEmail, deleteUserProfile, getCaptchaSecret, isAuthRateLimitError, isCaptchaFailedError, isLeakedPasswordError, isWeakPasswordError, provisionUserProfile } from '../utils/accountProvisioning.ts'
 import { isDirectOfferMetadata, persistDirectOffer } from '../utils/direct_offer.ts'
 import { gotrueAdmin } from '../utils/gotrue_admin.ts'
@@ -32,6 +33,10 @@ const registerSchema = z.object({
   utm_source: z.string().trim().min(1).optional(),
   utm_medium: z.string().trim().min(1).optional(),
   utm_campaign: z.string().trim().min(1).optional(),
+  utm_content: z.string().trim().min(1).max(256).optional().catch(undefined),
+  utm_term: z.string().trim().min(1).max(256).optional().catch(undefined),
+  // Optional attribution must never block an otherwise valid registration.
+  oppref: z.unknown().transform(normalizeOpenAIClickReference).optional(),
   // Paid-ads signups send offer=direct (no free trial). Any other value is ignored.
   offer: z.string().max(64).optional(),
   opt_for_newsletters: z.boolean().default(false),
@@ -136,7 +141,7 @@ app.post('/', async (c) => {
     userMetadata.last_name = body.last_name
   if (body.ref)
     userMetadata.ref = body.ref
-  for (const key of ['signup_source', 'signup_plugin', 'first_touch_type', 'first_touch_path', 'utm_source', 'utm_medium', 'utm_campaign'] as const) {
+  for (const key of ['signup_source', 'signup_plugin', 'first_touch_type', 'first_touch_path', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'oppref'] as const) {
     if (body[key])
       userMetadata[key] = body[key]
   }
