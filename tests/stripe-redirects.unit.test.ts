@@ -128,7 +128,6 @@ describe('stripe redirect URL allowlist', () => {
   })
 
   it('allows checkout success and cancel URLs on the China console host', async () => {
-    mockedEnv.WEBAPP_URL = 'https://console.capgo.app'
     const createSession = vi.fn().mockResolvedValue({ url: 'https://pay.capgo.test/p/pay' })
     const mocks = subscriptionCheckoutMocks()
     const stripeClient = {
