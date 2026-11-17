@@ -169,8 +169,8 @@ async function getUsage(orgId: string, org: UsageOrganization) {
     console.error('Error loading cycle storage usage:', error)
     return null
   })
-  const totalStorageByteHours = storageUsage?.storage_byte_hours
-    ?? usageInCycle.reduce((acc, entry) => acc + (entry.storage_byte_hours ?? 0), 0)
+  // No fallback to the chart series: its boundary day also holds the previous cycle's hours.
+  const totalStorageByteHours = storageUsage?.storage_byte_hours ?? 0
   const totalStorageBytes = billableStorageBytes(totalStorageByteHours, cycleStart, cycleEnd)
   const totalStorage = bytesToGb(totalStorageByteHours, 2)
   const includedStorage = currentPlan ? includedStorageGbHours(currentPlan.storage, cycleStart, cycleEnd) : 0

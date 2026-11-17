@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(28);
+SELECT plan(29);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -313,6 +313,19 @@ SELECT
         (SELECT ARRAY[storage_byte_hours, cycle_hours] FROM public.get_org_storage_usage((SELECT org_id FROM usage_ctx))),
         (SELECT ARRAY[4800, (cycle_end - cycle_start) * 24]::double precision[] FROM usage_ctx),
         'get_org_storage_usage returns the cycle byte-hours and hours billing uses'
+    );
+
+-- Right after a non-midnight rollover, before the new cycle has storage, only
+-- the previous cycle's part of the boundary day exists: the cycle uses nothing.
+DELETE FROM public.daily_storage_hourly
+WHERE app_id = 'com.test.gbhours.usage'
+  AND cycle_start = (SELECT cycle_start FROM usage_ctx);
+
+SELECT
+    is(
+        (SELECT storage_byte_hours FROM public.get_org_storage_usage((SELECT org_id FROM usage_ctx))),
+        0::double precision,
+        'get_org_storage_usage is zero when only the previous cycle has hours on the boundary day'
     );
 
 SELECT
