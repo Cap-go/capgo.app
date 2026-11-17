@@ -40,4 +40,4 @@ DELETE ON public.invoice_email_preferences,
 public.invoice_email_deliveries TO service_role;
 COMMENT ON TABLE public.invoice_email_deliveries IS
 'Paid invoice email decisions, deduplicated across Stripe event types.
-Acceptance is not inbox delivery. Empty recipients records an opted-out invoice.';
+Acceptance is not inbox delivery. Empty recipients records an opted-out invoice or missing mailbox.';

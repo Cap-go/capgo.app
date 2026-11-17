@@ -55,13 +55,13 @@ export async function queueInvoiceEmail(c: Context, orgId: string, billingAccoun
   const pool = await getPgClient(c)
   try {
     await withPgTransaction(pool, async (client) => {
-      // The write checks ownership and records the decision even when opted out.
-      // Replayed events cannot pick up newly-added recipients or send an old opt-out.
+      // Check ownership and snapshot recipients in the same write, including empty decisions.
+      // Replay cannot pick up new recipients after an opt-out or missing mailbox.
       const result = await client.query<{ id: string, recipients: string[] }>(`
         INSERT INTO public.invoice_email_deliveries (org_id, billing_account, customer_id, invoice_id, recipients)
         SELECT o.id, $2, $3, $4, CASE WHEN NOT COALESCE(p.enabled, true) THEN '{}'::text[]
           WHEN cardinality(p.recipients) > 0 THEN p.recipients
-          ELSE ARRAY[COALESCE(NULLIF($5, ''), NULLIF(o.management_email, ''))] END
+          ELSE array_remove(ARRAY[COALESCE(NULLIF(trim($5), ''), NULLIF(trim(o.management_email), ''))], NULL) END
         FROM public.orgs o LEFT JOIN public.invoice_email_preferences p ON p.org_id = o.id
         WHERE o.id = $1 AND o.customer_id = $3
         ON CONFLICT (billing_account, invoice_id) DO NOTHING RETURNING id, recipients
@@ -69,8 +69,6 @@ export async function queueInvoiceEmail(c: Context, orgId: string, billingAccoun
       const delivery = result.rows[0]
       if (!delivery?.recipients.length)
         return
-      if (delivery.recipients.some(email => !email))
-        throw new Error('Paid invoice has no email recipient')
       await client.query(`SELECT pgmq.send('send_email', $1::jsonb)`, [JSON.stringify({
         function_name: 'send_email', function_type: 'cloudflare', payload: { invoice_delivery_id: delivery.id },
       })])

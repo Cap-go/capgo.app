@@ -61,6 +61,21 @@ describe('invoice PDF rendering', () => {
     expect(notes.map(item => item.str)).toEqual(['One', 'Two', 'Three', 'Four', 'Five'])
     expect(Math.min(...notes.map(item => item.transform[5]))).toBeGreaterThan(60)
   })
+  it.concurrent('retains every tax and credit row when totals span pages', async () => {
+    const document = buildInvoiceDocument(exampleInvoice, exampleAccount, exampleLines, [], new Map())
+    document.totals = [
+      ...Array.from({ length: 80 }, (_, i) => ({ label: `${i % 2 ? 'Credit' : 'Tax'} adjustment ${i + 1}`, amount: `$${i + 1}.01` })),
+      { label: 'Final amount paid', amount: '$999.99', strong: true },
+    ]
+    const pages = await renderedPages(document)
+    expect(pages.length).toBeGreaterThan(1)
+    const text = pages.flat().map(item => item.str).join(' ')
+    for (const row of document.totals) {
+      expect(text).toContain(row.label)
+      // PDF text extraction can split kerned digits into separate text items.
+      expect(text.replace(/\s+/g, '')).toContain(row.amount)
+    }
+  })
   it.concurrent('renders long descriptions, accented identities and multiple pages as an actual PDF', async () => {
     const lines = Array.from({ length: 101 }, (_, i) => ({ ...exampleLines[0], description: `Line ${i + 1}: ${'Long subscription description '.repeat(12)}` }))
     const document = buildInvoiceDocument({ ...exampleInvoice, customer_name: 'Example Société' }, exampleAccount, lines, [], new Map([[exampleRate.id, exampleRate]]))

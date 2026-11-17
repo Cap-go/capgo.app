@@ -89,7 +89,6 @@ export function invoicePdfDefinition(invoice: InvoiceDocument, billingUrl = 'htt
         },
       },
       {
-        unbreakable: true,
         columns: [{ text: '', width: '*' }, {
           width: 276,
           table: { widths: ['*', 65], body: invoice.totals.map(row => [{ text: row.label, bold: row.strong }, { text: row.amount, bold: row.strong, alignment: 'right' }]) },

@@ -1983,12 +1983,15 @@ async function handleInvoiceStripeEvent(
   stripeData: StripeData,
   customer: StripeInfoRow,
 ) {
-  await queueInvoiceEmail(c, org.id, getWebhookBillingAccount(c), stripeEvent)
   if (await handleAutoTopUpInvoicePaid(c, stripeEvent, org.id))
     return c.json(BRES)
   await recoverOpenAIFirstPaymentFromInvoice(c, org, stripeEvent, customer)
-  if (stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded')
-    return invoicePaid(c, org, stripeEvent, stripeData, customer)
+  if (stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded') {
+    const response = await invoicePaid(c, org, stripeEvent, stripeData, customer)
+    // Commit paid access first. An outbox failure still retries the email via Stripe.
+    await queueInvoiceEmail(c, org.id, getWebhookBillingAccount(c), stripeEvent)
+    return response
+  }
   if (stripeEvent.type === 'invoice.upcoming')
     return invoiceUpcoming(c, org, stripeEvent, stripeData)
   if (stripeEvent.type === 'invoice.created' || stripeEvent.type === 'invoice.updated')

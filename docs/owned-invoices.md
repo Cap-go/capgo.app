@@ -135,8 +135,11 @@ The PDF uses the same layout and billing-detail correction rules as downloads.
 
 A durable delivery decision is unique per Stripe entity and invoice, covering
 both `invoice.paid` and `invoice.payment_succeeded`. It snapshots the recipients
-at payment time and records opt-outs so webhook replay cannot resend an old
-invoice after settings change. The sender also honors an opt-out while queued.
+at payment time and records opt-outs or missing mailboxes so webhook replay cannot
+send an old invoice after settings change. Without selected recipients or either
+default mailbox, the PDF remains available in billing and no email is queued. Paid access is
+committed before email queuing; transient outbox failures still fail the webhook
+so Stripe retries the email. The sender also honors an opt-out while queued.
 Partial provider acceptances are committed before retrying failures; already
 accepted recipients are skipped. Provider acceptance followed by a process crash
 or failed database commit can still produce a duplicate (at-least-once delivery).
