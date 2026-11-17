@@ -305,14 +305,15 @@ describe('builds table after a successful build', () => {
     await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1))
     await new Promise(resolve => setTimeout(resolve, 0))
     mocks.failBuilds = true
+    const beforeRecovery = mocks.buildQueries
     for (let tick = 0; tick < 6; tick++) {
       vi.advanceTimersByTime(10_000)
       await new Promise(resolve => setTimeout(resolve, 0))
     }
-    const settled = mocks.buildQueries
+    expect(mocks.buildQueries).toBe(beforeRecovery + 3)
     vi.advanceTimersByTime(60_000)
     await new Promise(resolve => setTimeout(resolve, 0))
-    expect(mocks.buildQueries).toBe(settled)
+    expect(mocks.buildQueries).toBe(beforeRecovery + 3)
   })
 
   it('recovers saved outputs again for a later build after an earlier recovery gave up', async () => {
@@ -338,6 +339,36 @@ describe('builds table after a successful build', () => {
     mocks.builds = [{ ...next, status: 'succeeded' }, { ...running, status: 'succeeded' }]
     await tick()
     fetchMock.mockImplementation(async () => new Response(JSON.stringify({ outputs: { job_3: { url: 'https://dl.example.test/app.apk', kind: 'android_apk', expires_at: '2999-01-01T00:00:00Z' } } }), { status: 200 }))
+    await tick()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-download"]')).not.toBeNull())
+  })
+
+  it('re-arms recovery when a reload finds a running build, even if it ends before the next tick', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const tick = async () => {
+      vi.advanceTimersByTime(10_000)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    mocks.builds = [running]
+    const fetchMock = vi.fn().mockRejectedValue(new Error('offline'))
+    vi.stubGlobal('fetch', fetchMock)
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    mocks.builds = [{ ...running, status: 'succeeded' }]
+    for (let i = 0; i < 6; i++)
+      await tick()
+    const reload = () => (host.querySelector('[data-test="table-reload"]') as HTMLButtonElement).click()
+    const next = { ...running, id: 'b3', builder_job_id: 'job_3' }
+    mocks.builds = [next, { ...running, status: 'succeeded' }]
+    reload()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b3"]')).not.toBeNull())
+    mocks.builds = [{ ...next, status: 'succeeded' }, { ...running, status: 'succeeded' }]
+    const lookups = fetchMock.mock.calls.length
+    reload()
+    await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBe(lookups + 1))
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ outputs: { job_3: { url: 'https://dl.example.test/app.apk', kind: 'android_apk', expires_at: '2999-01-01T00:00:00Z' } } }), { status: 200 }))
+    await new Promise(resolve => setTimeout(resolve, 0))
     await tick()
     await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-download"]')).not.toBeNull())
   })

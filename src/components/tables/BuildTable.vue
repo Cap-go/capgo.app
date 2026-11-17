@@ -210,6 +210,9 @@ async function getData(silent = false) {
     if (durations === null)
       toast.error(t('error-fetching-build-durations'))
     elements.value = builds
+    // A running build re-arms saved-output recovery for the moment it ends.
+    if (builds.some(build => isBuildActive(build.status)))
+      outputsFailures.value = 0
     total.value = count || 0
     if (isCurrent())
       await loadSavedOutputs(builds, isCurrent, silent)
@@ -598,10 +601,7 @@ watch(() => hasActiveBuild.value || (outputsFailures.value > 0 && outputsFailure
     if (polling || document.visibilityState !== 'visible' || isLoading.value || (openedRow.value && !isBuildActive(openedRow.value.status)))
       return
     // Without a running build this tick only recovers saved outputs: it uses one retry.
-    // A running build re-arms recovery for the moment it ends.
-    if (hasActiveBuild.value)
-      outputsFailures.value = 0
-    else
+    if (!hasActiveBuild.value)
       outputsFailures.value++
     // One poll at a time: a slower answer must not be superseded by the next tick forever.
     polling = true
