@@ -598,7 +598,10 @@ watch(() => hasActiveBuild.value || (outputsFailures.value > 0 && outputsFailure
     if (polling || document.visibilityState !== 'visible' || isLoading.value || (openedRow.value && !isBuildActive(openedRow.value.status)))
       return
     // Without a running build this tick only recovers saved outputs: it uses one retry.
-    if (!hasActiveBuild.value)
+    // A running build re-arms recovery for the moment it ends.
+    if (hasActiveBuild.value)
+      outputsFailures.value = 0
+    else
       outputsFailures.value++
     // One poll at a time: a slower answer must not be superseded by the next tick forever.
     polling = true

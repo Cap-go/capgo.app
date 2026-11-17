@@ -314,4 +314,31 @@ describe('builds table after a successful build', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(mocks.buildQueries).toBe(settled)
   })
+
+  it('recovers saved outputs again for a later build after an earlier recovery gave up', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const tick = async () => {
+      vi.advanceTimersByTime(10_000)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    mocks.builds = [running]
+    const fetchMock = vi.fn().mockRejectedValue(new Error('offline'))
+    vi.stubGlobal('fetch', fetchMock)
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    mocks.builds = [{ ...running, status: 'succeeded' }]
+    for (let i = 0; i < 6; i++)
+      await tick()
+    const next = { ...running, id: 'b3', builder_job_id: 'job_3' }
+    mocks.builds = [next, { ...running, status: 'succeeded' }]
+    ;(host.querySelector('[data-test="table-reload"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b3"]')).not.toBeNull())
+    await tick()
+    mocks.builds = [{ ...next, status: 'succeeded' }, { ...running, status: 'succeeded' }]
+    await tick()
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ outputs: { job_3: { url: 'https://dl.example.test/app.apk', kind: 'android_apk', expires_at: '2999-01-01T00:00:00Z' } } }), { status: 200 }))
+    await tick()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-download"]')).not.toBeNull())
+  })
 })
