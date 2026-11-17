@@ -334,8 +334,14 @@ GRANT EXECUTE ON FUNCTION public.get_org_storage_usage(uuid) TO authenticated, s
 ALTER TABLE public.version_meta
 ADD COLUMN IF NOT EXISTS recorded_at timestamp NOT NULL DEFAULT pg_catalog.timezone('UTC', pg_catalog.now());
 
+-- Future rows take the insert time, not the transaction start (closer to the
+-- commit). Set after the column is added: a volatile default there would
+-- rewrite the table.
+ALTER TABLE public.version_meta
+ALTER COLUMN recorded_at SET DEFAULT pg_catalog.timezone('UTC', pg_catalog.clock_timestamp());
+
 COMMENT ON COLUMN public.version_meta.recorded_at IS
-'When the event was written (UTC). timestamp is when it happened: a late removal is dated at the deletion. Storage refreshes are re-queued for events recorded after their cutoff.';
+'When the event was written (UTC). timestamp is when it happened: a late removal is dated at the deletion. Storage refreshes are re-queued for events recorded after (or up to 1 hour before) their cutoff.';
 
 CREATE OR REPLACE FUNCTION public.process_cron_stats_jobs()
 RETURNS void
@@ -394,13 +400,17 @@ BEGIN
             -- calculated (it read version_meta up to there), not after
             -- stats_updated_at (its completion): a removal while a refresh ran,
             -- or one recorded late and dated at the deletion (before that
-            -- cutoff), still gets refreshed.
+            -- cutoff), still gets refreshed. recorded_at is set at insert, not
+            -- commit: an event recorded up to 1 hour before the cutoff may not
+            -- have been visible to that refresh (these writes run in short,
+            -- statement-timeout-bound transactions), so it is refreshed once
+            -- more.
             SELECT 1
             FROM public.version_meta event
             WHERE event.app_id = a.app_id
               AND event.recorded_at > COALESCE(
                 (
-                  SELECT pg_catalog.timezone('UTC', max(refresh.calculated_until))
+                  SELECT pg_catalog.timezone('UTC', max(refresh.calculated_until)) - interval '1 hour'
                   FROM public.daily_storage_hourly_refreshes refresh
                   WHERE refresh.app_id = a.app_id
                     AND refresh.owner_org = a.owner_org

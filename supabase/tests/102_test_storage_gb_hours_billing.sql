@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(55);
+SELECT plan(56);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -581,6 +581,30 @@ SELECT
             WHERE message->'payload'->>'appId' = 'com.test.gbhours.settled'
         ),
         'stats_jobs leaves an idle app whose events were all recorded before its last cutoff'
+    );
+
+-- An event recorded shortly before the cutoff may have committed after that
+-- refresh read version_meta: refreshed once more.
+INSERT INTO public.apps (app_id, icon_url, name, owner_org, user_id)
+SELECT 'com.test.gbhours.overlap', '', 'com.test.gbhours.overlap', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid FROM gbh_ctx;
+INSERT INTO public.app_stats_refresh_state (app_id, owner_org, stats_updated_at)
+SELECT 'com.test.gbhours.overlap', org_id, pg_catalog.timezone('UTC', now()) - interval '21 hours' FROM gbh_ctx
+ON CONFLICT (app_id) DO UPDATE SET stats_updated_at = EXCLUDED.stats_updated_at, stats_refresh_requested_at = NULL;
+INSERT INTO public.daily_storage_hourly_refreshes (app_id, owner_org, cycle_start, segment_start, written_at, calculated_until)
+SELECT 'com.test.gbhours.overlap', org_id, CURRENT_DATE - 10, '-infinity', now() - interval '2 days', now() - interval '2 days' FROM gbh_ctx;
+INSERT INTO public.version_meta (timestamp, app_id, version_id, size, recorded_at) VALUES
+(pg_catalog.timezone('UTC', now()) - interval '40 days', 'com.test.gbhours.overlap', 9100213, 100, pg_catalog.timezone('UTC', now()) - interval '40 days'),
+(pg_catalog.timezone('UTC', now()) - interval '2 days 30 minutes', 'com.test.gbhours.overlap', 9100213, -100, pg_catalog.timezone('UTC', now()) - interval '2 days 30 minutes');
+DELETE FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' = 'com.test.gbhours.overlap';
+SELECT public.process_cron_stats_jobs();
+
+SELECT
+    ok(
+        EXISTS (
+            SELECT 1 FROM pgmq.q_cron_stat_app
+            WHERE message->'payload'->>'appId' = 'com.test.gbhours.overlap'
+        ),
+        'stats_jobs refreshes an idle app for an event recorded just before its last cutoff'
     );
 
 -- Ownership history (billing accrual start) is backend-controlled.

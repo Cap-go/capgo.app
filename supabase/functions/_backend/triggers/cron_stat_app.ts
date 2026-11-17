@@ -466,7 +466,9 @@ async function replaceCycleStorageHourly(
 async function readStorageRefreshedAt(pg: PgClient, appId: string, ownerOrg: string, cycleStartDay: string, segmentStart: string, coversUntil: string) {
   // A storage event dated before `coversUntil` but recorded after that refresh read version_meta
   // (a removal written late and dated at the deletion) was not in its calculation: the segment
-  // is then not finalized, and the caller recomputes it.
+  // is then not finalized, and the caller recomputes it. recorded_at is set at insert, not commit,
+  // so an event recorded up to 1 hour before the refresh started may not have been visible to it
+  // (these writes run in short, statement-timeout-bound transactions): it is recomputed once more.
   const { rows } = await pg.query<{ calculated_until: string | Date | null }>(
     `SELECT refresh.calculated_until
      FROM public.daily_storage_hourly_refreshes refresh
@@ -479,7 +481,7 @@ async function readStorageRefreshedAt(pg: PgClient, appId: string, ownerOrg: str
          FROM public.version_meta event
          WHERE event.app_id = refresh.app_id
            AND event.timestamp < pg_catalog.timezone('UTC', $5::timestamptz)
-           AND event.recorded_at > pg_catalog.timezone('UTC', refresh.written_at)
+           AND event.recorded_at > pg_catalog.timezone('UTC', refresh.written_at) - interval '1 hour'
        )`,
     [appId, ownerOrg, cycleStartDay, segmentStart, coversUntil],
   )
