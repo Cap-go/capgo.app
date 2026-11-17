@@ -1,5 +1,6 @@
 import type { PluginStateAppDoc, PluginStateChannelRow, PluginStateDeviceDoc, PluginStateManifestDoc, PluginStateManifestFallbackDoc, PluginStatePlan, PluginStatePointer, PluginStateStripe, PluginStateVersionDoc } from './pluginStateFormat.ts'
 import { isPluginStateGeneration, PLUGIN_STATE_FORMAT } from './pluginStateFormat.ts'
+import { parseServingPolicy } from './servingRegions.ts'
 
 // Match the dependency-free predicates used by plugin_schemas/*.is.ts. Pulling
 // a schema interpreter into this hot-path worker exceeds its bundle-size budget.
@@ -69,6 +70,8 @@ function isApp(value: unknown): value is PluginStateAppDoc {
 export function parsePluginStateApp(value: unknown): PluginStateAppDoc {
   if (!isApp(value))
     throw new Error('Invalid plugin app state')
+  if (value.owner)
+    parseServingPolicy(value.owner.serving_regions, value.owner.serving_region_mode)
   return value
 }
 

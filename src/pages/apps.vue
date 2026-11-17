@@ -42,6 +42,8 @@ const lacksSecurityAccess = computed(() => {
 function normalizeAppRow(app: AppIconSource): AppRow {
   return {
     ...app,
+    serving_regions: 'serving_regions' in app ? app.serving_regions : ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME'],
+    serving_region_mode: 'serving_region_mode' in app ? app.serving_region_mode : 'route',
     bundle_incompatible_alert: 'bundle_incompatible_alert' in app && typeof app.bundle_incompatible_alert === 'string'
       ? app.bundle_incompatible_alert
       : 'default',

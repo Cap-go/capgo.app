@@ -118,8 +118,16 @@ CREATE TABLE public.apps (
     onboarding jsonb DEFAULT '{}'::jsonb NOT NULL,
     device_data_collection jsonb DEFAULT '{"country": true, "is_prod": true, "platform": true, "os_version": true, "is_emulator": true, "version_build": true, "install_source": true, "plugin_version": true}'::jsonb NOT NULL,
     bundle_incompatible_alert text DEFAULT 'default'::text NOT NULL,
+    serving_regions text[] DEFAULT ARRAY['EU'::text, 'NA'::text, 'SA'::text, 'OC'::text, 'AS_INDIA'::text, 'AS_JAPAN'::text, 'HK'::text, 'AF'::text, 'ME'::text] NOT NULL,
+    serving_region_mode text DEFAULT 'route'::text NOT NULL,
     CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600))),
-    CONSTRAINT apps_bundle_incompatible_alert_check CHECK ((bundle_incompatible_alert = ANY (ARRAY['default'::text, 'all'::text])))
+    CONSTRAINT apps_bundle_incompatible_alert_check CHECK ((bundle_incompatible_alert = ANY (ARRAY['default'::text, 'all'::text]))),
+    CONSTRAINT apps_serving_region_mode_valid CHECK ((serving_region_mode = ANY (ARRAY['route'::text, 'block'::text]))),
+    CONSTRAINT apps_serving_regions_valid CHECK (
+CASE
+    WHEN (array_ndims(serving_regions) = 1) THEN (((cardinality(serving_regions) >= 1) AND (cardinality(serving_regions) <= 9)) AND (serving_regions <@ ARRAY['EU'::text, 'NA'::text, 'SA'::text, 'OC'::text, 'AS_INDIA'::text, 'AS_JAPAN'::text, 'HK'::text, 'AF'::text, 'ME'::text]) AND (array_position(serving_regions, NULL::text) IS NULL) AND (cardinality(array_positions(serving_regions, 'EU'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'NA'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'SA'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'OC'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'AS_INDIA'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'AS_JAPAN'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'HK'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'AF'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'ME'::text)) <= 1))
+    ELSE false
+END)
 );
 
 ALTER TABLE ONLY public.apps REPLICA IDENTITY FULL;

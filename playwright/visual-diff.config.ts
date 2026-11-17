@@ -394,7 +394,19 @@ function visualTrialPlanOptions() {
   ]
 }
 
+async function prepareServingRegions(page: Page, width: number) {
+  await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
+  await dismissRemindMeLater(page)
+  const target = process.env.VISUAL_DIFF_PHASE === 'after'
+    ? page.locator('[data-test="serving-regions"]')
+    : page.locator('input[name="block_provider_infra_requests"]')
+  await target.waitFor({ state: 'visible', timeout: 120_000 })
+  await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
+}
+
 export const visualDiffRoutes: VisualDiffRoute[] = [
+  { slug: 'serving-regions-desktop', path: '/app/com.demo.app/settings', auth: true, prepare: page => prepareServingRegions(page, 1280) },
+  { slug: 'serving-regions-mobile', path: '/app/com.demo.app/settings', auth: true, prepare: page => prepareServingRegions(page, 390) },
   {
     slug: 'builds-empty',
     path: '/app/com.demo.app/builds',
