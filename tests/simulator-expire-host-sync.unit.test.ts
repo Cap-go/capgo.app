@@ -68,6 +68,10 @@ const liveRow = {
 
 const dueDeviceRow = { id: sessionId, emulator_id: 'emu-1', device_stopped_at: null }
 
+function dueQueryHonorsSkipList(sql: string): boolean {
+  return sql.includes('NOT (id = ANY(') && sql.includes('$2::uuid[]')
+}
+
 function mockExpireSimulatorSessions(sql: string, params?: unknown[]): PgQueryResult | null {
   if (!sql.includes('expire_simulator_sessions'))
     return null
@@ -97,7 +101,7 @@ function installStatefulPgMock() {
     }
     if (sql.includes('FOR UPDATE') && sql.includes('simulator_sessions')) {
       const skipIdleIds = (params?.[1] as string[] | undefined) ?? []
-      if (skipIdleIds.includes(sessionId))
+      if (dueQueryHonorsSkipList(sql) && skipIdleIds.includes(sessionId))
         return { rowCount: 0, rows: [] }
       if (!mockState.hostActivityRefreshed)
         return { rowCount: 1, rows: [dueDeviceRow] }
@@ -199,7 +203,10 @@ describe('simulator org expiry host sync', () => {
     const { reserveSimulatorSlot } = await import('../supabase/functions/_backend/public/build/concurrency.ts')
     await reserveSimulatorSlot(context, { orgId, appId, userId, platform: 'ios' })
     expect(Date.now() - started).toBeLessThan(SIMULATOR_ORG_HOST_SYNC_BUDGET_MS + 500)
-    const dueParams = pgState.queryParams.find(params => (params?.[1] as string[] | undefined)?.includes(sessionId))
+    const dueIndex = pgState.queries.findIndex(query => query.includes('FOR UPDATE') && query.includes('simulator_sessions'))
+    expect(dueIndex).toBeGreaterThanOrEqual(0)
+    expect(dueQueryHonorsSkipList(pgState.queries[dueIndex]!)).toBe(true)
+    const dueParams = pgState.queryParams[dueIndex]
     expect(dueParams?.[1]).toContain(sessionId)
     const expireIndex = pgState.queries.findIndex(query => query.includes('expire_simulator_sessions'))
     expect(expireIndex).toBeGreaterThanOrEqual(0)
