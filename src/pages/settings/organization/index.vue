@@ -70,10 +70,12 @@ watch(currentOrganization, (newOrg) => {
   if (newOrg) {
     orgName.value = newOrg.name
     email.value = newOrg.management_email
-    void loadSupportChannel(newOrg.gid)
-    return
   }
-  void loadSupportChannel(undefined)
+}, { immediate: true })
+// The support channel only depends on which organization is selected: a logo
+// load or settings save that replaces the organization object must not refetch it.
+watch(() => currentOrganization.value?.gid, (orgId) => {
+  void loadSupportChannel(orgId)
 }, { immediate: true })
 
 // Form values, seeded from the organization and re-seeded when another organization is selected.

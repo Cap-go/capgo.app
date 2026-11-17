@@ -541,6 +541,26 @@
       "type": "text"
     },
     {
+      "default": "ARRAY['EU'::text, 'NA'::text, 'SA'::text, 'OC'::text, 'AS_INDIA'::text, 'AS_JAPAN'::text, 'HK'::text, 'AF'::text, 'ME'::text]",
+      "generated": "",
+      "identity": "",
+      "name": "serving_regions",
+      "notNull": true,
+      "position": 32,
+      "table": "apps",
+      "type": "text[]"
+    },
+    {
+      "default": "'route'::text",
+      "generated": "",
+      "identity": "",
+      "name": "serving_region_mode",
+      "notNull": true,
+      "position": 33,
+      "table": "apps",
+      "type": "text"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -2014,6 +2034,26 @@
       "default": null,
       "generated": "",
       "identity": "",
+      "name": "billing_address",
+      "notNull": false,
+      "position": 29,
+      "table": "stripe_info",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "billing_currency",
+      "notNull": false,
+      "position": 30,
+      "table": "stripe_info",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
       "name": "app_version_id",
       "notNull": true,
       "position": 1,
@@ -2089,6 +2129,20 @@
       "name": "apps_pkey",
       "table": "apps",
       "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (serving_region_mode = ANY (ARRAY['route'::text, 'block'::text]))",
+      "name": "apps_serving_region_mode_valid",
+      "table": "apps",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (\nCASE\n    WHEN array_ndims(serving_regions) = 1 THEN cardinality(serving_regions) >= 1 AND cardinality(serving_regions) <= 9 AND serving_regions <@ ARRAY['EU'::text, 'NA'::text, 'SA'::text, 'OC'::text, 'AS_INDIA'::text, 'AS_JAPAN'::text, 'HK'::text, 'AF'::text, 'ME'::text] AND array_position(serving_regions, NULL::text) IS NULL AND cardinality(array_positions(serving_regions, 'EU'::text)) <= 1 AND cardinality(array_positions(serving_regions, 'NA'::text)) <= 1 AND cardinality(array_positions(serving_regions, 'SA'::text)) <= 1 AND cardinality(array_positions(serving_regions, 'OC'::text)) <= 1 AND cardinality(array_positions(serving_regions, 'AS_INDIA'::text)) <= 1 AND cardinality(array_positions(serving_regions, 'AS_JAPAN'::text)) <= 1 AND cardinality(array_positions(serving_regions, 'HK'::text)) <= 1 AND cardinality(array_positions(serving_regions, 'AF'::text)) <= 1 AND cardinality(array_positions(serving_regions, 'ME'::text)) <= 1\n    ELSE false\nEND)",
+      "name": "apps_serving_regions_valid",
+      "table": "apps",
+      "type": "c",
       "valid": true
     },
     {
@@ -2325,6 +2379,13 @@
     {
       "definition": "CHECK (billing_account = ANY (ARRAY['ee'::text, 'us'::text]))",
       "name": "stripe_info_billing_account_check",
+      "table": "stripe_info",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (billing_currency ~ '^[a-z]{3}$'::text)",
+      "name": "stripe_info_billing_currency_check",
       "table": "stripe_info",
       "type": "c",
       "valid": true

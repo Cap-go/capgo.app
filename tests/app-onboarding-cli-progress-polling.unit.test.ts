@@ -17,12 +17,14 @@ const PENDING_ONBOARDING = {
   steps: {},
 }
 
+let lastProgress: { applyOnboarding: (value: unknown) => void } | undefined
+
 async function mountProgress(initialOnboarding: unknown = PENDING_ONBOARDING, active = ref(true)) {
   const { useAppOnboardingCliProgress } = await import('../src/composables/useAppOnboardingCliProgress')
   const host = document.createElement('div')
   const app = createApp(defineComponent({
     setup() {
-      useAppOnboardingCliProgress('com.example.app', initialOnboarding, active)
+      lastProgress = useAppOnboardingCliProgress('com.example.app', initialOnboarding, active)
       return () => h('div')
     },
   }))
@@ -117,4 +119,118 @@ describe('useAppOnboardingCliProgress polling', () => {
     expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls)
     app.unmount()
   })
+
+  function setVisibility(state: 'visible' | 'hidden') {
+    Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+
+  it('polls every 2 seconds at first, then backs off while nothing changes', async () => {
+    const { CLI_PROGRESS_POLL_FAST_PHASE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
+    invokeCapgoApiMock.mockResolvedValue({ data: { onboarding: PENDING_ONBOARDING }, error: null })
+    const app = await mountProgress()
+    await vi.advanceTimersByTimeAsync(10_000)
+    // Initial request plus one poll every 2 s.
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(6)
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_FAST_PHASE_MS + 60_000)
+    let calls = invokeCapgoApiMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    // A fixed 2 s interval would send 30 requests a minute; the backoff caps at one per 30 s.
+    expect(invokeCapgoApiMock.mock.calls.length - calls).toBeLessThanOrEqual(2)
+    calls = invokeCapgoApiMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(invokeCapgoApiMock.mock.calls.length - calls).toBeLessThanOrEqual(1)
+    app.unmount()
+  })
+
+  it('polls quickly again once the CLI reports progress', async () => {
+    const { CLI_PROGRESS_POLL_FAST_PHASE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
+    let step = 0
+    invokeCapgoApiMock.mockImplementation(async () => ({ data: { onboarding: { ...PENDING_ONBOARDING, step } }, error: null }))
+    const app = await mountProgress()
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_FAST_PHASE_MS + 120_000)
+    step = 1
+    await vi.advanceTimersByTimeAsync(30_000)
+    const afterProgress = invokeCapgoApiMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(invokeCapgoApiMock.mock.calls.length).toBe(afterProgress + 5)
+    app.unmount()
+  })
+
+  it('pauses while the tab is hidden and refreshes when it becomes visible', async () => {
+    invokeCapgoApiMock.mockResolvedValue({ data: { onboarding: PENDING_ONBOARDING }, error: null })
+    const app = await mountProgress()
+    await flushRequests()
+    try {
+      setVisibility('hidden')
+      const calls = invokeCapgoApiMock.mock.calls.length
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls)
+
+      setVisibility('visible')
+      await flushRequests()
+      expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls + 1)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls + 2)
+    }
+    finally {
+      setVisibility('visible')
+      app.unmount()
+    }
+  })
+
+  it('stops polling after the idle limit', async () => {
+    const { CLI_PROGRESS_POLL_MAX_IDLE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
+    invokeCapgoApiMock.mockResolvedValue({ data: { onboarding: PENDING_ONBOARDING }, error: null })
+    const app = await mountProgress()
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_MAX_IDLE_MS + 60_000)
+    const calls = invokeCapgoApiMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls)
+    app.unmount()
+  })
+
+  it('replaces a backed-off timer when a write applies progress', async () => {
+    const { CLI_PROGRESS_POLL_FAST_PHASE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
+    invokeCapgoApiMock.mockResolvedValue({ data: { onboarding: PENDING_ONBOARDING }, error: null })
+    const app = await mountProgress()
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_FAST_PHASE_MS + 5 * 60_000)
+    const calls = invokeCapgoApiMock.mock.calls.length
+    lastProgress!.applyOnboarding({ ...PENDING_ONBOARDING, steps: { add_channel: { status: 'done' } } })
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls + 1)
+    app.unmount()
+  })
+
+  it('still backs off when the endpoint omits the channel state on most polls', async () => {
+    const { CLI_PROGRESS_POLL_FAST_PHASE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
+    // Like private/onboarding_progress: hasChannel only on the initial request and every fifth poll.
+    invokeCapgoApiMock.mockImplementation(async (_path: string, options: { body: { N: number, initial: boolean } }) => ({
+      data: options.body.initial || options.body.N % 5 === 0
+        ? { onboarding: PENDING_ONBOARDING, hasChannel: false }
+        : { onboarding: PENDING_ONBOARDING },
+      error: null,
+    }))
+    const app = await mountProgress()
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_FAST_PHASE_MS + 5 * 60_000)
+    const calls = invokeCapgoApiMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(invokeCapgoApiMock.mock.calls.length - calls).toBeLessThanOrEqual(2)
+    app.unmount()
+  })
+
+  it('restarts polling stopped by the idle limit when a write applies progress', async () => {
+    const { CLI_PROGRESS_POLL_MAX_IDLE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
+    invokeCapgoApiMock.mockResolvedValue({ data: { onboarding: PENDING_ONBOARDING }, error: null })
+    const app = await mountProgress()
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_MAX_IDLE_MS + 60_000)
+    const calls = invokeCapgoApiMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls)
+    lastProgress!.applyOnboarding({ ...PENDING_ONBOARDING, steps: { add_channel: { status: 'done' } } })
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls + 1)
+    app.unmount()
+  })
 })
+

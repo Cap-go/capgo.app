@@ -4,7 +4,7 @@ import type { PgQueryClient } from '../../utils/pg.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { CAPGO_API_2026_10_22, resolveCapgoApiVersion } from '../../utils/api_version.ts'
-import { lockBundleLifecycles, softDeleteLockedBundles } from '../../utils/bundle_soft_delete.ts'
+import { BUNDLE_DELETE_BATCH_SIZE, lockBundleLifecycles, retryOnDeadlock, softDeleteLockedBundles, softDeleteNextActiveBundles } from '../../utils/bundle_soft_delete.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -132,6 +132,44 @@ async function deleteBundleByNameInTransaction(
   return { status: 'deleted', id }
 }
 
+/**
+ * DELETE /bundle without a version: soft-deletes every active bundle of the app except the
+ * ones a channel targets, in keyset batches of BUNDLE_DELETE_BATCH_SIZE. Each batch selects,
+ * locks (lifecycle locks, like POST /bundle/cleanup and channel promotion) and soft-deletes its
+ * bundles in one write transaction, so per-row triggers never run for the whole app in one
+ * transaction, a concurrent promotion either keeps its bundle or sees it deleted, and the
+ * candidates never come from a cached read. Authorization is the bundle.delete check in
+ * deleteBundle.
+ */
+export async function deleteAllBundles(c: Context<MiddlewareKeyVariables>, appId: string, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<number> {
+  const effectiveApikey = apikey.key ?? c.get('capgkey')
+  if (!effectiveApikey)
+    throw simpleError('cannot_delete_bundle', 'You can\'t access this app', { app_id: appId })
+
+  let deletedCount = 0
+  const pgClient = await getPgClient(c)
+  try {
+    let afterId = 0
+    while (true) {
+      // A batch is its own transaction, so retrying a deadlock victim is safe.
+      const batch = await retryOnDeadlock(() => softDeleteNextActiveBundles(c, pgClient, effectiveApikey, appId, afterId, BUNDLE_DELETE_BATCH_SIZE, 'delete_all_bundles'))
+      if (batch.lastId === null)
+        break
+      deletedCount += batch.deleted.length
+      afterId = batch.lastId
+    }
+  }
+  catch (error) {
+    if (error instanceof HTTPException)
+      throw error
+    throw simpleError('cannot_delete_all_version', 'Cannot delete all version', { supabaseError: error, deleted: deletedCount })
+  }
+  finally {
+    await closeClient(c, pgClient)
+  }
+  return deletedCount
+}
+
 export async function deleteBundle(c: Context<MiddlewareKeyVariables>, body: GetLatest, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   if (!body.app_id) {
     throw simpleError('missing_app_id', 'Missing app_id', { body })
@@ -147,49 +185,40 @@ export async function deleteBundle(c: Context<MiddlewareKeyVariables>, body: Get
   if (body.version && wantsDistinctDeleteErrors(c))
     return deleteBundleByName(c, body.app_id, body.version, apikey)
 
+  if (!body.version) {
+    await deleteAllBundles(c, body.app_id, apikey)
+    return c.json(BRES)
+  }
+
   await withRlsContext(c, apikeyPrincipal(c, apikey.key), async (client) => {
-    if (body.version) {
-      let versionId: number | null = null
-      try {
-        const found = await client.query<{ id: string }>(
-          'SELECT id FROM public.app_versions WHERE app_id = $1 AND name = $2 AND deleted = false',
-          [body.app_id, body.version],
-        )
-        if (found.rows.length === 1)
-          versionId = Number(found.rows[0].id)
-      }
-      catch (versionError) {
-        throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: versionError })
-      }
-      if (versionId === null)
-        throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: null })
-
-      const linkedVersionIds = await getLinkedChannelVersionIds(client, body.app_id)
-      if (linkedVersionIds.has(versionId))
-        throw simpleError('cannot_delete_linked_version', 'Cannot delete a bundle linked to a channel', { app_id: body.app_id, version: body.version })
-
-      let updated = 0
-      try {
-        updated = (await client.query('UPDATE public.app_versions SET deleted = true WHERE id = $1 RETURNING id', [versionId])).rows.length
-      }
-      catch (dbError) {
-        throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: dbError })
-      }
-      if (updated !== 1)
-        throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: null })
+    let versionId: number | null = null
+    try {
+      const found = await client.query<{ id: string }>(
+        'SELECT id FROM public.app_versions WHERE app_id = $1 AND name = $2 AND deleted = false',
+        [body.app_id, body.version],
+      )
+      if (found.rows.length === 1)
+        versionId = Number(found.rows[0].id)
     }
-    else {
-      const linkedVersionIds = await getLinkedChannelVersionIds(client, body.app_id)
-      try {
-        if (linkedVersionIds.size > 0)
-          await client.query('UPDATE public.app_versions SET deleted = true WHERE app_id = $1 AND NOT (id = ANY($2::bigint[]))', [body.app_id, [...linkedVersionIds]])
-        else
-          await client.query('UPDATE public.app_versions SET deleted = true WHERE app_id = $1', [body.app_id])
-      }
-      catch (dbError) {
-        throw simpleError('cannot_delete_all_version', 'Cannot delete all version', { supabaseError: dbError })
-      }
+    catch (versionError) {
+      throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: versionError })
     }
+    if (versionId === null)
+      throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: null })
+
+    const linkedVersionIds = await getLinkedChannelVersionIds(client, body.app_id)
+    if (linkedVersionIds.has(versionId))
+      throw simpleError('cannot_delete_linked_version', 'Cannot delete a bundle linked to a channel', { app_id: body.app_id, version: body.version })
+
+    let updated = 0
+    try {
+      updated = (await client.query('UPDATE public.app_versions SET deleted = true WHERE id = $1 RETURNING id', [versionId])).rows.length
+    }
+    catch (dbError) {
+      throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: dbError })
+    }
+    if (updated !== 1)
+      throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: null })
   })
 
   return c.json(BRES)

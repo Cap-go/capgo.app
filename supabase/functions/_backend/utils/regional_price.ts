@@ -1,3 +1,4 @@
+import { effectiveBillingCurrency } from './billing_currency.ts'
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { PriceTier } from './country_price_tier.ts'
@@ -29,7 +30,7 @@ export async function getCustomerBilling(stripe: Stripe, customerId: string): Pr
     return { currency: null, countries: [] }
   const countries = [customer.address?.country, paymentMethodCountry(customer.invoice_settings?.default_payment_method)]
   return {
-    currency: customer.currency?.toLowerCase() ?? null,
+    currency: await effectiveBillingCurrency(stripe, customer),
     countries: countries.filter((country): country is string => !!country),
   }
 }

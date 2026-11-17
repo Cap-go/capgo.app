@@ -1,3 +1,4 @@
+import { Hono } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildCompleteManifestVersionSizes, buildManifestVersionSizesQuery, buildManifestSizeLookupQuery as buildPluginManifestSizeLookupQuery, getManifestDownloadSize as getPluginManifestDownloadSize, MAX_MANIFEST_SIZE_FILES, MAX_MANIFEST_SIZE_VERSIONS } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
 import { MAX_MANIFEST_ENTRIES } from '../supabase/functions/_backend/utils/manifest_limits.ts'
@@ -125,15 +126,22 @@ describe('manifest download size helpers', () => {
   })
 
   it.concurrent('returns unknown sizes without querying postgres when no version scope exists', async () => {
-    const result = await getPluginManifestDownloadSize({
-      get(key: string) {
+    const app = new Hono()
+    const contextReads = vi.fn()
+    app.get('/', async (c) => {
+      vi.spyOn(c, 'get').mockImplementation((key) => {
+        contextReads(key)
         throw new Error(`postgres context was read: ${key}`)
-      },
-    } as never, 'com.example.app', undefined, undefined, [
-      { file_name: 'main.js', file_hash: 'hash-b' },
-    ])
+      })
+      return c.json(await getPluginManifestDownloadSize(c, 'com.example.app', undefined, undefined, [
+        { file_name: 'main.js', file_hash: 'hash-b' },
+      ]))
+    })
+    const response = await app.request('/')
 
-    expect(result).toEqual({
+    expect(response.status).toBe(200)
+    expect(contextReads).not.toHaveBeenCalled()
+    expect(await response.json()).toEqual({
       totalSize: 0,
       knownFiles: 0,
       unknownFiles: 1,

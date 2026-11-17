@@ -8,6 +8,7 @@ import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceRes, Device
 import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { canSkipDeviceInfoWrite, DEVICE_INFO_REFRESH_TTL_SECONDS, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
+import { devicesOffsetClause } from './devicesPageOffset.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { DEFAULT_LIMIT } from './types.ts'
 import { legacyDownloadFailKey, legacyDownloadFailPluginSqlCF, subtractLegacyDownloadFails, summarizeLegacyCheckFailures, sumLegacyDownloadFails } from './legacyDownloadFail.ts'
@@ -55,6 +56,7 @@ type AiBinding = {
 
 // eslint-disable-next-line ts/consistent-type-definitions
 export type Bindings = {
+  SERVING_REGION_SIGNING_KEY?: string
   DEVICE_USAGE: AnalyticsEngineDataset
   BANDWIDTH_USAGE: AnalyticsEngineDataset
   VERSION_USAGE: AnalyticsEngineDataset
@@ -710,7 +712,7 @@ export function buildVersionUsageChannelFilterCF(channel?: VersionUsageChannel |
   return `AND ${match}`
 }
 
-const DAY_BUCKET_CF = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+export const DAY_BUCKET_CF = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
 
 /**
  * app_log failure rows carry the channel in blob8 (name) and blob9 (id). Rows
@@ -1457,6 +1459,7 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
     outerFilter,
     `ORDER BY ${orderBy}`,
     `LIMIT ${limit + 1}`,
+    devicesOffsetClause(params.offset),
   ].filter(Boolean).join('\n')
 }
 

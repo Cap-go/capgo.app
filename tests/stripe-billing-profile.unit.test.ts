@@ -8,7 +8,7 @@ const details = {
 }
 function context() {
   const customers = { retrieve: vi.fn(), update: vi.fn(), listTaxIds: vi.fn(), createTaxId: vi.fn(), deleteTaxId: vi.fn() }
-  const ctx = { customerId: 'cus_example', billingAccount: 'us', stripe: { customers }, publishableKey: '' } as unknown as InAppBillingContext
+  const ctx = { customerId: 'cus_example', billingAccount: 'us', stripe: { subscriptions: { list: async () => ({ data: [] }) }, customers }, publishableKey: '' } as unknown as InAppBillingContext
   return { ctx, customers }
 }
 
@@ -17,7 +17,7 @@ describe('billing profile', () => {
     const { ctx, customers } = context()
     customers.retrieve.mockResolvedValue({ ...details, metadata: { private: 'hidden' } })
     customers.listTaxIds.mockResolvedValue({ data: [{ id: 'txi_example', type: 'eu_vat', value: 'DE123456789', verification: { status: 'pending' } }] })
-    expect(await getBillingProfile(ctx)).toEqual({ ...details, taxIds: [{ id: 'txi_example', type: 'eu_vat', value: 'DE123456789', status: 'pending' }] })
+    expect(await getBillingProfile(ctx)).toEqual({ ...details, currency: null, taxIds: [{ id: 'txi_example', type: 'eu_vat', value: 'DE123456789', status: 'pending' }] })
     expect(customers.retrieve).toHaveBeenCalledWith('cus_example')
     expect(customers.listTaxIds).toHaveBeenCalledWith('cus_example', { limit: 100 })
   })

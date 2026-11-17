@@ -255,6 +255,10 @@ function clearUsageCaches() {
   cacheByOrgByApp.delete(cacheKey)
 }
 
+// Set when the user asked for the refresh (Reload button): the app list is
+// refetched too, so apps created elsewhere show up. Automatic refreshes keep it.
+let refreshAppCatalogAfterPoll = false
+
 function stopRefreshPolling() {
   touchRefreshStateClock()
   if (refreshPollTimer !== null) {
@@ -262,11 +266,13 @@ function stopRefreshPolling() {
     refreshPollTimer = null
   }
   isRefreshPolling.value = false
+  // A manual catalog refresh applies to the poll it started only.
+  refreshAppCatalogAfterPoll = false
 }
 
-async function reloadChartsAfterRefresh() {
+async function reloadChartsAfterRefresh(options: { refreshAppCatalog?: boolean } = {}) {
   clearUsageCaches()
-  await reloadAllCharts()
+  await reloadAllCharts(options)
 }
 
 async function pollRefreshState() {
@@ -283,8 +289,9 @@ async function pollRefreshState() {
       const appSettled = !isChartRefreshInProgress(appState.stats_refresh_requested_at, appState.stats_updated_at)
       const orgCacheReady = isOrgCacheReadyForRefresh(orgState.stats_updated_at, appState.stats_refresh_requested_at)
       if (appSettled && orgCacheReady) {
+        const refreshAppCatalog = refreshAppCatalogAfterPoll
         stopRefreshPolling()
-        await reloadChartsAfterRefresh()
+        await reloadChartsAfterRefresh({ refreshAppCatalog })
         return
       }
     }
@@ -301,8 +308,9 @@ async function pollRefreshState() {
       const orgSettled = !isChartRefreshInProgress(orgState.stats_refresh_requested_at, orgState.stats_updated_at)
       const orgCacheReady = isOrgCacheReadyForRefresh(orgState.stats_updated_at, orgState.stats_refresh_requested_at)
       if (orgSettled && orgCacheReady) {
+        const refreshAppCatalog = refreshAppCatalogAfterPoll
         stopRefreshPolling()
-        await reloadChartsAfterRefresh()
+        await reloadChartsAfterRefresh({ refreshAppCatalog })
         return
       }
     }
@@ -342,6 +350,7 @@ async function queueScopeRefresh(auto = false): Promise<boolean> {
       touchRefreshStateClock()
 
       if (result.requested_at && isChartRefreshInProgress(result.requested_at, localAppStatsUpdatedAt.value, refreshStateClock.value)) {
+        refreshAppCatalogAfterPoll = !auto
         startRefreshPolling()
         return true
       }
@@ -358,13 +367,14 @@ async function queueScopeRefresh(auto = false): Promise<boolean> {
       })
 
       if (result.requested_at && isChartRefreshInProgress(result.requested_at, localOrgStatsUpdatedAt.value, refreshStateClock.value)) {
+        refreshAppCatalogAfterPoll = !auto
         startRefreshPolling()
         return true
       }
     }
 
     if (!auto) {
-      await reloadChartsAfterRefresh()
+      await reloadChartsAfterRefresh({ refreshAppCatalog: true })
     }
     return false
   }
@@ -379,7 +389,7 @@ async function queueScopeRefresh(auto = false): Promise<boolean> {
 
 async function handleReloadClick() {
   if (props.forceDemo || !hasRefreshableScope.value || (!isCurrentScopeStale.value && !isCurrentScopeRefreshing.value)) {
-    await reloadChartsAfterRefresh()
+    await reloadChartsAfterRefresh({ refreshAppCatalog: true })
     return
   }
 
@@ -390,7 +400,7 @@ async function handleReloadClick() {
 }
 
 // Function to reload all chart data
-async function reloadAllCharts() {
+async function reloadAllCharts(options: { refreshAppCatalog?: boolean } = {}) {
   // Force reload of main dashboard data
   // End date should be next UTC midnight to include all of today's UTC data
   const todayUtc = normalizeToUtcStartOfDay()
@@ -402,7 +412,9 @@ async function reloadAllCharts() {
   const request = usageLoading.start()
   try {
     await Promise.all([
-      dashboardAppsStore.fetchApps(true).then(() => {
+      // Only an explicit refresh (?refresh=true, e.g. after creating an app)
+      // refetches the app list; a usage stats refresh does not change it.
+      dashboardAppsStore.fetchApps(options.refreshAppCatalog === true).then(() => {
         if (!disposed && scopeKey === currentScopeKey.value)
           reloadTrigger.value++
       }),
@@ -789,7 +801,7 @@ async function ensureDashboard() {
 watch([currentScopeKey, () => props.forceDemo], () => {
   if (needsForceRefresh.value) {
     needsForceRefresh.value = false
-    void reloadAllCharts()
+    void reloadAllCharts({ refreshAppCatalog: true })
   }
   else {
     void ensureDashboard()

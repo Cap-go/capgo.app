@@ -178,6 +178,11 @@ export interface ReadDevicesParams {
   /** Only return devices with updated_at less than or equal to this ISO timestamp */
   updated_at_lte?: string
   limit?: number
+  /**
+   * Rows to skip after the cursor, so the console can jump straight to a far
+   * page instead of walking every cursor page. Bounded by MAX_DEVICES_PAGE_OFFSET.
+   */
+  offset?: number
   /** Cursor for pagination - use the last updated_at from previous page */
   cursor?: string
 }

@@ -69,6 +69,22 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
+describe('serving policy payload compatibility', () => {
+  it('accepts f:1 owner documents with absent legacy fields and validates supplied fields', () => {
+    const legacy = appDoc()
+    expect(() => parsePluginStateApp(legacy)).not.toThrow()
+    if (!legacy.owner)
+      throw new Error('Owner fixture missing')
+    legacy.owner.serving_regions = ['NA']
+    legacy.owner.serving_region_mode = 'block'
+    expect(() => parsePluginStateApp(legacy)).not.toThrow()
+    legacy.owner.serving_regions = ['EU', 'EU']
+    expect(() => parsePluginStateApp(legacy)).toThrow()
+    legacy.owner.serving_regions = null
+    expect(() => parsePluginStateApp(legacy)).toThrow()
+  })
+})
+
 describe('plugin state rollout', () => {
   it.each([
     ['off', 0], ['invalid', 0], ['-1', 0], ['', 0], ['on', 10_000],

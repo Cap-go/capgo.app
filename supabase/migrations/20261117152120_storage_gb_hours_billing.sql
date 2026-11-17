@@ -349,91 +349,150 @@ LANGUAGE plpgsql
 SET search_path TO ''
 AS $$
 DECLARE
-  app_record RECORD;
-  -- stat_app_queue drains up to 50/min; release 30/min to keep headroom.
-  v_per_minute CONSTANT integer := 30;
-  v_index integer := 0;
+  -- stat_app_queue drains up to 30/min; release 25/min to keep headroom.
+  v_per_minute CONSTANT integer := 25;
+  v_now_utc timestamp without time zone := pg_catalog.timezone('UTC', pg_catalog.clock_timestamp());
+  v_refresh_ttl CONSTANT interval := INTERVAL '5 minutes';
+  v_app_ids character varying[];
+  v_org_ids uuid[];
+  v_queue_app_ids character varying[];
+  v_queue_org_ids uuid[];
+  v_slot record;
 BEGIN
-  FOR app_record IN (
-    WITH active_apps AS (
-      SELECT DISTINCT av.app_id
-      FROM public.app_versions av
-      WHERE av.created_at >= pg_catalog.now() - INTERVAL '30 days'
+  WITH active_apps AS (
+    SELECT DISTINCT av.app_id
+    FROM public.app_versions av
+    WHERE av.created_at >= pg_catalog.now() - INTERVAL '30 days'
 
-      UNION
+    UNION
 
-      SELECT DISTINCT dm.app_id
-      FROM public.daily_mau dm
-      WHERE dm.date >= pg_catalog.now() - INTERVAL '30 days' AND dm.mau > 0
+    SELECT DISTINCT dm.app_id
+    FROM public.daily_mau dm
+    WHERE dm.date >= pg_catalog.now() - INTERVAL '30 days' AND dm.mau > 0
 
-      UNION
+    UNION
 
-      SELECT DISTINCT du.app_id
-      FROM public.device_usage du
-      WHERE du.timestamp >= pg_catalog.now() - INTERVAL '30 days'
+    SELECT DISTINCT du.app_id
+    FROM public.device_usage du
+    WHERE du.timestamp >= pg_catalog.now() - INTERVAL '30 days'
 
-      UNION
+    UNION
 
-      SELECT DISTINCT bu.app_id
-      FROM public.bandwidth_usage bu
-      WHERE bu.timestamp >= pg_catalog.now() - INTERVAL '30 days'
+    SELECT DISTINCT bu.app_id
+    FROM public.bandwidth_usage bu
+    WHERE bu.timestamp >= pg_catalog.now() - INTERVAL '30 days'
 
-      UNION
+    UNION
 
-      SELECT a.app_id
-      FROM public.apps a
-      INNER JOIN public.orgs o ON o.id = a.owner_org
-      LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
-      LEFT JOIN public.app_stats_refresh_state s ON s.app_id = a.app_id
-      WHERE (si.status = 'succeeded' OR o.has_usage_credits)
-        AND (s.stats_updated_at IS NULL
-          OR s.stats_updated_at < pg_catalog.timezone('UTC', pg_catalog.now()) - INTERVAL '20 hours')
-        AND (
-          EXISTS (
-            SELECT 1
-            FROM public.app_versions stored
-            WHERE stored.app_id = a.app_id
-              AND stored.deleted = false
-          )
-          OR EXISTS (
-            -- An event written after how far the latest storage refresh
-            -- calculated (it read version_meta up to there), not after
-            -- stats_updated_at (its completion): a removal while a refresh ran,
-            -- or one recorded late and dated at the deletion (before that
-            -- cutoff), still gets refreshed. recorded_at is set at insert, not
-            -- commit: an event recorded up to 1 hour before the cutoff may not
-            -- have been visible to that refresh (these writes run in short,
-            -- statement-timeout-bound transactions), so it is refreshed once
-            -- more.
-            SELECT 1
-            FROM public.version_meta event
-            WHERE event.app_id = a.app_id
-              AND event.recorded_at > COALESCE(
-                (
-                  SELECT pg_catalog.timezone('UTC', max(refresh.calculated_until)) - interval '1 hour'
-                  FROM public.daily_storage_hourly_refreshes refresh
-                  WHERE refresh.app_id = a.app_id
-                    AND refresh.owner_org = a.owner_org
-                ),
-                '-infinity'::timestamp
-              )
-          )
+    SELECT a.app_id
+    FROM public.apps a
+    INNER JOIN public.orgs o ON o.id = a.owner_org
+    LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
+    LEFT JOIN public.app_stats_refresh_state s ON s.app_id = a.app_id
+    WHERE (si.status = 'succeeded' OR o.has_usage_credits)
+      AND (s.stats_updated_at IS NULL
+        OR s.stats_updated_at < pg_catalog.timezone('UTC', pg_catalog.now()) - INTERVAL '20 hours')
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM public.app_versions stored
+          WHERE stored.app_id = a.app_id
+            AND stored.deleted = false
         )
-    )
-    SELECT DISTINCT
-      active_apps.app_id,
-      a.owner_org
-    FROM active_apps
-    INNER JOIN public.apps a ON a.app_id = active_apps.app_id
+        OR EXISTS (
+          -- An event written after how far the latest storage refresh
+          -- calculated (it read version_meta up to there), not after
+          -- stats_updated_at (its completion): a removal while a refresh ran,
+          -- or one recorded late and dated at the deletion (before that
+          -- cutoff), still gets refreshed. recorded_at is set at insert, not
+          -- commit: an event recorded up to 1 hour before the cutoff may not
+          -- have been visible to that refresh (these writes run in short,
+          -- statement-timeout-bound transactions), so it is refreshed once
+          -- more.
+          SELECT 1
+          FROM public.version_meta event
+          WHERE event.app_id = a.app_id
+            AND event.recorded_at > COALESCE(
+              (
+                SELECT pg_catalog.timezone('UTC', max(refresh.calculated_until)) - interval '1 hour'
+                FROM public.daily_storage_hourly_refreshes refresh
+                WHERE refresh.app_id = a.app_id
+                  AND refresh.owner_org = a.owner_org
+              ),
+              '-infinity'::timestamp
+            )
+        )
+      )
   )
+  SELECT
+    pg_catalog.array_agg(a.app_id ORDER BY a.app_id),
+    pg_catalog.array_agg(a.owner_org ORDER BY a.app_id)
+  INTO v_app_ids, v_org_ids
+  FROM active_apps
+  INNER JOIN public.apps a ON a.app_id = active_apps.app_id;
+
+  IF v_app_ids IS NULL THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO public.org_stats_refresh_state (org_id)
+  SELECT DISTINCT org_ids.org_id
+  FROM pg_catalog.unnest(v_org_ids) AS org_ids(org_id)
+  ON CONFLICT ON CONSTRAINT org_stats_refresh_state_pkey DO NOTHING;
+
+  PERFORM 1
+  FROM public.org_stats_refresh_state s
+  WHERE s.org_id = ANY(v_org_ids)
+  ORDER BY s.org_id
+  FOR UPDATE;
+
+  WITH requested AS (
+    INSERT INTO public.app_stats_refresh_state (app_id, owner_org, stats_refresh_requested_at)
+    SELECT candidate.app_id, candidate.owner_org, v_now_utc
+    FROM ROWS FROM (pg_catalog.unnest(v_app_ids), pg_catalog.unnest(v_org_ids)) AS candidate(app_id, owner_org)
+    LEFT JOIN public.app_stats_refresh_state s ON s.app_id = candidate.app_id
+    WHERE (s.stats_updated_at IS NULL OR s.stats_updated_at < v_now_utc - v_refresh_ttl)
+      AND (s.stats_refresh_requested_at IS NULL OR s.stats_refresh_requested_at < v_now_utc - v_refresh_ttl)
+    ON CONFLICT (app_id) DO UPDATE
+    SET owner_org = EXCLUDED.owner_org,
+        stats_refresh_requested_at = EXCLUDED.stats_refresh_requested_at
+    WHERE (app_stats_refresh_state.stats_updated_at IS NULL
+        OR app_stats_refresh_state.stats_updated_at < v_now_utc - v_refresh_ttl)
+      AND (app_stats_refresh_state.stats_refresh_requested_at IS NULL
+        OR app_stats_refresh_state.stats_refresh_requested_at < v_now_utc - v_refresh_ttl)
+    RETURNING app_id, owner_org
+  )
+  SELECT
+    pg_catalog.array_agg(requested.app_id ORDER BY requested.app_id),
+    pg_catalog.array_agg(requested.owner_org ORDER BY requested.app_id)
+  INTO v_queue_app_ids, v_queue_org_ids
+  FROM requested
+  WHERE NOT EXISTS (
+    SELECT 1 FROM pgmq.q_cron_stat_app queued_job
+    WHERE queued_job.message->'payload'->>'appId' = requested.app_id
+  );
+
+  IF v_queue_app_ids IS NULL THEN
+    RETURN;
+  END IF;
+
+  FOR v_slot IN
+    SELECT
+      ((queued.position - 1) / v_per_minute)::integer AS slot,
+      pg_catalog.array_agg(pg_catalog.jsonb_build_object(
+        'function_name', 'cron_stat_app',
+        'function_type', 'cloudflare',
+        'payload', pg_catalog.jsonb_build_object(
+          'appId', queued.app_id,
+          'orgId', queued.owner_org,
+          'todayOnly', false
+        )
+      ) ORDER BY queued.position) AS messages
+    FROM ROWS FROM (pg_catalog.unnest(v_queue_app_ids), pg_catalog.unnest(v_queue_org_ids)) WITH ORDINALITY AS queued(app_id, owner_org, position)
+    GROUP BY 1
+    ORDER BY 1
   LOOP
-    IF public.queue_cron_stat_app_for_app(
-      app_record.app_id,
-      app_record.owner_org,
-      (v_index / v_per_minute) * 60
-    ) THEN
-      v_index := v_index + 1;
-    END IF;
+    PERFORM pgmq.send_batch('cron_stat_app', v_slot.messages, v_slot.slot * 60);
   END LOOP;
 END;
 $$;

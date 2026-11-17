@@ -99,6 +99,26 @@ describe('app put settings fields', () => {
     mocks.callerChannelSelect.mockResolvedValue({ data: { id: 7 }, error: null })
   })
 
+  it('persists both serving choices and preserves omitted fields in old payloads', async () => {
+    await put(createContext(), 'com.example.app', { serving_regions: ['NA', 'HK'], serving_region_mode: 'block' }, { key: 'test-key' } as any)
+    expect(mocks.updatePayload).toHaveBeenLastCalledWith(expect.objectContaining({ serving_regions: ['NA', 'HK'], serving_region_mode: 'block' }))
+    await put(createContext(), 'com.example.app', { name: 'Old client' }, { key: 'test-key' } as any)
+    expect(mocks.updatePayload.mock.calls.at(-1)?.[0]).not.toHaveProperty('serving_regions')
+    expect(mocks.updatePayload.mock.calls.at(-1)?.[0]).not.toHaveProperty('serving_region_mode')
+  })
+
+  it.each([[], ['EU', 'EU'], ['INVALID'], null])('rejects invalid serving regions %j before writing', async (regions) => {
+    await expect(put(createContext(), 'com.example.app', { serving_regions: regions }, { key: 'test-key' } as any)).rejects.toMatchObject({ status: 400 })
+    expect(mocks.updatePayload).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid mode and blocks org.create_app-only onboarding settings changes', async () => {
+    await expect(put(createContext(), 'com.example.app', { serving_region_mode: 'other' }, { key: 'test-key' } as any)).rejects.toMatchObject({ status: 400 })
+    mocks.checkPermission.mockImplementation(async (_c, permission) => permission === 'org.create_app')
+    await expect(put(createContext(), 'com.example.app', { onboarding: { intent: 'ota' }, serving_regions: ['NA'] }, { key: 'test-key' } as any)).rejects.toMatchObject({ status: 401 })
+    expect(mocks.updatePayload).not.toHaveBeenCalled()
+  })
+
   it('persists the incompatible-bundle alert scope', async () => {
     const response = await put(createContext(), 'com.example.app', {
       bundle_incompatible_alert: 'all',

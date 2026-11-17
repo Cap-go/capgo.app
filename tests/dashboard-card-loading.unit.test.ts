@@ -39,7 +39,7 @@ vi.mock('~/services/console', () => ({
       const query: Record<string, any> = {}
       for (const method of ['select', 'in', 'gte', 'lte', 'order'])
         query[method] = () => query
-      query.range = () => mocks.rows('daily_version')
+      query.range = () => mocks.rows('apps')
       return query
     },
   }),
@@ -64,7 +64,7 @@ function result(name: string, count = 5) {
     return { data: [{ app_id: 'com.example.app', day_index: 29, uploads: count }], error: null }
   if (name === 'get_deploy_daily_counts')
     return { data: [{ app_id: 'com.example.app', channel_id: 'example-channel', channel_name: 'Production', day_index: 29, deploys: count }], error: null }
-  return { data: [{ app_id: 'com.example.app', date: '2026-10-29', install: count, fail: 0, get: 0 }], error: null }
+  return { data: [{ app_id: 'com.example.app', date: '2026-10-29', install_count: count, fail_count: 0, get_count: 0 }], error: null }
 }
 
 async function flush() {
@@ -118,7 +118,7 @@ describe.each([
 
     expect(container.querySelector('[data-test="interactive-chart"]')).toBe(chart)
     expect(container.querySelector('[data-test="chart-refreshing"]')).not.toBeNull()
-    resolveRefresh(result(_name === 'uploads' ? 'get_bundle_upload_daily_counts' : _name === 'deployments' ? 'get_deploy_daily_counts' : 'daily_version', 9))
+    resolveRefresh(result(_name === 'uploads' ? 'get_bundle_upload_daily_counts' : _name === 'deployments' ? 'get_deploy_daily_counts' : 'get_update_daily_counts', 9))
     await flush()
     expect(container.querySelector('[data-test="chart-refreshing"]')).toBeNull()
     expect(container.querySelector('[data-test="interactive-chart"]')?.textContent).toContain('9')
@@ -175,7 +175,7 @@ describe.each([
     props.reloadTrigger++
     await flush()
     const requests = mocks.rows.mock.calls.length
-    const row = result(_name === 'uploads' ? 'get_bundle_upload_daily_counts' : _name === 'deployments' ? 'get_deploy_daily_counts' : 'daily_version').data[0]
+    const row = result(_name === 'uploads' ? 'get_bundle_upload_daily_counts' : _name === 'deployments' ? 'get_deploy_daily_counts' : 'get_update_daily_counts').data[0]
     mounted?.unmount()
     mounted = undefined
     resolvePage({ data: Array.from({ length: 1000 }, () => row), error: null } as ReturnType<typeof result>)
@@ -195,7 +195,7 @@ describe.each([
     const currentChart = container.querySelector('[data-test="interactive-chart"]')?.textContent
     expect(currentChart).toContain('5')
 
-    resolveOld(result(_name === 'uploads' ? 'get_bundle_upload_daily_counts' : _name === 'deployments' ? 'get_deploy_daily_counts' : 'daily_version', 99))
+    resolveOld(result(_name === 'uploads' ? 'get_bundle_upload_daily_counts' : _name === 'deployments' ? 'get_deploy_daily_counts' : 'get_update_daily_counts', 99))
     await flush()
     expect(container.querySelector('[data-test="interactive-chart"]')?.textContent).toBe(currentChart)
   })
@@ -205,15 +205,15 @@ describe('update evolution refresh', () => {
   it.each([0, 1])('clears the previous badge after refreshing to %i active days', async (activeDays) => {
     mocks.rows.mockResolvedValueOnce({
       data: [
-        { app_id: 'com.example.app', date: '2026-10-28', install: 5, fail: 0, get: 0 },
-        { app_id: 'com.example.app', date: '2026-10-29', install: 10, fail: 0, get: 0 },
+        { app_id: 'com.example.app', date: '2026-10-28', install_count: 5, fail_count: 0, get_count: 0 },
+        { app_id: 'com.example.app', date: '2026-10-29', install_count: 10, fail_count: 0, get_count: 0 },
       ],
       error: null,
     })
     const props = await mountCard(UpdateStatsCard)
     expect(container.querySelector('[data-test="chart-card-header-actions"]')?.textContent).toContain('100.00%')
 
-    mocks.rows.mockResolvedValueOnce(result('daily_version', activeDays * 7))
+    mocks.rows.mockResolvedValueOnce(result('get_update_daily_counts', activeDays * 7))
     props.reloadTrigger++
     await flush()
 

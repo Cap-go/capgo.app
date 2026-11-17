@@ -20,6 +20,7 @@ import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, rele
 import { isTransientPgError } from './pg_errors.ts'
 import { authPrincipal, queryJson, withRlsContext } from './pg_rls.ts'
 import { getPlanPriceInterval } from './plan_price_interval.ts'
+import { devicesOffsetClause } from './devicesPageOffset.ts'
 import { getClientIP } from './rate_limit.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { Constants } from './supabase.types.ts'
@@ -215,7 +216,7 @@ async function readDevicesSBSql(c: Context, params: ReadDevicesParams, customIdM
   try {
     return await queryJson<Database['public']['Tables']['devices']['Row']>(
       pgClient,
-      `SELECT * FROM public.devices WHERE ${where} ORDER BY ${orderBy} LIMIT $${values.length}`,
+      `SELECT * FROM public.devices WHERE ${where} ORDER BY ${orderBy} LIMIT $${values.length} ${devicesOffsetClause(params.offset)}`,
       values,
     )
   }
