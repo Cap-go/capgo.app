@@ -41,7 +41,7 @@ it('explains how to update a legacy saved card and blocks confirmation until a v
   await settle()
   document.querySelector<HTMLButtonElement>('[data-test="billing-change-currency"]')!.click()
   await settle()
-  const select = document.querySelector<HTMLSelectElement>('select')!
+  const select = document.querySelector('select')! as unknown as HTMLSelectElement
   select.value = 'usd'
   select.dispatchEvent(new Event('change', { bubbles: true }))
   await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain('Update your saved card in Payment method'))
