@@ -8,6 +8,7 @@ const TRANSIENT_FAILURE_PATTERNS: ReadonlyArray<readonly [TransientTestFailure, 
   ['kong_upstream', /An invalid response was received from the upstream server/],
   ['workerd_restart', /Your worker restarted mid-request/],
   ['gateway_502_503', /AssertionError: expected 50[23] to be \d+/],
+  ['gateway_502_503', /^AssertionError: Could not list bundles for app [^\s:]+: upstream_unavailable \| Upstream unavailable: expected false to be true(?:\s|$)/m],
 ]
 
 export function getTransientTestFailure(output: string): TransientTestFailure | null {

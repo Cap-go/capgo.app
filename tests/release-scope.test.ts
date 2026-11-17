@@ -40,7 +40,7 @@ describe('release scope matching', () => {
     ], null],
     ['root package and test inputs', ['package.json', 'bun.lock', 'tsconfig.json', 'vitest.config.ts'], 'capgo'],
     ['read-replica schema sync scripts', ['scripts/sync-read-replica-schema.ts', 'scripts/check-read-replica-hyperdrive-schema.sh'], 'capgo'],
-    ['capgo deploy workflow', ['.github/workflows/build_and_deploy.yml', 'scripts/deploy-scope.ts'], 'capgo'],
+    ['capgo deploy workflow', ['.github/workflows/build_and_deploy.yml', 'scripts/deploy-scope.ts', 'scripts/deploy-state.ts', 'scripts/deployment-state.ts', 'scripts/resolve-deploy-tag.ts'], 'capgo'],
     ['inventory queue provisioning', ['scripts/ensure-r2-inventory-queues.ts'], 'capgo'],
     ['console runtime code', ['src/pages/index.vue'], 'capgo'],
     ['CLI runtime code', ['cli/src/index.ts'], 'cli'],
