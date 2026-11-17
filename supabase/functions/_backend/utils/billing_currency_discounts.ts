@@ -21,7 +21,7 @@ export async function replacementDiscounts(stripe: Stripe, discounts: Array<stri
       continue
     }
     const source = discount.source.coupon
-    const coupon = typeof source === 'string' ? await stripe.coupons.retrieve(source, { expand: ['currency_options'] }, billingRequestOptions) : source
+    let coupon = typeof source === 'string' ? await stripe.coupons.retrieve(source, { expand: ['currency_options', 'applies_to'] }, billingRequestOptions) : source
     if (!coupon)
       throw simpleError('billing_discount_unavailable', 'Could not load the current discount. Please retry.')
     const end = Number(coupon.metadata?.capgo_discount_end) || discount.end
@@ -40,6 +40,9 @@ export async function replacementDiscounts(stripe: Stripe, discounts: Array<stri
         throw error
     }
     if (!copied) {
+      // Expanded discount objects can still omit a coupon's currency options.
+      if (!coupon.percent_off && !coupon.currency_options && typeof source !== 'string')
+        coupon = await stripe.coupons.retrieve(coupon.id, { expand: ['currency_options', 'applies_to'] }, billingRequestOptions)
       const amount = coupon.currency === currency ? coupon.amount_off : coupon.currency_options?.[currency]?.amount_off
       if (!coupon.percent_off && !amount)
         throw simpleError('billing_discount_currency', 'This discount is not available in the selected currency.')
@@ -47,7 +50,8 @@ export async function replacementDiscounts(stripe: Stripe, discounts: Array<stri
         id: couponId,
         duration: coupon.duration === 'once' ? 'once' : 'forever',
         ...(coupon.name ? { name: coupon.name } : {}),
-        ...(coupon.percent_off ? { percent_off: coupon.percent_off } : { amount_off: amount!, currency }),
+        // Keep every original amount so a later currency change can reuse it.
+        ...(coupon.percent_off ? { percent_off: coupon.percent_off } : { amount_off: coupon.amount_off!, currency: coupon.currency!, currency_options: coupon.currency_options }),
         ...(coupon.applies_to ? { applies_to: coupon.applies_to } : {}),
         metadata: { capgo_source_discount: discount.id, ...(end ? { capgo_discount_end: String(end) } : {}) },
       }, { ...billingRequestOptions, idempotencyKey: couponId })
