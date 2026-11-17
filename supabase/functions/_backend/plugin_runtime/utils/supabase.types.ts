@@ -5239,6 +5239,7 @@ export type Database = {
           p_end_exclusive_day: string
           p_owner_org: string
           p_replace_legacy: boolean
+          p_require_current_owner?: boolean
           p_rows: Json
           p_segment_start: string
           p_written_at: string

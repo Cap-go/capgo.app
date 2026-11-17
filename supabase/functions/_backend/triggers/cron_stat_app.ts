@@ -93,6 +93,11 @@ interface StorageHourlyCalculationOptions {
   accrualStart?: string | null
   /** When the refresh started, before it read version_meta. Newer rows are never replaced. */
   writtenAt?: string
+  /**
+   * Live refreshes only write while `ownerOrg` still owns the app (default). The former-owner and
+   * deletion finalizers write rows clipped at the transfer or deletion and turn it off.
+   */
+  requireCurrentOwner?: boolean
 }
 
 interface StorageHourlyCalculationResult {
@@ -413,7 +418,8 @@ async function replaceCycleStorageHourly(
          p_segment_start => $6::timestamptz,
          p_replace_legacy => $7::boolean,
          p_rows => $8::jsonb,
-         p_written_at => $9::timestamptz
+         p_written_at => $9::timestamptz,
+         p_require_current_owner => $10::boolean
        )`,
       [
         options.appId,
@@ -425,6 +431,7 @@ async function replaceCycleStorageHourly(
         segmentStartMs === cycleStartMs,
         JSON.stringify(calculation.rows.map(row => ({ cycle_start: row.cycle_start, date: row.date, storage_byte_hours: row.storage_byte_hours }))),
         writtenAt,
+        options.requireCurrentOwner ?? true,
       ],
     )
     return { data: null, error: null }
@@ -442,7 +449,7 @@ async function finalizePreviousCycle(
   c: Context,
   pg: PgClient,
   events: VersionMetaStorageRow[],
-  options: { appId: string, ownerOrg: string, cycleStart: string, calculationEndMs: number, accrualStart: string | null, writtenAt: string },
+  options: { appId: string, ownerOrg: string, cycleStart: string, calculationEndMs: number, accrualStart: string | null, writtenAt: string, requireCurrentOwner?: boolean },
 ) {
   const cycleStartMs = parseTimestampMs(options.cycleStart)
   if (options.calculationEndMs - cycleStartMs >= STORAGE_FINALIZE_WINDOW_MS)
@@ -463,6 +470,7 @@ async function finalizePreviousCycle(
     currentHour: new Date(Math.min(parseTimestampMs(previous.cycle_end), options.calculationEndMs)).toISOString(),
     accrualStart: options.accrualStart,
     writtenAt: options.writtenAt,
+    requireCurrentOwner: options.requireCurrentOwner,
   })
 }
 
@@ -525,6 +533,7 @@ async function finalizeFormerOwner(
     calculationEndMs: transferredAtMs,
     accrualStart: formerOwnedSince,
     writtenAt: options.writtenAt,
+    requireCurrentOwner: false,
   })
   await replaceCycleStorageHourly(c, pg, events, {
     appId: options.appId,
@@ -534,6 +543,7 @@ async function finalizeFormerOwner(
     currentHour: transferredAt,
     accrualStart: formerOwnedSince,
     writtenAt: options.writtenAt,
+    requireCurrentOwner: false,
   })
 }
 
@@ -673,6 +683,8 @@ export async function finalizeDeletedAppStorageHourly(
     currentHour: deletedAt,
     accrualStart: ownership.ownedSince,
     writtenAt,
+    // The app row is gone: these rows are clipped at the deletion.
+    requireCurrentOwner: false,
   })
   // Deleted soon after a rollover: the previous cycle's last hours are only recorded here.
   await finalizePreviousCycle(c, pg, events, {
@@ -682,6 +694,7 @@ export async function finalizeDeletedAppStorageHourly(
     calculationEndMs: deletedAtMs,
     accrualStart: ownership.ownedSince,
     writtenAt,
+    requireCurrentOwner: false,
   })
   // Deleted soon after a transfer: the former owner's last hours are only recorded here.
   await finalizeFormerOwner(c, pg, events, { appId: record.app_id, ownerOrg: record.owner_org, ownership, calculationEndMs: deletedAtMs, writtenAt })

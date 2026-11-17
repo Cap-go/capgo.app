@@ -166,7 +166,8 @@ CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
     p_segment_start timestamptz,
     p_replace_legacy boolean,
     p_rows jsonb,
-    p_written_at timestamptz
+    p_written_at timestamptz,
+    p_require_current_owner boolean DEFAULT true
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -174,6 +175,23 @@ SECURITY DEFINER
 SET search_path TO ''
 AS $$
 BEGIN
+  -- A live refresh only writes while its org still owns the app: it may have
+  -- read the owner before a transfer and calculated past it. The share lock
+  -- keeps a transfer from committing in between. When the owner changed it
+  -- writes nothing (and leaves the watermark), so the new owner's refresh
+  -- finalizes the former owner up to the transfer. The former-owner and
+  -- deletion finalizers write rows clipped on purpose and skip this check.
+  IF p_require_current_owner THEN
+    PERFORM 1
+    FROM public.apps
+    WHERE apps.app_id = p_app_id
+      AND apps.owner_org = p_owner_org
+    FOR SHARE;
+    IF NOT FOUND THEN
+      RETURN;
+    END IF;
+  END IF;
+
   -- Advance the watermark, or stop: a refresh that started later already
   -- replaced this cycle and segment. The row lock serializes concurrent ones.
   INSERT INTO public.daily_storage_hourly_refreshes AS refresh (app_id, owner_org, cycle_start, segment_start, written_at)
@@ -227,10 +245,10 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz) TO service_role;
+ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 2c. Cycle storage usage for the console

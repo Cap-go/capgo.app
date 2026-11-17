@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(33);
+SELECT plan(35);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -194,14 +194,16 @@ SELECT app_id, org_id, cycle_start - 28, cycle_start, 9, '2026-03-01T00:00:00Z':
 SELECT public.replace_app_storage_hourly(
     app_id, org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T00:00:00Z', true,
     '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 240}, {"cycle_start": "2026-03-01", "date": "2026-03-02", "storage_byte_hours": 100}]'::jsonb,
-    '2026-03-02T10:00:00Z'
+    '2026-03-02T10:00:00Z',
+    false
 ) FROM replace_ctx;
 
 -- The older refresh (started 09:00) finishes later with a stale first day only.
 SELECT public.replace_app_storage_hourly(
     app_id, org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T00:00:00Z', true,
     '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 1}]'::jsonb,
-    '2026-03-02T09:00:00Z'
+    '2026-03-02T09:00:00Z',
+    false
 ) FROM replace_ctx;
 
 SELECT
@@ -233,7 +235,8 @@ SELECT
 SELECT public.replace_app_storage_hourly(
     app_id, org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T00:00:00Z', true,
     '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 120}]'::jsonb,
-    '2026-03-02T11:00:00Z'
+    '2026-03-02T11:00:00Z',
+    false
 ) FROM replace_ctx;
 
 SELECT
@@ -254,7 +257,8 @@ SELECT
 SELECT public.replace_app_storage_hourly(
     app_id, org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T00:00:00Z', true,
     '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 5}, {"cycle_start": "2026-03-01", "date": "2026-03-02", "storage_byte_hours": 5}]'::jsonb,
-    '2026-03-02T10:30:00Z'
+    '2026-03-02T10:30:00Z',
+    false
 ) FROM replace_ctx;
 
 SELECT
@@ -276,17 +280,20 @@ SELECT
 SELECT public.replace_app_storage_hourly(
     'com.test.gbhours.anchor', org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T00:00:00Z', true,
     '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 24}]'::jsonb,
-    '2026-03-02T08:00:00Z'
+    '2026-03-02T08:00:00Z',
+    false
 ) FROM replace_ctx;
 SELECT public.replace_app_storage_hourly(
     'com.test.gbhours.anchor', org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T12:00:00Z', true,
     '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 12}]'::jsonb,
-    '2026-03-02T11:00:00Z'
+    '2026-03-02T11:00:00Z',
+    false
 ) FROM replace_ctx;
 SELECT public.replace_app_storage_hourly(
     'com.test.gbhours.anchor', org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T00:00:00Z', true,
     '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 24}]'::jsonb,
-    '2026-03-02T10:00:00Z'
+    '2026-03-02T10:00:00Z',
+    false
 ) FROM replace_ctx;
 
 SELECT
@@ -296,6 +303,35 @@ SELECT
         'a late refresh under a moved anchor does not re-insert the replaced segment'
     );
 
+-- A live refresh writes nothing for an org that no longer owns the app (it
+-- read the owner before a transfer): the new owner finalizes it instead.
+SELECT public.replace_app_storage_hourly(
+    live_app, other_org_id, DATE '2026-05-01', DATE '2026-06-01', DATE '2026-06-01', '2026-05-01T00:00:00Z', true,
+    '[{"cycle_start": "2026-05-01", "date": "2026-05-02", "storage_byte_hours": 77}]'::jsonb,
+    '2026-05-03T00:00:00Z'
+) FROM gbh_ctx;
+SELECT public.replace_app_storage_hourly(
+    live_app, org_id, DATE '2026-05-01', DATE '2026-06-01', DATE '2026-06-01', '2026-05-01T00:00:00Z', true,
+    '[{"cycle_start": "2026-05-01", "date": "2026-05-02", "storage_byte_hours": 88}]'::jsonb,
+    '2026-05-03T00:00:00Z'
+) FROM gbh_ctx;
+
+SELECT
+    is(
+        (SELECT count(*)::integer FROM public.daily_storage_hourly
+         WHERE app_id = (SELECT live_app FROM gbh_ctx) AND owner_org = (SELECT other_org_id FROM gbh_ctx) AND cycle_start = DATE '2026-05-01'),
+        0,
+        'a live refresh writes nothing once its org no longer owns the app'
+    );
+
+SELECT
+    is(
+        (SELECT storage_byte_hours FROM public.daily_storage_hourly
+         WHERE app_id = (SELECT live_app FROM gbh_ctx) AND owner_org = (SELECT org_id FROM gbh_ctx) AND cycle_start = DATE '2026-05-01'),
+        88::double precision,
+        'a live refresh of the current owner writes its rows'
+    );
+
 -- A legacy row (written before the migration) of an app created mid-cycle is
 -- replaced by the app's segment, not billed twice.
 INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours, updated_at)
@@ -303,7 +339,8 @@ SELECT 'com.test.gbhours.legacy', org_id, cycle_start + 3, cycle_start + 3, 50, 
 SELECT public.replace_app_storage_hourly(
     'com.test.gbhours.legacy', org_id, cycle_start, cycle_end, cycle_end, '2026-03-04T08:00:00Z', false,
     '[{"cycle_start": "2026-03-01", "date": "2026-03-04", "storage_byte_hours": 40}]'::jsonb,
-    '2026-03-05T00:00:00Z'
+    '2026-03-05T00:00:00Z',
+    false
 ) FROM replace_ctx;
 
 SELECT
@@ -318,7 +355,8 @@ SELECT
 SELECT public.replace_app_storage_hourly(
     app_id, org_id, cycle_start, cycle_end, cycle_end, '2026-03-02T06:00:00Z', false,
     '[{"cycle_start": "2026-03-01", "date": "2026-03-02", "storage_byte_hours": 18}]'::jsonb,
-    '2026-03-02T12:00:00Z'
+    '2026-03-02T12:00:00Z',
+    false
 ) FROM replace_ctx;
 
 SELECT
@@ -336,8 +374,8 @@ SELECT
 
 SELECT
     ok(
-        NOT has_function_privilege('authenticated', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz)', 'EXECUTE')
-        AND NOT has_function_privilege('anon', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz)', 'EXECUTE'),
+        NOT has_function_privilege('authenticated', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean)', 'EXECUTE')
+        AND NOT has_function_privilege('anon', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean)', 'EXECUTE'),
         'replace_app_storage_hourly is not callable by clients'
     );
 

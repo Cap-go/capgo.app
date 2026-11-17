@@ -130,6 +130,8 @@ describe('on_app_delete trigger', () => {
 
       expect(response.status).toBe(200)
       const replace = pgQuery.mock.calls.find(([sql]) => sql.includes('replace_app_storage_hourly'))
+      // The app row is gone, so the deletion finalizer skips the current-owner check.
+      expect(replace?.[1]?.[9]).toBe(false)
       // Whole-cycle segment: the app existed since the cycle start.
       expect(replace?.[1]?.slice(0, 7)).toEqual(['com.test.delete', 'org-1', '2026-01-01', '2026-02-01', '2026-02-01', '2026-01-01T00:00:00.000Z', true])
       // 100 bytes for the 6 hours between the upload and the deletion, not up to the handler's
