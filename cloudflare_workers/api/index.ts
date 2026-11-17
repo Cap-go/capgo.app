@@ -297,7 +297,7 @@ appScheduled.post('/flush-plugin-notifications', async (c) => {
   return c.json({ ...BRES, ...result })
 })
 
-async function runScheduledSimulatorExpiry(env: Bindings, ctx: ExecutionContext) {
+export async function runScheduledSimulatorExpiry(env: Bindings, ctx: ExecutionContext) {
   const request = new Request('https://api-scheduled.capgo.internal/expire-simulator-sessions', { method: 'POST' })
   const response = await appScheduled.fetch(request, env, ctx)
   if (!response.ok)

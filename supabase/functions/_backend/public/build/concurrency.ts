@@ -220,9 +220,11 @@ const ORGS_WITH_DUE_SIMULATOR_SESSIONS_SQL = `
   LIMIT 500
 `
 
-export async function sweepDueSimulatorSessions(c: Context): Promise<{ orgs: number, orphanedDevices: number }> {
+export async function sweepDueSimulatorSessions(c: Context): Promise<{ orgs: number, orphanedDevices: number, hostSync: number }> {
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
+    const { syncInProgressSimulatorSessionsFromHost, stopOrphanedSimulatorDevices } = await import('./simulator.ts')
+    const hostSync = await syncInProgressSimulatorSessionsFromHost(c)
     pgPool = await getPgClient(c, true)
     const orgs = await pgPool.query<{ owner_org: string }>(
       ORGS_WITH_DUE_SIMULATOR_SESSIONS_SQL,
@@ -230,9 +232,8 @@ export async function sweepDueSimulatorSessions(c: Context): Promise<{ orgs: num
     )
     for (const row of orgs.rows)
       await expireSimulatorSessions(c, row.owner_org)
-    const { stopOrphanedSimulatorDevices } = await import('./simulator.ts')
     const orphanedDevices = await stopOrphanedSimulatorDevices(c)
-    return { orgs: orgs.rows.length, orphanedDevices }
+    return { orgs: orgs.rows.length, orphanedDevices, hostSync }
   }
   finally {
     if (pgPool)

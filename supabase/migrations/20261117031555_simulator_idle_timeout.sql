@@ -11,9 +11,42 @@ SET last_activity_at = COALESCE(started_at, created_at)
 WHERE last_activity_at IS NULL;
 
 -- Idle window is five minutes here and SIMULATOR_IDLE_TIMEOUT_MINUTES (5) in the API worker.
+DROP INDEX IF EXISTS public.simulator_sessions_idle_sweep_idx;
 CREATE INDEX IF NOT EXISTS simulator_sessions_idle_sweep_idx
-  ON public.simulator_sessions (last_activity_at)
+  ON public.simulator_sessions (COALESCE(last_activity_at, started_at, created_at))
   WHERE status IN ('new', 'queued', 'starting', 'in-progress');
+
+CREATE INDEX IF NOT EXISTS simulator_sessions_orphan_device_stop_idx
+  ON public.simulator_sessions (updated_at)
+  WHERE status = 'stopped' AND emulator_id IS NOT NULL AND device_stopped_at IS NULL;
+
+CREATE OR REPLACE FUNCTION public.bump_simulator_session_activity(p_session_id uuid)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  bumped integer := 0;
+BEGIN
+  UPDATE public.simulator_sessions
+  SET last_activity_at = now(),
+      updated_at = now()
+  WHERE id = p_session_id
+    AND status = 'in-progress'
+    AND started_at IS NOT NULL
+    AND started_at > now() - make_interval(mins => max_duration_minutes)
+    AND COALESCE(last_activity_at, started_at) > now() - make_interval(mins => 5);
+  GET DIAGNOSTICS bumped = ROW_COUNT;
+  RETURN bumped;
+END;
+$$;
+
+ALTER FUNCTION public.bump_simulator_session_activity(uuid) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.bump_simulator_session_activity(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.bump_simulator_session_activity(uuid) FROM anon;
+REVOKE ALL ON FUNCTION public.bump_simulator_session_activity(uuid) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.bump_simulator_session_activity(uuid) TO service_role;
 
 -- Stop when the session hits its max duration or five minutes without API activity.
 CREATE OR REPLACE FUNCTION public.expire_simulator_sessions(p_org_id uuid)

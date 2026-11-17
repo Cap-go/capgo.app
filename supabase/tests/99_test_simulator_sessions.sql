@@ -164,20 +164,9 @@ SELECT is(
   'four minutes idle is still inside the five minute window'
 );
 
-SELECT results_eq(
-  $$ WITH bumped AS (
-       UPDATE public.simulator_sessions
-       SET last_activity_at = now(),
-           updated_at = now()
-       WHERE id = '99000000-0000-4000-8000-000000000006'
-         AND status = 'in-progress'
-         AND started_at IS NOT NULL
-         AND started_at > now() - make_interval(mins => max_duration_minutes)
-         AND COALESCE(last_activity_at, started_at) > now() - make_interval(mins => 5)
-       RETURNING id
-     )
-     SELECT count(*)::integer FROM bumped $$,
-  ARRAY[1],
+SELECT is(
+  public.bump_simulator_session_activity('99000000-0000-4000-8000-000000000006'),
+  1,
   'activity bump updates last_activity_at while inside the idle window'
 );
 
@@ -195,20 +184,9 @@ UPDATE public.simulator_sessions
 SET last_activity_at = now() - interval '6 minutes'
 WHERE id = '99000000-0000-4000-8000-000000000006';
 
-SELECT results_eq(
-  $$ WITH bumped AS (
-       UPDATE public.simulator_sessions
-       SET last_activity_at = now(),
-           updated_at = now()
-       WHERE id = '99000000-0000-4000-8000-000000000006'
-         AND status = 'in-progress'
-         AND started_at IS NOT NULL
-         AND started_at > now() - make_interval(mins => max_duration_minutes)
-         AND COALESCE(last_activity_at, started_at) > now() - make_interval(mins => 5)
-       RETURNING id
-     )
-     SELECT count(*)::integer FROM bumped $$,
-  ARRAY[0],
+SELECT is(
+  public.bump_simulator_session_activity('99000000-0000-4000-8000-000000000006'),
+  0,
   'activity bump is refused once the idle window has elapsed'
 );
 

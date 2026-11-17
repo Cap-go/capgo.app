@@ -28,6 +28,14 @@ export interface EmulatorSessionData {
   url: string
   status?: string
   remoteConfig?: unknown
+  lastActivityAt?: string | null
+  finishedAt?: string | null
+}
+
+const HOST_TERMINAL_SESSION_STATUSES = new Set(['stopped', 'errored'])
+
+export function hostEmulatorSessionTerminal(status: string | undefined): boolean {
+  return status !== undefined && HOST_TERMINAL_SESSION_STATUSES.has(status)
 }
 
 export const SIMULATOR_DEVICE_COMMANDS = ['devices', 'screenshot', 'snapshot', 'home', 'lock', 'tap', 'open'] as const
@@ -160,7 +168,7 @@ export function emulatorSessionCreateBody(input: { id?: string, appId: string, p
     name: input.name,
     type: 'agent-device',
     maxDurationMinutes: SIMULATOR_MAX_DURATION_MINUTES,
-    idleTimeoutMinutes: SIMULATOR_IDLE_TIMEOUT_MINUTES,
+    maxIdleTimeMinutes: SIMULATOR_IDLE_TIMEOUT_MINUTES,
   }
 }
 
@@ -284,7 +292,17 @@ export async function stopOrphanedSimulatorDevices(c: Context, limit = 50): Prom
     ORDER BY updated_at ASC
     LIMIT $1
   `, [limit])
-  await stopDevicesForDueSimulatorExpiry(c, rows)
+  for (const row of rows) {
+    if (!row.emulator_id || row.device_stopped_at)
+      continue
+    try {
+      await bestEffortStopSimulatorDevice(c, row)
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to stop orphaned simulator device', sessionId: row.id, error })
+      await queryWrite(c, `UPDATE public.simulator_sessions SET updated_at = now() WHERE id = $1::uuid`, [row.id])
+    }
+  }
   return rows.length
 }
 
@@ -304,21 +322,18 @@ export async function stopDevicesForDueSimulatorExpiry(
   }
 }
 
-export const simulatorActivityBumpSql = (idleTimeoutMinutes = SIMULATOR_IDLE_TIMEOUT_MINUTES) => `
-        UPDATE public.simulator_sessions
-        SET last_activity_at = now(),
-            updated_at = now()
-        WHERE id = $1::uuid
-          AND status = 'in-progress'
-          AND started_at IS NOT NULL
-          AND started_at > now() - make_interval(mins => max_duration_minutes)
-          AND COALESCE(last_activity_at, started_at) > now() - make_interval(mins => ${idleTimeoutMinutes})
-        RETURNING id
+export const simulatorActivityBumpSql = () => `
+        SELECT public.bump_simulator_session_activity($1::uuid) AS bumped
       `
+
+export async function bumpSimulatorSessionActivity(c: Context, sessionId: string): Promise<boolean> {
+  const rows = await queryWrite<{ bumped: number }>(c, simulatorActivityBumpSql(), [sessionId])
+  return Number(rows[0]?.bumped) === 1
+}
 
 type SimulatorActivityTouch = { bump?: boolean }
 
-async function touchSimulatorActivity(
+export async function touchSimulatorActivity(
   c: Context,
   sessionId: string,
   context?: { orgId: string, userId: string, appId: string, row: SimulatorRow },
@@ -333,17 +348,8 @@ async function touchSimulatorActivity(
     return 'skipped'
   }
   try {
-    const rows = context
-      ? await queryWrite<{ id: string }>(c, simulatorActivityBumpSql(), [sessionId])
-      : await queryWrite<{ id: string }>(c, `
-        UPDATE public.simulator_sessions
-        SET last_activity_at = now(),
-            updated_at = now()
-        WHERE id = $1::uuid
-          AND status = 'in-progress'
-        RETURNING id
-      `, [sessionId])
-    if (rows.length === 1)
+    const rows = await queryWrite<{ bumped: number }>(c, simulatorActivityBumpSql(), [sessionId])
+    if (Number(rows[0]?.bumped) === 1)
       return 'bumped'
     if (!context || context.row.status !== 'in-progress' || !simulatorSessionPastExpiry(context.row))
       return 'skipped'
@@ -474,7 +480,7 @@ export function simulatorSessionPastExpiry(
   return now >= activity + SIMULATOR_IDLE_TIMEOUT_MINUTES * 60_000
 }
 
-async function markSession(c: Context, id: string, status: 'in-progress' | 'stopped' | 'errored', extra?: { url?: string, emulatorId?: string }) {
+export async function markSession(c: Context, id: string, status: 'in-progress' | 'stopped' | 'errored', extra?: { url?: string, emulatorId?: string }) {
   const rows = await queryWrite<{ id: string }>(c, `
     UPDATE public.simulator_sessions
     SET status = $2,
@@ -523,6 +529,77 @@ export function canFinishSimulatorStop(input: { remoteStatus: number | null, bil
   if (input.seconds > 0 && !input.billingRecorded)
     return false
   return true
+}
+
+async function fetchRemoteEmulatorSession(c: Context, emulatorId: string): Promise<EmulatorSessionData | null> {
+  try {
+    const { accessKey, origin } = simulatorConfig(c)
+    const found = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${emulatorId}`, 'GET')
+    return found.data ?? null
+  }
+  catch (error) {
+    if (error instanceof SimulatorHostError && simulatorHostStopIsFinal(error.status)) {
+      return {
+        id: emulatorId,
+        url: '',
+        status: 'stopped',
+        finishedAt: new Date().toISOString(),
+      }
+    }
+    return null
+  }
+}
+
+export async function syncSimulatorSessionFromHost(
+  c: Context,
+  row: SimulatorRow,
+  context: { orgId: string, userId: string },
+): Promise<'synced' | 'finalized' | 'skipped'> {
+  if (row.status !== 'in-progress' || !row.emulator_id)
+    return 'skipped'
+  const host = await fetchRemoteEmulatorSession(c, row.emulator_id)
+  if (!host)
+    return 'skipped'
+  const working: SimulatorRow = { ...row }
+  if (host.lastActivityAt) {
+    const updated = await queryWrite<{ last_activity_at: string }>(c, `
+      UPDATE public.simulator_sessions
+      SET last_activity_at = $2::timestamptz,
+          updated_at = now()
+      WHERE id = $1::uuid
+        AND status = 'in-progress'
+        AND (last_activity_at IS NULL OR last_activity_at < $2::timestamptz)
+      RETURNING last_activity_at
+    `, [row.id, host.lastActivityAt])
+    working.last_activity_at = updated[0]?.last_activity_at ?? host.lastActivityAt
+  }
+  if (hostEmulatorSessionTerminal(host.status)) {
+    const stoppedAt = host.finishedAt ?? new Date().toISOString()
+    working.device_stopped_at = await rememberDeviceStop(c, row.id, stoppedAt)
+    await finalizeExpiredSimulatorSession(c, { orgId: context.orgId, userId: context.userId, appId: row.app_id, row: working })
+    return 'finalized'
+  }
+  if (simulatorSessionPastExpiry(working)) {
+    await finalizeExpiredSimulatorSession(c, { orgId: context.orgId, userId: context.userId, appId: row.app_id, row: working })
+    return 'finalized'
+  }
+  return 'synced'
+}
+
+export async function syncInProgressSimulatorSessionsFromHost(c: Context, limit = 300): Promise<number> {
+  const rows = await queryRead<SimulatorRow & { owner_org: string }>(c, `
+    SELECT id, owner_org, app_id, platform, status, url, emulator_id, started_at, last_activity_at,
+           device_stopped_at, requested_by, max_duration_minutes
+    FROM public.simulator_sessions
+    WHERE status = 'in-progress'
+      AND emulator_id IS NOT NULL
+      AND device_stopped_at IS NULL
+    ORDER BY updated_at ASC
+    LIMIT $1
+  `, [limit])
+  for (const row of rows)
+    await syncSimulatorSessionFromHost(c, row, { orgId: row.owner_org, userId: row.requested_by })
+  return rows.length
 }
 
 async function postEmulator(origin: string, accessKey: string, path: string, method: string, body?: unknown): Promise<{ status: number, data?: EmulatorSessionData }> {
@@ -706,7 +783,9 @@ async function recordStartupFailure(c: Context, slotId: string, emulatorId: stri
 
 export async function readSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const appId = requireAppId(body.app_id)
-  const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
+  let { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
+  await syncSimulatorSessionFromHost(c, row, { orgId, userId })
+  ;({ orgId, row } = await ownedSession(c, principal, userId, appId, sessionId))
   const touch = await touchSimulatorActivity(c, sessionId, { orgId, userId, appId, row }, { bump: false })
   if (touch === 'expired') {
     return c.json({
@@ -796,10 +875,11 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
 export async function pingSimulatorActivity(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const appId = requireAppId(body.app_id)
   const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
-  const touch = await touchSimulatorActivity(c, sessionId, { orgId, userId, appId, row }, { bump: true })
-  if (touch === 'expired')
+  const sync = await syncSimulatorSessionFromHost(c, row, { orgId, userId })
+  if (sync === 'finalized')
     throw simpleError('invalid_request', 'This simulator is not running.')
-  if (touch === 'skipped' && row.status !== 'in-progress')
+  const fresh = await ownedSession(c, principal, userId, appId, sessionId)
+  if (fresh.row.status !== 'in-progress')
     throw simpleError('invalid_request', 'This simulator is not running.')
   return c.json({ status: 'ok' })
 }
