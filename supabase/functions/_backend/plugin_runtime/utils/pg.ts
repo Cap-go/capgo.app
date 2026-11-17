@@ -1,5 +1,9 @@
+import { isRestrictedServingPolicy } from './servingRegions.ts'
+import { requestServingPolicy } from './servingPolicy.ts'
+import { quickError } from './hono.ts'
 import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
+import type { ServingRegion } from './servingRegions.ts'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { getRuntimeKey } from 'hono/adapter'
@@ -142,7 +146,7 @@ function getReplicationLagInflight(c: Context) {
   return inflight
 }
 
-const READ_REPLICA_ROUTES: { region: string, binding: ReadReplicaHyperdriveBinding }[] = [
+const READ_REPLICA_ROUTES: { region: ServingRegion, binding: ReadReplicaHyperdriveBinding }[] = [
   { region: 'AS_JAPAN', binding: 'HYPERDRIVE_CAPGO_READ_AS_JAPAN' },
   { region: 'AS_INDIA', binding: 'HYPERDRIVE_CAPGO_READ_AS_INDIA' },
   { region: 'NA', binding: 'HYPERDRIVE_CAPGO_READ_NA' },
@@ -398,6 +402,17 @@ function findRegionalReadReplicaRoute(c: Context, dbRegion: string | undefined) 
  * measured more than READ_REPLICA_FALLBACK_LAG_SECONDS behind it.
  */
 function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
+  const policy = requestServingPolicy(c)
+  if (policy && isRestrictedServingPolicy(policy)) {
+    const candidates = READ_REPLICA_ROUTES.filter(route => policy.regions.includes(route.region) && c.env[route.binding])
+    const regional = candidates.find(route => route.region === dbRegion)
+    const selected = regional && !isReplicaTooFarBehind(regional.binding)
+      ? regional
+      : candidates.find(route => !isReplicaTooFarBehind(route.binding))
+    if (!selected)
+      throw quickError(503, 'serving_region_unavailable', 'No allowed regional backend is available')
+    return selected
+  }
   const route = findRegionalReadReplicaRoute(c, dbRegion)
   if (!route || route === EU_READ_REPLICA_ROUTE || !c.env[EU_READ_REPLICA_ROUTE.binding] || !isReplicaTooFarBehind(route.binding))
     return route
@@ -410,6 +425,11 @@ function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
  * their edge cache TTL keeps the regional replica's lag cap.
  */
 export function getReadReplicaBinding(c: Context): string | null {
+  const policy = requestServingPolicy(c)
+  if (policy && isRestrictedServingPolicy(policy)) {
+    const source = c.get('databaseSource')
+    return READ_REPLICA_ROUTES.find(route => route.binding === source && policy.regions.includes(route.region))?.binding ?? null
+  }
   const route = findRegionalReadReplicaRoute(c, getClientDbRegionSB(c))
   if (route)
     return route.binding
@@ -424,7 +444,7 @@ function getReadOnlyDatabaseURL(c: Context, dbRegion: string | undefined): strin
     return null
 
   if (selectedRoute.region !== dbRegion)
-    cloudlog({ requestId: c.get('requestId'), message: 'Regional read replica too far behind, reading from EU replica', dbRegion })
+    cloudlog({ requestId: c.get('requestId'), message: 'Reading from an alternate regional replica', dbRegion, selectedRegion: selectedRoute.region })
   setDatabaseSource(c, selectedRoute.binding)
   return c.env[selectedRoute.binding].connectionString
 }
@@ -442,6 +462,9 @@ function getLocalReadOnlyDatabaseURL(c: Context): string | null {
 }
 
 export function getDatabaseURL(c: Context, readOnly = false): string {
+  const policy = requestServingPolicy(c)
+  if (!readOnly && policy && isRestrictedServingPolicy(policy))
+    throw quickError(503, 'serving_region_unavailable', 'Legacy server storage is unavailable with regional serving restrictions')
   const dbRegion = getClientDbRegionSB(c)
 
   // For read-only queries, use region to avoid Network latency

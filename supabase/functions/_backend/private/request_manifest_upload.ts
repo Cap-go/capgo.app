@@ -7,6 +7,7 @@ import { Hono } from 'hono/tiny'
 import { quickError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { manifestReuseResolver } from '../utils/manifest_upload_reuse.ts'
 import { createManifestUploadResponse, ManifestUploadRequestError, parseManifestUploadRequestBody, resolveManifestUploadPublicBaseUrl, validateManifestUploadRequest } from '../utils/manifest_upload.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { throwDatabaseLookupError, throwDatabaseUnavailable } from '../utils/pg_auth_lookup.ts'
@@ -106,6 +107,7 @@ app.post('/', middlewareKey({ usePostgres: true, readOnly: false, rateLimitScope
         secret: capabilitySecret,
         keyId: getEnv(c, 'MANIFEST_UPLOAD_CAPABILITY_KEY_ID'),
         publicBaseUrl,
+        resolveReuseReceipts: manifestReuseResolver(c),
       })
     }
     catch (error) {
@@ -119,6 +121,7 @@ app.post('/', middlewareKey({ usePostgres: true, readOnly: false, rateLimitScope
       message: 'request_manifest_upload done',
       version_id: request.version_id,
       entry_count: request.entries.length,
+      reuse_count: response.entries.filter(entry => entry.action === 'reuse').length,
       request_bytes: requestBytes,
       response_bytes: encoder.encode(JSON.stringify(response)).byteLength,
       elapsed_ms: Date.now() - startedAt,

@@ -2,9 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make rapid-merge release generation race-safe while ensuring release-generation re-runs are rejected and deployment retries stay pinned to their original immutable tag.
-
-**Architecture:** `bump_version.yml` calculates pending work from component-specific tags, cancels an older first-attempt push run when a newer source push arrives, rejects every re-run before tag generation, and publishes generated release refs with a compare-and-swap-style atomic push. `build_and_deploy.yml` resolves the tag that triggered the workflow, never retargets a retry, rejects stale retries before production mutation, and serializes deployments by environment. Production schema/types generation moves behind successful replica reconciliation and Supabase migration deployment, then publishes through a compare-and-swap retry loop on `main`.
+**Current deployment contract:** Full deployment recovery uses **Re-run all jobs**.
+Each attempt resolves the newest tag for the original stable/alpha environment,
+then keeps that target immutable across jobs and completion evidence. Deployment
+scope uses durable per-destination state refs with CAS, pending intent and an
+`always()` completion job. Stable Supabase completion includes subscription
+refresh; plugin baselines cover each region independently. Unknown history forces
+reconciliation. See the [current design](../specs/2026-09-09-reliable-release-retries-design.md).
+This contract supersedes the original-tag retry instructions in Tasks 6 and 7
+below, which remain as historical implementation notes. Release publication and
+the complete post-merge test gate are unchanged by this deployment update.
 
 **Tech Stack:** GitHub Actions YAML, Bun/TypeScript, Git refs, Vitest.
 
@@ -379,7 +386,7 @@ The PR body must summarize the observed races, state that full post-merge tests 
 
 Use the `pr-ready` workflow to inspect checks, reviews, unresolved conversations, mergeability, and base/head SHAs. Record observation A only when all required gates are green. Recheck fresh state at least 300 seconds later and record observation B only if no relevant state changed.
 
-## Approved revision: pinned retries and post-deploy schema sync
+## Historical revision: original-tag retries and post-deploy schema sync
 
 Tasks 1–3 above describe the first implementation already present on this PR branch. The following tasks replace Task 3's “newest tag” retry behavior with the user-approved immutable-tag design and relocate schema/type synchronization. Task 4 is repeated only after these revisions are complete.
 

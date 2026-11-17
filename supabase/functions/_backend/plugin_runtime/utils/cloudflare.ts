@@ -52,6 +52,7 @@ type AiBinding = {
 
 // eslint-disable-next-line ts/consistent-type-definitions
 export type Bindings = {
+  SERVING_REGION_SIGNING_KEY?: string
   DEVICE_USAGE: AnalyticsEngineDataset
   BANDWIDTH_USAGE: AnalyticsEngineDataset
   VERSION_USAGE: AnalyticsEngineDataset

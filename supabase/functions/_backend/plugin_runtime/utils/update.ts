@@ -1,3 +1,4 @@
+import { enforceServingPolicy } from './servingPolicy.ts'
 import type { SemVer } from '@std/semver'
 import type { Context } from 'hono'
 import type { ManifestEntry } from './downloadUrl.ts'
@@ -1030,6 +1031,7 @@ async function upToDateFromReadCache(c: Context, body: AppInfos, appStatus: Awai
  * cache, not from the snippet header (the device can read that header).
  */
 export async function recordSnippetUpToDate(c: Context, body: AppInfos, answer: { versionName: string }) {
+  await enforceServingPolicy(c, body.app_id)
   const pluginState = await startPluginStateRequest(c, body.app_id, body.device_id ?? '')
   const stateDatabase = pluginState ? createPluginStateDatabase(c, pluginState) : null
   const lazyClient = stateDatabase ? stateDatabase.lazy : createLazyPgClient(c, true)
@@ -1054,6 +1056,7 @@ export async function recordSnippetUpToDate(c: Context, body: AppInfos, answer: 
 }
 
 export async function update(c: Context, body: AppInfos) {
+  await enforceServingPolicy(c, body.app_id)
   const startUpdate = performance.now()
   const appStatus = await getAppStatus(c, body.app_id)
   const appStatusMs = Math.round(performance.now() - startUpdate)

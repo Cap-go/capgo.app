@@ -6,7 +6,7 @@ import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import type { ClientBindingInput } from './scope.ts'
 import { sql } from 'drizzle-orm'
-import { createRoleBindingForPrincipal, lockRbacOrgs } from '../../private/role_bindings.ts'
+import { createRoleBindingBatchCache, createRoleBindingForPrincipal, lockRbacOrgs, prefetchRolesForBindings } from '../../private/role_bindings.ts'
 import { getErrorCode, getErrorStatus } from '../../utils/errors.ts'
 import { honoFactory, parseBody, quickError, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
@@ -14,7 +14,7 @@ import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { authPrincipal, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
 import { schema } from '../../utils/postgres_schema.ts'
-import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
+import { checkPermissionsBatch, checkPermissionsBatchPg } from '../../utils/rbac.ts'
 import { validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { apiKeyBindingsAllowOrgCreate, assertApiKeyCanKeepOrgCreateGrant, parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
 import { apiKeyManagerPrincipal, assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
@@ -75,6 +75,25 @@ function toDrizzleApiKeyUpdate(updateData: ApiKeyUpdateData): Partial<typeof sch
   return drizzleUpdate
 }
 
+/**
+ * 403 on the first org (in input order) where the caller lacks
+ * org.update_user_roles. All orgs are checked with one batched statement.
+ */
+async function assertCanUpdateUserRolesInOrgs(
+  c: Context<MiddlewareKeyVariables>,
+  orgIds: string[],
+  pg?: { drizzle: ReturnType<typeof getDrizzleClient>, userId: string },
+) {
+  const checks = orgIds.map(orgId => ({ permission: 'org.update_user_roles' as const, scope: { orgId } }))
+  const allowed = pg
+    ? await checkPermissionsBatchPg(c, checks, pg.drizzle, pg.userId)
+    : await checkPermissionsBatch(c, checks)
+  const deniedOrgId = orgIds.find((_orgId, idx) => !allowed[idx])
+  if (deniedOrgId !== undefined) {
+    throw quickError(403, 'forbidden_binding', `Forbidden - Admin rights required for org ${deniedOrgId}`, { requestId: c.get('requestId'), orgId: deniedOrgId })
+  }
+}
+
 async function replaceApiKeyBindings(
   c: Context<MiddlewareKeyVariables>,
   auth: AuthInfo,
@@ -98,11 +117,7 @@ async function replaceApiKeyBindings(
   // Intentionally stricter than POST /apikey: app admins (app.manage_apikeys)
   // may create app-scoped keys but not re-scope existing ones. Relaxing this
   // must re-run the escalation checks of assertCanManageApiKeyBindingsPg.
-  for (const orgId of affectedOrgIds) {
-    if (!(await checkPermission(c, 'org.update_user_roles', { orgId }))) {
-      throw quickError(403, 'forbidden_binding', `Forbidden - Admin rights required for org ${orgId}`, { requestId: c.get('requestId'), orgId })
-    }
-  }
+  await assertCanUpdateUserRolesInOrgs(c, affectedOrgIds)
 
   let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   try {
@@ -116,11 +131,7 @@ async function replaceApiKeyBindings(
       const txDrizzle = tx as unknown as ReturnType<typeof getDrizzleClient>
       await lockRbacOrgs(txDrizzle, affectedOrgIds)
 
-      for (const orgId of affectedOrgIds) {
-        if (!(await checkPermissionPg(c, 'org.update_user_roles', { orgId }, txDrizzle, auth.userId))) {
-          throw quickError(403, 'forbidden_binding', `Forbidden - Admin rights required for org ${orgId}`, { requestId: c.get('requestId'), orgId })
-        }
-      }
+      await assertCanUpdateUserRolesInOrgs(c, affectedOrgIds, { drizzle: txDrizzle, userId: auth.userId })
       if (updateData && Object.keys(updateData).length > 0) {
         const result = await tx
           .update(schema.apikeys)
@@ -136,6 +147,10 @@ async function replaceApiKeyBindings(
       await tx
         .delete(schema.role_bindings)
         .where(sql`${schema.role_bindings.principal_type} = public.rbac_principal_apikey() AND ${schema.role_bindings.principal_id} = ${apikey.rbac_id}::uuid`)
+
+      // Resolve every role once for the whole binding set.
+      const batchCache = createRoleBindingBatchCache()
+      await prefetchRolesForBindings(txDrizzle, batchCache, bindings.map(binding => binding.role_name))
 
       for (const binding of bindings) {
         const bindingParams: CreateBindingParams = {
@@ -155,6 +170,7 @@ async function replaceApiKeyBindings(
           auth.userId,
           'jwt',
           auth.userId,
+          { skipOrgLock: true, batchCache },
         )
 
         if (!result.ok) {
@@ -219,11 +235,7 @@ async function replaceApiKeyGlobalPermissionsForExistingBindings(
     throw quickError(403, 'not_authorized', 'Only user sessions can update API key permissions', { requestId: c.get('requestId') })
   }
 
-  for (const orgId of currentBindingOrgIds) {
-    if (!(await checkPermission(c, 'org.update_user_roles', { orgId }))) {
-      throw quickError(403, 'forbidden_binding', `Forbidden - Admin rights required for org ${orgId}`, { requestId: c.get('requestId'), orgId })
-    }
-  }
+  await assertCanUpdateUserRolesInOrgs(c, currentBindingOrgIds)
 
   let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   try {
@@ -234,11 +246,7 @@ async function replaceApiKeyGlobalPermissionsForExistingBindings(
       const txDrizzle = tx as unknown as ReturnType<typeof getDrizzleClient>
       await lockRbacOrgs(txDrizzle, currentBindingOrgIds)
 
-      for (const orgId of currentBindingOrgIds) {
-        if (!(await checkPermissionPg(c, 'org.update_user_roles', { orgId }, txDrizzle, auth.userId))) {
-          throw quickError(403, 'forbidden_binding', `Forbidden - Admin rights required for org ${orgId}`, { requestId: c.get('requestId'), orgId })
-        }
-      }
+      await assertCanUpdateUserRolesInOrgs(c, currentBindingOrgIds, { drizzle: txDrizzle, userId: auth.userId })
       if (updateData && Object.keys(updateData).length > 0) {
         const result = await tx
           .update(schema.apikeys)

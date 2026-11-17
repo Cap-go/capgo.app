@@ -21,6 +21,10 @@ import {
 import { MCP_EVENT_CATALOG } from '../supabase/functions/_backend/utils/mcp_events.ts'
 import { getBuildStatus } from '../supabase/functions/_backend/public/build/status.ts'
 
+vi.mock('../supabase/functions/_backend/mcp/mobile_app.ts', async original => ({
+  ...(await original<typeof import('../supabase/functions/_backend/mcp/mobile_app.ts')>()),
+  latestCapacitorRelease: async () => ({ latest: '8.6.2', next: '9.0.0-rc.0', source: 'npm' }),
+}))
 vi.mock('../supabase/functions/_backend/utils/docs_search.ts', () => ({
   DOCS_SEARCH_MAX_RESULTS: 20,
   searchCapgoDocs: async () => [docsPage],
@@ -46,7 +50,6 @@ vi.mock(
     ...(await original<
       typeof import('../supabase/functions/_backend/mcp/events_rpc.ts')
     >()),
-    loadApikeyRbacId: async () => 'example-rbac',
     handleCapgoListEventSubscriptions: async () => [subscription],
   }),
 )
@@ -442,6 +445,11 @@ const payloads = {
       result: { devices: [] },
     },
   },
+  // Guidance tools answer without the API; the payload is unused.
+  capgo_plan_mobile_app: null,
+  capgo_recommend_plugins: null,
+  capgo_get_mobile_checklist: null,
+  capgo_check_mobile_readiness: null,
 } satisfies Record<McpToolName, unknown>
 
 function context(payload: unknown): McpToolContext {
@@ -553,6 +561,8 @@ describe('every hosted MCP tool has a usable output contract', () => {
           session_id: '11111111-1111-4111-8111-111111111111',
           platform: 'ios',
           command: 'devices',
+          source: 'existing_web_app',
+          features: ['camera'],
         },
         context(payload),
       )
