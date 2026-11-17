@@ -144,9 +144,10 @@ describe('app transfer security', () => {
        VALUES (pg_catalog.timezone('UTC', pg_catalog.now() - interval '30 minutes'), $1, $2, $3)`,
       [appId, 990_000_000 + Math.floor(Math.random() * 1_000_000), bundleSize],
     )
-    // The former owner's real ownership segment (the app creation) and billing cycle.
+    // The former owner's real ownership segment and billing cycle. The backend keys a segment by
+    // the app creation through a JS Date, so at millisecond precision.
     const [former] = await executeSQL<{ segment_start: string, cycle_day: string, cycle_end_day: string, end_exclusive_day: string }>(
-      `SELECT apps.created_at::text AS segment_start,
+      `SELECT pg_catalog.date_trunc('milliseconds', apps.created_at)::text AS segment_start,
          (cycle.cycle_start AT TIME ZONE 'UTC')::date::text AS cycle_day,
          (cycle.cycle_end AT TIME ZONE 'UTC')::date::text AS cycle_end_day,
          (((cycle.cycle_end - interval '1 microsecond') AT TIME ZONE 'UTC')::date + 1)::text AS end_exclusive_day
@@ -289,7 +290,7 @@ describe('app transfer security', () => {
     }>(
       `WITH transfer AS (
          SELECT pg_catalog.date_trunc('milliseconds', (apps.transfer_history[1] ->> 'transferred_at')::timestamptz) AS at,
-           apps.created_at
+           pg_catalog.date_trunc('milliseconds', apps.created_at) AS created_at
          FROM public.apps
          WHERE apps.app_id = $1
        ),
