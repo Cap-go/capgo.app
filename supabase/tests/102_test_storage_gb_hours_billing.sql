@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(63);
+SELECT plan(65);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -836,6 +836,25 @@ SELECT
         (SELECT array_agg(ARRAY[lifetime::text, size::text] ORDER BY lifetime, size) FROM public.version_meta WHERE version_id = 9100310),
         ARRAY[ARRAY['0', '-500'], ARRAY['0', '500'], ARRAY['1', '-500'], ARRAY['1', '500']],
         'deleting it again closes the restored lifetime'
+    );
+
+-- A retried removal of the first deletion never closes a later restored
+-- lifetime, even if that lifetime were still open while deleted.
+UPDATE public.app_versions SET deleted = false WHERE id = 9100310;
+ALTER TABLE public.app_versions DISABLE TRIGGER close_soft_deleted_version_storage_lifetime;
+UPDATE public.app_versions SET deleted = true WHERE id = 9100310;
+ALTER TABLE public.app_versions ENABLE TRIGGER close_soft_deleted_version_storage_lifetime;
+
+SELECT
+    ok(
+        NOT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100310, -500, TIMESTAMPTZ '2026-01-03 00:00:00+00'),
+        'a removal dated before a restored lifetime started does not close it'
+    );
+
+SELECT
+    ok(
+        NOT EXISTS (SELECT 1 FROM public.version_meta WHERE version_id = 9100310 AND lifetime = 2 AND size < 0),
+        'and that lifetime stays open'
     );
 
 -- A bundle restored before the migration (closed lifetime, live again, size

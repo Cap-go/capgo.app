@@ -752,17 +752,33 @@ export function appStorageOwnership(record: AppOwnershipRecord): StorageOwnershi
 }
 
 /**
- * When the app was deleted: close_app_storage_lifetimes closes every open bundle lifetime at the
- * deletion, so the latest closing event is the deletion time. Falls back to `fallback` (the
- * handler's clock) when the app had no bundle to close.
+ * When the app was deleted, for messages queued before they carried `occurred_at`:
+ * close_app_storage_lifetimes closes every open bundle lifetime at the deletion, so the latest
+ * closing event is the deletion time. Falls back to `fallback` (the handler's clock) when the app
+ * had no bundle to close. When the app ID exists again, only what happened before its recreation
+ * belongs to the deleted incarnation: later removals (of the new app's bundles) and the handler's
+ * clock are capped at the recreation.
  */
 async function readAppDeletedAt(pg: PgClient, appId: string, fallback: string): Promise<string> {
   const { rows } = await pg.query<{ deleted_at: string | Date | null }>(
-    `SELECT max(timestamp) AS deleted_at
-     FROM public.version_meta
-     WHERE app_id = $1
-       AND size < 0
-       AND timestamp <= $2::timestamp`,
+    `WITH recreated AS (
+       SELECT pg_catalog.timezone('UTC', apps.created_at) AS at
+       FROM public.apps
+       WHERE apps.app_id = $1
+     ),
+     bound AS (
+       SELECT LEAST($2::timestamp, (SELECT min(recreated.at) FROM recreated)) AS at
+     )
+     SELECT COALESCE(
+       (
+         SELECT max(event.timestamp)
+         FROM public.version_meta event, bound
+         WHERE event.app_id = $1
+           AND event.size < 0
+           AND event.timestamp <= bound.at
+       ),
+       (SELECT bound.at FROM bound)
+     ) AS deleted_at`,
     [appId, fallback],
   )
   return toIsoTimestamp(rows[0]?.deleted_at) ?? fallback

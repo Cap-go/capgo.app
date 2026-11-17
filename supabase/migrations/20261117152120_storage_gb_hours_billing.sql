@@ -1233,6 +1233,12 @@ BEGIN
     IF NOT COALESCE(v_deleted, false) THEN
       RETURN FALSE;
     END IF;
+    -- A removal dated before a restored lifetime started belongs to an
+    -- earlier deletion (a retried job): it never closes the later lifetime.
+    IF v_lifetime > 0 AND p_timestamp IS NOT NULL
+      AND pg_catalog.timezone('UTC', p_timestamp) < v_lifetime_added_at THEN
+      RETURN FALSE;
+    END IF;
     -- A removal never precedes the bundle's upload event.
     v_event_at := GREATEST(v_event_at, v_lifetime_added_at);
   END IF;

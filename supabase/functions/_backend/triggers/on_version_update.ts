@@ -371,6 +371,8 @@ async function closeVersionStorageLifetime(c: Context, pg: PgClient, record: Dat
              AND removed.lifetime = added.lifetime
              AND removed.size < 0
          )
+         -- A restored lifetime started after this job's deletion belongs to a later deletion.
+         AND (added.lifetime = 0 OR $3::timestamptz IS NULL OR added.timestamp <= pg_catalog.timezone('UTC', $3::timestamptz))
          -- A bundle restored before this job ran is stored again: its new lifetime stays open.
          AND NOT EXISTS (
            SELECT 1 FROM public.app_versions live
