@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(27);
+SELECT plan(28);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -247,6 +247,23 @@ SELECT
         ),
         ARRAY[120]::double precision[],
         'a newer refresh replaces the cycle rows of its org'
+    );
+
+-- A legacy row (written before the migration) of an app created mid-cycle is
+-- replaced by the app's segment, not billed twice.
+INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours, updated_at)
+SELECT 'com.test.gbhours.legacy', org_id, cycle_start + 3, cycle_start + 3, 50, '2026-03-04T00:00:00Z'::timestamptz FROM replace_ctx;
+SELECT public.replace_app_storage_hourly(
+    'com.test.gbhours.legacy', org_id, cycle_start, cycle_end, cycle_end, '2026-03-04T08:00:00Z', false,
+    '[{"cycle_start": "2026-03-01", "date": "2026-03-04", "storage_byte_hours": 40}]'::jsonb,
+    '2026-03-05T00:00:00Z'
+) FROM replace_ctx;
+
+SELECT
+    is(
+        (SELECT array_agg(storage_byte_hours) FROM public.daily_storage_hourly WHERE app_id = 'com.test.gbhours.legacy'),
+        ARRAY[40]::double precision[],
+        'a refresh replaces the legacy rows of its cycle'
     );
 
 -- The same org recreates the app ID mid-cycle: the new incarnation accrues in

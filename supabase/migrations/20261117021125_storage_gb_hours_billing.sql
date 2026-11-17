@@ -39,8 +39,8 @@ ALTER TABLE public.daily_storage_hourly ALTER COLUMN cycle_start SET NOT NULL;
 --   the cycle (the cycle start, the app creation, or a transfer to the org).
 --   A deleted app ID recreated by the same org within the cycle accrues in a
 --   new segment, so refreshing it never replaces the earlier incarnation's
---   hours. Existing rows get '-infinity' (legacy whole-cycle segment), which
---   only a whole-cycle refresh replaces.
+--   hours. Existing rows get '-infinity' (legacy), which the next refresh of
+--   the org's cycle replaces with its recalculated segment.
 ALTER TABLE public.daily_storage_hourly
 ADD COLUMN IF NOT EXISTS segment_start timestamptz NOT NULL DEFAULT '-infinity';
 ALTER TABLE public.daily_storage_hourly DROP CONSTRAINT IF EXISTS daily_storage_hourly_pkey;
@@ -114,10 +114,12 @@ COMMENT ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) IS
 -- whose cycle_start is in [p_cycle_start_day, p_cycle_end_day) and whose day
 -- is in [p_cycle_start_day, p_end_exclusive_day), are replaced: hours of
 -- another owner or of an earlier incarnation of the app ID, and the other
--- cycles' parts of a boundary day, stay. A whole-cycle refresh
--- (p_replace_legacy: the segment starts at the cycle start) also replaces this
--- cycle's rows of earlier-starting segments: legacy rows (-infinity,
--- cycle_start = date) and a whole-cycle segment whose anchor time moved.
+-- cycles' parts of a boundary day, stay. Legacy rows of the org's cycle
+-- (-infinity, written before this migration) are always replaced: the old
+-- refresh overwrote every row of the app ID in the cycle, so they only hold
+-- the current app's hours, which the refresh recalculates. A whole-cycle
+-- refresh (p_replace_legacy: the segment starts at the cycle start) also
+-- replaces a whole-cycle segment whose anchor time moved.
 -- p_written_at is taken by the caller before it reads version_meta: a row
 -- written by a refresh that started later is never deleted or overwritten,
 -- whatever order the refreshes finish in.
@@ -152,6 +154,7 @@ AS $$
       AND dsh.date < p_end_exclusive_day
       AND (
         dsh.segment_start = p_segment_start
+        OR dsh.segment_start = '-infinity'::timestamptz
         OR (p_replace_legacy AND dsh.segment_start < p_segment_start)
       )
       AND dsh.updated_at <= p_written_at

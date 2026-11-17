@@ -85,24 +85,28 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
   let pg: PgClient | undefined
   try {
     pg = await getPgClient(c)
-    await pg.query(
-      `INSERT INTO public.deleted_apps (app_id, created_at, owner_org, transfer_history)
-      VALUES ($1, $2, $3, ARRAY(SELECT pg_catalog.jsonb_array_elements($4::jsonb)))`,
-      [record.app_id, record.created_at, record.owner_org, JSON.stringify(record.transfer_history ?? [])],
-    )
-  }
-  catch (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'error inserting deleted_apps', error, app_id: record.app_id })
-  }
-  // Storage is billed in GB-hours: record the hours since the last stats refresh up to the deletion
-  // (the time close_app_storage_lifetimes closed the bundles, not this handler's clock).
-  // cron_stat_app no longer refreshes the app once it is gone.
-  try {
-    pg ??= await getPgClient(c)
-    await finalizeDeletedAppStorageHourly(c, pg, record, new Date().toISOString())
-  }
-  catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'error finalizing deleted app storage hours', error, app_id: record.app_id })
+    // Storage is billed in GB-hours: record the hours since the last stats refresh up to the
+    // deletion (the time close_app_storage_lifetimes closed the bundles, not this handler's clock).
+    // cron_stat_app no longer refreshes the app once it is gone, so a failure fails the job and the
+    // queue retries it. It runs first and is idempotent, so a retry never duplicates deleted_apps.
+    try {
+      await finalizeDeletedAppStorageHourly(c, pg, record, new Date().toISOString())
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'error finalizing deleted app storage hours', error, app_id: record.app_id })
+      throw error
+    }
+
+    try {
+      await pg.query(
+        `INSERT INTO public.deleted_apps (app_id, created_at, owner_org, transfer_history)
+        VALUES ($1, $2, $3, ARRAY(SELECT pg_catalog.jsonb_array_elements($4::jsonb)))`,
+        [record.app_id, record.created_at, record.owner_org, JSON.stringify(record.transfer_history ?? [])],
+      )
+    }
+    catch (error) {
+      cloudlog({ requestId: c.get('requestId'), message: 'error inserting deleted_apps', error, app_id: record.app_id })
+    }
   }
   finally {
     if (pg)

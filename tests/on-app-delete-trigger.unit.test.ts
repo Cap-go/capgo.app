@@ -85,7 +85,10 @@ describe('on_app_delete trigger', () => {
     expect(pgQuery.mock.calls.find(([sql]) => sql.includes('INSERT INTO public.deleted_apps'))?.[1])
       .toEqual(['com.test.delete', '2026-01-01T00:00:00.000Z', 'org-1', '[]'])
     expect(cleanupStarted).toHaveBeenCalledOnce()
-    expect(statements.indexOf(inserts[0])).toBe(0)
+    // Storage finalization runs first, then deleted_apps, then the row cleanup.
+    const insertIndex = statements.indexOf(inserts[0])
+    expect(insertIndex).toBeLessThan(statements.findIndex(sql => sql.startsWith('DELETE FROM public.')))
+    expect(statements.slice(0, insertIndex).every(sql => !sql.startsWith('DELETE FROM public.'))).toBe(true)
     expect(statements.at(-1)).toBe('DELETE FROM public.app_versions WHERE app_id = $1')
     expect(statements.filter(sql => sql.startsWith('DELETE FROM public.'))).toHaveLength(9)
   })
@@ -135,6 +138,39 @@ describe('on_app_delete trigger', () => {
       pgQuery.mockReset()
       pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
       vi.useRealTimers()
+    }
+  })
+
+  it('fails the job without recording deleted_apps when storage finalization fails', async () => {
+    pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM public.version_meta'))
+        throw new Error('connection reset')
+      return { rows: [], rowCount: 0 }
+    })
+    try {
+      const response = await app.request('http://local/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'DELETE',
+          table: 'apps',
+          record: {
+            app_id: 'com.test.delete',
+            owner_org: 'org-1',
+            created_at: '2026-01-01T00:00:00.000Z',
+            transfer_history: [],
+          },
+        }),
+      })
+
+      // A non-2xx response leaves the queue message for a retry.
+      expect(response.status).toBeGreaterThanOrEqual(500)
+      expect(pgQuery.mock.calls.some(([sql]) => sql.includes('INSERT INTO public.deleted_apps'))).toBe(false)
+      expect(cleanupStarted).not.toHaveBeenCalled()
+    }
+    finally {
+      pgQuery.mockReset()
+      pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
     }
   })
 })
