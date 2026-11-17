@@ -5,7 +5,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
-import { apikeyPrincipal, withRlsTransaction } from '../../utils/pg_rls.ts'
+import { apikeyPrincipal, queryJsonOne, withRlsTransaction } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
@@ -131,6 +131,11 @@ async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, 
 
     // A simulator whose device stopped by itself is billed up to that stop: settle it now, before the
     // apps delete trigger settles the sessions still open at the current time.
+    const app = await queryJsonOne<{ owner_org: string | null }>(pg, 'SELECT owner_org FROM public.apps WHERE app_id = $1', [appId])
+      .catch((error: unknown) => {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'error reading app owner for simulator settlement', error, app_id: appId })
+        return null
+      })
     if (app?.owner_org) {
       await expireSimulatorSessions(c, app.owner_org)
         .catch(error => cloudlogErr({ requestId: c.get('requestId'), message: 'error settling simulator sessions', error, app_id: appId }))

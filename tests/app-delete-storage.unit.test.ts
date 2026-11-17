@@ -36,10 +36,11 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 const APP_ID = 'com.example.app'
+const ORG_ID = '22222222-2222-4222-8222-222222222222'
 
 // Direct Postgres: every delete succeeds.
 const pgClient = {
-  query: vi.fn(async () => ({ rows: [] })),
+  query: vi.fn(async (_text: string, _values?: unknown[]): Promise<{ rows: unknown[] }> => ({ rows: [] })),
 }
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
