@@ -105,6 +105,10 @@ async function deleteAppRows(c: Context<MiddlewareKeyVariables>, client: PgClien
 async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<void> {
   const pg = await getPgClient(c)
   try {
+    const { rows: [app] } = await pg.query<{ owner_org: string }>(
+      'SELECT owner_org FROM public.apps WHERE app_id = $1',
+      [appId],
+    )
     // Use the API key's RLS context for data queries - RLS will enforce access
     const apikeyRls = apikeyPrincipal(c, apikey.key)
 
