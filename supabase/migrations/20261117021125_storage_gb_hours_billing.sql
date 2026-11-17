@@ -509,6 +509,47 @@ CREATE TRIGGER close_version_storage_lifetime
 AFTER DELETE ON public.app_versions
 FOR EACH ROW EXECUTE FUNCTION public.close_version_storage_lifetime();
 
+-- A soft deletion closes the bundle's lifetime in the same transaction, at
+-- that server time: the asynchronous removal job can run much later (after a
+-- hard deletion that would otherwise close it at the later time). The job's
+-- own removal write then finds the event and changes nothing.
+CREATE OR REPLACE FUNCTION public.close_soft_deleted_version_storage_lifetime()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+BEGIN
+  INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+  SELECT
+    GREATEST(added.timestamp, pg_catalog.timezone('UTC', pg_catalog.now())),
+    added.app_id, added.version_id, -added.size
+  FROM public.version_meta added
+  WHERE added.app_id = NEW.app_id
+    AND added.version_id = NEW.id
+    AND added.size > 0
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.version_meta removed
+      WHERE removed.app_id = added.app_id
+        AND removed.version_id = added.version_id
+        AND removed.size < 0
+    )
+  ON CONFLICT DO NOTHING;
+  RETURN NEW;
+END;
+$$;
+ALTER FUNCTION public.close_soft_deleted_version_storage_lifetime() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.close_soft_deleted_version_storage_lifetime() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.close_soft_deleted_version_storage_lifetime() FROM anon, authenticated;
+
+DROP TRIGGER IF EXISTS close_soft_deleted_version_storage_lifetime ON public.app_versions;
+CREATE TRIGGER close_soft_deleted_version_storage_lifetime
+AFTER UPDATE OF deleted ON public.app_versions
+FOR EACH ROW
+WHEN (NEW.deleted AND NOT OLD.deleted)
+EXECUTE FUNCTION public.close_soft_deleted_version_storage_lifetime();
+
 -- ---------------------------------------------------------------------------
 -- 2f. Trigger messages carry when the change happened
 -- ---------------------------------------------------------------------------

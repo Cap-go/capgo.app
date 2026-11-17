@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(53);
+SELECT plan(55);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -728,6 +728,29 @@ SELECT
         (SELECT timestamp FROM public.version_meta WHERE version_id = 9100308 AND size > 0),
         pg_catalog.timezone('UTC', pg_catalog.now()),
         'a future event time is capped at now'
+    );
+
+-- A soft deletion closes the lifetime at once; a later hard deletion keeps that time.
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider)
+SELECT 9100309, live_app, '9.9.1', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2' FROM gbh_ctx;
+INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+SELECT TIMESTAMP '2026-01-02 00:00:00', live_app, 9100309, 400 FROM gbh_ctx;
+UPDATE public.app_versions SET deleted = true WHERE id = 9100309;
+
+SELECT
+    is(
+        (SELECT timestamp FROM public.version_meta WHERE version_id = 9100309 AND size < 0),
+        pg_catalog.timezone('UTC', pg_catalog.now()),
+        'a soft deletion closes the bundle lifetime in its transaction'
+    );
+
+DELETE FROM public.app_versions WHERE id = 9100309;
+
+SELECT
+    is(
+        (SELECT array_agg(timestamp) FROM public.version_meta WHERE version_id = 9100309 AND size < 0),
+        ARRAY[pg_catalog.timezone('UTC', pg_catalog.now())],
+        'a later hard deletion keeps the soft deletion time'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.
