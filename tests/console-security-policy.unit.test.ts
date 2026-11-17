@@ -66,9 +66,14 @@ describe('console content security policy', () => {
     ['local', 'http://localhost:8788'],
   ] as const)('allows only the configured %s policy gateway origin', (environment, origin) => {
     vi.stubEnv('PLUGIN_REGION_TARGETS', configs.plugin_region_targets[environment])
+    vi.stubEnv('API_DOMAIN', configs.api_domain[environment])
     try {
       const connect = buildConsoleContentSecurityPolicy().split('; ').find(directive => directive.startsWith('connect-src '))
       expect(connect).toContain(origin)
+      const apiProtocol = environment === 'local' ? 'http:' : 'https:'
+      expect(connect).toContain(new URL(`${apiProtocol}//${configs.api_domain[environment]}`).origin)
+      if (environment !== 'prod')
+        expect(connect).not.toContain('https://api.capgo.app')
       expect(connect).not.toContain('https://*.capgo.app')
       const emitted = withConsoleContentSecurityPolicy('/*\n  Content-Security-Policy: stale-policy\n  X-Content-Type-Options: nosniff\n')
       expect(emitted).toContain(`Content-Security-Policy: ${buildConsoleContentSecurityPolicy()}`)

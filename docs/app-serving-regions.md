@@ -43,6 +43,9 @@ enabled, they become effective at the successful conditional R2 write of sr1:<ap
 A save does not acknowledge activation. Settings show this distinction and let
 the user compare the published document with their choices. Publication failure
 leaves the previous policy effective and the requested change pending.
+Status checks use the console environment's configured policy gateway and CSP.
+Only the latest check can update the displayed status; changing the app or form
+invalidates a check that is still in flight.
 
 A dedicated durable policy queue is drained by the existing sync handler and
 existing periodic plugin_state_sync_tick. It operates independently of the
@@ -79,6 +82,7 @@ known, the unfiltered original-origin fallback is forbidden. The shared
 five-subrequest budget includes the preflight, Cache API operations and retries.
 The gateway signs a fifteen-second app-and-client-IP-bound ingress receipt using a
 separate SERVING_REGION_SIGNING_KEY secret, never embedded in snippet source. The
+receipt requires a unique client binding; shared ingress addresses cannot establish one. The
 active-policy snippet shares that routing horizon across its five-subrequest
 budget, including the policy request, complete cache reads and circuit writes,
 and worker attempts. These routing operations wait at most three seconds or the
@@ -86,7 +90,9 @@ remaining routing time. Individual network timeouts remain three seconds. This
 bounds routing, not response-body delivery after a worker has answered. Workers
 verify it with Web Crypto; plain region headers have no authority. Direct
 regional requests use trusted request.cf.colo. No new Worker-to-Worker data
-forwarder is introduced. Deno fetches only the policy from the fixed gateway;
+forwarder is introduced. Deno fetches only the policy from its configured
+PLUGIN_REGION_TARGETS gateway and requires an active response for the same
+compiled reader epoch. Missing gateway configuration fails unavailable;
 restricted policies fail unavailable if that runtime cannot attest ingress or
 supply an allowed replica binding. Legacy server-side channel storage that
 would open a primary read/write connection is unavailable under a restrictive
@@ -139,6 +145,8 @@ no deployment, provider mutation or automatic production activation.
    key, and initialized policies. Write {"f":1,"epoch":"<reader epoch>"} to
    sr1:ready only after the staging and deployed-ingress checks. As postgres,
    invoke activate_serving_policy_publication(epoch, verification_json).
+   The activation check and epoch write hold the same transaction lock as policy claims through commit.
+   Busy claim admission fails activation safely instead of accepting a partial transition.
    The function requires completed baseline pagination, empty pending/failed
    queues, matching private.settings reader epoch, and true acknowledgements
    for all nine region names plus snippet, deno, warm_cache, colo_attestation,
@@ -168,8 +176,8 @@ snippet request needs a second independent policy read. No plugin request
 queries the primary to discover its policy. Per-request R2 work is constant,
 independent of device/bundle/manifest count. Full 2M–50M requests/day load,
 regional ingress attestation and the coordinated deployment transition require
-staging validation before readiness acknowledgement. The gateway is a fixed
-EU hostname control-plane dependency; a gateway outage fails closed. A later
+staging validation before readiness acknowledgement. The configured gateway
+(EU in production) is a control-plane dependency; a gateway outage fails closed. A later
 multi-gateway policy-only fallback must preserve the same subrequest budget.
 
 R2 consistency contract:

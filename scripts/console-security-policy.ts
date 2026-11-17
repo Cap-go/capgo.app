@@ -59,15 +59,9 @@ function getDeployTimeConnectOverrides(): string[] {
 
 function getConfiguredConnectSources(dev: boolean): string[] {
   const sources = new Set<string>()
-  const envKeys = dev
-    ? (['prod', 'preprod', 'development', 'local'] as const)
-    : (['prod'] as const)
-
-  for (const env of envKeys) {
-    const apiDomain = configs.api_domain?.[env]
-    if (typeof apiDomain === 'string')
-      addConnectOrigin(sources, apiDomain)
-  }
+  const apiDomains = dev ? Object.values(configs.api_domain) : [getRightKey('api_domain')]
+  for (const apiDomain of apiDomains)
+    addConnectOrigin(sources, apiDomain)
 
   for (const raw of getDeployTimeConnectOverrides())
     addConnectOrigin(sources, raw)
