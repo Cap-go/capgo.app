@@ -1,0 +1,119 @@
+{
+  "ref": "origin/main",
+  "rows": [
+    {
+      "file": "channelSelfRateLimit.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [
+        "cache.ts",
+        "logging.ts",
+        "rate_limit.ts",
+        "sensitive_url.ts",
+        "utils.ts"
+      ],
+      "driftedInClosure": [
+        "cache.ts",
+        "logging.ts",
+        "rate_limit.ts",
+        "sensitive_url.ts",
+        "utils.ts"
+      ],
+      "safeReExport": false
+    },
+    {
+      "file": "deviceComparison.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [],
+      "driftedInClosure": [],
+      "safeReExport": true
+    },
+    {
+      "file": "downloadUrl.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [
+        "logging.ts",
+        "manifest_encoding.ts",
+        "s3.ts",
+        "sensitive_url.ts",
+        "utils.ts"
+      ],
+      "driftedInClosure": [
+        "logging.ts",
+        "s3.ts",
+        "sensitive_url.ts",
+        "utils.ts"
+      ],
+      "safeReExport": false
+    },
+    {
+      "file": "geolocation.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [
+        "utils.ts"
+      ],
+      "driftedInClosure": [
+        "utils.ts"
+      ],
+      "safeReExport": false
+    },
+    {
+      "file": "manifest_encoding.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [],
+      "driftedInClosure": [],
+      "safeReExport": true
+    },
+    {
+      "file": "queryHelpers.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [],
+      "driftedInClosure": [],
+      "safeReExport": true
+    },
+    {
+      "file": "rateLimitInfo.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [
+        "utils.ts"
+      ],
+      "driftedInClosure": [
+        "utils.ts"
+      ],
+      "safeReExport": false
+    },
+    {
+      "file": "rollout.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [],
+      "driftedInClosure": [],
+      "safeReExport": true
+    },
+    {
+      "file": "statsInsights.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [],
+      "driftedInClosure": [],
+      "safeReExport": true
+    },
+    {
+      "file": "supabase_write_guard.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [
+        "logging.ts",
+        "sensitive_url.ts"
+      ],
+      "driftedInClosure": [
+        "logging.ts",
+        "sensitive_url.ts"
+      ],
+      "safeReExport": false
+    },
+    {
+      "file": "version_manifest_sql.ts",
+      "selfByteIdentical": true,
+      "runtimeClosure": [],
+      "driftedInClosure": [],
+      "safeReExport": true
+    }
+  ]
+}
