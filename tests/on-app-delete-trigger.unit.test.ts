@@ -533,4 +533,31 @@ describe('on_app_delete trigger', () => {
       vi.useRealTimers()
     }
   })
+
+  it('finalizes every unfinished cycle of a gap across two rollovers', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-02T00:00:00.000Z'))
+    try {
+      mockMonthlyCycles([{ timestamp: '2026-01-31T00:00:00.000Z', version_id: 1, size: 100 }])
+      const replaced = await deleteApp({
+        app_id: 'com.test.delete',
+        owner_org: 'org-1',
+        created_at: '2026-01-01T00:00:00.000Z',
+        transfer_history: [],
+      }, '2026-03-01T01:00:00.000Z')
+
+      expect(replaced).toEqual(expect.arrayContaining([
+        ['org-1', '2026-03-01', 100],
+        // February, the previous cycle.
+        ['org-1', '2026-02-01', 100 * 28 * 24],
+        // January too: the last refresh before the gap never recorded January 31st.
+        ['org-1', '2026-01-01', 2400],
+      ]))
+    }
+    finally {
+      pgQuery.mockReset()
+      pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+      vi.useRealTimers()
+    }
+  })
 })

@@ -477,11 +477,16 @@ async function readSegmentRefreshedAt(c: Context, pg: PgClient, appId: string, o
   }))).data
 }
 
+// Earlier cycles walked back when refreshes were missing across several rollovers (about the same
+// window as the former-owner lookback).
+const MAX_UNFINISHED_PREVIOUS_CYCLES = 3
+
 /**
- * Records the previous cycle's hours up to its end until a refresh that started after that end has
- * done it (its watermark): the interval between the cycle's last refresh and the rollover is only
- * recorded then, however late the first refresh after the rollover comes. Used by live refreshes,
- * the deletion finalizer and the former-owner finalizer.
+ * Records the previous cycles' hours up to their end until a refresh that calculated past that end
+ * has done it (its watermark): the interval between a cycle's last refresh and its rollover is only
+ * recorded then, however late the next refresh comes. Walks back through consecutive unfinished
+ * cycles (a gap across several rollovers), stopping at the first finalized one. Used by live
+ * refreshes, the deletion finalizer and the former-owner finalizer.
  */
 async function finalizePreviousCycle(
   c: Context,
@@ -489,33 +494,37 @@ async function finalizePreviousCycle(
   events: VersionMetaStorageRow[],
   options: { appId: string, ownerOrg: string, cycleStart: string, calculationEndMs: number, accrualStart: string | null, writtenAt: string, requireCurrentOwner?: boolean, appUuid?: string | null },
 ) {
-  const cycleStartMs = parseTimestampMs(options.cycleStart)
-  const previous = (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_previous_storage_cycle', async () => ({
-    data: await readCycleBefore(pg, options.ownerOrg, options.cycleStart),
-    error: null,
-  }))).data
-  // Only a previous cycle that ends exactly where this one starts (a plan change can move the anchor).
-  if (!previous?.cycle_start || !previous.cycle_end || parseTimestampMs(previous.cycle_end) !== cycleStartMs)
-    return
-  const previousEndMs = parseTimestampMs(previous.cycle_end)
-  // Nothing of that cycle is owned by this segment.
-  if (options.accrualStart && parseTimestampMs(options.accrualStart) >= previousEndMs)
-    return
-  const finalizedAt = await readSegmentRefreshedAt(c, pg, options.appId, options.ownerOrg, previous.cycle_start, options.accrualStart)
-  if (finalizedAt && parseTimestampMs(finalizedAt) >= previousEndMs)
-    return
-  await replaceCycleStorageHourly(c, pg, events, {
-    appId: options.appId,
-    ownerOrg: options.ownerOrg,
-    cycleStart: previous.cycle_start,
-    cycleEnd: previous.cycle_end,
-    // Never past the calculation's own end (a backfill with an earlier currentHour).
-    currentHour: new Date(Math.min(previousEndMs, options.calculationEndMs)).toISOString(),
-    accrualStart: options.accrualStart,
-    writtenAt: options.writtenAt,
-    requireCurrentOwner: options.requireCurrentOwner,
-    appUuid: options.appUuid,
-  })
+  let laterCycleStart = options.cycleStart
+  for (let walked = 0; walked < MAX_UNFINISHED_PREVIOUS_CYCLES; walked++) {
+    const laterCycleStartMs = parseTimestampMs(laterCycleStart)
+    const previous = (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_previous_storage_cycle', async () => ({
+      data: await readCycleBefore(pg, options.ownerOrg, laterCycleStart),
+      error: null,
+    }))).data
+    // Only a previous cycle that ends exactly where the later one starts (a plan change can move the anchor).
+    if (!previous?.cycle_start || !previous.cycle_end || parseTimestampMs(previous.cycle_end) !== laterCycleStartMs)
+      return
+    const previousEndMs = parseTimestampMs(previous.cycle_end)
+    // Nothing of that cycle (or any earlier one) is owned by this segment.
+    if (options.accrualStart && parseTimestampMs(options.accrualStart) >= previousEndMs)
+      return
+    const finalizedAt = await readSegmentRefreshedAt(c, pg, options.appId, options.ownerOrg, previous.cycle_start, options.accrualStart)
+    if (finalizedAt && parseTimestampMs(finalizedAt) >= previousEndMs)
+      return
+    await replaceCycleStorageHourly(c, pg, events, {
+      appId: options.appId,
+      ownerOrg: options.ownerOrg,
+      cycleStart: previous.cycle_start,
+      cycleEnd: previous.cycle_end,
+      // Never past the calculation's own end (a backfill with an earlier currentHour).
+      currentHour: new Date(Math.min(previousEndMs, options.calculationEndMs)).toISOString(),
+      accrualStart: options.accrualStart,
+      writtenAt: options.writtenAt,
+      requireCurrentOwner: options.requireCurrentOwner,
+      appUuid: options.appUuid,
+    })
+    laterCycleStart = previous.cycle_start
+  }
 }
 
 /**
