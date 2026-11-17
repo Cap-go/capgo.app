@@ -78,10 +78,6 @@ const page = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
 const currentVersionId = ref<number | null>(null)
-const currentVersionName = ref<string | null>(null)
-const channelName = ref('')
-// A rollback sets a new stable bundle, which resets any configured rollout.
-const rolloutTargetName = ref<string | null>(null)
 
 // Fetch current channel's version_id (only relevant for channel mode)
 async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promise<boolean> {
@@ -95,12 +91,8 @@ async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promi
   const context = await readChannelRollbackContext(props.channelId)
   if (!context)
     return false
-  if (isCurrent()) {
+  if (isCurrent())
     currentVersionId.value = context.versionId
-    channelName.value = context.channelName
-    currentVersionName.value = context.versionName
-    rolloutTargetName.value = context.rolloutTargetName
-  }
   return true
 }
 
@@ -484,17 +476,12 @@ async function handleRollback(item: DeployHistory) {
   const rolledBack = await confirmAndRollbackChannel({
     appId,
     channelId,
-    channelName: channelName.value || item.channel?.name || '',
     bundle: { id: item.version_id, name: item.version.name },
-    currentBundleName: currentVersionName.value,
-    rolloutTargetName: rolloutTargetName.value,
     stillSameChannel,
   })
   if (!rolledBack)
     return
   currentVersionId.value = item.version_id
-  currentVersionName.value = item.version.name
-  rolloutTargetName.value = null
   fetchDeployHistory()
 }
 

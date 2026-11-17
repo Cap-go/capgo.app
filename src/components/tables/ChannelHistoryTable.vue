@@ -59,10 +59,6 @@ const MEANINGFUL_CHANNEL_AUDIT_ROWS = 'operation.eq.INSERT,and(operation.eq.UPDA
 const SEARCH_WINDOW_ROWS = 1000
 const total = ref(0)
 const currentVersionId = ref<number | null>(null)
-const currentVersionName = ref<string | null>(null)
-const channelName = ref('')
-// A rollback sets a new stable bundle, which resets any configured rollout.
-const rolloutTargetName = ref<string | null>(null)
 
 // Selected entry for details modal
 const selectedEntry = ref<HistoryEntry | null>(null)
@@ -121,12 +117,8 @@ async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promi
   const context = await readChannelRollbackContext(props.channelId)
   if (!context)
     return false
-  if (isCurrent()) {
+  if (isCurrent())
     currentVersionId.value = context.versionId
-    channelName.value = context.channelName
-    currentVersionName.value = context.versionName
-    rolloutTargetName.value = context.rolloutTargetName
-  }
   return true
 }
 
@@ -417,17 +409,12 @@ async function handleRollback(item: HistoryEntry) {
   const rolledBack = await confirmAndRollbackChannel({
     appId,
     channelId,
-    channelName: channelName.value,
     bundle: { id: bundle.id, name: bundle.name },
-    currentBundleName: currentVersionName.value,
-    rolloutTargetName: rolloutTargetName.value,
     stillSameChannel,
   })
   if (!rolledBack)
     return
   currentVersionId.value = bundle.id
-  currentVersionName.value = bundle.name
-  rolloutTargetName.value = null
   fetchHistory()
 }
 

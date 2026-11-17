@@ -19,6 +19,13 @@ watch(
   },
   { immediate: true },
 )
+
+// The impact confirm describes one change to one channel: leaving the page
+// cancels it, so it can never be confirmed from a page the user already left.
+watch(() => route.path, () => {
+  if (dialogStore.showDialog && dialogStore.dialogOptions?.id === CHANNEL_CHANGE_DIALOG_ID)
+    void dialogStore.closeDialog()
+})
 </script>
 
 <template>

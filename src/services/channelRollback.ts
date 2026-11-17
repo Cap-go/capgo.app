@@ -48,27 +48,35 @@ export async function readChannelRollbackContext(channelId: number): Promise<Cha
  * "Rollback to this version" from the history tables: the same impact confirm
  * as setting a bundle, then the write. Everything stays bound to the channel
  * the user confirmed; `stillSameChannel` says whether the table still shows it.
- * Resolves true when the bundle was set and the table still shows that channel.
+ * The channel is read right before the confirm (another session may have
+ * changed its bundle or started a rollout since the table loaded), and nothing
+ * opens when that read fails. Resolves true when the bundle was set and the
+ * table still shows that channel.
  */
 export async function confirmAndRollbackChannel(options: {
   appId: string
   channelId: number
-  channelName: string
   bundle: { id: number, name: string }
-  currentBundleName: string | null
-  /** A rollback sets a new stable bundle, which resets any configured rollout. */
-  rolloutTargetName: string | null
   stillSameChannel: () => boolean
 }): Promise<boolean> {
   const { t } = i18n.global
+  const context = await readChannelRollbackContext(options.channelId)
+  if (!options.stillSameChannel())
+    return false
+  if (!context) {
+    toast.error(t('channel-impact-bundle-read-failed'))
+    return false
+  }
   const result = await confirmChannelChange({
     appId: options.appId,
     channelId: options.channelId,
-    channelName: options.channelName,
+    channelName: context.channelName,
     action: 'set',
     bundle: options.bundle,
-    currentBundleName: options.currentBundleName,
-    stopsRolloutTarget: options.rolloutTargetName,
+    currentBundleName: context.versionName,
+    // A new stable bundle resets any configured rollout (channel trigger); the
+    // same bundle again does not change the version, so the rollout stays.
+    stopsRolloutTarget: context.versionId === options.bundle.id ? null : context.rolloutTargetName,
     title: t('rollback-to-version'),
     confirmText: t('rollback'),
   })

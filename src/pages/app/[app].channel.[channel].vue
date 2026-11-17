@@ -103,7 +103,7 @@ const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
 // Cached row first, then a background refresh; stale reads never apply (see useChannelRecord).
-const { channel, load: loadChannel, beginNavigation } = useChannelRecord<Database['public']['Tables']['channels']['Row'] & Channel>({
+const { channel, load: loadChannel, beginNavigation, isMounted } = useChannelRecord<Database['public']['Tables']['channels']['Row'] & Channel>({
   normalize: row => withBuiltinChannelVersion(row) as any,
 })
 const defaultUploadChannel = ref<string | null>(null)
@@ -523,12 +523,12 @@ function servedBundleName(name: string | null | undefined) {
 }
 
 /**
- * True while the page still shows the channel a flow started on: the route id
- * and the loaded row must both match (after A → B → A the route is A again
- * while the row of B can still be on screen until A reloads).
+ * True while the page still shows the channel a flow started on: the page is
+ * mounted, and the route id and the loaded row both match (after A → B → A the
+ * route is A again while the row of B can still be on screen until A reloads).
  */
 function stillOnChannel(channelId: number) {
-  return id.value === channelId && channel.value?.id === channelId
+  return isMounted() && id.value === channelId && channel.value?.id === channelId
 }
 
 /** bundleCompatibility, with an error toast (and null) when the check itself fails. */
