@@ -303,7 +303,7 @@ describe('on_app_delete trigger', () => {
     try {
       pgQuery.mockImplementation(async (sql: string) => {
         // close_app_storage_lifetimes closed the bundle when the app was deleted, at 06:00.
-        if (sql.includes('WITH recreated AS'))
+        if (sql.includes('WITH incarnation AS'))
           return { rows: [{ deleted_at: '2026-01-10T06:00:00.000Z' }], rowCount: 1 } as any
         if (sql.includes('FROM public.version_meta'))
           return { rows: [
@@ -385,7 +385,7 @@ describe('on_app_delete trigger', () => {
     vi.setSystemTime(new Date('2026-02-01T12:00:00.000Z'))
     try {
       pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
-        if (sql.includes('WITH recreated AS'))
+        if (sql.includes('WITH incarnation AS'))
           return { rows: [{ deleted_at: '2026-02-01T06:00:00.000Z' }], rowCount: 1 } as any
         if (sql.includes('FROM public.version_meta'))
           return { rows: [
@@ -434,7 +434,7 @@ describe('on_app_delete trigger', () => {
     vi.setSystemTime(new Date('2026-01-12T00:00:00.000Z'))
     try {
       pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
-        if (sql.includes('WITH recreated AS'))
+        if (sql.includes('WITH incarnation AS'))
           throw new Error('the event time must be used, not the closing events')
         if (sql.includes('FROM public.version_meta')) {
           const until = Date.parse(String(params?.[1]))

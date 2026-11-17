@@ -755,16 +755,25 @@ export function appStorageOwnership(record: AppOwnershipRecord): StorageOwnershi
  * When the app was deleted, for messages queued before they carried `occurred_at`:
  * close_app_storage_lifetimes closes every open bundle lifetime at the deletion, so the latest
  * closing event is the deletion time. Falls back to `fallback` (the handler's clock) when the app
- * had no bundle to close. When the app ID exists again, only what happened before its recreation
- * belongs to the deleted incarnation: later removals (of the new app's bundles) and the handler's
- * clock are capped at the recreation.
+ * had no bundle to close. Only events of the deleted incarnation count: from its creation
+ * (`createdAt`) until the app ID was created again, by a live app or one deleted since (in
+ * deleted_apps), and the handler's clock is capped there too.
  */
-async function readAppDeletedAt(pg: PgClient, appId: string, fallback: string): Promise<string> {
+export async function readAppDeletedAt(pg: PgClient, appId: string, createdAt: string | Date | null | undefined, fallback: string): Promise<string> {
   const { rows } = await pg.query<{ deleted_at: string | Date | null }>(
-    `WITH recreated AS (
+    `WITH incarnation AS (
+       SELECT pg_catalog.timezone('UTC', COALESCE($3::timestamptz, '-infinity'::timestamptz)) AS created_at
+     ),
+     recreated AS (
        SELECT pg_catalog.timezone('UTC', apps.created_at) AS at
-       FROM public.apps
+       FROM public.apps, incarnation
        WHERE apps.app_id = $1
+         AND pg_catalog.timezone('UTC', apps.created_at) > incarnation.created_at
+       UNION ALL
+       SELECT pg_catalog.timezone('UTC', deleted_apps.created_at)
+       FROM public.deleted_apps, incarnation
+       WHERE deleted_apps.app_id = $1
+         AND pg_catalog.timezone('UTC', deleted_apps.created_at) > incarnation.created_at
      ),
      bound AS (
        SELECT LEAST($2::timestamp, (SELECT min(recreated.at) FROM recreated)) AS at
@@ -772,14 +781,15 @@ async function readAppDeletedAt(pg: PgClient, appId: string, fallback: string): 
      SELECT COALESCE(
        (
          SELECT max(event.timestamp)
-         FROM public.version_meta event, bound
+         FROM public.version_meta event, bound, incarnation
          WHERE event.app_id = $1
            AND event.size < 0
+           AND event.timestamp >= incarnation.created_at
            AND event.timestamp <= bound.at
        ),
        (SELECT bound.at FROM bound)
-     ) AS deleted_at`,
-    [appId, fallback],
+     ) AT TIME ZONE 'UTC' AS deleted_at`,
+    [appId, fallback, createdAt == null ? null : new Date(createdAt).toISOString()],
   )
   return toIsoTimestamp(rows[0]?.deleted_at) ?? fallback
 }
@@ -800,7 +810,7 @@ export async function finalizeDeletedAppStorageHourly(
   const writtenAt = new Date().toISOString()
   // The trigger event's time is the deletion. Older messages have none: fall back to the latest
   // lifetime closed by close_app_storage_lifetimes.
-  const deletedAt = occurredAt ?? await readAppDeletedAt(pg, record.app_id, processedAt)
+  const deletedAt = occurredAt ?? await readAppDeletedAt(pg, record.app_id, record.created_at, processedAt)
   const deletedAtMs = parseTimestampMs(deletedAt)
   // Only events up to the deletion: a recreated app ID's events belong to the new incarnation.
   const events = await readVersionStorageLifetimes(pg, record.app_id, new Date(deletedAtMs + 1).toISOString())
