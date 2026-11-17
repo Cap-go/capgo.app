@@ -119,14 +119,14 @@ describe('on_app_delete trigger', () => {
 
     expect(response.status).toBe(200)
     const statements = pgQuery.mock.calls.map(([sql]) => sql)
-    const inserts = statements.filter(sql => sql.includes('INSERT INTO public.deleted_apps'))
+    const inserts = statements.filter(sql => sql.includes('record_app_deletion_once'))
     expect(inserts).toHaveLength(1)
-    expect(pgQuery.mock.calls.find(([sql]) => sql.includes('INSERT INTO public.deleted_apps'))?.[1])
-      .toEqual(['com.test.delete', '2026-01-01T00:00:00.000Z', 'org-1', '[]'])
+    expect(pgQuery.mock.calls.find(([sql]) => sql.includes('record_app_deletion_once'))?.[1])
+      .toEqual(['com.test.delete', 'org-1', '2026-01-01T00:00:00.000Z', '[]'])
     expect(cleanupStarted).toHaveBeenCalledOnce()
     // The pass is claimed before anything else, then deleted_apps is recorded.
     expect(statements[0]).toContain('begin_app_storage_cleanup_pass')
-    expect(pgQuery.mock.calls[0][1]).toEqual(['com.test.delete', 'org-1', 0, STORAGE_CLEANUP_LEASE_SECONDS])
+    expect(pgQuery.mock.calls[0][1]).toEqual(['com.test.delete', 'org-1', 0, STORAGE_CLEANUP_LEASE_SECONDS, JSON.stringify(record)])
     expect(statements.indexOf(inserts[0])).toBe(1)
     expect(statements.filter(sql => sql.startsWith('DELETE FROM public.'))).toHaveLength(9)
     expect(statements).toContain('DELETE FROM public.app_versions WHERE app_id = $1')
@@ -165,7 +165,7 @@ describe('on_app_delete trigger', () => {
 
     expect(response.status).toBe(200)
     const statements = sqlStatements()
-    expect(statements.some(sql => sql.includes('INSERT INTO public.deleted_apps'))).toBe(false)
+    expect(statements.some(sql => sql.includes('record_app_deletion_once'))).toBe(false)
     expect(statements.some(sql => sql.startsWith('DELETE FROM public.'))).toBe(false)
     expect(deleteObjectsWithPrefix).toHaveBeenCalledOnce()
     expect((requeueCalls()[0][1] as unknown[])[2]).toBe(3)
@@ -209,7 +209,7 @@ describe('on_app_delete trigger', () => {
 
     const statements = sqlStatements()
     // The deletion is still recorded for billing, but app_id-matched rows now belong to the new app.
-    expect(statements.some(sql => sql.includes('INSERT INTO public.deleted_apps'))).toBe(true)
+    expect(statements.some(sql => sql.includes('record_app_deletion_once'))).toBe(true)
     expect(statements.some(sql => sql.startsWith('DELETE FROM public.'))).toBe(false)
     expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
   })
@@ -220,7 +220,7 @@ describe('on_app_delete trigger', () => {
     await sendTrigger()
 
     const statements = sqlStatements()
-    expect(statements.some(sql => sql.includes('INSERT INTO public.deleted_apps'))).toBe(false)
+    expect(statements.some(sql => sql.includes('record_app_deletion_once'))).toBe(false)
     expect(statements.some(sql => sql.startsWith('DELETE FROM public.'))).toBe(false)
     expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
     expect(finishCalls()).toHaveLength(0)
@@ -242,7 +242,7 @@ describe('on_app_delete trigger', () => {
     const response = await sendTrigger()
 
     expect(response.status).toBeGreaterThanOrEqual(500)
-    expect(sqlStatements().some(sql => sql.includes('INSERT INTO public.deleted_apps'))).toBe(false)
+    expect(sqlStatements().some(sql => sql.includes('record_app_deletion_once'))).toBe(false)
     expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
   })
 

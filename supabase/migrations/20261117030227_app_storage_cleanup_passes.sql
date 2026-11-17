@@ -6,7 +6,8 @@
 -- when the prefix is empty, the pass budget is spent, or the app id exists
 -- again in the org. A pass that dies, or whose next message could not be
 -- queued, leaves its row behind; requeue_stalled_app_storage_cleanups (cron)
--- queues the next pass for rows past due_at.
+-- queues the next pass for rows past due_at, replaying pass 0 (deleted_apps,
+-- app_id rows) from the stored apps row until it has finished once.
 --
 -- An app created again with the same id in the same org owns that prefix
 -- again. Every decision about it runs here on the primary, under one advisory
@@ -29,6 +30,15 @@ CREATE TABLE public.app_storage_cleanups (
   running boolean NOT NULL DEFAULT false,
   -- When the sweeper may assume that pass died and queue the next one.
   due_at timestamptz NOT NULL,
+  -- The deleted apps row, so the sweeper can replay pass 0.
+  record jsonb NOT NULL,
+  -- Pass 0 (deleted_apps, app_id rows) finished; until then the sweeper
+  -- replays pass 0 instead of moving on to storage-only passes.
+  first_pass_done boolean NOT NULL DEFAULT false,
+  -- deleted_apps was written for this deletion (replays must not add another).
+  deletion_recorded boolean NOT NULL DEFAULT false,
+  -- Sweeper requeues; bounded like passes.
+  requeues integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
   PRIMARY KEY (app_id, owner_org)
 );
@@ -74,7 +84,8 @@ CREATE FUNCTION public.begin_app_storage_cleanup_pass(
   p_app_id text,
   p_owner_org uuid,
   p_pass integer,
-  p_lease_seconds integer
+  p_lease_seconds integer,
+  p_record jsonb
 ) RETURNS text
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -97,8 +108,8 @@ BEGIN
     IF p_pass <> 0 THEN
       RETURN 'superseded';
     END IF;
-    INSERT INTO public.app_storage_cleanups (app_id, owner_org, pass, running, due_at)
-    VALUES (p_app_id, p_owner_org, 0, true, pg_catalog.clock_timestamp() + pg_catalog.make_interval(secs => p_lease_seconds));
+    INSERT INTO public.app_storage_cleanups (app_id, owner_org, pass, running, due_at, record)
+    VALUES (p_app_id, p_owner_org, 0, true, pg_catalog.clock_timestamp() + pg_catalog.make_interval(secs => p_lease_seconds), COALESCE(p_record, '{}'::jsonb));
     RETURN 'claimed';
   END IF;
 
@@ -115,9 +126,44 @@ BEGIN
   RETURN 'claimed';
 END;
 $$;
-ALTER FUNCTION public.begin_app_storage_cleanup_pass(text, uuid, integer, integer) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.begin_app_storage_cleanup_pass(text, uuid, integer, integer) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.begin_app_storage_cleanup_pass(text, uuid, integer, integer) TO service_role;
+ALTER FUNCTION public.begin_app_storage_cleanup_pass(text, uuid, integer, integer, jsonb) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.begin_app_storage_cleanup_pass(text, uuid, integer, integer, jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.begin_app_storage_cleanup_pass(text, uuid, integer, integer, jsonb) TO service_role;
+
+-- Records the deletion in deleted_apps (billing) once per cleanup, so a
+-- replayed pass 0 does not add a second row. Without cleanup state (the app id
+-- exists again, or the app had no storage claim) it records unconditionally,
+-- like before.
+CREATE FUNCTION public.record_app_deletion_once(
+  p_app_id text,
+  p_owner_org uuid,
+  p_created_at timestamptz,
+  p_transfer_history jsonb
+) RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_recorded boolean;
+BEGIN
+  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('app_storage_cleanup:' || p_app_id, 0));
+  SELECT deletion_recorded INTO v_recorded FROM public.app_storage_cleanups
+  WHERE app_id = p_app_id AND owner_org = p_owner_org
+  FOR UPDATE;
+  IF v_recorded THEN
+    RETURN false;
+  END IF;
+  INSERT INTO public.deleted_apps (app_id, created_at, owner_org, transfer_history)
+  VALUES (p_app_id, p_created_at, p_owner_org, ARRAY(SELECT pg_catalog.jsonb_array_elements(COALESCE(p_transfer_history, '[]'::jsonb))));
+  UPDATE public.app_storage_cleanups SET deletion_recorded = true
+  WHERE app_id = p_app_id AND owner_org = p_owner_org;
+  RETURN true;
+END;
+$$;
+ALTER FUNCTION public.record_app_deletion_once(text, uuid, timestamptz, jsonb) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.record_app_deletion_once(text, uuid, timestamptz, jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_app_deletion_once(text, uuid, timestamptz, jsonb) TO service_role;
 
 -- Ends pass p_pass, only when it still owns the cleanup (otherwise nothing
 -- happens). With p_done (prefix empty or budget spent) the state is cleared.
@@ -153,6 +199,7 @@ BEGIN
   v_msg_id := pgmq.send('on_app_delete', public.app_storage_cleanup_message(p_app_id, p_owner_org, p_pass + 1), v_delay);
   UPDATE public.app_storage_cleanups
   SET pass = p_pass + 1,
+    first_pass_done = true,
     running = false,
     due_at = pg_catalog.clock_timestamp() + pg_catalog.make_interval(secs => v_delay + p_lease_seconds)
   WHERE app_id = p_app_id AND owner_org = p_owner_org;
@@ -163,11 +210,12 @@ ALTER FUNCTION public.finish_app_storage_cleanup_pass(text, uuid, integer, boole
 REVOKE ALL ON FUNCTION public.finish_app_storage_cleanup_pass(text, uuid, integer, boolean, integer, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.finish_app_storage_cleanup_pass(text, uuid, integer, boolean, integer, integer) TO service_role;
 
--- Queues the next pass of cleanups whose pass never finished (worker killed,
--- next message not queued or stuck in a backlog). Recording that next pass
--- makes the replaced message superseded, so only one chain continues. Each
--- requeue counts as a pass, so the budget still bounds a cleanup that keeps
--- failing. Returns how many passes were queued.
+-- Requeues cleanups whose pass never finished (worker killed, next message
+-- not queued or stuck in a backlog). Until pass 0 finished it replays pass 0
+-- from the stored record, so deleted_apps and the app_id rows are not skipped;
+-- after that it queues the next storage pass, which makes the replaced message
+-- superseded so only one chain continues. Requeues are bounded like passes.
+-- Returns how many messages were queued.
 CREATE FUNCTION public.requeue_stalled_app_storage_cleanups(p_limit integer DEFAULT 100)
 RETURNS integer
 LANGUAGE plpgsql
@@ -175,13 +223,15 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
+  -- A plain value (not clock_timestamp() in the predicate) bounds the due_at index scan.
+  v_cutoff timestamptz := pg_catalog.clock_timestamp();
   v_row record;
   v_queued integer := 0;
 BEGIN
   FOR v_row IN
-    SELECT c.app_id, c.owner_org, c.pass
+    SELECT c.app_id, c.owner_org, c.pass, c.record, c.first_pass_done, c.requeues
     FROM public.app_storage_cleanups AS c
-    WHERE c.due_at < pg_catalog.clock_timestamp()
+    WHERE c.due_at < v_cutoff
     ORDER BY c.due_at
     LIMIT GREATEST(COALESCE(p_limit, 100), 1)
     FOR UPDATE SKIP LOCKED
@@ -190,14 +240,26 @@ BEGIN
     IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtextextended('app_storage_cleanup:' || v_row.app_id, 0)) THEN
       CONTINUE;
     END IF;
-    IF v_row.pass + 1 >= 50
+    IF v_row.pass + 1 >= 50 OR v_row.requeues + 1 >= 50
       OR EXISTS (SELECT 1 FROM public.apps WHERE app_id = v_row.app_id AND owner_org = v_row.owner_org) THEN
       DELETE FROM public.app_storage_cleanups WHERE app_id = v_row.app_id AND owner_org = v_row.owner_org;
       CONTINUE;
     END IF;
-    PERFORM pgmq.send('on_app_delete', public.app_storage_cleanup_message(v_row.app_id, v_row.owner_org, v_row.pass + 1), 0);
+    IF v_row.first_pass_done THEN
+      PERFORM pgmq.send('on_app_delete', public.app_storage_cleanup_message(v_row.app_id, v_row.owner_org, v_row.pass + 1), 0);
+    ELSE
+      PERFORM pgmq.send('on_app_delete', pg_catalog.jsonb_build_object(
+        'function_name', 'on_app_delete',
+        'payload', pg_catalog.jsonb_build_object(
+          'type', 'DELETE', 'table', 'apps', 'schema', 'public', 'record', NULL, 'old_record', v_row.record
+        )
+      ), 0);
+    END IF;
     UPDATE public.app_storage_cleanups
-    SET pass = v_row.pass + 1, running = false, due_at = pg_catalog.clock_timestamp() + interval '2 minutes'
+    SET pass = CASE WHEN v_row.first_pass_done THEN v_row.pass + 1 ELSE 0 END,
+      requeues = v_row.requeues + 1,
+      running = false,
+      due_at = pg_catalog.clock_timestamp() + interval '2 minutes'
     WHERE app_id = v_row.app_id AND owner_org = v_row.owner_org;
     v_queued := v_queued + 1;
   END LOOP;

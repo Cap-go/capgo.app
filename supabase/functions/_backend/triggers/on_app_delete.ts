@@ -66,8 +66,8 @@ async function beginStoragePass(c: Context<MiddlewareKeyVariables>, record: AppR
   const pg = await getPgClient(c)
   try {
     const result = await pg.query<{ claim: StorageClaim }>(
-      'SELECT public.begin_app_storage_cleanup_pass($1::text, $2::uuid, $3::integer, $4::integer) AS claim',
-      [record.app_id, record.owner_org, pass, STORAGE_CLEANUP_LEASE_SECONDS],
+      'SELECT public.begin_app_storage_cleanup_pass($1::text, $2::uuid, $3::integer, $4::integer, $5::jsonb) AS claim',
+      [record.app_id, record.owner_org, pass, STORAGE_CLEANUP_LEASE_SECONDS, JSON.stringify(record)],
     )
     const claim = result.rows[0]?.claim
     if (claim !== 'claimed' && claim !== 'recreated' && claim !== 'superseded' && claim !== 'running')
@@ -188,15 +188,14 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
 
   // Track deleted app for billing before returning (queue consumer 15s HTTP budget).
   // Follow-up storage passes, and a pass-0 message delivered again after it was handled,
-  // were already recorded.
+  // were already recorded; a pass 0 the sweeper replays records it at most once per cleanup.
   if (pass === 0 && claim !== 'superseded' && claim !== 'running') {
     let pg: PgClient | undefined
     try {
       pg = await getPgClient(c)
       await pg.query(
-        `INSERT INTO public.deleted_apps (app_id, created_at, owner_org, transfer_history)
-        VALUES ($1, $2, $3, ARRAY(SELECT pg_catalog.jsonb_array_elements($4::jsonb)))`,
-        [record.app_id, record.created_at, record.owner_org, JSON.stringify(record.transfer_history ?? [])],
+        'SELECT public.record_app_deletion_once($1::text, $2::uuid, $3::timestamptz, $4::jsonb)',
+        [record.app_id, record.owner_org, record.created_at, JSON.stringify(record.transfer_history ?? [])],
       )
     }
     catch (error) {
