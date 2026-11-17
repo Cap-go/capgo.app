@@ -33,6 +33,10 @@ test('saves and reloads the incompatible-bundle alert scope', async ({ page }) =
     await page.login('test@capgo.app', 'testtest')
     await page.goto(`/app/${APP_ID}/settings`)
 
+    const servingRegions = page.locator('[data-test="serving-regions"]')
+    await expect(servingRegions).toBeVisible()
+    await expect(servingRegions.locator('input[name="serving-region-NA"]')).toBeChecked()
+
     const scope = page.locator('#bundle-incompatible-alert')
     await expect(scope).toBeVisible()
     await expect(scope).toHaveValue('default')
@@ -43,6 +47,7 @@ test('saves and reloads the incompatible-bundle alert scope', async ({ page }) =
 
     await page.reload()
     await expect(scope).toHaveValue('all')
+    await expect(servingRegions.locator('input[name="serving-region-NA"]')).toBeChecked()
 
     await scope.selectOption('default')
     await page.locator('#update-app').getByRole('button', { name: 'Save', exact: true }).click()
