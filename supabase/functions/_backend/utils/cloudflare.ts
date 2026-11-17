@@ -712,7 +712,7 @@ export function buildVersionUsageChannelFilterCF(channel?: VersionUsageChannel |
   return `AND ${match}`
 }
 
-const DAY_BUCKET_CF = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+export const DAY_BUCKET_CF = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
 
 /**
  * app_log failure rows carry the channel in blob8 (name) and blob9 (id). Rows

@@ -202,6 +202,13 @@ export function calculateStorageHourlyRows(
   events: VersionMetaStorageRow[],
   options: StorageHourlyCalculationOptions,
 ): StorageHourlyCalculationResult {
+  return calculateStorageHourlyRowsFromLifetimes(collectStorageVersionLifetimes(events).values(), options)
+}
+
+export function calculateStorageHourlyRowsFromLifetimes(
+  versions: Iterable<StorageVersionLifetime>,
+  options: StorageHourlyCalculationOptions,
+): StorageHourlyCalculationResult {
   const cycleStartMs = parseTimestampMs(options.cycleStart)
   const cycleEndMs = parseTimestampMs(options.cycleEnd)
   const currentHourMs = options.currentHour ? parseTimestampMs(options.currentHour) : Date.now()
@@ -211,12 +218,11 @@ export function calculateStorageHourlyRows(
     return emptyStorageHourlyCalculationResult()
 
   assertStorageCycleWithinLimit(cycleStartMs, cycleEndMs)
-  const versions = collectStorageVersionLifetimes(events)
   const dailyBuckets = new Map<number, number>()
   let skippedMissingAddition = 0
   let skippedInvalidInterval = 0
 
-  for (const version of versions.values()) {
+  for (const version of versions) {
     const interval = getStorageInterval(version, cycleStartMs, calculationEndMs, cycleEndMs)
     if ('skipReason' in interval) {
       if (interval.skipReason === 'missingAddition')
@@ -234,6 +240,46 @@ export function calculateStorageHourlyRows(
     skippedMissingAddition,
     skippedInvalidInterval,
   }
+}
+
+/** Storage lifetime of one bundle, as folded from its version_meta rows. */
+export interface VersionStorageLifetimeRow {
+  version_id: number | string
+  added_at: string | Date | null
+  size: number | string | null
+  removed_at: string | Date | null
+}
+
+/**
+ * One row per bundle of the app: first addition (time and size) and first
+ * removal before $2, the same fold as collectStorageVersionLifetimes. Bundles
+ * removed more than a day before the cycle start ($3) would be skipped as
+ * outside the cycle anyway, so they are not returned; the one-day margin keeps
+ * that true whatever timezone the driver parses timestamps in. Bundles without
+ * an addition are kept: they are counted as skipped metadata.
+ */
+export const VERSION_STORAGE_LIFETIMES_SQL = `
+  SELECT
+    vm.version_id,
+    pg_catalog.min(vm.timestamp) FILTER (WHERE vm.size > 0) AS added_at,
+    (pg_catalog.array_agg(vm.size ORDER BY vm.timestamp, vm.size DESC) FILTER (WHERE vm.size > 0))[1] AS size,
+    pg_catalog.min(vm.timestamp) FILTER (WHERE vm.size < 0) AS removed_at
+  FROM public.version_meta vm
+  WHERE vm.app_id = $1
+    AND vm.timestamp < $2::timestamp
+  GROUP BY vm.version_id
+  HAVING NOT (
+    pg_catalog.bool_or(vm.size > 0)
+    AND COALESCE(pg_catalog.min(vm.timestamp) FILTER (WHERE vm.size < 0) < $3::timestamp - INTERVAL '1 day', false)
+  )
+`
+
+export function versionStorageLifetimesFromRows(rows: VersionStorageLifetimeRow[]): StorageVersionLifetime[] {
+  return rows.map(row => ({
+    addedAt: row.added_at == null ? undefined : parseTimestampMs(row.added_at),
+    size: row.added_at == null || row.size == null ? undefined : Number(row.size),
+    removedAt: row.removed_at == null ? undefined : parseTimestampMs(row.removed_at),
+  }))
 }
 
 async function runSupabaseResultWithRetry<T>(
@@ -282,18 +328,9 @@ async function runSupabaseResultWithRetry<T>(
   return result
 }
 
-async function readVersionMetaStorageRows(pg: PgClient, appId: string, calculationEnd: string) {
-  const { rows } = await pg.query<VersionMetaStorageRow>(
-    `
-      SELECT timestamp, version_id, size
-      FROM public.version_meta
-      WHERE app_id = $1
-        AND timestamp < $2::timestamp
-      ORDER BY version_id, timestamp
-    `,
-    [appId, calculationEnd],
-  )
-  return rows
+async function readVersionStorageLifetimes(pg: PgClient, appId: string, calculationEnd: string, cycleStart: string) {
+  const { rows } = await pg.query<VersionStorageLifetimeRow>(VERSION_STORAGE_LIFETIMES_SQL, [appId, calculationEnd, cycleStart])
+  return versionStorageLifetimesFromRows(rows)
 }
 
 // Same as a PostgREST bulk upsert: missing keys become NULL and only the listed
@@ -330,8 +367,8 @@ async function refreshStorageHourly(
     throw simpleError('cannot_get_cycle_info', 'Cannot get cycle info', { cycleInfo })
 
   const calculationEnd = currentHour ?? new Date().toISOString()
-  const events = await readVersionMetaStorageRows(pg, appId, calculationEnd)
-  const calculation = calculateStorageHourlyRows(events, {
+  const versions = await readVersionStorageLifetimes(pg, appId, calculationEnd, cycleInfo.subscription_anchor_start)
+  const calculation = calculateStorageHourlyRowsFromLifetimes(versions, {
     appId,
     ownerOrg,
     cycleStart: cycleInfo.subscription_anchor_start,
@@ -452,13 +489,17 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
   const startDate = cycleInfo.subscription_anchor_start
   const endDate = cycleInfo.subscription_anchor_end
 
-  // get mau
-  let mau = await readStatsMau(c, appId, startDate, endDate)
-  // get bandwidth
-  let bandwidth = await readStatsBandwidth(c, appId, startDate, endDate)
-  // get storage
-  let storage = await readStatsStorage(c, appId, startDate, endDate)
-  let versionUsage = await readStatsVersion(c, appId, startDate, endDate)
+  // The reads are independent: run them together. MAU, bandwidth and version
+  // usage are one Analytics Engine SQL API call each, plus one for the legacy
+  // download_fail correction of version usage (4 per app; storage is Postgres).
+  // Every app is still queried on its own: a query covering several apps is
+  // read at a coarser Analytics Engine sample rate, which changes the counts.
+  let [mau, bandwidth, storage, versionUsage] = await Promise.all([
+    readStatsMau(c, appId, startDate, endDate),
+    readStatsBandwidth(c, appId, startDate, endDate),
+    readStatsStorage(c, appId, startDate, endDate),
+    readStatsVersion(c, appId, startDate, endDate),
+  ])
 
   if (body.todayOnly) {
     // take only the last day
