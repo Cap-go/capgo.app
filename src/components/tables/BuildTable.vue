@@ -608,7 +608,7 @@ columns.value = [
     key: 'status',
     onClick: openBuild,
     mobile: true,
-    class: 'truncate max-w-24',
+    class: 'whitespace-nowrap',
     renderFunction: (elem: Element) => h('span', { 'title': t('build-row-open'), 'data-test': 'build-row-status' }, elem.status),
   },
   {
@@ -627,7 +627,7 @@ columns.value = [
     label: t('saved-build'),
     key: 'artifact',
     mobile: true,
-    class: 'max-w-48',
+    class: 'min-w-56',
     renderFunction: savedBuildCell,
   },
   {
