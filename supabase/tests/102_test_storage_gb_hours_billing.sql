@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(35);
+SELECT plan(36);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -316,6 +316,24 @@ SELECT public.replace_app_storage_hourly(
     '2026-05-03T00:00:00Z'
 ) FROM gbh_ctx;
 
+-- A live refresh that loaded another incarnation of the app (deleted and
+-- recreated by the same org mid-refresh) writes nothing either.
+SELECT public.replace_app_storage_hourly(
+    live_app, org_id, DATE '2026-04-01', DATE '2026-05-01', DATE '2026-05-01', '2026-04-01T00:00:00Z', true,
+    '[{"cycle_start": "2026-04-01", "date": "2026-04-02", "storage_byte_hours": 66}]'::jsonb,
+    '2026-04-03T00:00:00Z',
+    true,
+    gen_random_uuid()
+) FROM gbh_ctx;
+
+SELECT
+    is(
+        (SELECT count(*)::integer FROM public.daily_storage_hourly
+         WHERE app_id = (SELECT live_app FROM gbh_ctx) AND cycle_start = DATE '2026-04-01'),
+        0,
+        'a live refresh of an earlier incarnation of the app writes nothing'
+    );
+
 SELECT
     is(
         (SELECT count(*)::integer FROM public.daily_storage_hourly
@@ -374,8 +392,8 @@ SELECT
 
 SELECT
     ok(
-        NOT has_function_privilege('authenticated', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean)', 'EXECUTE')
-        AND NOT has_function_privilege('anon', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean)', 'EXECUTE'),
+        NOT has_function_privilege('authenticated', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean, uuid)', 'EXECUTE')
+        AND NOT has_function_privilege('anon', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean, uuid)', 'EXECUTE'),
         'replace_app_storage_hourly is not callable by clients'
     );
 

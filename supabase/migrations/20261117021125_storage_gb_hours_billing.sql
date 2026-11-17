@@ -167,7 +167,8 @@ CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
     p_replace_legacy boolean,
     p_rows jsonb,
     p_written_at timestamptz,
-    p_require_current_owner boolean DEFAULT true
+    p_require_current_owner boolean DEFAULT true,
+    p_app_uuid uuid DEFAULT NULL
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -181,11 +182,15 @@ BEGIN
   -- writes nothing (and leaves the watermark), so the new owner's refresh
   -- finalizes the former owner up to the transfer. The former-owner and
   -- deletion finalizers write rows clipped on purpose and skip this check.
+  -- p_app_uuid (apps.id when the refresh loaded the app) also binds it to that
+  -- incarnation: an app deleted and recreated by the same org mid-refresh is
+  -- another row, so the stale refresh writes nothing.
   IF p_require_current_owner THEN
     PERFORM 1
     FROM public.apps
     WHERE apps.app_id = p_app_id
       AND apps.owner_org = p_owner_org
+      AND (p_app_uuid IS NULL OR apps.id = p_app_uuid)
     FOR SHARE;
     IF NOT FOUND THEN
       RETURN;
@@ -245,10 +250,10 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean) TO service_role;
+ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean, uuid) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean, uuid) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean, uuid) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 2c. Cycle storage usage for the console

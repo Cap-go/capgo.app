@@ -35,6 +35,8 @@ interface CycleInfo {
 
 interface AppOwnerOrgRow {
   owner_org: string
+  /** apps.id: identifies this incarnation of the app ID. */
+  id: string | null
   /** When the current owner got the app: its creation or its last transfer to that org. */
   owned_since: string | null
   /** Last transfer to the current owner, if any, and the org that owned the app before it. */
@@ -45,6 +47,8 @@ interface AppOwnerOrgRow {
 }
 
 interface StorageOwnership {
+  /** apps.id loaded by the refresh; live writes are refused for another incarnation. */
+  appUuid?: string | null
   ownedSince: string | null
   transferredAt: string | null
   transferredFrom: string | null
@@ -98,6 +102,8 @@ interface StorageHourlyCalculationOptions {
    * deletion finalizers write rows clipped at the transfer or deletion and turn it off.
    */
   requireCurrentOwner?: boolean
+  /** apps.id the refresh loaded: a live write is refused once the app ID is another incarnation. */
+  appUuid?: string | null
 }
 
 interface StorageHourlyCalculationResult {
@@ -419,7 +425,8 @@ async function replaceCycleStorageHourly(
          p_replace_legacy => $7::boolean,
          p_rows => $8::jsonb,
          p_written_at => $9::timestamptz,
-         p_require_current_owner => $10::boolean
+         p_require_current_owner => $10::boolean,
+         p_app_uuid => $11::uuid
        )`,
       [
         options.appId,
@@ -432,6 +439,7 @@ async function replaceCycleStorageHourly(
         JSON.stringify(calculation.rows.map(row => ({ cycle_start: row.cycle_start, date: row.date, storage_byte_hours: row.storage_byte_hours }))),
         writtenAt,
         options.requireCurrentOwner ?? true,
+        options.appUuid ?? null,
       ],
     )
     return { data: null, error: null }
@@ -449,7 +457,7 @@ async function finalizePreviousCycle(
   c: Context,
   pg: PgClient,
   events: VersionMetaStorageRow[],
-  options: { appId: string, ownerOrg: string, cycleStart: string, calculationEndMs: number, accrualStart: string | null, writtenAt: string, requireCurrentOwner?: boolean },
+  options: { appId: string, ownerOrg: string, cycleStart: string, calculationEndMs: number, accrualStart: string | null, writtenAt: string, requireCurrentOwner?: boolean, appUuid?: string | null },
 ) {
   const cycleStartMs = parseTimestampMs(options.cycleStart)
   if (options.calculationEndMs - cycleStartMs >= STORAGE_FINALIZE_WINDOW_MS)
@@ -471,6 +479,7 @@ async function finalizePreviousCycle(
     accrualStart: options.accrualStart,
     writtenAt: options.writtenAt,
     requireCurrentOwner: options.requireCurrentOwner,
+    appUuid: options.appUuid,
   })
 }
 
@@ -574,6 +583,7 @@ async function refreshStorageHourly(
     currentHour: calculationEnd,
     accrualStart: ownership.ownedSince,
     writtenAt,
+    appUuid: ownership.appUuid,
   })
 
   await finalizePreviousCycle(c, pg, events, {
@@ -583,6 +593,7 @@ async function refreshStorageHourly(
     calculationEndMs,
     accrualStart: ownership.ownedSince,
     writtenAt,
+    appUuid: ownership.appUuid,
   })
 
   await finalizeFormerOwner(c, pg, events, { appId, ownerOrg, ownership, calculationEndMs, writtenAt })
@@ -760,6 +771,7 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
          LIMIT 1
        )
        SELECT apps.owner_org,
+         apps.id,
          GREATEST(apps.created_at, last_transfer.transferred_at) AS owned_since,
          last_transfer.transferred_at,
          last_transfer.transferred_from,
@@ -916,6 +928,7 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
   // Storage is billed from these byte-hours: a failure must fail the job so the
   // queue retries it, instead of leaving the cycle under-counted.
   const storageHourly = await refreshStorageHourly(c, pg, appId, orgId, cycleInfo, body.currentHour, {
+    appUuid: appResult.data.id,
     ownedSince: toIsoTimestamp(appResult.data.owned_since),
     transferredAt: toIsoTimestamp(appResult.data.transferred_at),
     transferredFrom: appResult.data.transferred_from,

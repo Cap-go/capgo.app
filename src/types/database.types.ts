@@ -6086,6 +6086,7 @@ export type Database = {
       replace_app_storage_hourly: {
         Args: {
           p_app_id: string
+          p_app_uuid?: string
           p_cycle_end_day: string
           p_cycle_start_day: string
           p_end_exclusive_day: string
