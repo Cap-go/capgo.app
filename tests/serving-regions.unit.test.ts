@@ -6,8 +6,9 @@ import { Hono } from 'hono'
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest'
 import plugin from '../cloudflare_workers/plugin/index.ts'
 import snippet from '../cloudflare_workers/snippet/index.js'
+import configs from '../configs.json'
 import { CacheHelper } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
-import { getDatabaseURL } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
+import { getDatabaseURL, getReadReplicaBinding } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 import { enforceServingPolicy, signServingIngress } from '../supabase/functions/_backend/plugin_runtime/utils/servingPolicy.ts'
 import { parseServingPolicy, SERVING_REGIONS } from '../supabase/functions/_backend/plugin_runtime/utils/servingRegions.ts'
 import { createPluginStateSyncStore } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
@@ -72,6 +73,46 @@ describe('serving policy', () => {
     const { PLUGIN_STATE_POINTERS: _binding, ...denoEnv } = env
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ active: false }, { status: 503 })))
     expect((await app.fetch(request(), denoEnv)).status).toBe(503)
+    expect(dataAccess).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['prod', 'https://plugin.eu.capgo.app/serving_policy/'],
+    ['preprod', 'https://plugin.preprod.capgo.app/serving_policy/'],
+    ['development', 'https://plugin.dev.capgo.app/serving_policy/'],
+    ['local', 'http://localhost:8788/serving_policy/'],
+  ] as const)('uses the configured %s policy store without an R2 binding', async (environment, baseUrl) => {
+    const { app, env, dataAccess } = harness(() => document())
+    const { PLUGIN_STATE_POINTERS: _binding, ...denoEnv } = env
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ ...document(), active: true, epoch: rollout.epoch }))
+    vi.stubGlobal('fetch', fetcher)
+    const response = await app.fetch(request(), { ...denoEnv, PLUGIN_REGION_TARGETS: configs.plugin_region_targets[environment] })
+    expect(response.status).toBe(200)
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe(baseUrl + appId)
+    expect(fetcher.mock.calls[0]?.[1]).toEqual({ redirect: 'manual', cache: 'no-store', signal: expect.any(AbortSignal) })
+    expect(dataAccess).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    { active: false, epoch: 'staging-test-epoch' },
+    { active: true, epoch: 'another-test-epoch' },
+  ])('rejects a disabled or different-epoch Deno policy gateway %j', async (activation) => {
+    const { app, env, dataAccess } = harness(() => document())
+    const { PLUGIN_STATE_POINTERS: _binding, ...denoEnv } = env
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ...document(), ...activation })))
+    const response = await app.fetch(request(), { ...denoEnv, PLUGIN_REGION_TARGETS: configs.plugin_region_targets.preprod })
+    expect(response.status).toBe(503)
+    expect(dataAccess).not.toHaveBeenCalled()
+  })
+
+  it('does not silently query production when a Deno gateway is unconfigured', async () => {
+    vi.stubEnv('PLUGIN_REGION_TARGETS', '')
+    const { app, env, dataAccess } = harness(() => document())
+    const { PLUGIN_STATE_POINTERS: _binding, ...denoEnv } = env
+    const fetcher = vi.fn()
+    vi.stubGlobal('fetch', fetcher)
+    expect((await app.fetch(request(), denoEnv)).status).toBe(503)
+    expect(fetcher).not.toHaveBeenCalled()
     expect(dataAccess).not.toHaveBeenCalled()
   })
 
@@ -172,6 +213,22 @@ describe('serving policy', () => {
   it('never falls back to EU/primary when the only allowed replica binding is absent', async () => {
     const { app, env } = harness(() => document(['HK']))
     expect((await app.fetch(request(), env)).status).toBe(503)
+  })
+
+  it('reports a completed restricted read after its replica becomes lagging, while rejecting new reads', async () => {
+    const { env } = harness(() => document(['NA']))
+    const app = new Hono()
+    app.get('/', async (c) => {
+      await enforceServingPolicy(c, appId)
+      expect(getDatabaseURL(c, true)).toBe('postgres://na')
+      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_NA', { status: 'lagging', max_lag_seconds: 2400 })
+      const source = getReadReplicaBinding(c)
+      expect(() => getDatabaseURL(c, true)).toThrow()
+      return c.json({ source })
+    })
+    const response = await app.fetch(request(), env)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ source: 'HYPERDRIVE_CAPGO_READ_NA' })
   })
 
   it('rejects spoofed ingress and accepts only signed matching app receipts', async () => {

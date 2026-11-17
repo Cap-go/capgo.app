@@ -9,16 +9,24 @@ const mode = defineModel<string>('mode', { required: true })
 const { t } = useI18n()
 const options = ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME']
 const verification = ref<'unknown' | 'active' | 'pending' | 'unavailable'>('unknown')
-watch([regions, mode], () => {
+let checkGeneration = 0
+watch([regions, mode, () => props.appId], () => {
+  checkGeneration++
   verification.value = 'unknown'
-}, { deep: true })
+}, { deep: true, flush: 'sync' })
 async function checkActivation() {
+  const generation = ++checkGeneration
+  const appId = props.appId
+  verification.value = 'unknown'
   try {
-    const response = await fetch(`https://plugin.eu.capgo.app/serving_policy/${encodeURIComponent(props.appId)}`, { cache: 'no-store' })
+    const url = new URL(encodeURIComponent(appId), import.meta.env.VITE_SERVING_POLICY_URL)
+    const response = await fetch(url, { cache: 'no-store' })
     if (!response.ok)
       throw new Error('Unavailable')
-    const doc = await response.json()
-    if (!doc || typeof doc !== 'object' || !('active' in doc) || !('app_id' in doc) || doc.app_id !== props.appId)
+    const doc: unknown = await response.json()
+    if (generation !== checkGeneration)
+      return
+    if (!doc || typeof doc !== 'object' || !('active' in doc) || !('app_id' in doc) || doc.app_id !== appId)
       throw new Error('Invalid rollout status')
     if (doc.active === false) {
       verification.value = 'pending'
@@ -35,7 +43,8 @@ async function checkActivation() {
       : 'pending'
   }
   catch {
-    verification.value = 'unavailable'
+    if (generation === checkGeneration)
+      verification.value = 'unavailable'
   }
 }
 const empty = computed(() => regions.value.length === 0)

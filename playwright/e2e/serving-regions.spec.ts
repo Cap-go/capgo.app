@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { env } from 'node:process'
 import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { createClient } from '../../tests/sql-data-client'
@@ -7,6 +8,31 @@ import { consoleQueryError, consoleQueryPayload, forwardConsoleQuery, routeConso
 
 const APP_ID = 'com.example.serving.e2e'
 const regions = ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME']
+
+test('production CSP permits the serving policy check', async ({ page }) => {
+  const appId = 'com.example.policy-csp'
+  const url = `https://plugin.eu.capgo.app/serving_policy/${appId}`
+  const csp = readFileSync(new URL('../../public/_headers', import.meta.url), 'utf8').match(/^  Content-Security-Policy: (.+)$/m)?.[1]
+  if (!csp)
+    throw new Error('Missing production CSP fixture')
+  await page.route('https://console.capgo.app/policy-status-fixture', route => route.fulfill({
+    contentType: 'text/html',
+    headers: { 'content-security-policy': csp },
+    body: '<!doctype html><html><body>Policy status fixture</body></html>',
+  }))
+  let requests = 0
+  await page.route(url, (route) => {
+    requests++
+    return route.fulfill({ headers: { 'access-control-allow-origin': 'https://console.capgo.app' }, json: { app_id: appId, active: false } })
+  })
+  await page.goto('https://console.capgo.app/policy-status-fixture')
+  const result = await page.evaluate(async (endpoint) => {
+    const response = await fetch(endpoint, { cache: 'no-store' })
+    return { status: response.status, body: await response.json() }
+  }, url)
+  expect(result).toEqual({ status: 200, body: { app_id: appId, active: false } })
+  expect(requests).toBe(1)
+})
 
 test('saves and reloads serving regions and both outside-region modes', async ({ page }) => {
   const status = getSupabaseStatus()
@@ -20,7 +46,7 @@ test('saves and reloads serving regions and both outside-region modes', async ({
   const inserted = await admin.from('apps').insert({ app_id: APP_ID, owner_org: demo.owner_org, user_id: demo.user_id, name: 'Serving regions e2e', icon_url: '' })
   expect(inserted.error).toBeNull()
   try {
-    await page.route('https://plugin.eu.capgo.app/serving_policy/**', route => route.fulfill({ json: { app_id: APP_ID, active: false, phase: 'disabled' } }))
+    await page.route('**/serving_policy/**', route => route.fulfill({ json: { app_id: APP_ID, active: false, phase: 'disabled' } }))
     await page.login('test@capgo.app', 'testtest')
     await page.goto(`/app/${APP_ID}/settings`)
     // Repository uses data-test rather than Playwright's default test id.

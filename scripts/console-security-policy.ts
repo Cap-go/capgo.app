@@ -6,6 +6,8 @@
  */
 
 import configs from '../configs.json'
+import { servingPolicyStatusBaseUrl } from './serving-policy-status-url'
+import { getRightKey } from './utils.mjs'
 
 export interface ConsoleCspOptions {
   /** Local Vite dev server — allow http/ws to localhost. */
@@ -69,6 +71,8 @@ function getConfiguredConnectSources(dev: boolean): string[] {
 
   for (const raw of getDeployTimeConnectOverrides())
     addConnectOrigin(sources, raw)
+
+  addConnectOrigin(sources, process.env.VITE_SERVING_POLICY_URL ?? servingPolicyStatusBaseUrl(getRightKey('plugin_region_targets')))
 
   return [...sources]
 }
@@ -178,3 +182,9 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
 }
 
 export const CONSOLE_CONTENT_SECURITY_POLICY = buildConsoleContentSecurityPolicy()
+
+export function withConsoleContentSecurityPolicy(headers: string): string {
+  if (!/^  Content-Security-Policy: .+$/m.test(headers))
+    throw new Error('No Content-Security-Policy line found in console headers')
+  return headers.replace(/^  Content-Security-Policy: .+$/m, `  Content-Security-Policy: ${buildConsoleContentSecurityPolicy()}`)
+}

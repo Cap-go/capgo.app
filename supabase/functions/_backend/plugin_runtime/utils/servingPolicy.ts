@@ -5,6 +5,8 @@ import { servingRegionReaderEpoch } from './servingRegionRollout.js'
 import { quickError } from './hono.ts'
 import { trustedIngressRegion } from './servingRegionIngress.ts'
 import { compareServingRegions, isRestrictedServingPolicy, parseServingPolicy, servingPolicyKey } from './servingRegions.ts'
+import { servingPolicyStatusBaseUrl } from './servingPolicyGateway.ts'
+import { getEnv } from './utils.ts'
 
 export interface ServingPolicyDocument { f: 1, app_id: string, generation: string, policy: ServingPolicy }
 const policies = new WeakMap<Request, ServingPolicy>()
@@ -33,12 +35,20 @@ export async function readServingPolicy(c: Context, appId: string): Promise<Serv
   if (!bucket) {
     // Deno shares the gate but has no R2 binding. Fetch only control metadata,
     // never app data or a primary database. No caller-selected origin.
-    const response = await fetch(`https://plugin.eu.capgo.app/serving_policy/${encodeURIComponent(appId)}`, {
+    const targets: unknown = c.env?.PLUGIN_REGION_TARGETS ?? getEnv(c, 'PLUGIN_REGION_TARGETS')
+    if (typeof targets !== 'string' || !targets)
+      throw new Error('Serving policy gateway is not configured')
+    const url = new URL(encodeURIComponent(appId), servingPolicyStatusBaseUrl(targets))
+    const response = await fetch(url, {
       redirect: 'manual', cache: 'no-store', signal: AbortSignal.timeout(1000),
     })
     if (!response.ok)
       throw new Error('Serving policy store unavailable')
-    return parseServingPolicyDocument(await response.json(), appId)
+    const value: unknown = await response.json()
+    if (!value || typeof value !== 'object' || !('active' in value) || value.active !== true
+      || !('epoch' in value) || value.epoch !== servingRegionReaderEpoch)
+      throw new Error('Serving policy gateway is not active for this release')
+    return parseServingPolicyDocument(value, appId)
   }
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -60,7 +70,7 @@ export async function readServingPolicy(c: Context, appId: string): Promise<Serv
 }
 
 function signingSecret(c: Context): string | undefined {
-  const value: unknown = c.env?.SERVING_REGION_SIGNING_KEY
+  const value: unknown = c.env?.SERVING_REGION_SIGNING_KEY ?? getEnv(c, 'SERVING_REGION_SIGNING_KEY')
   return typeof value === 'string' && value.length >= 32 ? value : undefined
 }
 
@@ -75,14 +85,23 @@ function hex(bytes: ArrayBuffer) {
   return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
+function ingressBindingIp(c: Context) {
+  const ip = c.req.header('cf-connecting-ip')
+  if (!ip)
+    throw new Error('Trusted ingress IP unavailable')
+  // Cross-zone Worker requests share this address, so it cannot bind a receipt.
+  const address = ip.includes(':') ? new URL(`http://[${ip}]`).hostname : ip
+  if (address === '[2a06:98c0:3600::103]')
+    throw new Error('Trusted ingress IP unavailable')
+  return ip
+}
+
 /** The snippet receives an opaque receipt; it never receives or embeds a credential. */
 export async function signServingIngress(c: Context, appId: string) {
   const region = trustedIngressRegion(c.req.raw.cf?.colo)
   if (!region)
     throw new Error('Trusted ingress colo unavailable')
-  const ip = c.req.header('cf-connecting-ip')
-  if (!ip)
-    throw new Error('Trusted ingress IP unavailable')
+  const ip = ingressBindingIp(c)
   const payload = JSON.stringify({ appId, region, ip, expires: Date.now() + ingressReceiptLifetimeMs })
   const signature = hex(await crypto.subtle.sign('HMAC', await signingKey(c), new TextEncoder().encode(payload)))
   return `${encodeURIComponent(payload)}.${signature}`
@@ -92,6 +111,7 @@ async function ingressRegion(c: Context, appId: string): Promise<ServingRegion |
   const receipt = c.req.header(ingressHeader)
   if (!receipt)
     return trustedIngressRegion(c.req.raw.cf?.colo)
+  const ip = ingressBindingIp(c)
   const separator = receipt.lastIndexOf('.')
   const parts = [receipt.slice(0, separator), receipt.slice(separator + 1)]
   if (separator <= 0 || !/^[0-9a-f]{64}$/.test(parts[1]))
@@ -104,7 +124,7 @@ async function ingressRegion(c: Context, appId: string): Promise<ServingRegion |
   const now = Date.now()
   if (!data || typeof data !== 'object' || !('appId' in data) || data.appId !== appId
     || !('expires' in data) || typeof data.expires !== 'number' || !Number.isFinite(data.expires) || data.expires < now || data.expires > now + ingressReceiptLifetimeMs
-    || !('ip' in data) || data.ip !== c.req.header('cf-connecting-ip')
+    || !('ip' in data) || data.ip !== ip
     || !('region' in data))
     throw new Error('Expired or mismatched ingress receipt')
   return parseServingPolicy([data.region], 'block').regions[0]

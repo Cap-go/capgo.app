@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 // import veauryVitePlugins from 'veaury/vite/index'
 import type { Plugin } from 'vite'
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import VueI18n from '@intlify/unplugin-vue-i18n/vite'
@@ -23,9 +23,11 @@ import VueRouter from 'vue-router/vite'
 import pack from './package.json'
 import { isGuestRoutePath } from './src/constants/guestRoutes'
 import { branch, getRightKey } from './scripts/utils.mjs'
+import { servingPolicyStatusBaseUrl } from './scripts/serving-policy-status-url'
+import { withConsoleContentSecurityPolicy } from './scripts/console-security-policy'
 import 'vitest/config'
 
-type FrontendConfigKey = 'api_domain' | 'base_domain' | 'captcha_key'
+type FrontendConfigKey = 'api_domain' | 'base_domain' | 'captcha_key' | 'plugin_region_targets'
 
 function getFrontendKey(key: FrontendConfigKey): string {
   return getRightKey(key)
@@ -289,6 +291,7 @@ const frontendEnvironmentVariables: Record<string, string> = {
   VITE_APP_VERSION: appVersion,
   VITE_APP_URL: getUrl(),
   VITE_API_HOST: getUrl('api_domain'),
+  VITE_SERVING_POLICY_URL: servingPolicyStatusBaseUrl(getFrontendKey('plugin_region_targets')),
   VITE_CAPTCHA_KEY: getFrontendKey('captcha_key'),
   VITE_BRANCH: branch,
   package_dependencies: JSON.stringify(pack.dependencies),
@@ -308,6 +311,21 @@ function consoleVersionFilePlugin(): Plugin {
 
 function frontendEnvironmentPlugin(): Plugin {
   return EnvironmentPlugin(frontendEnvironmentVariables, { defineOn: 'import.meta.env' })
+}
+
+function consoleResponseHeadersPlugin(): Plugin {
+  let outputDirectory: string
+  return {
+    name: 'capgo-console-response-headers',
+    apply: 'build',
+    configResolved(config) {
+      outputDirectory = path.resolve(config.root, config.build.outDir)
+    },
+    writeBundle() {
+      const headersPath = path.join(outputDirectory, '_headers')
+      writeFileSync(headersPath, withConsoleContentSecurityPolicy(readFileSync(headersPath, 'utf8')))
+    },
+  }
 }
 
 export default defineConfig({
@@ -394,6 +412,7 @@ export default defineConfig({
       ],
     }),
     frontendEnvironmentPlugin(),
+    consoleResponseHeadersPlugin(),
 
     // https://github.com/vuejs/router
     VueRouter({

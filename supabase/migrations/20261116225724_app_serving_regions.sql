@@ -683,6 +683,10 @@ $$;
 CREATE FUNCTION public.activate_serving_policy_publication(p_epoch text, p_verified jsonb) RETURNS void
 LANGUAGE plpgsql SET search_path = '' AS $$
 BEGIN
+  -- Keep preparation claims outside the activation check-to-commit interval.
+  IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('serving_policy_sync_claim')) THEN
+    RAISE EXCEPTION 'Serving policy activation prerequisites incomplete';
+  END IF;
   IF p_epoch !~ '^[a-zA-Z0-9_-]{8,80}$'
     OR p_epoch IS DISTINCT FROM (SELECT value FROM private.settings WHERE name = 'CAPGO_SERVING_REGIONS_READER_EPOCH')
     OR NOT COALESCE(p_verified @> '{"EU":true,"NA":true,"SA":true,"OC":true,"AS_INDIA":true,"AS_JAPAN":true,"HK":true,"AF":true,"ME":true,"snippet":true,"deno":true,"warm_cache":true,"colo_attestation":true,"load":true,"keys":true}', false)

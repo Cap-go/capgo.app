@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { buildConsoleContentSecurityPolicy, CONSOLE_CONTENT_SECURITY_POLICY } from '../scripts/console-security-policy.ts'
+import { describe, expect, it, vi } from 'vitest'
+import configs from '../configs.json'
+import { buildConsoleContentSecurityPolicy, CONSOLE_CONTENT_SECURITY_POLICY, withConsoleContentSecurityPolicy } from '../scripts/console-security-policy.ts'
 
 describe('console content security policy', () => {
   it.concurrent('exports a production policy without localhost connect sources', () => {
@@ -56,5 +57,45 @@ describe('console content security policy', () => {
 
   it.concurrent('does not allow fonts.bunny.net after self-hosting webfonts', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('fonts.bunny.net')
+  })
+
+  it.each([
+    ['prod', 'https://plugin.eu.capgo.app'],
+    ['preprod', 'https://plugin.preprod.capgo.app'],
+    ['development', 'https://plugin.dev.capgo.app'],
+    ['local', 'http://localhost:8788'],
+  ] as const)('allows only the configured %s policy gateway origin', (environment, origin) => {
+    vi.stubEnv('PLUGIN_REGION_TARGETS', configs.plugin_region_targets[environment])
+    try {
+      const connect = buildConsoleContentSecurityPolicy().split('; ').find(directive => directive.startsWith('connect-src '))
+      expect(connect).toContain(origin)
+      expect(connect).not.toContain('https://*.capgo.app')
+      const emitted = withConsoleContentSecurityPolicy('/*\n  Content-Security-Policy: stale-policy\n  X-Content-Type-Options: nosniff\n')
+      expect(emitted).toContain(`Content-Security-Policy: ${buildConsoleContentSecurityPolicy()}`)
+      expect(emitted).toContain('X-Content-Type-Options: nosniff')
+      for (const other of ['https://plugin.eu.capgo.app', 'https://plugin.preprod.capgo.app', 'https://plugin.dev.capgo.app', 'http://localhost:8788']) {
+        if (other !== origin)
+          expect(connect).not.toContain(other)
+      }
+    }
+    finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('allows an explicitly overridden policy gateway without retaining the default origin', () => {
+    vi.stubEnv('VITE_SERVING_POLICY_URL', 'https://gateway.example.com/plugins/serving_policy/')
+    try {
+      const connect = buildConsoleContentSecurityPolicy().split('; ').find(directive => directive.startsWith('connect-src '))
+      expect(connect).toContain('https://gateway.example.com')
+      expect(connect).not.toContain('https://plugin.eu.capgo.app')
+    }
+    finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('rejects a missing CSP declaration instead of producing incomplete deployment headers', () => {
+    expect(() => withConsoleContentSecurityPolicy('/*\n  X-Content-Type-Options: nosniff\n')).toThrow()
   })
 })

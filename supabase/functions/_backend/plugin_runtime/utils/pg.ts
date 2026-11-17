@@ -426,9 +426,11 @@ function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
  */
 export function getReadReplicaBinding(c: Context): string | null {
   const policy = requestServingPolicy(c)
-  const route = policy && isRestrictedServingPolicy(policy)
-    ? findReadReplicaRoute(c, getClientDbRegionSB(c))
-    : findRegionalReadReplicaRoute(c, getClientDbRegionSB(c))
+  if (policy && isRestrictedServingPolicy(policy)) {
+    const source = c.get('databaseSource')
+    return READ_REPLICA_ROUTES.find(route => route.binding === source && policy.regions.includes(route.region))?.binding ?? null
+  }
+  const route = findRegionalReadReplicaRoute(c, getClientDbRegionSB(c))
   if (route)
     return route.binding
   return isLocalWorkerEnv(c) && existInEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL')
