@@ -56,7 +56,15 @@ describe('native build concurrency limits', () => {
     mockLogPgError.mockReset()
     mockGetEnv.mockReset()
     mockSendEventToTracking.mockReset()
-    mockGetEnv.mockImplementation((_c: unknown, key: string) => key === 'WEBAPP_URL' ? 'https://console.capgo.app/' : undefined)
+    mockGetEnv.mockImplementation((_c: unknown, key: string) => {
+      if (key === 'WEBAPP_URL')
+        return 'https://console.capgo.app/'
+      if (key === 'SIMULATOR_ACCESS_KEY')
+        return 'host-key'
+      if (key === 'SIMULATOR_ORIGIN')
+        return 'https://host.test'
+      return undefined
+    })
     mockSendEventToTracking.mockResolvedValue(undefined)
   })
 
@@ -90,7 +98,7 @@ describe('native build concurrency limits', () => {
     expect(client.query).toHaveBeenCalledWith('BEGIN')
     expect(client.query).toHaveBeenCalledWith('COMMIT')
     expect(client.query).not.toHaveBeenCalledWith('ROLLBACK')
-    expect(client.release).toHaveBeenCalledTimes(2)
+    expect(client.release).toHaveBeenCalledTimes(3)
     expect(mockCloseClient).toHaveBeenCalledWith(context, pool)
     expect(mockSendEventToTracking).not.toHaveBeenCalled()
   })
@@ -119,7 +127,7 @@ describe('native build concurrency limits', () => {
 
     expect(client.query).toHaveBeenCalledWith('ROLLBACK')
     expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE public.build_requests'), expect.anything())
-    expect(client.release).toHaveBeenCalledTimes(2)
+    expect(client.release).toHaveBeenCalledTimes(3)
     expect(mockSendEventToTracking).toHaveBeenCalledWith(context, expect.objectContaining({
       event: 'Native build concurrency limit reached',
       sentToBento: true,
@@ -258,6 +266,9 @@ function mockPgClient(options: {
         return { rowCount: null, rows: [] }
 
       if (query.includes('DISTINCT owner_org'))
+        return { rowCount: 0, rows: [] }
+
+      if (query.includes('owner_org = $1::uuid') && query.includes('emulator_id IS NOT NULL'))
         return { rowCount: 0, rows: [] }
 
       if (query.includes('emulator_id') && query.includes('device_stopped_at'))
