@@ -708,6 +708,52 @@ $$;
 ALTER FUNCTION "public"."transfer_app"("p_app_id" character varying, "p_new_org_id" "uuid") OWNER TO "postgres";
 
 -- ---------------------------------------------------------------------------
+-- 2h. Ownership history is backend-controlled
+-- ---------------------------------------------------------------------------
+-- apps.created_at and apps.transfer_history now delimit billable ownership
+-- segments (cron_stat_app accrues from them). Clients could edit both through
+-- the console's apps writes (an owner moving created_at into the future would
+-- stop all accrual). Only internal roles and transfer_app may change them; a
+-- client insert gets the real creation time and an empty history.
+CREATE OR REPLACE FUNCTION public.guard_apps_ownership_history()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+BEGIN
+  IF public.is_internal_request_role(public.current_request_role())
+    OR pg_catalog.current_setting('capgo.allow_owner_org_transfer', true) = 'true' THEN
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    NEW.created_at := pg_catalog.now();
+    NEW.transfer_history := '{}';
+    RETURN NEW;
+  END IF;
+
+  IF NEW.created_at IS DISTINCT FROM OLD.created_at
+    OR NEW.transfer_history IS DISTINCT FROM OLD.transfer_history THEN
+    RAISE EXCEPTION 'APP_OWNERSHIP_HISTORY_CLIENT_WRITE_DENIED'
+      USING ERRCODE = '42501',
+        DETAIL = 'apps.created_at and apps.transfer_history are set by the backend and transfer_app().';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION public.guard_apps_ownership_history() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.guard_apps_ownership_history() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.guard_apps_ownership_history() FROM anon, authenticated;
+
+DROP TRIGGER IF EXISTS guard_apps_ownership_history ON public.apps;
+CREATE TRIGGER guard_apps_ownership_history
+BEFORE INSERT OR UPDATE OF created_at, transfer_history ON public.apps
+FOR EACH ROW EXECUTE FUNCTION public.guard_apps_ownership_history();
+
+-- ---------------------------------------------------------------------------
 -- 3. Org billing metrics read storage from byte-hours
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.calculate_org_metrics_cache_entry(

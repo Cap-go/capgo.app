@@ -490,8 +490,9 @@ const MAX_UNFINISHED_PREVIOUS_CYCLES = 3
 /**
  * Records the previous cycles' hours up to their end until a refresh that calculated past that end
  * has done it (its watermark): the interval between a cycle's last refresh and its rollover is only
- * recorded then, however late the next refresh comes. Walks back through consecutive unfinished
- * cycles (a gap across several rollovers), stopping at the first finalized one. Used by live
+ * recorded then, however late the next refresh comes. Walks back through consecutive previous
+ * cycles (a gap across several rollovers), finalizing every unfinished one and skipping finalized
+ * ones (a retry after an older cycle failed still reaches it), up to a bound. Used by live
  * refreshes, the deletion finalizer and the former-owner finalizer.
  */
 async function finalizePreviousCycle(
@@ -515,9 +516,9 @@ async function finalizePreviousCycle(
     if (options.accrualStart && parseTimestampMs(options.accrualStart) >= previousEndMs)
       return
     const finalizedAt = await readSegmentRefreshedAt(c, pg, options.appId, options.ownerOrg, previous.cycle_start, options.accrualStart)
-    if (finalizedAt && parseTimestampMs(finalizedAt) >= previousEndMs)
-      return
-    await replaceCycleStorageHourly(c, pg, events, {
+    // A finalized cycle is skipped, not a stop: a retry after an older cycle failed still reaches it.
+    if (!finalizedAt || parseTimestampMs(finalizedAt) < previousEndMs) {
+      await replaceCycleStorageHourly(c, pg, events, {
       appId: options.appId,
       ownerOrg: options.ownerOrg,
       cycleStart: previous.cycle_start,
@@ -529,7 +530,8 @@ async function finalizePreviousCycle(
       requireCurrentOwner: options.requireCurrentOwner,
       appUuid: options.appUuid,
       transferCount: options.transferCount,
-    })
+      })
+    }
     laterCycleStart = previous.cycle_start
   }
 }

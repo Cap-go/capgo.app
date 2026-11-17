@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(36);
+SELECT plan(39);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -542,6 +542,29 @@ SELECT
             WHERE message->'payload'->>'appId' = 'com.test.gbhours.lastbundle'
         ),
         'stats_jobs refreshes an idle app after its last bundle was removed'
+    );
+
+-- Ownership history (billing accrual start) is backend-controlled.
+SELECT set_config('request.jwt.claim.role', 'authenticated', true);
+SELECT
+    throws_ok(
+        $$UPDATE public.apps SET created_at = now() + interval '10 years' WHERE app_id = 'com.test.gbhours.live'$$,
+        '42501',
+        'APP_OWNERSHIP_HISTORY_CLIENT_WRITE_DENIED',
+        'a client cannot move an app creation time'
+    );
+SELECT
+    throws_ok(
+        $$UPDATE public.apps SET transfer_history = ARRAY['{"transferred_at": "2030-01-01T00:00:00Z"}'::jsonb] WHERE app_id = 'com.test.gbhours.live'$$,
+        '42501',
+        'APP_OWNERSHIP_HISTORY_CLIENT_WRITE_DENIED',
+        'a client cannot rewrite an app transfer history'
+    );
+SELECT set_config('request.jwt.claim.role', '', true);
+SELECT
+    lives_ok(
+        $$UPDATE public.apps SET created_at = created_at - interval '1 second' WHERE app_id = 'com.test.gbhours.live'$$,
+        'the backend can still correct an app creation time'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.
