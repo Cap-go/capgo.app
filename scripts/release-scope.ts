@@ -28,7 +28,7 @@ export const componentMatchers: Record<Component, RegExp[]> = {
     ...capgoRootMatchers,
     /^\.github\/workflows\/build_and_deploy\.yml$/,
     /^\.github\/workflows\/build_mobile_ios\.yml$/,
-    /^scripts\/deploy-scope\.ts$/,
+    /^scripts\/(deploy-scope|deploy-state|deployment-state|resolve-deploy-tag)\.ts$/,
     /^scripts\/(check-read-replica-hyperdrive-schema\.sh|sync-read-replica-schema\.ts)$/,
     /^aliproxy\//,
     /^android\//,

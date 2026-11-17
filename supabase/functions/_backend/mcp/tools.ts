@@ -12,6 +12,9 @@ import { MCP_OUTPUT_SCHEMAS } from './output_schemas.ts'
 import type { McpToolName } from './output_schemas.ts'
 import { guidanceForError } from './error_guidance.ts'
 import { getSkill, listSkills, readSkillResource } from './skills.ts'
+import { buildChecklist, buildPlan, checkReadiness, latestCapacitorRelease, recommendPlugins } from './mobile_app.ts'
+import type { PlanInput, ReadinessInput } from './mobile_app.ts'
+import { mobileChecklistInputSchema, mobileReadinessInputSchema, planMobileAppInputSchema, recommendPluginsInputSchema } from './mobile_app_schemas.ts'
 
 // Ceiling for the device-selection cap of one push send or update check. Omitting limit still targets the whole audience.
 export const MAX_NOTIFICATION_TARGET_LIMIT = 100_000
@@ -1845,6 +1848,65 @@ const docsTools: McpTool[] = [
   },
 ]
 
+// ---------------------------------------------------------------------------
+// Web app to mobile app: typed guidance built from Capgo's Capacitor skills. These tools read no
+// account data and change nothing; the agent inspects the project and passes what it found.
+// ---------------------------------------------------------------------------
+const mobileAppTools: McpTool[] = [
+  {
+    name: 'capgo_plan_mobile_app',
+    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_plan_mobile_app,
+    title: 'Plan a mobile app',
+    description: 'Plan turning an existing web app, a live website or a new idea into a Capacitor iOS and Android app, end to end. Start here for any "make my website or web app a mobile app" request. '
+      + 'The hosted server cannot read files: first inspect the project yourself (package.json dependencies, devDependencies and lockfile, capacitor.config, ios/ and android/ folders, node --version, xcodebuild -version) and pass what you found. '
+      + 'Returns ordered phases (prepare, static build or scaffold, Capacitor on the latest npm release, mobile design, native plugins, run, Capgo live updates and cloud builds, store submission). Each step has commands, file changes, verify checks, who runs it, the Capgo tools to call and the capgo-skills skill to load. '
+      + 'Also returns plugin picks, run options (local simulator or emulator, physical device, Capgo app preview, Capgo cloud simulator), warnings and the next tool. Confirm the app name and app ID with the user before npx cap init. Read-only: it changes nothing.',
+    inputSchema: planMobileAppInputSchema as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'Plan a mobile app', ...READ, openWorldHint: true },
+    run: async input => textResult(buildPlan(input as unknown as PlanInput, await latestCapacitorRelease())),
+  },
+  {
+    name: 'capgo_recommend_plugins',
+    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_recommend_plugins,
+    title: 'Recommend Capacitor plugins',
+    description: 'Pick Capacitor plugins for native features: camera, files, push and local notifications, location, biometrics, social login, passkeys, in-app purchases, Apple/Google Pay, deep links, offline storage, SQLite, share, scanners, maps, contacts, calendar, health, Bluetooth, NFC, audio, video, ads, native navigation and live updates. '
+      + 'Use it when the app needs a device capability the browser cannot give it, before writing native code or adding permissions. '
+      + 'Uses official @capacitor plugins, and Capgo @capgo plugins where they cover more. Returns each package with its install command, iOS purpose-string keys and capabilities, Android permissions, store rules, docs and alternatives, plus one install command for packages not already in packages. Read-only.',
+    inputSchema: recommendPluginsInputSchema as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'Recommend Capacitor plugins', ...READ },
+    run: async (input) => {
+      const { features, platforms, packageManager, packages, includeBaseline } = input as z.infer<typeof recommendPluginsInputSchema>
+      return textResult(recommendPlugins({ features: features ?? [], platforms, packageManager, installed: packages, includeBaseline }))
+    },
+  },
+  {
+    name: 'capgo_get_mobile_checklist',
+    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_get_mobile_checklist,
+    title: 'Get mobile app checklist',
+    description: 'Get the rules a Capacitor app must meet to feel native on phones and pass App Store and Google Play review. '
+      + 'Use it while turning a web app into a mobile app (design and native setup) and again before submission (store rules); capgo_check_mobile_readiness then checks a project against these rules. '
+      + 'Sections: design (viewport-fit=cover, safe areas, Android edge-to-edge, keyboard, navigation and back button, touch targets, no website chrome, external links, offline states, icon and splash), '
+      + 'native setup (static build, bundled assets, API origins, auth redirects, permission strings, service worker, deep links, live updates), '
+      + 'Apple App Review (Developer Program, SDK deadline, 4.2 minimum functionality, account deletion, Sign in with Apple, In-App Purchase, privacy manifest, App Tracking Transparency, demo account), '
+      + 'Google Play (target API, signed App Bundle, closed testing, Data safety, Play Billing, permission declarations) and release (versions, Capgo Cloud Build, live update policy, channels). '
+      + 'Returns each rule with its severity, how to check it, the fix, the policy link and the skill to load, plus counts by severity and the conditional rules left out for traits you did not pass. Read-only.',
+    inputSchema: mobileChecklistInputSchema as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'Get mobile app checklist', ...READ },
+    run: async input => textResult(buildChecklist(input as z.infer<typeof mobileChecklistInputSchema>)),
+  },
+  {
+    name: 'capgo_check_mobile_readiness',
+    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_check_mobile_readiness,
+    title: 'Check mobile app readiness',
+    description: 'Check a Capacitor project against the mobile checklist using facts you inspected: package.json packages, capacitor.config values, viewport meta tag, safe-area CSS, Info.plist purpose strings, privacy manifest, Android targetSdk, icon, back button, service worker, live updates, and store facts (account deletion, Sign in with Apple, store billing, demo account). '
+      + 'Compares the installed Capacitor with the latest npm release. Returns ready, a verdict, the ids of blocking checks, blocker checks that need facts with how to check them, and every check with status, fix and skill. '
+      + 'Call it after each round of fixes until ready is true, then run the app on devices. Read-only.',
+    inputSchema: mobileReadinessInputSchema as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'Check mobile app readiness', ...READ, openWorldHint: true },
+    run: async input => textResult(checkReadiness(input as ReadinessInput, await latestCapacitorRelease())),
+  },
+]
+
 export const MCP_TOOLS: readonly McpTool[] = [
   ...accountTools,
   ...appTools,
@@ -1859,6 +1921,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   ...mcpEventTools,
   ...notificationTools,
   ...docsTools,
+  ...mobileAppTools,
 ].map(withValidatedOutput)
 
 export const MCP_TOOLS_BY_NAME: ReadonlyMap<string, McpTool> = new Map(MCP_TOOLS.map(tool => [tool.name, tool]))
