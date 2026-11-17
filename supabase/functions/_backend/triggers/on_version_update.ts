@@ -209,7 +209,10 @@ async function v2PathSize(c: Context, pg: PgClient, record: Database['public']['
     cloudlog({ requestId: c.get('requestId'), message: 'app_versions_meta size upserted', ...versionUpdateLogFields(record), owner_org: ownerOrg, size })
   }
   catch (errorUpdate) {
+    // The deletion path reads this size to record the bundle's removal event: acknowledging the
+    // upload without it would leave the bundle billed in GB-hours after it is deleted.
     cloudlog({ requestId: c.get('requestId'), message: 'errorUpdate', error: errorUpdate, ...versionUpdateLogFields(record), size })
+    throw simpleError('cannot_update_version_meta', 'Cannot record the bundle size', { id: record.id }, errorUpdate)
   }
   const { error } = await createStatsMeta(c, record.app_id, record.id, size)
   if (isLostStorageEvent(error)) {
@@ -333,6 +336,32 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
   }
 }
 
+/** Writes the missing removal event of a bundle from its upload event (idempotent). */
+async function closeVersionStorageLifetime(c: Context, pg: PgClient, record: Database['public']['Tables']['app_versions']['Row']) {
+  try {
+    await pg.query(
+      `INSERT INTO public.version_meta (app_id, version_id, size)
+       SELECT added.app_id, added.version_id, -added.size
+       FROM public.version_meta added
+       WHERE added.app_id = $1
+         AND added.version_id = $2
+         AND added.size > 0
+         AND NOT EXISTS (
+           SELECT 1 FROM public.version_meta removed
+           WHERE removed.app_id = added.app_id
+             AND removed.version_id = added.version_id
+             AND removed.size < 0
+         )
+       ON CONFLICT DO NOTHING`,
+      [record.app_id, record.id],
+    )
+  }
+  catch (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'error closing bundle storage lifetime', error, id: record.id })
+    throw simpleError('cannot_record_storage_event', 'Cannot record the bundle removal storage event', { id: record.id }, error)
+  }
+}
+
 async function deleteVersionDatabaseState(c: Context, pg: PgClient, record: Database['public']['Tables']['app_versions']['Row']) {
   await unlinkChannelsFromDeletedVersion(c, pg, record)
 
@@ -364,8 +393,11 @@ async function deleteVersionDatabaseState(c: Context, pg: PgClient, record: Data
     cloudlog({ requestId: c.get('requestId'), message: 'error reading version meta', error, id: record.id })
     throw simpleError('cannot_read_version_meta', 'Cannot read version metadata for deleted version', { id: record.id }, error)
   }
-  if (!data) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find version meta', id: record.id })
+  if (!data || !data.size) {
+    // No size to remove (missing or already zero metadata): still close the bundle's storage
+    // lifetime from its recorded upload event, so GB-hour billing stops at the deletion.
+    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find version meta size, closing lifetime from its upload event', id: record.id })
+    await closeVersionStorageLifetime(c, pg, record)
   }
   else {
     const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size)
@@ -470,6 +502,7 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 
 export const onVersionUpdateTestUtils = {
   getDeletedVersionAction,
+  v2PathSize,
   deleteManifest,
   unlinkChannelsFromDeletedVersion,
 }

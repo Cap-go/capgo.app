@@ -89,6 +89,7 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
   s3: {
     deleteObject,
     moveObjectToTrash,
+    getSizeDiagnostics: vi.fn(async () => ({ size: 4321, selectedCandidateKey: 'bundle.zip' })),
   },
 }))
 
@@ -187,6 +188,27 @@ describe('deleted version storage boundaries', () => {
     await expect(deleteIt(createContext(), createVersion())).rejects.toThrow()
     expect(createStatsMeta).not.toHaveBeenCalled()
     expect(moveObjectToTrash).not.toHaveBeenCalled()
+  })
+
+  it('closes the storage lifetime from the upload event when the size is missing', async () => {
+    versionMeta.value = null
+    const response = await deleteIt(createContext(), createVersion())
+    expect(response.status).toBe(200)
+    const statements = pgQuery.mock.calls.map(([sql]) => sql as string)
+    expect(statements.some(sql => sql.includes('INSERT INTO public.version_meta') && sql.includes('-added.size'))).toBe(true)
+    expect(createStatsMeta).not.toHaveBeenCalled()
+  })
+
+  it('fails the upload job when the bundle size cannot be saved', async () => {
+    pgQuery.mockImplementation(async (query: string) => {
+      if (query.includes('INSERT INTO public.app_versions_meta'))
+        throw new Error('connection reset')
+      return { rows: [], rowCount: 0 }
+    })
+    const { onVersionUpdateTestUtils } = await import('../supabase/functions/_backend/triggers/on_version_update.ts')
+    await expect(onVersionUpdateTestUtils.v2PathSize(createContext(), { query: pgQuery } as any, createVersion(), createVersion().r2_path)).rejects.toThrow()
+    // No storage event without the size the removal will need.
+    expect(createStatsMeta).not.toHaveBeenCalled()
   })
 
   it('treats an already zero size as recorded', async () => {
