@@ -569,6 +569,11 @@ async function captureRouteScreenshot(
     page.setDefaultTimeout(visualDiffActionTimeoutMs)
     page.setDefaultNavigationTimeout(visualDiffActionTimeoutMs)
 
+    await page.route('**/serving_policy/**', route => route.fulfill({
+      json: { app_id: decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop() ?? ''), active: false },
+    }))
+    await route.beforeNavigate?.(page)
+
     if (route.auth) {
       console.log(`[visual-diff] logging in for ${phase} ${route.slug}`)
       await login(page, route.authCredentials)

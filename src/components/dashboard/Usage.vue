@@ -32,7 +32,6 @@ import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
-import { useChartCardCompact } from './chartCardDensity'
 import DeploymentStatsCard from './DeploymentStatsCard.vue'
 import UpdateStatsCard from './UpdateStatsCard.vue'
 import UsageCard from './UsageCard.vue'
@@ -46,23 +45,18 @@ const props = defineProps<{
 
 const plans = ref<Plan[]>([])
 const { t } = useI18n()
-const compact = useChartCardCompact()
 
 const noData = computed(() => false)
-const storageUsageMode = ref<'total' | 'hourly'>('total')
-const storageUnit = computed(() => storageUsageMode.value === 'total' ? t('units-gb') : t('units-gb-hours'))
 // const noData = computed(() => data.value.mau.length == 0)
 
 const data = ref({
   mau: [] as number[],
-  storage: [] as number[],
   storageByteHours: [] as number[],
   bandwidth: [] as number[],
 })
 
 const dataByApp = ref({
   mau: {} as { [appId: string]: number[] },
-  storage: {} as { [appId: string]: number[] },
   storageByteHours: {} as { [appId: string]: number[] },
   bandwidth: {} as { [appId: string]: number[] },
 })
@@ -71,10 +65,11 @@ const appNames = ref<{ [appId: string]: string }>({})
 
 // Create computed properties to ensure reactivity when switching between modes
 const mauData = computed(() => data.value.mau)
-const storageData = computed(() => storageUsageMode.value === 'total' ? data.value.storage : data.value.storageByteHours)
+// Storage is billed in GB-hours: the chart shows GB-hours, never the bytes stored right now.
+const storageData = computed(() => data.value.storageByteHours)
 const bandwidthData = computed(() => data.value.bandwidth)
 const mauDataByApp = computed(() => dataByApp.value.mau)
-const storageDataByApp = computed(() => storageUsageMode.value === 'total' ? dataByApp.value.storage : dataByApp.value.storageByteHours)
+const storageDataByApp = computed(() => dataByApp.value.storageByteHours)
 const bandwidthDataByApp = computed(() => dataByApp.value.bandwidth)
 
 const reloadTrigger = ref(0) // Increment this to trigger reload in all charts
@@ -82,14 +77,12 @@ const reloadTrigger = ref(0) // Increment this to trigger reload in all charts
 // Per-org cache for 30-day data: Map<orgId, cachedData>
 const cacheByOrg = new Map<string, {
   mau: number[]
-  storage: number[]
   storageByteHours: number[]
   bandwidth: number[]
 }>()
 
 const cacheByOrgByApp = new Map<string, {
   mau: { [appId: string]: number[] }
-  storage: { [appId: string]: number[] }
   storageByteHours: { [appId: string]: number[] }
   bandwidth: { [appId: string]: number[] }
 }>()
@@ -473,10 +466,8 @@ const storageLimitHours = computed(() => {
   return Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000))
 })
 
+// A plan with S GB of storage includes S x hours-in-cycle GB-hours.
 const storageLimits = computed(() => {
-  if (storageUsageMode.value === 'total')
-    return allLimits.value.storage
-
   return Object.fromEntries(
     Object.entries(allLimits.value.storage as Record<string, number>).map(([planName, value]) => [
       planName,
@@ -521,7 +512,7 @@ async function getAppStats(rangeStart: Date, rangeEnd: Date) {
 }
 
 // Helper function to filter 30-day data to billing period
-function filterToBillingPeriod(fullData: { mau: number[], storage: number[], storageByteHours: number[], bandwidth: number[] }, last30DaysStart: Date, billingStart: Date) {
+function filterToBillingPeriod(fullData: { mau: number[], storageByteHours: number[], bandwidth: number[] }, last30DaysStart: Date, billingStart: Date) {
   const currentDate = normalizeToUtcStartOfDay()
 
   // Calculate billing period length - use getDaysBetweenDates for consistency
@@ -531,7 +522,6 @@ function filterToBillingPeriod(fullData: { mau: number[], storage: number[], sto
   // Create arrays for billing period length
   const billingData = {
     mau: Array.from({ length: currentBillingDay }).fill(undefined) as number[],
-    storage: Array.from({ length: currentBillingDay }).fill(undefined) as number[],
     storageByteHours: Array.from({ length: currentBillingDay }).fill(undefined) as number[],
     bandwidth: Array.from({ length: currentBillingDay }).fill(undefined) as number[],
   }
@@ -545,7 +535,6 @@ function filterToBillingPeriod(fullData: { mau: number[], storage: number[], sto
       const billingIndex = getDaysBetweenDates(billingStart, dataDate)
       if (billingIndex >= 0 && billingIndex < currentBillingDay) {
         billingData.mau[billingIndex] = fullData.mau[i]
-        billingData.storage[billingIndex] = fullData.storage[i]
         billingData.storageByteHours[billingIndex] = fullData.storageByteHours[i]
         billingData.bandwidth[billingIndex] = fullData.bandwidth[i]
       }
@@ -583,20 +572,17 @@ async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => 
       if (cachedDataByApp && Object.keys(cachedDataByApp.mau).length > 0) {
         const newDataByApp = {
           mau: {} as { [appId: string]: number[] },
-          storage: {} as { [appId: string]: number[] },
           storageByteHours: {} as { [appId: string]: number[] },
           bandwidth: {} as { [appId: string]: number[] },
         }
         Object.keys(cachedDataByApp.mau).forEach((appId) => {
           const appData = {
             mau: cachedDataByApp.mau[appId],
-            storage: cachedDataByApp.storage[appId],
             storageByteHours: cachedDataByApp.storageByteHours[appId],
             bandwidth: cachedDataByApp.bandwidth[appId],
           }
           const filteredAppData = filterToBillingPeriod(appData, last30DaysStart, billingStart)
           newDataByApp.mau[appId] = filteredAppData.data.mau
-          newDataByApp.storage[appId] = filteredAppData.data.storage
           newDataByApp.storageByteHours[appId] = filteredAppData.data.storageByteHours
           newDataByApp.bandwidth[appId] = filteredAppData.data.bandwidth
         })
@@ -607,7 +593,6 @@ async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => 
       // Show all 30 days from cache - deep copy to ensure reactivity
       data.value = {
         mau: [...cachedData.mau],
-        storage: [...cachedData.storage],
         storageByteHours: [...cachedData.storageByteHours],
         bandwidth: [...cachedData.bandwidth],
       }
@@ -615,13 +600,11 @@ async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => 
         // Deep copy the by-app data to ensure reactivity
         const newDataByApp = {
           mau: {} as { [appId: string]: number[] },
-          storage: {} as { [appId: string]: number[] },
           storageByteHours: {} as { [appId: string]: number[] },
           bandwidth: {} as { [appId: string]: number[] },
         }
         Object.keys(cachedDataByApp.mau).forEach((appId) => {
           newDataByApp.mau[appId] = [...cachedDataByApp.mau[appId]]
-          newDataByApp.storage[appId] = [...cachedDataByApp.storage[appId]]
           newDataByApp.storageByteHours[appId] = [...cachedDataByApp.storageByteHours[appId]]
           newDataByApp.bandwidth[appId] = [...cachedDataByApp.bandwidth[appId]]
         })
@@ -641,13 +624,12 @@ async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => 
     return {
       ...item,
       date: itemDate,
-    } as { mau: number, storage: number, storage_byte_hours?: number, bandwidth: number, date: Date }
+    } as { mau: number, storage_byte_hours?: number, bandwidth: number, date: Date }
   })
 
   // Create 30-day arrays
   const full30DayData = {
     mau: Array.from({ length: 30 }).fill(undefined) as number[],
-    storage: Array.from({ length: 30 }).fill(undefined) as number[],
     storageByteHours: Array.from({ length: 30 }).fill(undefined) as number[],
     bandwidth: Array.from({ length: 30 }).fill(undefined) as number[],
   }
@@ -657,7 +639,6 @@ async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => 
     const index = getDaysBetweenDates(last30DaysStart, item.date)
     if (index >= 0 && index < 30) {
       full30DayData.mau[index] = item.mau
-      full30DayData.storage[index] = bytesToGb(item.storage ?? 0, 2)
       full30DayData.storageByteHours[index] = bytesToGb(item.storage_byte_hours ?? 0, 2)
       full30DayData.bandwidth[index] = bytesToGb(item.bandwidth ?? 0, 2)
     }
@@ -670,7 +651,6 @@ async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => 
   appNames.value = appNamesMap
   const full30DayDataByApp = {
     mau: {} as { [appId: string]: number[] },
-    storage: {} as { [appId: string]: number[] },
     storageByteHours: {} as { [appId: string]: number[] },
     bandwidth: {} as { [appId: string]: number[] },
   }
@@ -691,7 +671,6 @@ async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => 
     // Process each app's data for 30 days
     Object.keys(appGroups).forEach((appId) => {
       full30DayDataByApp.mau[appId] = Array.from({ length: 30 }).fill(undefined) as number[]
-      full30DayDataByApp.storage[appId] = Array.from({ length: 30 }).fill(undefined) as number[]
       full30DayDataByApp.storageByteHours[appId] = Array.from({ length: 30 }).fill(undefined) as number[]
       full30DayDataByApp.bandwidth[appId] = Array.from({ length: 30 }).fill(undefined) as number[]
 
@@ -699,7 +678,6 @@ async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => 
         const index = getDaysBetweenDates(last30DaysStart, item.date)
         if (index >= 0 && index < 30) {
           full30DayDataByApp.mau[appId][index] = item.mau
-          full30DayDataByApp.storage[appId][index] = bytesToGb(item.storage ?? 0, 2)
           full30DayDataByApp.storageByteHours[appId][index] = bytesToGb(item.storage_byte_hours ?? 0, 2)
           full30DayDataByApp.bandwidth[appId][index] = bytesToGb(item.bandwidth ?? 0, 2)
         }
@@ -721,20 +699,17 @@ async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => 
     if (Object.keys(full30DayDataByApp.mau).length > 0) {
       const newDataByApp = {
         mau: {} as { [appId: string]: number[] },
-        storage: {} as { [appId: string]: number[] },
         storageByteHours: {} as { [appId: string]: number[] },
         bandwidth: {} as { [appId: string]: number[] },
       }
       Object.keys(full30DayDataByApp.mau).forEach((appId) => {
         const appData = {
           mau: full30DayDataByApp.mau[appId],
-          storage: full30DayDataByApp.storage[appId],
           storageByteHours: full30DayDataByApp.storageByteHours[appId],
           bandwidth: full30DayDataByApp.bandwidth[appId],
         }
         const filteredAppData = filterToBillingPeriod(appData, last30DaysStart, billingStart)
         newDataByApp.mau[appId] = filteredAppData.data.mau
-        newDataByApp.storage[appId] = filteredAppData.data.storage
         newDataByApp.storageByteHours[appId] = filteredAppData.data.storageByteHours
         newDataByApp.bandwidth[appId] = filteredAppData.data.bandwidth
       })
@@ -750,13 +725,11 @@ async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => 
 async function loadDemoData() {
   // Generate demo data for payment failed state
   const demoMau = generateDemoMauData(30)
-  const demoStorage = generateDemoStorageData(30).map(v => v / 1000) // Convert MB to GB
-  const demoStorageByteHours = demoStorage.map(v => v * 24)
+  const demoStorageByteHours = generateDemoStorageData(30).map(v => v / 1000 * 24) // MB stored all day -> GB-hours
   const demoBandwidth = generateDemoBandwidthData(30)
 
   data.value = {
     mau: demoMau,
-    storage: demoStorage,
     storageByteHours: demoStorageByteHours,
     bandwidth: demoBandwidth,
   }
@@ -766,10 +739,6 @@ async function loadDemoData() {
     mau: {
       'demo-app-1': generateDemoMauData(30).map(v => Math.round(v * 0.6)),
       'demo-app-2': generateDemoMauData(30).map(v => Math.round(v * 0.4)),
-    },
-    storage: {
-      'demo-app-1': generateDemoStorageData(30).map(v => v / 1000 * 0.6),
-      'demo-app-2': generateDemoStorageData(30).map(v => v / 1000 * 0.4),
     },
     storageByteHours: {
       'demo-app-1': generateDemoStorageData(30).map(v => v / 1000 * 0.6 * 24),
@@ -841,8 +810,8 @@ watch([currentScopeKey, () => props.forceDemo], () => {
 
 watch([dashboard, () => main.dashboardOrgId, currentScopeKey, () => props.forceDemo], (_values, previous) => {
   if (previous && previous[2] !== currentScopeKey.value) {
-    data.value = { mau: [], storage: [], storageByteHours: [], bandwidth: [] }
-    dataByApp.value = { mau: {}, storage: {}, storageByteHours: {}, bandwidth: {} }
+    data.value = { mau: [], storageByteHours: [], bandwidth: [] }
+    dataByApp.value = { mau: {}, storageByteHours: {}, bandwidth: {} }
     appNames.value = {}
   }
   void loadData(true)
@@ -1114,7 +1083,7 @@ onBeforeUnmount(() => {
     />
     <UsageCard
       :limits="storageLimits" :colors="colors.blue" :data="storageData" :data-by-app="storageDataByApp" :app-names="appNames" :accumulated="useBillingPeriod && showCumulative"
-      :title="t('Storage')" :unit="storageUnit"
+      :title="t('Storage')" :unit="t('units-gb-hours')"
       :use-billing-period="useBillingPeriod"
       :is-loading="isLoading"
       :is-refreshing="isRefreshing"
@@ -1122,33 +1091,7 @@ onBeforeUnmount(() => {
       :force-demo="forceDemo"
       :app-id="appId"
       class="col-span-full sm:col-span-6 xl:col-span-4"
-    >
-      <template #header>
-        <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <h2 class="min-w-0 font-semibold leading-tight text-slate-900 dark:text-white" :class="compact ? 'text-base' : 'text-xl sm:text-2xl'">
-            {{ t('Storage') }}
-          </h2>
-          <div class="inline-flex shrink-0 items-center rounded-lg bg-slate-100 p-1 dark:bg-slate-800" :aria-label="t('storage-chart-mode')">
-            <button
-              type="button"
-              class="h-9 min-h-9 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors"
-              :class="storageUsageMode === 'total' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
-              @click="storageUsageMode = 'total'"
-            >
-              {{ t('storage-total') }}
-            </button>
-            <button
-              type="button"
-              class="h-9 min-h-9 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors"
-              :class="storageUsageMode === 'hourly' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
-              @click="storageUsageMode = 'hourly'"
-            >
-              {{ t('storage-hourly') }}
-            </button>
-          </div>
-        </div>
-      </template>
-    </UsageCard>
+    />
     <UsageCard
       :limits="allLimits.bandwidth" :colors="colors.orange" :data="bandwidthData" :data-by-app="bandwidthDataByApp" :app-names="appNames" :accumulated="useBillingPeriod && showCumulative"
       :title="t('Bandwidth')" :unit="t('units-gb')"

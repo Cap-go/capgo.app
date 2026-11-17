@@ -18,7 +18,10 @@ const mocks = vi.hoisted(() => ({
   orgUpdates: vi.fn(),
   fetch: vi.fn(),
   log: vi.fn(),
+  queueInvoiceEmail: vi.fn(),
 }))
+
+vi.mock('../supabase/functions/_backend/utils/invoice_email.ts', () => ({ queueInvoiceEmail: mocks.queueInvoiceEmail }))
 
 vi.mock('hono/adapter', async importOriginal => ({
   ...await importOriginal<typeof import('hono/adapter')>(),
@@ -35,7 +38,7 @@ vi.mock('../supabase/functions/_backend/utils/stripe.ts', async importOriginal =
 vi.mock('../supabase/functions/_backend/utils/pg.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>(),
   closeClient: () => undefined,
-  getPgClient: async () => ({ query: mocks.query }),
+  getPgClient: async () => ({ query: mocks.query, connect: async () => ({ query: mocks.query, release: vi.fn() }) }),
 }))
 // pg.ts is part of an import cycle, so modules loaded while it initializes keep the real
 // getPgClient; route RLS-context queries to the same fake explicitly.
@@ -94,7 +97,7 @@ function customerEvent(type: 'customer.created' | 'customer.updated' = 'customer
   }
 }
 
-function database(account: BillingAccount, linked = true, storedAccount: BillingAccount = account) {
+function database(account: BillingAccount, linked = true, storedAccount: BillingAccount = account, payment?: { status: string, subscription_id: string, paid_at: string | null }) {
   mocks.query.mockImplementation(async (text: string, values: unknown[] = []) => {
     const table = /(?:FROM|UPDATE|INTO)\s+public\.(\w+)/.exec(text)?.[1]
     if (!table)
@@ -112,7 +115,14 @@ function database(account: BillingAccount, linked = true, storedAccount: Billing
       rows = [{ billing_account: storedAccount }]
     }
     else if (table === 'stripe_info' && text.includes('SELECT *')) {
-      rows = [{ customer_id: org.customer_id, billing_account: storedAccount }]
+      rows = [{ customer_id: org.customer_id, billing_account: storedAccount, ...payment }]
+    }
+    else if (table === 'stripe_info' && text.includes('FOR UPDATE')) {
+      rows = payment ? [{ ...payment }] : []
+    }
+    else if (table === 'stripe_info' && text.includes("SET status = 'succeeded'") && payment) {
+      payment.status = 'succeeded'
+      payment.paid_at ??= String(values[1])
     }
     return { rows: text.includes('to_json(q.*)') ? rows.map(row => ({ row })) : rows }
   })
@@ -141,6 +151,7 @@ async function deliver(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.queueInvoiceEmail.mockResolvedValue(undefined)
   mocks.fetch.mockImplementation(async () => Response.json({ results: 1, failed: 0 }))
   vi.stubGlobal('fetch', mocks.fetch)
   mocks.retrieve.mockResolvedValue({ id: org.customer_id, object: 'customer', email: org.management_email })
@@ -168,6 +179,32 @@ function chargeEvent(type: 'charge.failed' | 'charge.succeeded' = 'charge.failed
 
 describe.each(['ee', 'us'] as const)('%s billing notifications', (account) => {
   beforeEach(() => database(account))
+
+  it.each(['invoice.paid', 'invoice.payment_succeeded'])('commits paid access before retrying a failed email enqueue for %s', async (type) => {
+    const payment = { status: 'created', subscription_id: 'sub_synthetic_invoice', paid_at: null as string | null }
+    database(account, true, account, payment)
+    const event = {
+      id: 'evt_synthetic_invoice', object: 'event', type, created: 1_760_000_000,
+      data: { object: {
+        id: 'in_synthetic', object: 'invoice', customer: org.customer_id,
+        number: 'EXAMPLE-01', status: 'paid', amount_paid: 9900,
+        parent: { type: 'subscription_details', subscription_details: { subscription: payment.subscription_id } },
+      } },
+    }
+    const env = { ...environment(), BENTO_SECRET_KEY: '' }
+    mocks.queueInvoiceEmail.mockImplementationOnce(async () => {
+      expect(payment.status).toBe('succeeded')
+      expect(mocks.query.mock.calls.some(([sql]) => sql === 'COMMIT')).toBe(true)
+      throw new Error('Invoice email outbox temporarily unavailable')
+    })
+    expect((await deliver(account, event, { env })).status).toBeGreaterThanOrEqual(500)
+    expect(payment.status).toBe('succeeded')
+    expect(payment.paid_at).toBe(new Date(event.created * 1000).toISOString())
+    expect(mocks.queueInvoiceEmail).toHaveBeenCalledOnce()
+    expect((await deliver(account, event, { env })).status).toBe(200)
+    expect(mocks.queueInvoiceEmail).toHaveBeenCalledTimes(2)
+    expect(mocks.query.mock.calls.filter(([sql]) => sql.includes("SET status = 'succeeded'"))).toHaveLength(1)
+  })
 
   it('alerts every billing recipient even when the org has usage credits', async () => {
     const response = await deliver(account, chargeEvent())
