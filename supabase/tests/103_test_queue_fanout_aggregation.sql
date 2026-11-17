@@ -34,7 +34,7 @@ SELECT
     v.name,
     v.org,
     'com.test.fanout.' || v.name || '.' || replace(gen_random_uuid()::text, '-', '')
-FROM (VALUES ('q1', 'q'), ('q2', 'q'), ('q3', 'q'), ('q4', 'q'), ('d1', 'q'), ('r1', 'r')) AS v (name, org);
+FROM (VALUES ('q1', 'q'), ('q2', 'q'), ('q3', 'q'), ('q4', 'q'), ('d1', 'q'), ('c1', 'q'), ('r1', 'r')) AS v (name, org);
 
 INSERT INTO public.apps (app_id, icon_url, owner_org, name)
 SELECT fa.app_id, '', fan_org.org_id, fa.name
@@ -50,7 +50,7 @@ INSERT INTO public.channels (app_id, name, version, public, ios, android, owner_
 SELECT v.app_id, 'production', v.id, false, true, true, v.owner_org, tests.get_supabase_uid('fanout_user')
 FROM public.app_versions AS v
 INNER JOIN fanout_apps AS fa ON v.app_id = fa.app_id
-WHERE fa.name IN ('q2', 'd1');
+WHERE fa.name IN ('q2', 'd1', 'c1');
 
 CREATE TEMP VIEW fanout_count_msgs AS
 SELECT fa.name, m.message
@@ -176,31 +176,30 @@ SELECT is(
 -- cleanup_old_channel_devices: recount only rewrites apps that are wrong
 -- ---------------------------------------------------------------------------
 
+-- Only the dedicated fanout fixtures are touched; shared seed apps are left alone.
 UPDATE public.apps AS a
 SET channel_device_count = (SELECT count(*) FROM public.channel_devices AS cd WHERE cd.app_id = a.app_id)
-WHERE a.channel_device_count IS DISTINCT FROM (SELECT count(*) FROM public.channel_devices AS cd WHERE cd.app_id = a.app_id);
+WHERE a.app_id IN (SELECT app_id FROM fanout_apps);
 
 INSERT INTO public.channel_devices (channel_id, app_id, device_id, owner_org, is_self_set, created_at, updated_at)
-SELECT 2, 'com.demo.app', 'fanout-stale-self-set', owner_org, true, now() - interval '100 days', now() - interval '100 days'
-FROM public.apps WHERE app_id = 'com.demo.app';
+SELECT c.id, c.app_id, 'fanout-stale-self-set', c.owner_org, true, now() - interval '100 days', now() - interval '100 days'
+FROM public.channels AS c
+INNER JOIN fanout_apps AS fa ON c.app_id = fa.app_id AND fa.name = 'c1';
 
-UPDATE public.apps SET channel_device_count = 999 WHERE app_id = 'com.demo.app';
+UPDATE public.apps SET channel_device_count = 999
+WHERE app_id = (SELECT app_id FROM fanout_apps WHERE name = 'c1');
 
 CREATE TEMP TABLE fanout_ctids AS
 SELECT a.app_id, a.ctid AS row_ctid
 FROM public.apps AS a
-WHERE NOT EXISTS (
-    SELECT 1 FROM public.channel_devices AS cd
-    WHERE cd.app_id = a.app_id
-      AND cd.is_self_set
-      AND COALESCE(cd.updated_at, cd.created_at) < now() - interval '90 days'
-);
+INNER JOIN fanout_apps AS fa ON a.app_id = fa.app_id
+WHERE fa.name <> 'c1';
 
 SELECT public.cleanup_old_channel_devices();
 
 SELECT is(
-    (SELECT channel_device_count FROM public.apps WHERE app_id = 'com.demo.app'),
-    (SELECT count(*) FROM public.channel_devices WHERE app_id = 'com.demo.app'),
+    (SELECT channel_device_count FROM public.apps WHERE app_id = (SELECT app_id FROM fanout_apps WHERE name = 'c1')),
+    0::bigint,
     'cleanup recount fixes the drifted counter'
 );
 
