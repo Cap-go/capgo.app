@@ -694,6 +694,10 @@ describe('hosted MCP errors always give a way out', () => {
       'capgo_subscribe_events',
       'capgo_list_event_subscriptions',
       'capgo_unsubscribe_events',
+      'capgo_plan_mobile_app',
+      'capgo_recommend_plugins',
+      'capgo_get_mobile_checklist',
+      'capgo_check_mobile_readiness',
     ])
     const tools = (listTools() as Array<{ name: string, inputSchema: Record<string, any> }>).filter(tool => !localTools.has(tool.name))
     for (const tool of tools) {

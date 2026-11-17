@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { skillContentSchema, skillSchema } from './skills.ts'
+import { mobileChecklistOutputSchema, mobileReadinessOutputSchema, planMobileAppOutputSchema, recommendPluginsOutputSchema } from './mobile_app_schemas.ts'
 
 const text = (description: string) => z.string().describe(description)
 const number = (description: string) => z.number().describe(description)
@@ -2427,6 +2428,10 @@ export const MCP_OUTPUT_SCHEMAS = {
     }).passthrough(),
     'Result of one agent-device command on a running simulator.',
   ),
+  capgo_plan_mobile_app: planMobileAppOutputSchema,
+  capgo_recommend_plugins: recommendPluginsOutputSchema,
+  capgo_get_mobile_checklist: mobileChecklistOutputSchema,
+  capgo_check_mobile_readiness: mobileReadinessOutputSchema,
 } satisfies Record<string, z.ZodObject>
 
 export type McpToolName = keyof typeof MCP_OUTPUT_SCHEMAS
