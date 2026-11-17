@@ -119,9 +119,10 @@ describe('on_app_delete trigger', () => {
 
       expect(response.status).toBe(200)
       const replace = pgQuery.mock.calls.find(([sql]) => sql.includes('replace_app_storage_hourly'))
-      expect(replace?.[1]?.slice(0, 5)).toEqual(['com.test.delete', 'org-1', '2026-01-01', '2026-02-01', '2026-02-01'])
+      // Whole-cycle segment: the app existed since the cycle start.
+      expect(replace?.[1]?.slice(0, 7)).toEqual(['com.test.delete', 'org-1', '2026-01-01', '2026-02-01', '2026-02-01', '2026-01-01T00:00:00.000Z', true])
       // 100 bytes for the 12 hours between the upload and the deletion.
-      expect(JSON.parse(replace?.[1]?.[5] as string)).toEqual([{ cycle_start: '2026-01-01', date: '2026-01-10', storage_byte_hours: 1200 }])
+      expect(JSON.parse(replace?.[1]?.[7] as string)).toEqual([{ cycle_start: '2026-01-01', date: '2026-01-10', storage_byte_hours: 1200 }])
     }
     finally {
       pgQuery.mockReset()

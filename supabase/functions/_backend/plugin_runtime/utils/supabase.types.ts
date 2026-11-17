@@ -1258,6 +1258,7 @@ export type Database = {
           cycle_start: string
           date: string
           owner_org: string
+          segment_start: string
           storage_byte_hours: number
           updated_at: string
         }
@@ -1267,6 +1268,7 @@ export type Database = {
           cycle_start: string
           date: string
           owner_org: string
+          segment_start?: string
           storage_byte_hours?: number
           updated_at?: string
         }
@@ -1276,6 +1278,7 @@ export type Database = {
           cycle_start?: string
           date?: string
           owner_org?: string
+          segment_start?: string
           storage_byte_hours?: number
           updated_at?: string
         }
@@ -5211,7 +5214,9 @@ export type Database = {
           p_cycle_start_day: string
           p_end_exclusive_day: string
           p_owner_org: string
+          p_replace_legacy: boolean
           p_rows: Json
+          p_segment_start: string
           p_written_at: string
         }
         Returns: undefined

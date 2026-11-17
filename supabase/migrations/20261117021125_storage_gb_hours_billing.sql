@@ -35,12 +35,24 @@ DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
 ALTER TABLE public.daily_storage_hourly ADD COLUMN IF NOT EXISTS cycle_start date;
 UPDATE public.daily_storage_hourly SET cycle_start = date WHERE cycle_start IS NULL;
 ALTER TABLE public.daily_storage_hourly ALTER COLUMN cycle_start SET NOT NULL;
+-- * segment_start: when the accruing ownership segment of the app began inside
+--   the cycle (the cycle start, the app creation, or a transfer to the org).
+--   A deleted app ID recreated by the same org within the cycle accrues in a
+--   new segment, so refreshing it never replaces the earlier incarnation's
+--   hours. Existing rows get '-infinity' (legacy whole-cycle segment), which
+--   only a whole-cycle refresh replaces.
+ALTER TABLE public.daily_storage_hourly
+ADD COLUMN IF NOT EXISTS segment_start timestamptz NOT NULL DEFAULT '-infinity';
 ALTER TABLE public.daily_storage_hourly DROP CONSTRAINT IF EXISTS daily_storage_hourly_pkey;
 ALTER TABLE public.daily_storage_hourly
-ADD CONSTRAINT daily_storage_hourly_pkey PRIMARY KEY (app_id, owner_org, cycle_start, date);
+ADD CONSTRAINT daily_storage_hourly_pkey PRIMARY KEY (app_id, owner_org, cycle_start, date, segment_start);
 
 COMMENT ON COLUMN public.daily_storage_hourly.cycle_start IS
 'UTC date of the start of the billing cycle these hours belong to.';
+
+COMMENT ON COLUMN public.daily_storage_hourly.segment_start IS
+'Start of the ownership segment that accrued these hours (cycle start, app '
+'creation or transfer); -infinity for whole-day legacy rows.';
 
 COMMENT ON TABLE public.daily_storage_hourly IS
 'Storage usage in byte-hours per app and UTC day (GB-hours x 2^30), written by '
@@ -98,12 +110,14 @@ COMMENT ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) IS
 -- ---------------------------------------------------------------------------
 -- cron_stat_app calls this with the rows it calculated from version_meta.
 -- One statement, so billing reads never see the cycle between the delete and
--- the upsert. Only rows of p_owner_org whose cycle_start is in
--- [p_cycle_start_day, p_cycle_end_day) and whose day is in
--- [p_cycle_start_day, p_end_exclusive_day) are replaced: hours of another
--- owner of the app ID and the other cycles' parts of a boundary day stay.
--- Rows with a later cycle_start inside the cycle are legacy rows
--- (cycle_start = date) of this cycle and are replaced too.
+-- the upsert. Only rows of p_owner_org and of its segment p_segment_start,
+-- whose cycle_start is in [p_cycle_start_day, p_cycle_end_day) and whose day
+-- is in [p_cycle_start_day, p_end_exclusive_day), are replaced: hours of
+-- another owner or of an earlier incarnation of the app ID, and the other
+-- cycles' parts of a boundary day, stay. A whole-cycle refresh
+-- (p_replace_legacy: the segment starts at the cycle start) also replaces this
+-- cycle's rows of earlier-starting segments: legacy rows (-infinity,
+-- cycle_start = date) and a whole-cycle segment whose anchor time moved.
 -- p_written_at is taken by the caller before it reads version_meta: a row
 -- written by a refresh that started later is never deleted or overwritten,
 -- whatever order the refreshes finish in.
@@ -113,6 +127,8 @@ CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
     p_cycle_start_day date,
     p_cycle_end_day date,
     p_end_exclusive_day date,
+    p_segment_start timestamptz,
+    p_replace_legacy boolean,
     p_rows jsonb,
     p_written_at timestamptz
 )
@@ -134,25 +150,31 @@ AS $$
       AND dsh.cycle_start < GREATEST(p_cycle_end_day, p_cycle_start_day + 1)
       AND dsh.date >= p_cycle_start_day
       AND dsh.date < p_end_exclusive_day
+      AND (
+        dsh.segment_start = p_segment_start
+        OR (p_replace_legacy AND dsh.segment_start < p_segment_start)
+      )
       AND dsh.updated_at <= p_written_at
       AND NOT EXISTS (
         SELECT 1 FROM new_rows
-        WHERE new_rows.cycle_start = dsh.cycle_start AND new_rows.date = dsh.date
+        WHERE new_rows.cycle_start = dsh.cycle_start
+          AND new_rows.date = dsh.date
+          AND dsh.segment_start = p_segment_start
       )
   )
-  INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours, updated_at)
-  SELECT p_app_id, p_owner_org, new_rows.cycle_start, new_rows.date, new_rows.storage_byte_hours, p_written_at
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, segment_start, storage_byte_hours, updated_at)
+  SELECT p_app_id, p_owner_org, new_rows.cycle_start, new_rows.date, p_segment_start, new_rows.storage_byte_hours, p_written_at
   FROM new_rows
-  ON CONFLICT (app_id, owner_org, cycle_start, date) DO UPDATE SET
+  ON CONFLICT (app_id, owner_org, cycle_start, date, segment_start) DO UPDATE SET
     storage_byte_hours = EXCLUDED.storage_byte_hours,
     updated_at = EXCLUDED.updated_at
   WHERE public.daily_storage_hourly.updated_at <= EXCLUDED.updated_at
 $$;
 
-ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz) TO service_role;
+ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 2c. Cycle storage usage for the console

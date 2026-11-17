@@ -396,8 +396,12 @@ async function replaceCycleStorageHourly(
   const deleteRange = getStorageDailyDeleteRange(options.cycleStart, options.cycleEnd)
   const cycleEndDay = formatUtcDay(floorToDay(parseTimestampMs(options.cycleEnd)))
   const writtenAt = options.writtenAt ?? new Date().toISOString()
-  // replace_app_storage_hourly replaces only this org's rows of this cycle, in one statement, and
-  // never a row written by a refresh that started after writtenAt.
+  // The ownership segment these hours accrue in: an earlier incarnation of the app ID, or the
+  // former owner, keeps its own rows. A segment starting at the cycle start is a whole-cycle refresh.
+  const cycleStartMs = parseTimestampMs(options.cycleStart)
+  const segmentStartMs = options.accrualStart ? Math.max(cycleStartMs, parseTimestampMs(options.accrualStart)) : cycleStartMs
+  // replace_app_storage_hourly replaces only this org's rows of this cycle and segment, in one
+  // statement, and never a row written by a refresh that started after writtenAt.
   await runSupabaseResultWithRetry(c, 'replace_daily_storage_hourly', async () => {
     await pg.query(
       `SELECT public.replace_app_storage_hourly(
@@ -406,8 +410,10 @@ async function replaceCycleStorageHourly(
          p_cycle_start_day => $3::date,
          p_cycle_end_day => $4::date,
          p_end_exclusive_day => $5::date,
-         p_rows => $6::jsonb,
-         p_written_at => $7::timestamptz
+         p_segment_start => $6::timestamptz,
+         p_replace_legacy => $7::boolean,
+         p_rows => $8::jsonb,
+         p_written_at => $9::timestamptz
        )`,
       [
         options.appId,
@@ -415,6 +421,8 @@ async function replaceCycleStorageHourly(
         deleteRange.startDay,
         cycleEndDay,
         deleteRange.endExclusiveDay,
+        new Date(segmentStartMs).toISOString(),
+        segmentStartMs === cycleStartMs,
         JSON.stringify(calculation.rows.map(row => ({ cycle_start: row.cycle_start, date: row.date, storage_byte_hours: row.storage_byte_hours }))),
         writtenAt,
       ],
