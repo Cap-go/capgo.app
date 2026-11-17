@@ -6,6 +6,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed, createApp, nextTick, reactive, ref, watch } from 'vue'
 import { createI18n } from 'vue-i18n'
 import AppSetting from '../src/components/dashboard/AppSetting.vue'
+import { invokeCapgoApi } from '../src/services/capgoApi'
 import { useDashboardAppsStore } from '../src/stores/dashboardApps'
 
 const mocks = vi.hoisted(() => ({
@@ -87,6 +88,9 @@ describe('app settings catalog invalidation', () => {
     expect(catalog.apps).toEqual([])
     expect(catalog.isLoaded).toBe(true)
     expect(mocks.push).toHaveBeenCalledWith('/apps')
+    // Simulators whose device stopped are settled before the deletion settles the rest.
+    expect(invokeCapgoApi).toHaveBeenCalledWith(expect.stringMatching(/^private\/simulator\/\?app_id=/), expect.objectContaining({ method: 'GET' }))
+    expect(vi.mocked(invokeCapgoApi).mock.invocationCallOrder[0]).toBeLessThan(mocks.deleteApp.mock.invocationCallOrder[0]!)
   })
 
   it('keeps the shared catalog if the app deletion fails', async () => {
