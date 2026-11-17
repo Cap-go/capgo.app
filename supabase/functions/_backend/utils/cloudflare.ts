@@ -1046,8 +1046,9 @@ const DEVICE_INFO_PLATFORM_VALUES: Record<ChannelDevicePlatform, number> = { and
 export function buildDeviceChannelScopeCF(channelName: string, overrides?: ChannelDeviceOverrideIds): string {
   const reportedMatch = `default_channel = '${escapeSqlString(channelName)}'`
   const defaultPlatforms = (overrides?.defaultForPlatforms ?? []).map(platform => DEVICE_INFO_PLATFORM_VALUES[platform])
+  // platform is a Double column: Analytics Engine rejects an IN list of Integer literals.
   const defaultChannelMatch = defaultPlatforms.length
-    ? `(${reportedMatch} OR (default_channel = '' AND platform IN (${defaultPlatforms.join(', ')})))`
+    ? `(${reportedMatch} OR (default_channel = '' AND platform IN (${defaultPlatforms.map(value => value.toFixed(1)).join(', ')})))`
     : reportedMatch
   const elsewhere = overrides?.elsewhere ?? []
   const into = overrides?.into ?? []
