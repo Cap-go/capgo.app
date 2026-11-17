@@ -90,4 +90,19 @@ describe('calculateStorageHourlyRows', () => {
       ['2026-01-01', '2026-01-02', 1200],
     ])
   })
+
+  it('stamps rows with the time the refresh started, not the time it finished', () => {
+    const rows = calculateStorageHourlyRows([
+      { version_id: 1, size: 100, timestamp: '2026-01-01T00:00:00.000Z' },
+    ], {
+      appId: APP_ID,
+      ownerOrg: OWNER_ORG,
+      cycleStart: '2026-01-01T00:00:00.000Z',
+      cycleEnd: '2026-02-01T00:00:00.000Z',
+      currentHour: '2026-01-01T03:00:00.000Z',
+      writtenAt: '2026-01-01T03:00:05.000Z',
+    }).rows
+
+    expect(rows.map(row => row.updated_at)).toEqual(['2026-01-01T03:00:05.000Z'])
+  })
 })

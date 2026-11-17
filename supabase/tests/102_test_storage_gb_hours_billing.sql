@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(16);
+SELECT plan(20);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -172,6 +172,88 @@ SELECT
         (SELECT count(*)::integer FROM public.daily_storage_hourly WHERE app_id = (SELECT live_app FROM gbh_ctx) AND owner_org = (SELECT org_id FROM gbh_ctx)),
         6,
         'delete_old_deleted_apps keeps the byte-hours of live apps'
+    );
+
+-- replace_app_storage_hourly: two refreshes finishing out of order.
+CREATE TEMP TABLE replace_ctx AS
+SELECT
+    'com.test.gbhours.replace'::varchar AS app_id,
+    org_id,
+    other_org_id,
+    DATE '2026-03-01' AS cycle_start,
+    DATE '2026-04-01' AS cycle_end
+FROM gbh_ctx;
+
+-- Rows of another org and of the previous cycle on the boundary day must survive.
+INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours, updated_at)
+SELECT app_id, other_org_id, cycle_start, cycle_start, 7, '2026-03-01T00:00:00Z'::timestamptz FROM replace_ctx
+UNION ALL
+SELECT app_id, org_id, cycle_start - 28, cycle_start, 9, '2026-03-01T00:00:00Z'::timestamptz FROM replace_ctx;
+
+-- The newer refresh (started 10:00) finishes first: two days.
+SELECT public.replace_app_storage_hourly(
+    app_id, org_id, cycle_start, cycle_end, cycle_end,
+    '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 240}, {"cycle_start": "2026-03-01", "date": "2026-03-02", "storage_byte_hours": 100}]'::jsonb,
+    '2026-03-02T10:00:00Z'
+) FROM replace_ctx;
+
+-- The older refresh (started 09:00) finishes later with a stale first day only.
+SELECT public.replace_app_storage_hourly(
+    app_id, org_id, cycle_start, cycle_end, cycle_end,
+    '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 1}]'::jsonb,
+    '2026-03-02T09:00:00Z'
+) FROM replace_ctx;
+
+SELECT
+    is(
+        (
+            SELECT array_agg(storage_byte_hours ORDER BY date)
+            FROM public.daily_storage_hourly
+            WHERE app_id = (SELECT app_id FROM replace_ctx)
+              AND owner_org = (SELECT org_id FROM replace_ctx)
+              AND cycle_start = (SELECT cycle_start FROM replace_ctx)
+        ),
+        ARRAY[240, 100]::double precision[],
+        'a refresh that started earlier never overwrites or deletes rows of a later one'
+    );
+
+SELECT
+    is(
+        (
+            SELECT array_agg(storage_byte_hours ORDER BY owner_org = (SELECT org_id FROM replace_ctx))
+            FROM public.daily_storage_hourly
+            WHERE app_id = (SELECT app_id FROM replace_ctx)
+              AND (owner_org <> (SELECT org_id FROM replace_ctx) OR cycle_start <> (SELECT cycle_start FROM replace_ctx))
+        ),
+        ARRAY[7, 9]::double precision[],
+        'a refresh keeps other orgs and the previous cycle part of the boundary day'
+    );
+
+-- A later refresh replaces the cycle and drops a day it no longer has.
+SELECT public.replace_app_storage_hourly(
+    app_id, org_id, cycle_start, cycle_end, cycle_end,
+    '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 120}]'::jsonb,
+    '2026-03-02T11:00:00Z'
+) FROM replace_ctx;
+
+SELECT
+    is(
+        (
+            SELECT array_agg(storage_byte_hours ORDER BY date)
+            FROM public.daily_storage_hourly
+            WHERE app_id = (SELECT app_id FROM replace_ctx)
+              AND owner_org = (SELECT org_id FROM replace_ctx)
+              AND cycle_start = (SELECT cycle_start FROM replace_ctx)
+        ),
+        ARRAY[120]::double precision[],
+        'a newer refresh replaces the cycle rows of its org'
+    );
+
+SELECT
+    ok(
+        NOT has_function_privilege('authenticated', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz)', 'EXECUTE')
+        AND NOT has_function_privilege('anon', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz)', 'EXECUTE'),
+        'replace_app_storage_hourly is not callable by clients'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.

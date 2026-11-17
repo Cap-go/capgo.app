@@ -37,6 +37,18 @@ interface AppOwnerOrgRow {
   owner_org: string
   /** When the current owner got the app: its creation or its last transfer to that org. */
   owned_since: string | null
+  /** Last transfer to the current owner, if any, and the org that owned the app before it. */
+  transferred_at: string | null
+  transferred_from: string | null
+  /** When that former owner got the app. */
+  former_owned_since: string | null
+}
+
+interface StorageOwnership {
+  ownedSince: string | null
+  transferredAt: string | null
+  transferredFrom: string | null
+  formerOwnedSince: string | null
 }
 
 interface CycleBoundsRow {
@@ -79,6 +91,8 @@ interface StorageHourlyCalculationOptions {
   currentHour?: string
   /** Hours before this instant belong to another owner (or an earlier app with this ID). */
   accrualStart?: string | null
+  /** When the refresh started, before it read version_meta. Newer rows are never replaced. */
+  writtenAt?: string
 }
 
 interface StorageHourlyCalculationResult {
@@ -105,6 +119,13 @@ function parseTimestampMs(value: string | Date): number {
   if (!Number.isFinite(timestamp))
     throw new Error(`Invalid timestamp: ${String(value)}`)
   return timestamp
+}
+
+// node-postgres returns timestamptz as Date: keep one string shape for the calculation options.
+function toIsoTimestamp(value: string | Date | null | undefined): string | null {
+  if (value === null || value === undefined)
+    return null
+  return new Date(value).toISOString()
 }
 
 function floorToDay(timestampMs: number): number {
@@ -196,7 +217,7 @@ function addStorageIntervalToDailyBuckets(dailyBuckets: Map<number, number>, int
 }
 
 function buildStorageHourlyRows(dailyBuckets: Map<number, number>, options: StorageHourlyCalculationOptions) {
-  const now = new Date().toISOString()
+  const now = options.writtenAt ?? new Date().toISOString()
   return Array.from(dailyBuckets.entries())
     .sort(([a], [b]) => a - b)
     .map(([dateMs, storageByteHours]) => ({
@@ -331,11 +352,13 @@ async function upsertRows(
   )
 }
 
-// A refresh shortly after a rollover also finalizes the previous cycle: the hours between its last
-// refresh and its end are only recorded then. Later on, the completed cycle is left untouched.
-const STORAGE_PREVIOUS_CYCLE_FINALIZE_MS = 7 * DAY_MS
+// Refreshes during this window after a cycle rollover or an app transfer also finalize the
+// completed cycle (or the former owner's hours): the hours between its last refresh and the
+// rollover or transfer are only recorded then. Later on, completed periods are left untouched.
+const STORAGE_FINALIZE_WINDOW_MS = 7 * DAY_MS
 
-async function readPreviousCycle(pg: PgClient, orgId: string, cycleStart: string): Promise<CycleBoundsRow | null> {
+/** The billing cycle of `orgId` that contains the instant just before `before`. */
+async function readCycleBefore(pg: PgClient, orgId: string, before: string): Promise<CycleBoundsRow | null> {
   const { rows } = await pg.query<CycleBoundsRow>(
     `SELECT cycle.cycle_start, cycle.cycle_end
      FROM public.orgs o
@@ -347,7 +370,7 @@ async function readPreviousCycle(pg: PgClient, orgId: string, cycleStart: string
      ) AS cycle
      WHERE o.id = $1::uuid
      LIMIT 1`,
-    [orgId, cycleStart],
+    [orgId, before],
   )
   return rows[0] ?? null
 }
@@ -372,41 +395,29 @@ async function replaceCycleStorageHourly(
 
   const deleteRange = getStorageDailyDeleteRange(options.cycleStart, options.cycleEnd)
   const cycleEndDay = formatUtcDay(floorToDay(parseTimestampMs(options.cycleEnd)))
-  // Rows written by a newer refresh (a later updated_at) are never deleted or overwritten by this one.
-  const writtenAt = calculation.rows[0]?.updated_at ?? new Date().toISOString()
-  // One statement, so billing reads never see the cycle between the delete and the upsert.
-  // Only this org's rows of this cycle are replaced: hours of a former owner of the app ID and
-  // the other cycles' parts of the boundary days stay untouched. Rows with a later cycle_start
-  // inside the cycle are legacy rows (cycle_start = date) of this cycle and are replaced too.
+  const writtenAt = options.writtenAt ?? new Date().toISOString()
+  // replace_app_storage_hourly replaces only this org's rows of this cycle, in one statement, and
+  // never a row written by a refresh that started after writtenAt.
   await runSupabaseResultWithRetry(c, 'replace_daily_storage_hourly', async () => {
     await pg.query(
-      `WITH new_rows AS (
-         SELECT r.app_id, r.owner_org, r.cycle_start, r.date, r.storage_byte_hours, r.updated_at
-         FROM pg_catalog.jsonb_to_recordset($6::jsonb)
-           AS r(app_id varchar, owner_org uuid, cycle_start date, date date, storage_byte_hours double precision, updated_at timestamptz)
-       ),
-       removed AS (
-         DELETE FROM public.daily_storage_hourly dsh
-         WHERE dsh.app_id = $1
-           AND dsh.owner_org = $2::uuid
-           AND dsh.cycle_start >= $3::date
-           AND dsh.cycle_start < GREATEST($5::date, $3::date + 1)
-           AND dsh.date >= $3::date
-           AND dsh.date < $4::date
-           AND dsh.updated_at <= $7::timestamptz
-           AND NOT EXISTS (
-             SELECT 1 FROM new_rows
-             WHERE new_rows.cycle_start = dsh.cycle_start AND new_rows.date = dsh.date
-           )
-       )
-       INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours, updated_at)
-       SELECT new_rows.app_id, new_rows.owner_org, new_rows.cycle_start, new_rows.date, new_rows.storage_byte_hours, new_rows.updated_at
-       FROM new_rows
-       ON CONFLICT (app_id, owner_org, cycle_start, date) DO UPDATE SET
-         storage_byte_hours = EXCLUDED.storage_byte_hours,
-         updated_at = EXCLUDED.updated_at
-       WHERE public.daily_storage_hourly.updated_at <= EXCLUDED.updated_at`,
-      [options.appId, options.ownerOrg, deleteRange.startDay, deleteRange.endExclusiveDay, cycleEndDay, JSON.stringify(calculation.rows), writtenAt],
+      `SELECT public.replace_app_storage_hourly(
+         p_app_id => $1::varchar,
+         p_owner_org => $2::uuid,
+         p_cycle_start_day => $3::date,
+         p_cycle_end_day => $4::date,
+         p_end_exclusive_day => $5::date,
+         p_rows => $6::jsonb,
+         p_written_at => $7::timestamptz
+       )`,
+      [
+        options.appId,
+        options.ownerOrg,
+        deleteRange.startDay,
+        cycleEndDay,
+        deleteRange.endExclusiveDay,
+        JSON.stringify(calculation.rows.map(row => ({ cycle_start: row.cycle_start, date: row.date, storage_byte_hours: row.storage_byte_hours }))),
+        writtenAt,
+      ],
     )
     return { data: null, error: null }
   })
@@ -421,12 +432,16 @@ async function refreshStorageHourly(
   ownerOrg: string,
   cycleInfo: CycleInfo,
   currentHour?: string,
-  ownedSince?: string | null,
+  ownership: StorageOwnership = { ownedSince: null, transferredAt: null, transferredFrom: null, formerOwnedSince: null },
 ) {
   if (!cycleInfo.subscription_anchor_start || !cycleInfo.subscription_anchor_end)
     throw simpleError('cannot_get_cycle_info', 'Cannot get cycle info', { cycleInfo })
 
-  const calculationEnd = currentHour ?? new Date().toISOString()
+  // Taken before reading version_meta, so a refresh that finishes late never replaces the rows
+  // of a refresh that started after it.
+  const writtenAt = new Date().toISOString()
+  const calculationEnd = currentHour ?? writtenAt
+  const calculationEndMs = parseTimestampMs(calculationEnd)
   const events = await readVersionMetaStorageRows(pg, appId, calculationEnd)
   const cycleStart = cycleInfo.subscription_anchor_start
   const calculation = await replaceCycleStorageHourly(c, pg, events, {
@@ -435,25 +450,51 @@ async function refreshStorageHourly(
     cycleStart,
     cycleEnd: cycleInfo.subscription_anchor_end,
     currentHour: calculationEnd,
-    accrualStart: ownedSince,
+    accrualStart: ownership.ownedSince,
+    writtenAt,
   })
 
+  const readCycle = async (orgId: string, before: string) => (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_storage_cycle', async () => ({
+    data: await readCycleBefore(pg, orgId, before),
+    error: null,
+  }))).data
+
   const cycleStartMs = parseTimestampMs(cycleStart)
-  if (parseTimestampMs(calculationEnd) - cycleStartMs < STORAGE_PREVIOUS_CYCLE_FINALIZE_MS) {
-    const previous = await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_previous_storage_cycle', async () => ({
-      data: await readPreviousCycle(pg, ownerOrg, cycleStart),
-      error: null,
-    }))
+  if (calculationEndMs - cycleStartMs < STORAGE_FINALIZE_WINDOW_MS) {
+    const previous = await readCycle(ownerOrg, cycleStart)
     // Only a previous cycle that ends exactly where this one starts (a plan change can move the anchor).
-    if (previous.data?.cycle_start && previous.data.cycle_end && parseTimestampMs(previous.data.cycle_end) === cycleStartMs) {
+    if (previous?.cycle_start && previous.cycle_end && parseTimestampMs(previous.cycle_end) === cycleStartMs) {
       await replaceCycleStorageHourly(c, pg, events, {
         appId,
         ownerOrg,
-        cycleStart: previous.data.cycle_start,
-        cycleEnd: previous.data.cycle_end,
-        currentHour: previous.data.cycle_end,
-        accrualStart: ownedSince,
+        cycleStart: previous.cycle_start,
+        cycleEnd: previous.cycle_end,
+        // Never past this refresh's own end (a backfill with an earlier currentHour).
+        currentHour: new Date(Math.min(parseTimestampMs(previous.cycle_end), calculationEndMs)).toISOString(),
+        accrualStart: ownership.ownedSince,
+        writtenAt,
       })
+    }
+  }
+
+  // After a transfer, the former owner's refreshes stop: record its hours from its last refresh
+  // up to the transfer, in the former owner's billing cycle that contains it.
+  const { transferredAt, transferredFrom } = ownership
+  if (transferredAt && transferredFrom && transferredFrom !== ownerOrg) {
+    const transferredAtMs = parseTimestampMs(transferredAt)
+    if (transferredAtMs <= calculationEndMs && calculationEndMs - transferredAtMs < STORAGE_FINALIZE_WINDOW_MS) {
+      const formerCycle = await readCycle(transferredFrom, transferredAt)
+      if (formerCycle?.cycle_start && formerCycle.cycle_end) {
+        await replaceCycleStorageHourly(c, pg, events, {
+          appId,
+          ownerOrg: transferredFrom,
+          cycleStart: formerCycle.cycle_start,
+          cycleEnd: formerCycle.cycle_end,
+          currentHour: transferredAt,
+          accrualStart: ownership.formerOwnedSince,
+          writtenAt,
+        })
+      }
     }
   }
 
@@ -504,14 +545,33 @@ app.post('/', middlewareAPISecret, async (c) => {
 async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: string, orgId: string) {
   const appResult = await runSupabaseResultWithRetry<AppOwnerOrgRow>(c, 'load_app', async () => {
     const result = await pg.query<AppOwnerOrgRow>(
-      `SELECT apps.owner_org,
+      `WITH transfers AS (
+         SELECT (entry ->> 'transferred_at')::timestamptz AS transferred_at,
+           (entry ->> 'transferred_from')::uuid AS transferred_from,
+           (entry ->> 'transferred_to')::uuid AS transferred_to
+         FROM public.apps, pg_catalog.unnest(apps.transfer_history) AS entry
+         WHERE apps.app_id = $1
+       ),
+       last_transfer AS (
+         SELECT transfers.*
+         FROM transfers, public.apps
+         WHERE apps.app_id = $1 AND transfers.transferred_to = apps.owner_org
+         ORDER BY transfers.transferred_at DESC
+         LIMIT 1
+       )
+       SELECT apps.owner_org,
+         GREATEST(apps.created_at, last_transfer.transferred_at) AS owned_since,
+         last_transfer.transferred_at,
+         last_transfer.transferred_from,
          GREATEST(
            apps.created_at,
-           (SELECT max((transfer.entry ->> 'transferred_at')::timestamptz)
-            FROM pg_catalog.unnest(apps.transfer_history) AS transfer(entry)
-            WHERE transfer.entry ->> 'transferred_to' = apps.owner_org::text)
-         ) AS owned_since
+           (SELECT max(previous.transferred_at)
+            FROM transfers AS previous
+            WHERE previous.transferred_to = last_transfer.transferred_from
+              AND previous.transferred_at < last_transfer.transferred_at)
+         ) AS former_owned_since
        FROM public.apps
+       LEFT JOIN last_transfer ON true
        WHERE apps.app_id = $1
        LIMIT 2`,
       [appId],
@@ -655,7 +715,12 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
 
   // Storage is billed from these byte-hours: a failure must fail the job so the
   // queue retries it, instead of leaving the cycle under-counted.
-  const storageHourly = await refreshStorageHourly(c, pg, appId, orgId, cycleInfo, body.currentHour, appResult.data.owned_since)
+  const storageHourly = await refreshStorageHourly(c, pg, appId, orgId, cycleInfo, body.currentHour, {
+    ownedSince: toIsoTimestamp(appResult.data.owned_since),
+    transferredAt: toIsoTimestamp(appResult.data.transferred_at),
+    transferredFrom: appResult.data.transferred_from,
+    formerOwnedSince: toIsoTimestamp(appResult.data.former_owned_since),
+  })
 
   cloudlog({ requestId: c.get('requestId'), message: 'stats saved', mauLength: mau.length, bandwidthLength: bandwidth.length, storageHourlyLength: storageHourly.rows.length, versionUsageLength: versionUsage.length })
   await syncAppStatsRefresh(c, pg, appId)

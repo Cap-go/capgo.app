@@ -94,6 +94,67 @@ COMMENT ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) IS
 'credit tiers.';
 
 -- ---------------------------------------------------------------------------
+-- 2b. Atomic refresh of one app's rows for one org and one cycle
+-- ---------------------------------------------------------------------------
+-- cron_stat_app calls this with the rows it calculated from version_meta.
+-- One statement, so billing reads never see the cycle between the delete and
+-- the upsert. Only rows of p_owner_org whose cycle_start is in
+-- [p_cycle_start_day, p_cycle_end_day) and whose day is in
+-- [p_cycle_start_day, p_end_exclusive_day) are replaced: hours of another
+-- owner of the app ID and the other cycles' parts of a boundary day stay.
+-- Rows with a later cycle_start inside the cycle are legacy rows
+-- (cycle_start = date) of this cycle and are replaced too.
+-- p_written_at is taken by the caller before it reads version_meta: a row
+-- written by a refresh that started later is never deleted or overwritten,
+-- whatever order the refreshes finish in.
+CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
+    p_app_id character varying,
+    p_owner_org uuid,
+    p_cycle_start_day date,
+    p_cycle_end_day date,
+    p_end_exclusive_day date,
+    p_rows jsonb,
+    p_written_at timestamptz
+)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+  WITH new_rows AS (
+    SELECT r.cycle_start, r.date, r.storage_byte_hours
+    FROM pg_catalog.jsonb_to_recordset(COALESCE(p_rows, '[]'::jsonb))
+      AS r(cycle_start date, date date, storage_byte_hours double precision)
+  ),
+  removed AS (
+    DELETE FROM public.daily_storage_hourly dsh
+    WHERE dsh.app_id = p_app_id
+      AND dsh.owner_org = p_owner_org
+      AND dsh.cycle_start >= p_cycle_start_day
+      AND dsh.cycle_start < GREATEST(p_cycle_end_day, p_cycle_start_day + 1)
+      AND dsh.date >= p_cycle_start_day
+      AND dsh.date < p_end_exclusive_day
+      AND dsh.updated_at <= p_written_at
+      AND NOT EXISTS (
+        SELECT 1 FROM new_rows
+        WHERE new_rows.cycle_start = dsh.cycle_start AND new_rows.date = dsh.date
+      )
+  )
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours, updated_at)
+  SELECT p_app_id, p_owner_org, new_rows.cycle_start, new_rows.date, new_rows.storage_byte_hours, p_written_at
+  FROM new_rows
+  ON CONFLICT (app_id, owner_org, cycle_start, date) DO UPDATE SET
+    storage_byte_hours = EXCLUDED.storage_byte_hours,
+    updated_at = EXCLUDED.updated_at
+  WHERE public.daily_storage_hourly.updated_at <= EXCLUDED.updated_at
+$$;
+
+ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz) TO service_role;
+
+-- ---------------------------------------------------------------------------
 -- 3. Org billing metrics read storage from byte-hours
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.calculate_org_metrics_cache_entry(
