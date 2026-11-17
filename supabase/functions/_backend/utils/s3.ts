@@ -1,6 +1,5 @@
 import type { Context } from 'hono'
 import type { Database } from '../utils/supabase.types.ts'
-import { createHash } from 'node:crypto'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getManifestStorageCandidateKeys } from './manifest_encoding.ts'
@@ -236,7 +235,7 @@ async function moveObjectToTrash(c: Context, fileId: string) {
 
 /** S3 DeleteObjects (and R2) accept at most this many keys per request. */
 export const DELETE_OBJECTS_MAX_KEYS = 1_000
-// Per-key fallback when a server rejects DeleteObjects: bounded parallel DELETEs.
+// Per-key fallback when a server rejects DeleteObjects: bounded parallel single-key deletes.
 const SINGLE_DELETE_CONCURRENCY = 16
 
 export interface PrefixDeleteResult {
@@ -305,7 +304,7 @@ async function deleteKeysOneByOne(c: Context, client: ReturnType<typeof initS3>,
 /**
  * Deletes up to DELETE_OBJECTS_MAX_KEYS keys with one DeleteObjects request.
  * Returns the keys that could not be deleted. A server that rejects the batch
- * request gets bounded parallel single-key DELETEs instead.
+ * request gets bounded parallel single-key deletes instead.
  */
 async function deleteObjectKeys(c: Context, keys: string[], client = initS3(c, { serverSide: true })): Promise<string[]> {
   if (keys.length === 0)
@@ -315,9 +314,12 @@ async function deleteObjectKeys(c: Context, keys: string[], client = initS3(c, {
 
   const body = buildDeleteObjectsBody(keys)
   try {
+    // DeleteObjects requires a body integrity header: SHA-256 (accepted in place of Content-MD5).
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))
     const headers = new Headers({
       'Content-Type': 'application/xml',
-      'Content-MD5': createHash('md5').update(body).digest('base64'),
+      'x-amz-checksum-sha256': btoa(String.fromCodePoint(...new Uint8Array(digest))),
+      'x-amz-sdk-checksum-algorithm': 'SHA256',
     })
     const response = await client.makeRequest({
       method: 'POST',

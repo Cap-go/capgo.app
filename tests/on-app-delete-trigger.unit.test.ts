@@ -159,7 +159,7 @@ describe('on_app_delete trigger', () => {
     expect(JSON.parse(requeueCalls()[0][1]![1] as string).payload.storage_cleanup_pass).toBe(4)
   })
 
-  it('stops requeueing after the pass budget', async () => {
+  it('stops requeuing after the pass budget', async () => {
     deleteObjectsWithPrefix.mockResolvedValue({ deleted: 500, failed: 0, done: false })
 
     await sendTrigger({ storage_cleanup_pass: MAX_STORAGE_CLEANUP_PASSES - 1 })

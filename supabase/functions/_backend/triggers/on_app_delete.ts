@@ -128,7 +128,7 @@ export async function cleanupDeletedAppResources(
           await requeueStorageCleanup(c, pg, record, nextPass)
         }
         catch (error) {
-          cloudlogErr({ requestId: c.get('requestId'), message: 'error requeueing app storage cleanup', error, pass, app_id: record.app_id })
+          cloudlogErr({ requestId: c.get('requestId'), message: 'error requeuing app storage cleanup', error, pass, app_id: record.app_id })
         }
       }
     }

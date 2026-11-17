@@ -96,7 +96,7 @@ describe('deleteObjectsWithPrefix', () => {
     for (const batch of batches) {
       expect(batch.method).toBe('POST')
       expect(batch.query).toEqual({ delete: '' })
-      expect(batch.headers.get('Content-MD5')).toBeTruthy()
+      expect(batch.headers.get('x-amz-checksum-sha256')).toMatch(/^[A-Za-z0-9+/]{43}=$/)
       expect(keysInBody(batch.payload).length).toBeLessThanOrEqual(DELETE_OBJECTS_MAX_KEYS)
     }
     expect(storage.keys).toEqual(['orgs/org-1/apps/com.example.other/keep.zip'])
