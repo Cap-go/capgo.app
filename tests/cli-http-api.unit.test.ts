@@ -13,6 +13,9 @@ interface QueryCall {
 const mocks = vi.hoisted(() => ({
   // Caller (API-key scoped) statements: every table query is recorded and resolves to `result`.
   calls: [] as QueryCall[],
+  // Every statement sent on the caller client, in order (one entry per round trip).
+  statements: [] as string[],
+  events: [] as string[],
   result: { data: null as unknown, error: null as unknown },
   rpc: vi.fn(),
   rpcResults: {} as Record<string, unknown>,
@@ -35,9 +38,67 @@ function rpcArgs(text: string, values: unknown[]) {
   return Object.fromEntries([...text.matchAll(/(\w+) => \$(\d+)/g)].map(([, name, index]) => [name, values[Number(index) - 1]]))
 }
 
+async function callRpc(name: string, args: Record<string, unknown>) {
+  const { data, error } = await mocks.rpc(name, args)
+  if (error)
+    throw error
+  return data
+}
+
+// The preflight identity statement: actor, then 2FA, then the app row, each guarded like the SQL CASEs.
+async function runPreflightIdentity(text: string, values: unknown[]) {
+  const [appId, orgId, check2fa] = values as [string | null, string | null, boolean]
+  const userId = await callRpc('request_actor_user_id', {})
+  let rejected = false
+  if (userId && check2fa) {
+    if (appId)
+      rejected = await callRpc('reject_access_due_to_2fa_for_app', { app_id: appId }) as boolean
+    else if (orgId)
+      rejected = await callRpc('reject_access_due_to_2fa_for_org', { org_id: orgId }) as boolean
+  }
+  let app = null
+  if (userId && rejected !== true && appId) {
+    mocks.calls.push({ table: 'apps', text, values: [appId] })
+    if (mocks.result.error)
+      throw mocks.result.error
+    app = Array.isArray(mocks.result.data) ? (mocks.result.data[0] ?? null) : mocks.result.data
+  }
+  return { user_id: userId, rejected_2fa: rejected, app }
+}
+
+// The preflight plan statement: app-scoped check, org-wide fallback, then trial RPCs only when allowed.
+async function runPreflightPlan(text: string, values: unknown[]) {
+  const [orgid, actions, appid] = values as [string, string[], string | null]
+  mocks.events.push('plan')
+  const appAllowed = text.includes('appid => p.app_id')
+    ? await callRpc('is_allowed_action_org_action', { orgid, actions, appid })
+    : null
+  let orgAllowed = null
+  if (appAllowed !== true) {
+    orgAllowed = text.includes('public.is_allowed_action_org(')
+      ? await callRpc('is_allowed_action_org', { orgid })
+      : await callRpc('is_allowed_action_org_action', { orgid, actions })
+  }
+  const allowed = appAllowed === true || (appid === null && orgAllowed === true)
+  if (!allowed)
+    return { app_allowed: appAllowed, org_allowed: orgAllowed, is_paying: null, trial_days: null, has_credits: null }
+  return {
+    app_allowed: appAllowed,
+    org_allowed: orgAllowed,
+    is_paying: await callRpc('is_paying_org', { orgid }),
+    trial_days: await callRpc('is_trial_org', { orgid }),
+    has_credits: await callRpc('has_usage_credits_org', appid ? { orgid, appid } : { orgid }),
+  }
+}
+
 async function runStatement(client: unknown, text: string, values: unknown[] = []): Promise<unknown> {
   if (client !== CALLER_CLIENT)
     throw new Error('caller statement ran outside withRlsContext')
+  mocks.statements.push(text)
+  if (text.includes('AS rejected_2fa'))
+    return runPreflightIdentity(text, values)
+  if (text.includes('AS has_credits'))
+    return runPreflightPlan(text, values)
   const rpcName = text.match(/public\.(\w+)\(/)?.[1]
   if (rpcName) {
     const { data, error } = await mocks.rpc(rpcName, rpcArgs(text, values))
@@ -133,6 +194,8 @@ function requestIcon(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.calls.length = 0
+  mocks.statements.length = 0
+  mocks.events.length = 0
   mocks.principals.length = 0
   mocks.result = { data: APP_ROW, error: null }
   mocks.rpcResults = { ...DEFAULT_RPC_RESULTS }
@@ -296,6 +359,89 @@ describe('pOST /preflight', () => {
   it('rejects an invalid app id', async () => {
     const response = await post('/preflight', { app_id: 'not an app id' })
     expect(response.status).toBe(400)
+  })
+
+  it('needs three caller round trips for a full upload preflight', async () => {
+    const response = await post('/preflight', {
+      app_id: 'com.example.app',
+      permission: 'app.upload_bundle',
+      plan: 'all',
+      cli_version: '8.0.0',
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      user_id: mocks.apikey.user_id,
+      org_id: ORG_ID,
+      app_id: 'com.example.app',
+      trial_days_left: 7,
+      warnings: [{ message: 'Update CLI', fatal: false }],
+    })
+    // Identity (actor + 2FA + app row), plan status (+ trial), warnings. It used to take
+    // 8 caller statements: actor, 2FA, app, plan check, paying, trial, credits, warnings.
+    expect(mocks.statements).toHaveLength(3)
+    expect(mocks.statements[0]).toContain('request_actor_user_id()')
+    expect(mocks.statements[0]).toContain('reject_access_due_to_2fa_for_app')
+    expect(mocks.statements[1]).toContain('is_trial_org')
+    expect(mocks.statements[2]).toContain('get_organization_cli_warnings')
+  })
+
+  it('runs the RBAC check while the caller transaction reads the plan', async () => {
+    mocks.checkPermission.mockImplementation(async () => {
+      mocks.events.push('permission:start')
+      await new Promise(resolve => setTimeout(resolve, 10))
+      mocks.events.push('permission:end')
+      return true
+    })
+    const response = await post('/preflight', { app_id: 'com.example.app', permission: 'app.upload_bundle', plan: 'upload' })
+    expect(response.status).toBe(200)
+    expect(mocks.events).toEqual(['permission:start', 'plan', 'permission:end'])
+  })
+
+  it('keeps permission_denied ahead of plan failures that ran concurrently', async () => {
+    mocks.checkPermission.mockResolvedValue(false)
+    mocks.rpcResults.is_allowed_action_org_action = false
+    const response = await post('/preflight', { app_id: 'com.example.app', permission: 'app.upload_bundle', plan: 'upload' })
+    expect(response.status).toBe(403)
+    expect(await response.text()).toContain('Missing permission app.upload_bundle')
+
+    mocks.checkPermission.mockResolvedValue(false)
+    mocks.rpc.mockImplementation(async (name: string) => name === 'is_allowed_action_org_action'
+      ? { data: null, error: new Error('plan lookup failed') }
+      : { data: mocks.rpcResults[name] ?? null, error: null })
+    const failedPlan = await post('/preflight', { app_id: 'com.example.app', permission: 'app.upload_bundle', plan: 'upload' })
+    expect(failedPlan.status).toBe(403)
+    expect(await failedPlan.text()).toContain('Missing permission app.upload_bundle')
+  })
+
+  it('surfaces a failed plan read once the permission passes', async () => {
+    mocks.rpc.mockImplementation(async (name: string) => name === 'is_allowed_action_org_action'
+      ? { data: null, error: new Error('plan lookup failed') }
+      : { data: mocks.rpcResults[name] ?? null, error: null })
+    const response = await post('/preflight', { app_id: 'com.example.app', permission: 'app.upload_bundle', plan: 'upload' })
+    expect(response.status).toBe(400)
+    expect(await response.text()).toContain('Cannot check org plan status')
+  })
+
+  it('skips warnings when the plan denies and never reads the app after a 2FA rejection', async () => {
+    mocks.rpcResults.is_allowed_action_org_action = false
+    const denied = await post('/preflight', { app_id: 'com.example.app', plan: 'upload', cli_version: '8.0.0' })
+    expect(denied.status).toBe(402)
+    expect(mocks.rpc).not.toHaveBeenCalledWith('get_organization_cli_warnings', expect.anything())
+    expect(mocks.rpc).not.toHaveBeenCalledWith('is_paying_org', expect.anything())
+
+    mocks.calls.length = 0
+    mocks.rpcResults.reject_access_due_to_2fa_for_app = true
+    const rejected = await post('/preflight', { app_id: 'com.example.app', plan: 'upload' })
+    expect(rejected.status).toBe(403)
+    expect(mocks.calls.filter(call => call.table === 'apps')).toHaveLength(0)
+  })
+
+  it('returns invalid_apikey without checking 2FA when the key has no actor', async () => {
+    mocks.rpcResults.request_actor_user_id = null
+    const response = await post('/preflight', { app_id: 'com.example.app', permission: 'app.read' })
+    expect(response.status).toBe(401)
+    expect(mocks.rpc).not.toHaveBeenCalledWith('reject_access_due_to_2fa_for_app', expect.anything())
+    expect(mocks.checkPermission).not.toHaveBeenCalled()
   })
 })
 
