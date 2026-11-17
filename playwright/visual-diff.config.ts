@@ -72,6 +72,8 @@ export interface VisualDiffRoute {
   auth?: boolean
   /** Override default visual-diff login credentials. */
   authCredentials?: { email: string, password: string }
+  /** Install deterministic fixtures before login or route navigation starts. */
+  beforeNavigate?: (page: Page) => Promise<void>
   /** Optional deterministic UI setup before the screenshot is captured. */
   prepare?: (page: Page) => Promise<void>
 }
@@ -397,16 +399,27 @@ function visualTrialPlanOptions() {
 async function prepareServingRegions(page: Page, width: number) {
   await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
   await dismissRemindMeLater(page)
-  const target = process.env.VISUAL_DIFF_PHASE === 'after'
-    ? page.locator('[data-test="serving-regions"]')
+  const controls = page.locator('[data-test="serving-regions"]')
+  const target = process.env.VISUAL_DIFF_PHASE === 'after' || await controls.isVisible()
+    ? controls
     : page.locator('input[name="block_provider_infra_requests"]')
   await target.waitFor({ state: 'visible', timeout: 120_000 })
   await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
 }
 
+async function mockAvailableServingRegions(page: Page) {
+  await page.route('**/serving_policy/**', route => route.fulfill({
+    json: {
+      app_id: 'com.demo.app',
+      active: true,
+      policy: { regions: ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME'], mode: 'route' },
+    },
+  }))
+}
+
 export const visualDiffRoutes: VisualDiffRoute[] = [
-  { slug: 'serving-regions-desktop', path: '/app/com.demo.app/settings', auth: true, prepare: page => prepareServingRegions(page, 1280) },
-  { slug: 'serving-regions-mobile', path: '/app/com.demo.app/settings', auth: true, prepare: page => prepareServingRegions(page, 390) },
+  { slug: 'serving-regions-desktop', path: '/app/com.demo.app/settings', auth: true, beforeNavigate: mockAvailableServingRegions, prepare: page => prepareServingRegions(page, 1280) },
+  { slug: 'serving-regions-mobile', path: '/app/com.demo.app/settings', auth: true, beforeNavigate: mockAvailableServingRegions, prepare: page => prepareServingRegions(page, 390) },
   {
     slug: 'builds-empty',
     path: '/app/com.demo.app/builds',

@@ -46,7 +46,7 @@ test('saves and reloads serving regions and both outside-region modes', async ({
   const inserted = await admin.from('apps').insert({ app_id: APP_ID, owner_org: demo.owner_org, user_id: demo.user_id, name: 'Serving regions e2e', icon_url: '' })
   expect(inserted.error).toBeNull()
   try {
-    await page.route('**/serving_policy/**', route => route.fulfill({ json: { app_id: APP_ID, active: false, phase: 'disabled' } }))
+    await page.route('**/serving_policy/**', route => route.fulfill({ json: { app_id: APP_ID, active: true, policy: { regions, mode: 'route' } } }))
     await page.login('test@capgo.app', 'testtest')
     await page.goto(`/app/${APP_ID}/settings`)
     // Repository uses data-test rather than Playwright's default test id.
@@ -54,7 +54,7 @@ test('saves and reloads serving regions and both outside-region modes', async ({
     await expect(controls).toBeVisible()
     for (const region of regions)
       await expect(controls.locator(`input[name="serving-region-${region}"]`)).toBeChecked()
-    const mode = controls.getByRole('combobox', { name: 'Requests from elsewhere' })
+    const mode = controls.getByRole('combobox', { name: 'Requests outside these regions' })
     await expect(mode).toHaveValue('route')
     for (const region of regions.filter(region => region !== 'NA'))
       await controls.locator(`input[name="serving-region-${region}"]`).uncheck()
@@ -64,8 +64,7 @@ test('saves and reloads serving regions and both outside-region modes', async ({
     expect((await savedBlock).ok()).toBe(true)
     await page.reload()
     await expect(mode).toHaveValue('block')
-    await controls.getByRole('button', { name: 'Check published policy' }).click()
-    await expect(controls.getByRole('status')).toContainText('pending')
+    await expect(controls.getByRole('status')).toHaveText('Applying your changes.')
     await page.setViewportSize({ width: 1280, height: 1200 })
     await controls.evaluate(element => element.scrollIntoView({ block: 'center' }))
     await controls.screenshot({ path: '.context/serving-followup-block-pending.png' })
@@ -84,8 +83,7 @@ test('saves and reloads serving regions and both outside-region modes', async ({
     expect((await savedRoute).ok()).toBe(true)
     await page.reload()
     await expect(mode).toHaveValue('route')
-    await controls.getByRole('button', { name: 'Check published policy' }).click()
-    await expect(controls.getByRole('status')).toContainText('pending')
+    await expect(controls.getByRole('status')).toHaveText('Up to date.')
     await page.setViewportSize({ width: 1280, height: 1200 })
     await controls.evaluate(element => element.scrollIntoView({ block: 'center' }))
     await controls.screenshot({ path: '.context/serving-followup-route-pending.png' })
@@ -142,6 +140,7 @@ const settingsTest = test.extend<{ servingApp: { appId: string, admin: ReturnTyp
     })
     expect(inserted.error).toBeNull()
     try {
+      await page.route('**/serving_policy/**', route => route.fulfill({ json: { app_id: appId, active: true, policy: { regions, mode: 'route' } } }))
       await page.login('test@capgo.app', 'testtest')
       await page.goto(`/app/${appId}/settings`)
       await expect(page.locator('[data-test="serving-regions"]')).toBeVisible()
@@ -151,6 +150,17 @@ const settingsTest = test.extend<{ servingApp: { appId: string, admin: ReturnTyp
       await admin.from('apps').delete().eq('app_id', appId)
     }
   },
+})
+
+settingsTest('does not offer regional settings before the service can apply them', async ({ page, servingApp }) => {
+  const { admin, appId } = servingApp
+  await page.route('**/serving_policy/**', route => route.fulfill({ json: { app_id: appId, active: false } }))
+  await page.reload()
+  await expect(page.locator('[name="app_name"]')).toBeVisible()
+  await expect(page.locator('[data-test="serving-regions"]')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Check published policy' })).toHaveCount(0)
+  const saved = await admin.from('apps').select('serving_regions,serving_region_mode').eq('app_id', appId).single()
+  expect(saved.data).toEqual({ serving_regions: regions, serving_region_mode: 'route' })
 })
 
 settingsTest('saves the name and later settings when a serving-policy edit is rejected', async ({ page, servingApp }) => {
