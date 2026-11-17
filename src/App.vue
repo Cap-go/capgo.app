@@ -20,9 +20,9 @@ watch(
 </script>
 
 <template>
-  <div class="app-shell h-full overflow-hidden bg-slate-100 text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+  <div class="app-shell flex h-full min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-600 dark:bg-slate-900 dark:text-slate-300">
     <ChinaConsoleSuggestion />
-    <RouterView class="h-full overflow-hidden" />
+    <RouterView class="min-h-0 flex-1 overflow-auto" />
     <Toast />
     <DialogV2 />
     <SupportUsernamesPrompt />

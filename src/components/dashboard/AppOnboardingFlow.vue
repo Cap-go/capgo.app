@@ -51,7 +51,7 @@ import {
 import { isBuilderTodoListSelected } from '~/services/builderOnboardingChecklist'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
-import { getConsoleApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
+import { getConsoleApiHost, getLocalConfig, PROD_API_URL, useConsole } from '~/services/console'
 import { APP_ONBOARDING_READY_EVENT, sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -299,7 +299,7 @@ const publishAppQuestionPrimaryActionLabel = computed(() => hasSelectedDevelopme
   ? t('unified-onboarding-continue-intent')
   : t('organization-onboarding-development-environment-skip'))
 
-const localCommand = isLocal(config.apiHost) ? ` --api-host ${getConsoleApiHost()}` : ''
+const localCommand = config.apiHost !== PROD_API_URL ? ` --api-host ${getConsoleApiHost()}` : ''
 // TODO(2027-03-19): Remove v3 compatibility after all existing OTA checklists have migrated.
 const usesOtaTodoList = computed(() => !!createdApp.value && hasSupportedOtaTodoList(parseAppOnboarding(createdApp.value.onboarding)))
 const usesDualTodoList = computed(() => !!createdApp.value && hasDualOnboardingChecklists(createdApp.value.onboarding))
@@ -469,7 +469,7 @@ const cliCommandArgs = computed(() => {
   if (usesBuilderSetupCommand.value && apiKey.value)
     args.push('-a', apiKey.value)
 
-  if (isLocal(config.apiHost))
+  if (config.apiHost !== PROD_API_URL)
     args.push('--api-host', getConsoleApiHost())
 
   return args

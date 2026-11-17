@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CHINA_API_HOST, getConsoleApiHost, getConsoleWebOrigin } from '~/services/consoleApiHost'
+import { CHINA_API_HOST, getConsoleApiHost, getConsoleWebOrigin, isChinaCapgoConsoleHostname } from '~/services/consoleApiHost'
 
 describe('console API host resolver', () => {
   beforeEach(() => {
@@ -35,6 +35,14 @@ describe('console API host resolver', () => {
     })
     expect(getConsoleApiHost()).toBe('http://127.0.0.1:57671/functions/v1')
     expect(getConsoleWebOrigin()).toBe('http://localhost:5173')
+  })
+
+  it('does not treat notcapgo.com.cn as China console', () => {
+    vi.stubGlobal('window', {
+      location: { hostname: 'notcapgo.com.cn', origin: 'https://notcapgo.com.cn' },
+    })
+    expect(isChinaCapgoConsoleHostname('notcapgo.com.cn')).toBe(false)
+    expect(getConsoleApiHost()).toBe('https://api.capgo.app')
   })
 
   it('falls back to env when window is unavailable', () => {

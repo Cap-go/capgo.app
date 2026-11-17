@@ -24,7 +24,9 @@ export function createAssistantAnalytics(
 ) {
   function emit(event: string, properties: Record<string, string | number | boolean> = {}) {
     try {
-      capture(event, { ...properties, platform: ['ios', 'android'].includes(platform) ? platform : 'web', schema_version: 1, deployment: getConsoleApiHost()?.replace(/\/$/, '') === 'https://api.capgo.app' ? 'production' : 'non-production' })
+      const apiOrigin = getConsoleApiHost()?.replace(/\/$/, '')
+      const deployment = apiOrigin === 'https://api.capgo.app' || apiOrigin === 'https://api.capgo.com.cn' ? 'production' : 'non-production'
+      capture(event, { ...properties, platform: ['ios', 'android'].includes(platform) ? platform : 'web', schema_version: 1, deployment })
     }
     catch {
       // Analytics must never prevent a connection, response or tool from completing.

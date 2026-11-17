@@ -19,6 +19,7 @@ describe('console content security policy', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('sb.capgo.app')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('supabase.co')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://api.capgo.app')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://api.capgo.com.cn')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('https://api.preprod.capgo.app')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('https://api.dev.capgo.app')
   })

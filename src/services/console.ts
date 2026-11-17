@@ -4,7 +4,7 @@ import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/database.types'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { CHINA_API_HOST, getConsoleApiHost } from '~/services/consoleApiHost'
+import { CHINA_API_HOST, getConsoleApiHost, shouldSuggestChinaConsole } from '~/services/consoleApiHost'
 import { createConsoleAuthClient, resolveConsoleApiBase } from '~/services/consoleAuth'
 import { createConsoleClient } from '~/services/consoleClient'
 import { sortCreditPricingSteps } from './creditPricing'
@@ -132,30 +132,32 @@ export function mergeRemoteConfig(localConfig: CapgoConfig, remoteConfig: Partia
 
 const CHINA_CONFIG_PROBE_MS = 4_000
 
-async function fetchPrivateConfig(apiHost: string) {
+async function probeChinaApiReachable(): Promise<boolean> {
+  if (getConsoleApiHost() !== PROD_API_URL)
+    return false
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), CHINA_CONFIG_PROBE_MS)
   try {
-    const response = await fetch(`${apiHost}/private/config`, { signal: controller.signal })
-    clearTimeout(timeout)
-    return response
-  }
-  catch (error) {
-    clearTimeout(timeout)
-    throw error
-  }
-}
-
-async function probeChinaApiReachable() {
-  if (getConsoleApiHost() !== PROD_API_URL)
-    return false
-  try {
-    const response = await fetchPrivateConfig(CHINA_API_HOST)
-    return response.ok
+    const response = await fetch(`${CHINA_API_HOST}/private/config`, { signal: controller.signal })
+    if (!response.ok)
+      return false
+    await response.json()
+    return true
   }
   catch {
     return false
   }
+  finally {
+    clearTimeout(timeout)
+  }
+}
+
+function updateChinaConsoleSuggestion(mainApiReachable: boolean, chinaApiReachable: boolean) {
+  suggestChinaConsole.value = shouldSuggestChinaConsole({
+    onGlobalConsole: getConsoleApiHost() === PROD_API_URL,
+    mainApiReachable,
+    chinaApiReachable,
+  })
 }
 
 export async function getRemoteConfig() {
@@ -165,25 +167,26 @@ export async function getRemoteConfig() {
 
   const apiHost = getConsoleApiHost()
   try {
-    const response = await fetchPrivateConfig(apiHost)
+    const response = await fetch(`${apiHost}/private/config`)
     if (!response.ok) {
       console.log('Local config', localConfig)
       stripeEnabled.value = localConfig.stripeEnabled ?? stripeEnabled.value
-      if (await probeChinaApiReachable())
-        suggestChinaConsole.value = true
+      const chinaReachable = await probeChinaApiReachable()
+      updateChinaConsoleSuggestion(false, chinaReachable)
       return localConfig as CapgoConfig
     }
     const data = await response.json() as Partial<CapgoConfig>
     const merged = mergeRemoteConfig(localConfig, data)
     config = merged
     stripeEnabled.value = merged.stripeEnabled ?? stripeEnabled.value
+    updateChinaConsoleSuggestion(true, false)
     return merged
   }
   catch {
     console.log('Local config', localConfig)
     stripeEnabled.value = localConfig.stripeEnabled ?? stripeEnabled.value
-    if (await probeChinaApiReachable())
-      suggestChinaConsole.value = true
+    const chinaReachable = await probeChinaApiReachable()
+    updateChinaConsoleSuggestion(false, chinaReachable)
     return localConfig as CapgoConfig
   }
 }

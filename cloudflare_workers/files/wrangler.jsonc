@@ -76,6 +76,10 @@
           "zone_name": "capgo.app"
         },
         {
+          "pattern": "api.capgo.com.cn/files*",
+          "zone_name": "capgo.app"
+        },
+        {
           "pattern": "plugin.capgo.app/files*",
           "zone_name": "capgo.app"
         },
