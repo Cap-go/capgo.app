@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(29);
+SELECT plan(30);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -247,6 +247,27 @@ SELECT
         ),
         ARRAY[120]::double precision[],
         'a newer refresh replaces the cycle rows of its org'
+    );
+
+-- A refresh that started before the 11:00 one (which dropped March 2) finishes
+-- last with March 2: the removed day is not re-inserted.
+SELECT public.replace_app_storage_hourly(
+    app_id, org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T00:00:00Z', true,
+    '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 5}, {"cycle_start": "2026-03-01", "date": "2026-03-02", "storage_byte_hours": 5}]'::jsonb,
+    '2026-03-02T10:30:00Z'
+) FROM replace_ctx;
+
+SELECT
+    is(
+        (
+            SELECT array_agg(storage_byte_hours ORDER BY date)
+            FROM public.daily_storage_hourly
+            WHERE app_id = (SELECT app_id FROM replace_ctx)
+              AND owner_org = (SELECT org_id FROM replace_ctx)
+              AND cycle_start = (SELECT cycle_start FROM replace_ctx)
+        ),
+        ARRAY[120]::double precision[],
+        'an older refresh never re-inserts a day a newer refresh removed'
     );
 
 -- A legacy row (written before the migration) of an app created mid-cycle is

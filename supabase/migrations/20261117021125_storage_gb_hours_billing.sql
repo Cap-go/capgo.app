@@ -123,6 +123,36 @@ COMMENT ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) IS
 -- p_written_at is taken by the caller before it reads version_meta: a row
 -- written by a refresh that started later is never deleted or overwritten,
 -- whatever order the refreshes finish in.
+-- Latest refresh of each app/org/cycle/segment. replace_app_storage_hourly only
+-- runs when its refresh started after the recorded one, so a refresh finishing
+-- late can neither overwrite a newer result nor re-insert a day a newer refresh
+-- removed. Internal: no client access.
+CREATE TABLE IF NOT EXISTS public.daily_storage_hourly_refreshes (
+    app_id character varying NOT NULL,
+    owner_org uuid NOT NULL,
+    cycle_start date NOT NULL,
+    segment_start timestamptz NOT NULL,
+    written_at timestamptz NOT NULL,
+    PRIMARY KEY (app_id, owner_org, cycle_start, segment_start)
+);
+
+ALTER TABLE public.daily_storage_hourly_refreshes OWNER TO postgres;
+ALTER TABLE public.daily_storage_hourly_refreshes ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.daily_storage_hourly_refreshes FROM PUBLIC, anon, authenticated;
+CREATE POLICY "Deny all direct access"
+ON public.daily_storage_hourly_refreshes
+AS RESTRICTIVE
+FOR ALL
+TO PUBLIC
+USING (false)
+WITH CHECK (false);
+GRANT ALL ON TABLE public.daily_storage_hourly_refreshes TO service_role;
+
+COMMENT ON TABLE public.daily_storage_hourly_refreshes IS
+'Start time of the latest storage refresh applied per app, org, cycle and '
+'segment. Guards replace_app_storage_hourly against refreshes finishing out '
+'of order. Purged with old deleted apps by delete_old_deleted_apps.';
+
 CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
     p_app_id character varying,
     p_owner_org uuid,
@@ -135,10 +165,22 @@ CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
     p_written_at timestamptz
 )
 RETURNS void
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path TO ''
 AS $$
+BEGIN
+  -- Advance the watermark, or stop: a refresh that started later already
+  -- replaced this cycle and segment. The row lock serializes concurrent ones.
+  INSERT INTO public.daily_storage_hourly_refreshes AS refresh (app_id, owner_org, cycle_start, segment_start, written_at)
+  VALUES (p_app_id, p_owner_org, p_cycle_start_day, p_segment_start, p_written_at)
+  ON CONFLICT (app_id, owner_org, cycle_start, segment_start) DO UPDATE
+    SET written_at = EXCLUDED.written_at
+    WHERE refresh.written_at <= EXCLUDED.written_at;
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
   WITH new_rows AS (
     SELECT r.cycle_start, r.date, r.storage_byte_hours
     FROM pg_catalog.jsonb_to_recordset(COALESCE(p_rows, '[]'::jsonb))
@@ -171,7 +213,8 @@ AS $$
   ON CONFLICT (app_id, owner_org, cycle_start, date, segment_start) DO UPDATE SET
     storage_byte_hours = EXCLUDED.storage_byte_hours,
     updated_at = EXCLUDED.updated_at
-  WHERE public.daily_storage_hourly.updated_at <= EXCLUDED.updated_at
+  WHERE public.daily_storage_hourly.updated_at <= EXCLUDED.updated_at;
+END;
 $$;
 
 ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz) OWNER TO postgres;
@@ -807,6 +850,11 @@ BEGIN
   WHERE dsh.app_id = ANY (v_purged_app_ids)
     AND NOT EXISTS (SELECT 1 FROM public.apps a WHERE a.app_id = dsh.app_id)
     AND NOT EXISTS (SELECT 1 FROM public.deleted_apps da WHERE da.app_id = dsh.app_id);
+
+  DELETE FROM public.daily_storage_hourly_refreshes refresh
+  WHERE refresh.app_id = ANY (v_purged_app_ids)
+    AND NOT EXISTS (SELECT 1 FROM public.apps a WHERE a.app_id = refresh.app_id)
+    AND NOT EXISTS (SELECT 1 FROM public.deleted_apps da WHERE da.app_id = refresh.app_id);
 END;
 $$;
 

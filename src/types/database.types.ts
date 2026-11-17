@@ -1495,6 +1495,30 @@ export type Database = {
           },
         ]
       }
+      daily_storage_hourly_refreshes: {
+        Row: {
+          app_id: string
+          cycle_start: string
+          owner_org: string
+          segment_start: string
+          written_at: string
+        }
+        Insert: {
+          app_id: string
+          cycle_start: string
+          owner_org: string
+          segment_start: string
+          written_at: string
+        }
+        Update: {
+          app_id?: string
+          cycle_start?: string
+          owner_org?: string
+          segment_start?: string
+          written_at?: string
+        }
+        Relationships: []
+      }
       daily_version: {
         Row: {
           app_id: string
