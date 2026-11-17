@@ -10,8 +10,12 @@ async function defaultPgQuery(sql: string, params?: unknown[]): Promise<PgQueryR
     return { rowCount: 0, rows: [] }
   if (sql.includes('DISTINCT owner_org'))
     return { rowCount: 0, rows: [] }
-  if (sql.includes('expire_simulator_sessions'))
+  if (sql.includes('expire_simulator_sessions')) {
+    const skipIds = (params?.[1] as string[] | undefined) ?? []
+    if (skipIds.length > 0)
+      return { rowCount: 1, rows: [{ expire_simulator_sessions: 0 }] }
     return { rowCount: 1, rows: [{ expire_simulator_sessions: 0 }] }
+  }
   if (sql.includes('bump_simulator_session_activity'))
     return { rowCount: 1, rows: [{ bumped: 1 }] }
   if (sql.includes('last_activity_at = $2'))

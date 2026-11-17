@@ -68,6 +68,18 @@ const liveRow = {
 
 const dueDeviceRow = { id: sessionId, emulator_id: 'emu-1', device_stopped_at: null }
 
+function mockExpireSimulatorSessions(sql: string, params?: unknown[]): PgQueryResult | null {
+  if (!sql.includes('expire_simulator_sessions'))
+    return null
+  const skipIds = (params?.[1] as string[] | undefined) ?? []
+  const wouldIdleExpire = !mockState.hostActivityRefreshed
+  if (wouldIdleExpire && skipIds.includes(sessionId))
+    return { rowCount: 1, rows: [{ expire_simulator_sessions: 0 }] }
+  if (wouldIdleExpire)
+    return { rowCount: 1, rows: [{ expire_simulator_sessions: 1 }] }
+  return { rowCount: 1, rows: [{ expire_simulator_sessions: 0 }] }
+}
+
 function installStatefulPgMock() {
   mockState.hostActivityRefreshed = false
   pgState.query.mockImplementation(async (sql: string, params?: unknown[]): Promise<PgQueryResult> => {
@@ -91,8 +103,9 @@ function installStatefulPgMock() {
         return { rowCount: 1, rows: [dueDeviceRow] }
       return { rowCount: 0, rows: [] }
     }
-    if (sql.includes('expire_simulator_sessions'))
-      return { rowCount: 1, rows: [{ expire_simulator_sessions: 0 }] }
+    const expireResult = mockExpireSimulatorSessions(sql, params)
+    if (expireResult)
+      return expireResult
     if (sql.includes('DISTINCT owner_org'))
       return { rowCount: 1, rows: [{ owner_org: orgId }] }
     if (sql.includes('SELECT id FROM public.orgs'))
@@ -188,6 +201,14 @@ describe('simulator org expiry host sync', () => {
     expect(Date.now() - started).toBeLessThan(SIMULATOR_ORG_HOST_SYNC_BUDGET_MS + 500)
     const dueParams = pgState.queryParams.find(params => (params?.[1] as string[] | undefined)?.includes(sessionId))
     expect(dueParams?.[1]).toContain(sessionId)
+    const expireIndex = pgState.queries.findIndex(query => query.includes('expire_simulator_sessions'))
+    expect(expireIndex).toBeGreaterThanOrEqual(0)
+    expect(pgState.queryParams[expireIndex]).toEqual([orgId, [sessionId]])
+    const expireRow = await Promise.resolve(mockExpireSimulatorSessions(
+      pgState.queries[expireIndex]!,
+      pgState.queryParams[expireIndex],
+    ))
+    expect(expireRow?.rows[0]?.expire_simulator_sessions).toBe(0)
     expect(stopSpy).not.toHaveBeenCalled()
     stopSpy.mockRestore()
   })
@@ -244,6 +265,46 @@ describe('simulator host sync edge cases', () => {
     const result = await syncInProgressSimulatorSessionsForOrgFromHost(context, orgId)
     expect(result.synced).toBe(1)
     expect(result.hostUnreachableSessionIds).toContain(firstId)
+  })
+
+  it('adds rows not reached to hostUnreachableSessionIds when the org budget expires', async () => {
+    const pendingIds = [
+      'a1000000-0000-4000-8000-000000000001',
+      'a2000000-0000-4000-8000-000000000002',
+      'a3000000-0000-4000-8000-000000000003',
+      'a4000000-0000-4000-8000-000000000004',
+      'a5000000-0000-4000-8000-000000000005',
+      'a6000000-0000-4000-8000-000000000006',
+    ]
+    pgState.query.mockImplementation(async (sql: string): Promise<PgQueryResult> => {
+      pgState.queries.push(sql)
+      if (sql.includes('owner_org = $1::uuid') && sql.includes('emulator_id IS NOT NULL')) {
+        return {
+          rowCount: pendingIds.length,
+          rows: pendingIds.map((id, index) => ({ ...liveRow, id, emulator_id: `emu-${index}` })),
+        }
+      }
+      if (sql.includes('last_activity_at = $2'))
+        return { rowCount: 1, rows: [{ last_activity_at: freshHostActivity }] }
+      return { rowCount: 0, rows: [] }
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      data: { id: 'emu', url: 'https://host.test/s/x/', status: 'running', lastActivityAt: freshHostActivity },
+    }), { status: 200 })))
+    const budgetStart = Date.now()
+    let nowCalls = 0
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
+      nowCalls++
+      if (nowCalls > 3)
+        return budgetStart + SIMULATOR_ORG_HOST_SYNC_BUDGET_MS + 1
+      return budgetStart
+    })
+    const { syncInProgressSimulatorSessionsForOrgFromHost } = await import('../supabase/functions/_backend/public/build/simulator.ts')
+    const result = await syncInProgressSimulatorSessionsForOrgFromHost(context, orgId)
+    nowSpy.mockRestore()
+    for (const id of pendingIds.slice(4))
+      expect(result.hostUnreachableSessionIds).toContain(id)
+    expect(result.synced).toBeLessThanOrEqual(4)
   })
 
   it('does not settle a session when host GET returns 409', async () => {

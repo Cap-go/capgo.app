@@ -655,8 +655,11 @@ export async function syncInProgressSimulatorSessionsForOrgFromHost(c: Context, 
   let synced = 0
   const syncOptions: SimulatorHostSyncOptions = { hostTimeoutMs: SIMULATOR_ORG_HOST_SYNC_TIMEOUT_MS }
   for (let offset = 0; offset < rows.length; offset += SIMULATOR_ORG_HOST_SYNC_CONCURRENCY) {
-    if (Date.now() >= deadline)
+    if (Date.now() >= deadline) {
+      for (let pending = offset; pending < rows.length; pending++)
+        hostUnreachableSessionIds.push(rows[pending]!.id)
       break
+    }
     const chunk = rows.slice(offset, offset + SIMULATOR_ORG_HOST_SYNC_CONCURRENCY)
     const outcomes = await Promise.all(chunk.map(async (row) => {
       try {

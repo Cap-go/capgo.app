@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(24);
+SELECT plan(30);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -194,6 +194,77 @@ SELECT is(
   public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
   1,
   'six minutes idle expires after the bump is gone'
+);
+
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, last_activity_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000007',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'ios',
+  'in-progress',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '20 minutes',
+  now() - interval '6 minutes'
+);
+
+SELECT is(
+  public.expire_simulator_sessions(
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    ARRAY['99000000-0000-4000-8000-000000000007'::uuid]
+  ),
+  0,
+  'skip list defers idle expiry when host sync could not confirm activity'
+);
+
+SELECT is(
+  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000007'),
+  'in-progress',
+  'a skipped idle session stays open at six minutes idle'
+);
+
+UPDATE public.simulator_sessions
+SET started_at = now() - interval '41 minutes',
+    last_activity_at = now() - interval '41 minutes'
+WHERE id = '99000000-0000-4000-8000-000000000007';
+
+SELECT is(
+  public.expire_simulator_sessions(
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    ARRAY['99000000-0000-4000-8000-000000000007'::uuid]
+  ),
+  1,
+  'max duration still expires when the session is on the skip list'
+);
+
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, last_activity_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000008',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'android',
+  'in-progress',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '20 minutes',
+  now() - interval '6 minutes'
+);
+
+SELECT is(
+  public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+  1,
+  'idle expiry runs when the session is not on the skip list'
+);
+
+SELECT is(
+  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000008'),
+  'stopped',
+  'six minutes idle stops a session that is not skipped'
 );
 
 SELECT is(

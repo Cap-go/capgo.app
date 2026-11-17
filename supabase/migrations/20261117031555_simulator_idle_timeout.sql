@@ -48,8 +48,13 @@ REVOKE ALL ON FUNCTION public.bump_simulator_session_activity(uuid) FROM anon;
 REVOKE ALL ON FUNCTION public.bump_simulator_session_activity(uuid) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.bump_simulator_session_activity(uuid) TO service_role;
 
+DROP FUNCTION IF EXISTS public.expire_simulator_sessions(uuid);
+
 -- Stop when the session hits its max duration or five minutes without API activity.
-CREATE OR REPLACE FUNCTION public.expire_simulator_sessions(p_org_id uuid)
+CREATE OR REPLACE FUNCTION public.expire_simulator_sessions(
+  p_org_id uuid,
+  p_skip_idle_ids uuid[] DEFAULT '{}'::uuid[]
+)
 RETURNS integer
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -71,7 +76,10 @@ BEGIN
       AND status IN ('new', 'queued', 'starting', 'in-progress')
       AND (
         COALESCE(started_at, created_at) <= now() - make_interval(mins => max_duration_minutes)
-        OR COALESCE(last_activity_at, started_at, created_at) <= now() - make_interval(mins => 5)
+        OR (
+          COALESCE(last_activity_at, started_at, created_at) <= now() - make_interval(mins => 5)
+          AND NOT (id = ANY(COALESCE(p_skip_idle_ids, ARRAY[]::uuid[])))
+        )
       )
     FOR UPDATE
   LOOP
@@ -118,11 +126,11 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.expire_simulator_sessions(uuid) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.expire_simulator_sessions(uuid) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.expire_simulator_sessions(uuid) FROM anon;
-REVOKE ALL ON FUNCTION public.expire_simulator_sessions(uuid) FROM authenticated;
-GRANT EXECUTE ON FUNCTION public.expire_simulator_sessions(uuid) TO service_role;
+ALTER FUNCTION public.expire_simulator_sessions(uuid, uuid[]) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.expire_simulator_sessions(uuid, uuid[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.expire_simulator_sessions(uuid, uuid[]) FROM anon;
+REVOKE ALL ON FUNCTION public.expire_simulator_sessions(uuid, uuid[]) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.expire_simulator_sessions(uuid, uuid[]) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.settle_simulator_sessions_before_app_delete()
 RETURNS trigger

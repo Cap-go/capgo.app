@@ -259,7 +259,7 @@ export async function expireSimulatorSessions(c: Context, orgId: string): Promis
       [orgId, hostUnreachableSessionIds],
     )
     dueForDeviceStop = dueResult.rows
-    await client.query('SELECT public.expire_simulator_sessions($1::uuid)', [orgId])
+    await client.query('SELECT public.expire_simulator_sessions($1::uuid, $2::uuid[])', [orgId, hostUnreachableSessionIds])
     await client.query('COMMIT')
     if (dueForDeviceStop.length > 0)
       await stopDevicesForDueSimulatorExpiry(c, dueForDeviceStop)
