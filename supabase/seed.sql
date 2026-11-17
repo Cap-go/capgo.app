@@ -620,7 +620,8 @@ BEGIN
 
     INSERT INTO "public"."apps" ("created_at", "app_id", "icon_url", "name", "last_version", "updated_at", "owner_org", "user_id") VALUES
     (NOW(), 'com.demoadmin.app', '', 'Demo Admin app', '1.0.0', NOW(), '22dbad8a-b885-4309-9b3b-a09f8460fb6d', 'c591b04e-cf29-4945-b9a0-776d0672061a'),
-    (NOW(), 'com.demo.app', '', 'Demo app', '1.0.0', NOW(), '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097'),
+    -- Created a month ago: storage byte-hours accrue from the bundle uploads below.
+    (NOW() - interval '30 days', 'com.demo.app', '', 'Demo app', '1.0.0', NOW(), '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097'),
     (NOW(), 'com.stats.app', '', 'Stats Test App', '1.0.0', NOW(), 'b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d'),
     (NOW(), 'com.rls.app', '', 'RLS Test App', '1.0.0', NOW(), 'c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e'),
     (NOW(), 'com.encrypted.app', '', 'Encrypted Test App', '1.0.0', NOW(), 'a7b8c9d0-e1f2-4a3b-9c4d-5e6f7a8b9ca4', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193'),
@@ -745,6 +746,14 @@ BEGIN
     (10, NOW(), 'com.demoadmin.app', NOW(), 'admin123', 1500000),
     (13, NOW(), 'com.stats.app', NOW(), 'stats123', 850000);
 
+    -- Upload events of the demo bundles: storage is billed in byte-hours from version_meta,
+    -- so a stats refresh recomputes the same history the stats seed writes.
+    DELETE FROM public.version_meta WHERE app_id = 'com.demo.app';
+    INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+    SELECT pg_catalog.timezone('UTC', NOW() - uploads.age), 'com.demo.app', uploads.version_id, avm.size
+    FROM (VALUES (3, interval '28 days'), (5, interval '20 days'), (6, interval '12 days'), (7, interval '5 days')) AS uploads(version_id, age)
+    JOIN public.app_versions_meta avm ON avm.id = uploads.version_id;
+
     INSERT INTO "public"."channels" ("id", "created_at", "name", "app_id", "version", "updated_at", "public", "disable_auto_update_under_native", "disable_auto_update", "ios", "android", "electron", "allow_device_self_set", "allow_emulator", "allow_device", "allow_dev", "allow_prod", "created_by") VALUES
     (1, NOW(), 'production', 'com.demo.app', 3, NOW(), 't', 't', 'major'::"public"."disable_update", 'f', 't', 't', 't', 't', 't', 't', 't', '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid),
     (2, NOW(), 'no_access', 'com.demo.app', 5, NOW(), 'f', 't', 'major'::"public"."disable_update", 't', 't', 'f', 't', 't', 't', 't', 't', '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid),
@@ -798,7 +807,6 @@ DECLARE
   curr_date DATE;
   random_mau INTEGER;
   random_bandwidth BIGINT;
-  random_storage BIGINT;
   random_file_size BIGINT;
   random_uuid UUID;
   random_version_id BIGINT := 3;
@@ -840,14 +848,26 @@ BEGIN
   WHILE curr_date <= end_date::DATE LOOP
     random_mau := FLOOR(RANDOM() * 1000) + 1;
     random_bandwidth := FLOOR(RANDOM() * 1000000000) + 1;
-    random_storage := FLOOR(RANDOM() * 1000000000) + 1;
 
     INSERT INTO public.daily_mau (app_id, date, mau) VALUES ('com.demo.app', curr_date, random_mau);
     INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES ('com.demo.app', curr_date, random_bandwidth);
-    INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours) VALUES ('com.demo.app', demo_org_id, curr_date, curr_date, random_storage);
 
     curr_date := curr_date + INTERVAL '1 day';
   END LOOP;
+
+  -- Storage byte-hours of each day from the demo bundles' upload events (what a stats refresh
+  -- computes), so a refresh keeps the same history.
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+  SELECT 'com.demo.app', demo_org_id, day.d::date, day.d::date,
+    pg_catalog.round(SUM(vm.size * EXTRACT(EPOCH FROM (
+      LEAST(day.d + interval '1 day', pg_catalog.timezone('UTC', NOW())) - GREATEST(day.d, vm.timestamp)
+    )) / 3600))::bigint
+  FROM pg_catalog.generate_series(start_date, end_date, interval '1 day') AS day(d)
+  JOIN public.version_meta vm
+    ON vm.app_id = 'com.demo.app'
+    AND vm.size > 0
+    AND vm.timestamp < LEAST(day.d + interval '1 day', pg_catalog.timezone('UTC', NOW()))
+  GROUP BY day.d;
 
   -- Seed data for daily_version
 
