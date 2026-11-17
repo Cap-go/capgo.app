@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(51);
+SELECT plan(53);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -544,6 +544,45 @@ SELECT
         'stats_jobs refreshes an idle app after its last bundle was removed'
     );
 
+-- A removal recorded after the last refresh's cutoff but dated before it (at the
+-- deletion) still gets the app refreshed; events recorded before it do not.
+INSERT INTO public.apps (app_id, icon_url, name, owner_org, user_id)
+SELECT app_id, '', app_id, org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid
+FROM gbh_ctx, (VALUES ('com.test.gbhours.backdated'), ('com.test.gbhours.settled')) AS v(app_id);
+INSERT INTO public.app_stats_refresh_state (app_id, owner_org, stats_updated_at)
+SELECT app_id, org_id, pg_catalog.timezone('UTC', now()) - interval '21 hours'
+FROM gbh_ctx, (VALUES ('com.test.gbhours.backdated'), ('com.test.gbhours.settled')) AS v(app_id)
+ON CONFLICT (app_id) DO UPDATE SET stats_updated_at = EXCLUDED.stats_updated_at, stats_refresh_requested_at = NULL;
+INSERT INTO public.daily_storage_hourly_refreshes (app_id, owner_org, cycle_start, segment_start, written_at, calculated_until)
+SELECT app_id, org_id, CURRENT_DATE - 10, '-infinity', now() - interval '2 days', now() - interval '2 days'
+FROM gbh_ctx, (VALUES ('com.test.gbhours.backdated'), ('com.test.gbhours.settled')) AS v(app_id);
+INSERT INTO public.version_meta (timestamp, app_id, version_id, size, recorded_at) VALUES
+(pg_catalog.timezone('UTC', now()) - interval '40 days', 'com.test.gbhours.backdated', 9100211, 100, pg_catalog.timezone('UTC', now()) - interval '40 days'),
+-- Deleted 3 days ago, recorded just now.
+(pg_catalog.timezone('UTC', now()) - interval '3 days', 'com.test.gbhours.backdated', 9100211, -100, pg_catalog.timezone('UTC', now())),
+(pg_catalog.timezone('UTC', now()) - interval '40 days', 'com.test.gbhours.settled', 9100212, 100, pg_catalog.timezone('UTC', now()) - interval '40 days'),
+(pg_catalog.timezone('UTC', now()) - interval '3 days', 'com.test.gbhours.settled', 9100212, -100, pg_catalog.timezone('UTC', now()) - interval '3 days');
+DELETE FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' IN ('com.test.gbhours.backdated', 'com.test.gbhours.settled');
+SELECT public.process_cron_stats_jobs();
+
+SELECT
+    ok(
+        EXISTS (
+            SELECT 1 FROM pgmq.q_cron_stat_app
+            WHERE message->'payload'->>'appId' = 'com.test.gbhours.backdated'
+        ),
+        'stats_jobs refreshes an idle app after a removal recorded late and dated before its last cutoff'
+    );
+
+SELECT
+    ok(
+        NOT EXISTS (
+            SELECT 1 FROM pgmq.q_cron_stat_app
+            WHERE message->'payload'->>'appId' = 'com.test.gbhours.settled'
+        ),
+        'stats_jobs leaves an idle app whose events were all recorded before its last cutoff'
+    );
+
 -- Ownership history (billing accrual start) is backend-controlled.
 SELECT set_config('request.jwt.claim.role', 'authenticated', true);
 SELECT
@@ -650,10 +689,12 @@ SELECT
     );
 
 -- Storage events are recorded when they happened, capped at now.
-INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider, deleted, deleted_at)
-SELECT 9100306, live_app, '9.9.4', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', false, NULL FROM gbh_ctx
+-- 9100307 was deleted on 2026-01-06 (server updated_at); its deleted_at, which a
+-- client can write, claims 2026-01-01 and must not shorten the billed lifetime.
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider, deleted, deleted_at, updated_at)
+SELECT 9100306, live_app, '9.9.4', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', false, NULL, now() FROM gbh_ctx
 UNION ALL
-SELECT 9100307, live_app, '9.9.3', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', true, TIMESTAMPTZ '2026-01-06 00:00:00+00' FROM gbh_ctx;
+SELECT 9100307, live_app, '9.9.3', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', true, TIMESTAMPTZ '2026-01-01 00:00:00+00', TIMESTAMPTZ '2026-01-06 00:00:00+00' FROM gbh_ctx;
 SELECT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100306, 100, TIMESTAMPTZ '2026-01-02 00:00:00+00');
 -- A removal processed late is recorded at the deletion; one dated before the upload is clamped.
 SELECT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100306, -100, TIMESTAMPTZ '2026-01-01 00:00:00+00');
@@ -675,7 +716,7 @@ SELECT
     is(
         (SELECT array_agg(ARRAY[timestamp::text, size::text] ORDER BY size) FROM public.version_meta WHERE version_id = 9100307),
         ARRAY[ARRAY['2026-01-06 00:00:00', '-200'], ARRAY['2026-01-03 00:00:00', '200']],
-        'and closed at the deletion, so it is billed from upload to deletion only'
+        'and closed at its server-side deletion, not the client-writable deleted_at'
     );
 
 INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider)

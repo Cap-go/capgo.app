@@ -326,6 +326,17 @@ GRANT EXECUTE ON FUNCTION public.get_org_storage_usage(uuid) TO authenticated, s
 -- at most once a day: while they store a bundle, and once more after a bundle
 -- event (such as the last bundle's removal) newer than their last storage
 -- refresh's cutoff, so the hours up to that removal are recorded.
+-- When each storage event was written, separately from when it happened
+-- (timestamp): a removal recorded late is dated at the deletion, before the
+-- last refresh's cutoff, yet that refresh never saw it. stats_jobs compares
+-- this with the cutoff. A stable default: added without a table rewrite;
+-- existing rows get the migration time (one more refresh of their apps).
+ALTER TABLE public.version_meta
+ADD COLUMN IF NOT EXISTS recorded_at timestamp NOT NULL DEFAULT pg_catalog.timezone('UTC', pg_catalog.now());
+
+COMMENT ON COLUMN public.version_meta.recorded_at IS
+'When the event was written (UTC). timestamp is when it happened: a late removal is dated at the deletion. Storage refreshes are re-queued for events recorded after their cutoff.';
+
 CREATE OR REPLACE FUNCTION public.process_cron_stats_jobs()
 RETURNS void
 LANGUAGE plpgsql
@@ -379,13 +390,15 @@ BEGIN
               AND stored.deleted = false
           )
           OR EXISTS (
-            -- Compared with how far the latest storage refresh calculated (it
-            -- read version_meta up to there), not stats_updated_at (its
-            -- completion): a removal while a refresh ran still gets refreshed.
+            -- An event written after how far the latest storage refresh
+            -- calculated (it read version_meta up to there), not after
+            -- stats_updated_at (its completion): a removal while a refresh ran,
+            -- or one recorded late and dated at the deletion (before that
+            -- cutoff), still gets refreshed.
             SELECT 1
             FROM public.version_meta event
             WHERE event.app_id = a.app_id
-              AND event.timestamp > COALESCE(
+              AND event.recorded_at > COALESCE(
                 (
                   SELECT pg_catalog.timezone('UTC', max(refresh.calculated_until))
                   FROM public.daily_storage_hourly_refreshes refresh
@@ -872,8 +885,9 @@ SELECT public.backfill_missing_storage_lifetimes();
 -- An upload event can also arrive after its bundle was deleted: the upload job
 -- was still reading the size when the deletion job found no lifetime to close.
 -- The version row is locked (FOR SHARE) so a deletion cannot commit in between,
--- and a positive event for a version already deleted is closed at its deletion
--- in the same transaction, so a removed bundle stops accruing byte-hours.
+-- and a positive event for a version already deleted is closed at its last
+-- server-side update (the deletion or later) in the same transaction, so a
+-- removed bundle stops accruing byte-hours.
 DROP FUNCTION IF EXISTS public.upsert_version_meta(character varying, bigint, bigint);
 
 CREATE OR REPLACE FUNCTION public.upsert_version_meta(
@@ -909,7 +923,9 @@ BEGIN
     RETURN FALSE;
   END IF;
 
-  SELECT av.deleted, COALESCE(av.deleted_at, av.updated_at)
+  -- updated_at, not deleted_at: moddatetime sets it on every update, while a
+  -- client can write deleted_at and would backdate the deletion.
+  SELECT av.deleted, av.updated_at
   INTO v_deleted, v_deleted_at
   FROM public.app_versions av
   WHERE av.app_id = p_app_id

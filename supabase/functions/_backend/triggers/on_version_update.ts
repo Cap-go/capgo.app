@@ -337,9 +337,18 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
 }
 
 /**
+ * When the bundle was deleted, as the server saw it: the trigger time of the update that queued
+ * this job (`occurred_at`), not `app_versions.deleted_at`, which a client can write and would
+ * backdate. Null (processing time) for messages queued before `occurred_at` existed.
+ */
+function storageRemovalTime(c: Context): string | null {
+  return c.get('webhookOccurredAt') ?? null
+}
+
+/**
  * Writes the missing removal event of a bundle from its upload event (idempotent), at the bundle's
- * deletion time (processing time when unknown, never before the upload): a job that runs late
- * does not bill the hours after the deletion.
+ * deletion (`storageRemovalTime`, never before the upload): a job that runs late does not bill
+ * the hours after the deletion.
  */
 async function closeVersionStorageLifetime(c: Context, pg: PgClient, record: Database['public']['Tables']['app_versions']['Row']) {
   try {
@@ -359,7 +368,7 @@ async function closeVersionStorageLifetime(c: Context, pg: PgClient, record: Dat
              AND removed.size < 0
          )
        ON CONFLICT DO NOTHING`,
-      [record.app_id, record.id, record.deleted_at ?? null],
+      [record.app_id, record.id, storageRemovalTime(c)],
     )
   }
   catch (error) {
@@ -407,7 +416,7 @@ async function deleteVersionDatabaseState(c: Context, pg: PgClient, record: Data
   }
   else {
     // Removed at the deletion, not when this job runs.
-    const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size, record.deleted_at)
+    const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size, storageRemovalTime(c))
     if (isLostStorageEvent(errorCreateStatsMeta)) {
       // Storage is billed in GB-hours from version_meta: without the removal event the bundle stays
       // billed forever. Fail before zeroing the size, so the queue retry can still record it.

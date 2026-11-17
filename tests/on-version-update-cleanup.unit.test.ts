@@ -110,9 +110,12 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 
 const { deleteIt, onVersionUpdateTestUtils } = await import('../supabase/functions/_backend/triggers/on_version_update.ts')
 
+// When the deleting update fired its trigger (server-side), unlike the client-writable deleted_at.
+const OCCURRED_AT = '2026-01-02T03:04:05.000Z'
+
 function createContext() {
   return {
-    get: vi.fn(() => undefined),
+    get: vi.fn((key: string) => key === 'webhookOccurredAt' ? OCCURRED_AT : undefined),
     json: vi.fn((body: unknown, status = 200) => new Response(JSON.stringify(body), { status })),
   } as any
 }
@@ -166,8 +169,9 @@ describe('deleted version storage boundaries', () => {
     expect(statements.filter(sql => sql.startsWith('UPDATE public.channels'))).toHaveLength(2)
     expect(purgeFileReadCache).toHaveBeenCalledWith(createVersion().r2_path, createVersion().checksum)
     expect(pgQuery).toHaveBeenCalledWith('UPDATE public.app_versions_meta SET size = 0 WHERE id = $1', [123])
-    // Removed at the bundle's deletion, not when the job runs.
-    expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), 'com.cleanup.test', 123, -1234, '2026-01-01T00:00:00Z')
+    // Removed when the deleting update happened (server time), not when the job runs nor at the
+    // client-writable deleted_at.
+    expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), 'com.cleanup.test', 123, -1234, OCCURRED_AT)
   })
 
   it('fails without zeroing the size when the removal storage event is not recorded', async () => {
@@ -198,8 +202,8 @@ describe('deleted version storage boundaries', () => {
     const statements = pgQuery.mock.calls.map(([sql]) => sql as string)
     const close = pgQuery.mock.calls.find(([sql]) => (sql as string).includes('INSERT INTO public.version_meta') && (sql as string).includes('-added.size'))
     expect(close).toBeDefined()
-    // Closed at the bundle's deletion, never before its upload event.
-    expect(close?.[1]).toEqual(['com.cleanup.test', 123, '2026-01-01T00:00:00Z'])
+    // Closed at the deleting update (server time), never before its upload event.
+    expect(close?.[1]).toEqual(['com.cleanup.test', 123, OCCURRED_AT])
     expect(close?.[0]).toContain('GREATEST(added.timestamp')
     expect(statements.length).toBeGreaterThan(0)
     expect(createStatsMeta).not.toHaveBeenCalled()

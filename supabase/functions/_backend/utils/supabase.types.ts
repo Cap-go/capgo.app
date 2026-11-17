@@ -3942,18 +3942,21 @@ export type Database = {
       version_meta: {
         Row: {
           app_id: string
+          recorded_at: string
           size: number
           timestamp: string
           version_id: number
         }
         Insert: {
           app_id: string
+          recorded_at?: string
           size: number
           timestamp?: string
           version_id: number
         }
         Update: {
           app_id?: string
+          recorded_at?: string
           size?: number
           timestamp?: string
           version_id?: number
