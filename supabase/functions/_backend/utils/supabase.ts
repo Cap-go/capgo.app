@@ -1595,7 +1595,11 @@ export async function readChannelDeviceOverrideIdsSB(c: Context, app_id: string,
       limit: MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS,
     })
   }
-  return { into: partitioned.into, elsewhere: partitioned.elsewhere }
+  return {
+    into: partitioned.into,
+    elsewhere: partitioned.elsewhere,
+    truncated: partitioned.truncated || rows.length > CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT,
+  }
 }
 
 const CHANNEL_DEVICE_PLATFORMS: ChannelDevicePlatform[] = ['ios', 'android', 'electron']

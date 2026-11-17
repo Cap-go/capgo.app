@@ -18,6 +18,11 @@ export interface ChannelDevicePopulation {
   /** Devices in scope; can exceed the sum of `groups` when the setup list was capped. */
   total_devices: number
   truncated: boolean
+  /**
+   * The app has more channel_devices overrides than the capped id lists hold:
+   * some assigned devices are missing or not marked as assigned.
+   */
+  overrides_truncated?: boolean
 }
 
 interface PopulationRowCF {

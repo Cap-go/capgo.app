@@ -194,6 +194,9 @@ describe('channel impact summary', () => {
     expect(response.impacts[1].outcomes.revert_to_builtin).toBe(930)
     expect(response.impacts[2].rollout_receive).toBe(Math.round(response.impacts[2].receive / 4))
     expect(response.impacts.every(impact => impact.samples.length === 0)).toBe(true)
+    expect(response.overrides_truncated).toBe(false)
+    const capped = buildChannelImpactResponse('com.example.app', row, { ...population, overrides_truncated: true }, [{ kind: 'builtin' }], { includeSamples: false })
+    expect(capped.overrides_truncated).toBe(true)
   })
 })
 

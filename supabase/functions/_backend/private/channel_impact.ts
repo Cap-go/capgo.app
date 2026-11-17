@@ -99,6 +99,8 @@ export interface ChannelImpactResponse {
   window_days: number
   total_devices: number
   truncated: boolean
+  /** Too many channel_devices assignments to check them all: counts for assigned devices are estimates. */
+  overrides_truncated: boolean
   samples_included: boolean
   impacts: ChannelImpactResult[]
   generated_at: string
@@ -239,6 +241,7 @@ export function buildChannelImpactResponse(
     window_days: CHANNEL_IMPACT_WINDOW_DAYS,
     total_devices: population.total_devices,
     truncated: population.truncated,
+    overrides_truncated: !!population.overrides_truncated,
     samples_included: options.includeSamples,
     impacts,
     generated_at: (options.now ?? new Date()).toISOString(),

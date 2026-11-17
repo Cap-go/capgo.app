@@ -5011,5 +5011,6 @@
   "channel-impact-compat-check-failed": "Used in Capgo web console areas: components/channel, pages/app. Role: error toast message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-impact-native-mixed": "Used in Capgo web console areas: components/channel. Role: short status label in a table cell; \"switch\" means the devices move to the new bundle. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-impact-outcome-blocked-no-bundle": "Used in Capgo web console areas: components/channel. Role: short status label for a device in a list. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "channel-impact-why-no-bundle": "Used in Capgo web console areas: components/channel. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "channel-impact-why-no-bundle": "Used in Capgo web console areas: components/channel. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-impact-overrides-truncated": "Used in Capgo web console areas: components/channel. Role: warning banner. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

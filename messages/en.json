@@ -4756,5 +4756,6 @@
   "channel-impact-compat-check-failed": "Couldn't check this bundle's native packages against the channel, so nothing was changed. Try again.",
   "channel-impact-native-mixed": "{count} of {total} switch",
   "channel-impact-outcome-blocked-no-bundle": "Keeps its bundle: cannot download it",
-  "channel-impact-why-no-bundle": "{bundle} has no zip, only a delta manifest. {count} devices use an updater too old for manifests or are on a channel set to zip downloads, so they cannot download it."
+  "channel-impact-why-no-bundle": "{bundle} has no zip, only a delta manifest. {count} devices use an updater too old for manifests or are on a channel set to zip downloads, so they cannot download it.",
+  "channel-impact-overrides-truncated": "This app has too many devices assigned to channels from the console or the API to check them all, so counts for assigned devices are estimates."
 }

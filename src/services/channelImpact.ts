@@ -81,6 +81,7 @@ export interface ChannelImpactResponse {
   window_days: number
   total_devices: number
   truncated: boolean
+  overrides_truncated: boolean
   samples_included: boolean
   impacts: ChannelImpactResult[]
   generated_at: string

@@ -281,9 +281,10 @@ export async function readChannelDevicePopulation(c: Context, app_id: string, ch
   if (!deviceOverrides)
     throw new Error('channel_devices overrides unavailable')
   const overrides: ChannelDeviceOverrideIds = { into: deviceOverrides.into, elsewhere: deviceOverrides.elsewhere, defaultForPlatforms }
-  if (!shouldUseAnalyticsEngine(c))
-    return readChannelDevicePopulationSB(c, app_id, channel.name, overrides)
-  return readChannelDevicePopulationCF(c, app_id, channel.name, overrides)
+  const population = shouldUseAnalyticsEngine(c)
+    ? await readChannelDevicePopulationCF(c, app_id, channel.name, overrides)
+    : await readChannelDevicePopulationSB(c, app_id, channel.name, overrides)
+  return { ...population, overrides_truncated: !!deviceOverrides.truncated }
 }
 
 /**

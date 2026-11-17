@@ -303,6 +303,9 @@ const showImpact = computed(() => !isRevert.value || !!state.choice)
           <p v-if="response?.channel.paused" class="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
             {{ t('channel-impact-paused') }}
           </p>
+          <p v-if="response?.overrides_truncated" class="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-100" data-test="channel-impact-overrides-truncated">
+            {{ t('channel-impact-overrides-truncated') }}
+          </p>
 
           <p v-if="!impact.total_devices" class="text-sm text-slate-600 dark:text-slate-300" data-test="channel-impact-empty">
             {{ t('channel-impact-no-devices', { days: response?.window_days ?? 30 }) }}
