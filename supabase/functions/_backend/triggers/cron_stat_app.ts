@@ -462,30 +462,44 @@ async function replaceCycleStorageHourly(
   return calculation
 }
 
-/** How far the latest refresh of an app/org/cycle/segment calculated, if any. */
-async function readStorageRefreshedAt(pg: PgClient, appId: string, ownerOrg: string, cycleStartDay: string, segmentStart: string) {
+/** How far the latest refresh of an app/org/cycle/segment calculated, unless it missed an event dated before `coversUntil`. */
+async function readStorageRefreshedAt(pg: PgClient, appId: string, ownerOrg: string, cycleStartDay: string, segmentStart: string, coversUntil: string) {
+  // A storage event dated before `coversUntil` but recorded after that refresh read version_meta
+  // (a removal written late and dated at the deletion) was not in its calculation: the segment
+  // is then not finalized, and the caller recomputes it.
   const { rows } = await pg.query<{ calculated_until: string | Date | null }>(
-    `SELECT calculated_until
-     FROM public.daily_storage_hourly_refreshes
-     WHERE app_id = $1
-       AND owner_org = $2::uuid
-       AND cycle_start = $3::date
-       AND segment_start = $4::timestamptz`,
-    [appId, ownerOrg, cycleStartDay, segmentStart],
+    `SELECT refresh.calculated_until
+     FROM public.daily_storage_hourly_refreshes refresh
+     WHERE refresh.app_id = $1
+       AND refresh.owner_org = $2::uuid
+       AND refresh.cycle_start = $3::date
+       AND refresh.segment_start = $4::timestamptz
+       AND NOT EXISTS (
+         SELECT 1
+         FROM public.version_meta event
+         WHERE event.app_id = refresh.app_id
+           AND event.timestamp < pg_catalog.timezone('UTC', $5::timestamptz)
+           AND event.recorded_at > pg_catalog.timezone('UTC', refresh.written_at)
+       )`,
+    [appId, ownerOrg, cycleStartDay, segmentStart, coversUntil],
   )
   return toIsoTimestamp(rows[0]?.calculated_until)
-}
-
-async function readSegmentRefreshedAt(c: Context, pg: PgClient, appId: string, ownerOrg: string, cycleStart: string, ownedSince: string | null) {
-  return (await runSupabaseResultWithRetry<string | null>(c, 'read_storage_refresh', async () => ({
-    data: await readStorageRefreshedAt(pg, appId, ownerOrg, formatUtcDay(floorToDay(parseTimestampMs(cycleStart))), storageSegmentKey(ownedSince)),
-    error: null,
-  }))).data
 }
 
 // Earlier cycles walked back when refreshes were missing across several rollovers (about the same
 // window as the former-owner lookback).
 const MAX_UNFINISHED_PREVIOUS_CYCLES = 3
+
+/**
+ * How far the latest refresh of an app/org/cycle/segment calculated, if it saw every storage event
+ * dated before `coversUntil` (the end the caller needs finalized); null otherwise.
+ */
+async function readSegmentRefreshedAt(c: Context, pg: PgClient, appId: string, ownerOrg: string, cycleStart: string, ownedSince: string | null, coversUntil: string) {
+  return (await runSupabaseResultWithRetry<string | null>(c, 'read_storage_refresh', async () => ({
+    data: await readStorageRefreshedAt(pg, appId, ownerOrg, formatUtcDay(floorToDay(parseTimestampMs(cycleStart))), storageSegmentKey(ownedSince), coversUntil),
+    error: null,
+  }))).data
+}
 
 /**
  * Records the previous cycles' hours up to their end until a refresh that calculated past that end
@@ -515,8 +529,9 @@ async function finalizePreviousCycle(
     // Nothing of that cycle (or any earlier one) is owned by this segment.
     if (options.accrualStart && parseTimestampMs(options.accrualStart) >= previousEndMs)
       return
-    const finalizedAt = await readSegmentRefreshedAt(c, pg, options.appId, options.ownerOrg, previous.cycle_start, options.accrualStart)
+    const finalizedAt = await readSegmentRefreshedAt(c, pg, options.appId, options.ownerOrg, previous.cycle_start, options.accrualStart, previous.cycle_end)
     // A finalized cycle is skipped, not a stop: a retry after an older cycle failed still reaches it.
+    // An event recorded after its finalization and dated inside it reopens it.
     if (!finalizedAt || parseTimestampMs(finalizedAt) < previousEndMs) {
       await replaceCycleStorageHourly(c, pg, events, {
       appId: options.appId,
@@ -559,7 +574,7 @@ async function finalizeFormerOwners(
     }))).data
     if (!formerCycle?.cycle_start || !formerCycle.cycle_end)
       continue
-    const finalizedAt = await readSegmentRefreshedAt(c, pg, options.appId, former.orgId, formerCycle.cycle_start, former.ownedSince)
+    const finalizedAt = await readSegmentRefreshedAt(c, pg, options.appId, former.orgId, formerCycle.cycle_start, former.ownedSince, former.transferredAt)
     if (finalizedAt && parseTimestampMs(finalizedAt) >= transferredAtMs)
       continue
     // The previous cycle runs first: the transfer cycle's replace advances the watermark checked

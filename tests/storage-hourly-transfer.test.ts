@@ -162,3 +162,86 @@ describe('storage byte-hours when the first refresh after a transfer is late', (
     expect(byOrg.get(lateNewOrg) ?? 0).toBeGreaterThan(0)
   }, 60_000)
 })
+
+// A bundle removed shortly before a rollover whose removal is recorded only after the first refresh
+// of the new cycle already finalized the previous one: the late event, dated inside that cycle,
+// must reopen it.
+describe('storage byte-hours when a removal is recorded after its cycle was finalized', () => {
+  const lateRemovalAppId = `com.storage.lateremoval.${testId}`
+  const lateRemovalOrg = randomUUID()
+  const lateRemovalVersionId = versionId + 2
+
+  async function previousCycle() {
+    const [cycle] = await executeSQL<{ cycle_start: string, cycle_end: string, cycle_day: string }>(
+      `SELECT previous.cycle_start::text, previous.cycle_end::text, (previous.cycle_start AT TIME ZONE 'UTC')::date::text AS cycle_day
+       FROM public.orgs o
+       LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
+       CROSS JOIN LATERAL public.billing_cycle_for_anchor(si.subscription_anchor_start, si.subscription_anchor_end, pg_catalog.now()) AS current_cycle
+       CROSS JOIN LATERAL public.billing_cycle_for_anchor(si.subscription_anchor_start, si.subscription_anchor_end, current_cycle.cycle_start - interval '1 second') AS previous
+       WHERE o.id = $1::uuid`,
+      [lateRemovalOrg],
+    )
+    return cycle
+  }
+
+  async function refresh() {
+    const response = await fetch(`${BASE_URL}/triggers/cron_stat_app`, {
+      method: 'POST',
+      headers: triggerHeaders,
+      body: JSON.stringify({ appId: lateRemovalAppId, orgId: lateRemovalOrg }),
+    })
+    expect(response.status, await response.clone().text()).toBe(200)
+  }
+
+  beforeAll(async () => {
+    await executeSQL(
+      `INSERT INTO public.orgs (id, created_by, name, management_email) VALUES ($1::uuid, $2::uuid, $3, $4)`,
+      [lateRemovalOrg, USER_ID, `Storage late removal ${testId}`, `storage-late-removal-${testId}@capgo.app`],
+    )
+    await executeSQL(
+      `INSERT INTO public.apps (app_id, icon_url, name, owner_org, user_id, created_at)
+       VALUES ($1, '', $1, $2::uuid, $3::uuid, pg_catalog.now() - interval '120 days')`,
+      [lateRemovalAppId, lateRemovalOrg, USER_ID],
+    )
+    await executeSQL(
+      `INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+       VALUES (pg_catalog.timezone('UTC', pg_catalog.now() - interval '100 days'), $1, $2, $3)`,
+      [lateRemovalAppId, lateRemovalVersionId, BUNDLE_SIZE],
+    )
+  })
+
+  afterAll(async () => {
+    await executeSQL('DELETE FROM public.daily_storage_hourly WHERE app_id = $1', [lateRemovalAppId])
+    await executeSQL('DELETE FROM public.daily_storage_hourly_refreshes WHERE app_id = $1', [lateRemovalAppId])
+    await executeSQL('DELETE FROM public.version_meta WHERE app_id = $1', [lateRemovalAppId])
+    await executeSQL('DELETE FROM public.app_stats_refresh_state WHERE app_id = $1', [lateRemovalAppId])
+    await executeSQL('DELETE FROM public.apps WHERE app_id = $1', [lateRemovalAppId])
+    await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [lateRemovalOrg])
+  })
+
+  it('recomputes the finalized previous cycle from the late removal', async () => {
+    const cycle = await previousCycle()
+    // The first refresh of this cycle finalizes the previous one with the bundle still stored.
+    await refresh()
+    const byteHoursOfCycle = async () => {
+      const [row] = await executeSQL<{ byte_hours: number }>(
+        `SELECT COALESCE(SUM(storage_byte_hours), 0)::double precision AS byte_hours
+         FROM public.daily_storage_hourly
+         WHERE app_id = $1 AND owner_org = $2::uuid AND cycle_start = $3::date`,
+        [lateRemovalAppId, lateRemovalOrg, cycle.cycle_day],
+      )
+      return Number(row.byte_hours)
+    }
+    const cycleHours = (Date.parse(cycle.cycle_end) - Date.parse(cycle.cycle_start)) / HOUR_MS
+    expect(await byteHoursOfCycle()).toBeCloseTo(BUNDLE_SIZE * cycleHours, -3)
+
+    // The removal happened one day into that cycle, but its event is only recorded now.
+    await executeSQL(
+      `INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+       VALUES (pg_catalog.timezone('UTC', $3::timestamptz + interval '1 day'), $1, $2, $4)`,
+      [lateRemovalAppId, lateRemovalVersionId, cycle.cycle_start, -BUNDLE_SIZE],
+    )
+    await refresh()
+    expect(await byteHoursOfCycle()).toBeCloseTo(BUNDLE_SIZE * 24, -3)
+  }, 60_000)
+})
