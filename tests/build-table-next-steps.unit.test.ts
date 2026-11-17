@@ -133,12 +133,12 @@ describe('builds table after a successful build', () => {
     expect(mocks.buildQueries).toBe(before + 1)
   })
 
-  it('pauses the table refresh while a build view is open', async () => {
+  it('pauses the table refresh while a finished build view is open', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
-    mocks.builds = [running]
+    mocks.builds = [running, succeeded]
     const host = mount()
-    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
-    ;(host.querySelector('[data-test="row-b2"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b1"]')).not.toBeNull())
+    ;(host.querySelector('[data-test="row-b1"]') as HTMLButtonElement).click()
     await vi.waitFor(() => expect(host.querySelector('[data-test="live"]')).not.toBeNull())
     const before = mocks.buildQueries
     vi.advanceTimersByTime(30_000)
@@ -186,6 +186,24 @@ describe('builds table after a successful build', () => {
     expect(host.querySelector('[data-test="build-detail-simulator"]')).toBeNull()
     mocks.builds = [{ ...running, platform: 'ios', status: 'succeeded' }]
     ;(host.querySelector('[data-test="live-finish"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="build-detail-simulator"]')).not.toBeNull())
+  })
+
+  it('offers the simulator when the row ends after the build view saw the success', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const queued = { ...running, platform: 'ios', status: 'pending', builder_job_id: null }
+    mocks.builds = [queued]
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: mocks.builds[0].status === 'succeeded' ? { job_2: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } } : {} }), { status: 200 })))
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    ;(host.querySelector('[data-test="row-b2"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="live"]')).not.toBeNull())
+    // The stream reports success while the row still says running.
+    mocks.builds = [{ ...queued, status: 'running', builder_job_id: 'job_2' }]
+    ;(host.querySelector('[data-test="live-finish"]') as HTMLButtonElement).click()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    mocks.builds = [{ ...queued, status: 'succeeded', builder_job_id: 'job_2' }]
+    vi.advanceTimersByTime(10_000)
     await vi.waitFor(() => expect(host.querySelector('[data-test="build-detail-simulator"]')).not.toBeNull())
   })
 })

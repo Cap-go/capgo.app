@@ -56,6 +56,15 @@ const savedOutputsReady = ref(false)
 let savedOutputsKey = ''
 // The build whose details replace the table (live progress, result, download, error).
 const openedBuild = shallowRef<Element | null>(null)
+// The opened build as the latest refresh sees it: its job id and status move after the click.
+function findOpenedRow(): Element | null {
+  const opened = openedBuild.value
+  if (!opened)
+    return null
+  const rows: readonly { id: string }[] = elements.value
+  return (rows.find(build => build.id === opened.id) as Element | undefined) ?? opened
+}
+const openedRow = computed(findOpenedRow)
 const nextStepsDismissed = ref(isBuildNextStepsDismissed(props.appId))
 // While a build can still change on its own, the table refreshes itself.
 const REFRESH_MS = 10_000
@@ -511,7 +520,7 @@ function closeBuild() {
 }
 
 function detailSimulator() {
-  const jobId = openedBuild.value?.builder_job_id
+  const jobId = openedRow.value?.builder_job_id
   track('Build Next Step Clicked', { action: 'simulator', source: 'detail' })
   if (jobId)
     void openSavedBuild(jobId)
@@ -562,8 +571,8 @@ watch(hasActiveBuild, (active) => {
   if (!active)
     return
   refreshTimer = setInterval(() => {
-    // The open build view polls its own row: the hidden table waits.
-    if (document.visibilityState === 'visible' && !isLoading.value && !openedBuild.value)
+    // An open build view polls its own row: the hidden table only keeps up until that build ends.
+    if (document.visibilityState === 'visible' && !isLoading.value && (!openedRow.value || isBuildActive(openedRow.value.status)))
       void getData(true)
   }, REFRESH_MS)
 })
@@ -720,17 +729,17 @@ watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
       >
         <template #success-actions>
           <button
-            v-if="canOpenInSimulator(openedBuild)"
+            v-if="openedRow && canOpenInSimulator(openedRow)"
             type="button"
             class="d-btn d-btn-outline gap-2"
-            :disabled="openingJobs.includes(openedBuild.builder_job_id ?? '')"
+            :disabled="openingJobs.includes(openedRow?.builder_job_id ?? '')"
             data-test="build-detail-simulator"
             @click="detailSimulator"
           >
             <IconSmartphone class="h-4 w-4" />
-            {{ openingJobs.includes(openedBuild.builder_job_id ?? '') ? t('simulator-starting') : t('open-in-simulator') }}
+            {{ openingJobs.includes(openedRow?.builder_job_id ?? '') ? t('simulator-starting') : t('open-in-simulator') }}
           </button>
-          <p v-else-if="savedOutputFor(openedBuild)?.kind === 'ios_ipa'" class="self-center text-sm text-slate-500 dark:text-slate-400" data-test="build-detail-simulator-unavailable">
+          <p v-else-if="openedRow && savedOutputFor(openedRow)?.kind === 'ios_ipa'" class="self-center text-sm text-slate-500 dark:text-slate-400" data-test="build-detail-simulator-unavailable">
             {{ t('simulator-not-configured-hint') }}
           </p>
         </template>
