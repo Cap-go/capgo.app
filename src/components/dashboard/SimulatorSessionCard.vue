@@ -75,7 +75,7 @@ async function heartbeatSessions() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        authorization: `Bearer ${await sessionToken()}`,
+        'authorization': `Bearer ${await sessionToken()}`,
       },
       body: JSON.stringify({ app_id: appId }),
     })

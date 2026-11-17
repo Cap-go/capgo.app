@@ -795,11 +795,11 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
 
 export async function pingSimulatorActivity(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const appId = requireAppId(body.app_id)
-  const context = await ownedSession(c, principal, userId, appId, sessionId)
-  const touch = await touchSimulatorActivity(c, sessionId, context, { bump: true })
+  const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
+  const touch = await touchSimulatorActivity(c, sessionId, { orgId, userId, appId, row }, { bump: true })
   if (touch === 'expired')
     throw simpleError('invalid_request', 'This simulator is not running.')
-  if (touch === 'skipped' && context.row.status !== 'in-progress')
+  if (touch === 'skipped' && row.status !== 'in-progress')
     throw simpleError('invalid_request', 'This simulator is not running.')
   return c.json({ status: 'ok' })
 }

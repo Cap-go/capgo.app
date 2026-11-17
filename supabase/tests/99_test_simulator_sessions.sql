@@ -166,8 +166,7 @@ SELECT is(
 
 SELECT is(
   (
-    SELECT count(*)::integer
-    FROM (
+    WITH bumped AS (
       UPDATE public.simulator_sessions
       SET last_activity_at = now(),
           updated_at = now()
@@ -177,7 +176,8 @@ SELECT is(
         AND started_at > now() - make_interval(mins => max_duration_minutes)
         AND COALESCE(last_activity_at, started_at) > now() - make_interval(mins => 5)
       RETURNING id
-    ) bumped
+    )
+    SELECT count(*)::integer FROM bumped
   ),
   1,
   'activity bump updates last_activity_at while inside the idle window'
@@ -199,8 +199,7 @@ WHERE id = '99000000-0000-4000-8000-000000000006';
 
 SELECT is(
   (
-    SELECT count(*)::integer
-    FROM (
+    WITH bumped AS (
       UPDATE public.simulator_sessions
       SET last_activity_at = now(),
           updated_at = now()
@@ -210,7 +209,8 @@ SELECT is(
         AND started_at > now() - make_interval(mins => max_duration_minutes)
         AND COALESCE(last_activity_at, started_at) > now() - make_interval(mins => 5)
       RETURNING id
-    ) bumped
+    )
+    SELECT count(*)::integer FROM bumped
   ),
   0,
   'activity bump is refused once the idle window has elapsed'
