@@ -60,7 +60,7 @@ const empty = computed(() => regions.value.length === 0)
     </p>
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-describedby="serving-region-scope">
       <label v-for="region in options" :key="region" class="flex items-center gap-2 text-sm">
-        <input v-model="regions" type="checkbox" :value="region" class="checkbox checkbox-sm" :name="`serving-region-${region}`">
+        <input v-model="regions" type="checkbox" :value="region" class="d-checkbox d-checkbox-sm" :name="`serving-region-${region}`">
         {{ t(`serving-region-${region}`) }}
       </label>
     </div>
@@ -69,7 +69,7 @@ const empty = computed(() => regions.value.length === 0)
     </p>
     <label class="block text-sm">
       <span class="block mb-2 font-medium">{{ t('serving-region-outside') }}</span>
-      <select v-model="mode" name="serving_region_mode" class="w-full select select-bordered" :aria-label="t('serving-region-outside')">
+      <select v-model="mode" name="serving_region_mode" class="w-full d-select d-select-bordered" :aria-label="t('serving-region-outside')">
         <option value="route">{{ t('serving-region-route') }}</option>
         <option value="block">{{ t('serving-region-block') }}</option>
       </select>
@@ -77,7 +77,7 @@ const empty = computed(() => regions.value.length === 0)
     <p class="text-sm text-neutral-600 dark:text-neutral-400">
       {{ t('serving-region-limits') }}
     </p>
-    <button type="button" class="btn btn-sm btn-outline" @click="checkActivation">
+    <button type="button" class="d-btn d-btn-sm d-btn-outline" @click="checkActivation">
       {{ t('serving-region-check') }}
     </button>
     <output class="block">
