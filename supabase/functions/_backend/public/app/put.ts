@@ -27,7 +27,11 @@ import { MAX_BUILD_TIMEOUT_SECONDS, MIN_BUILD_TIMEOUT_SECONDS, normalizeBuildTim
 import { isBundleIncompatibleAlert } from '../../utils/bundle_compatibility_recovery.ts'
 import { backgroundTask, isValidAppId } from '../../utils/utils.ts'
 
+import { parseServingRegions, parseServingRegionMode } from '../../plugin_runtime/utils/servingRegions.ts'
+
 interface UpdateApp {
+  serving_regions?: unknown
+  serving_region_mode?: unknown
   name?: string
   icon?: string
   retention?: number
@@ -49,7 +53,7 @@ interface UpdateApp {
 type AppSettings = Pick<Database['public']['Tables']['apps']['Update'], 'name' | 'icon_url' | 'retention' | 'expose_metadata' | 'allow_device_custom_id'
   | 'need_onboarding' | 'existing_app' | 'block_provider_infra_requests' | 'device_data_collection'
   | 'allow_preview' | 'build_timeout_seconds' | 'default_upload_channel' | 'bundle_incompatible_alert'
-  | 'ios_store_url' | 'android_store_url'>
+  | 'ios_store_url' | 'android_store_url' | 'serving_regions' | 'serving_region_mode'>
 
 function validateDeviceDataCollectionPatch(patch: unknown): Record<string, boolean> {
   if (patch === null || typeof patch !== 'object' || Array.isArray(patch))
@@ -277,6 +281,16 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     body.build_timeout_seconds = normalizeBuildTimeoutSeconds(rawTimeout)
   }
 
+  let servingRegions: string[] | undefined
+  let servingRegionMode: string | undefined
+  try {
+    servingRegions = body.serving_regions === undefined ? undefined : parseServingRegions(body.serving_regions)
+    servingRegionMode = body.serving_region_mode === undefined ? undefined : parseServingRegionMode(body.serving_region_mode)
+  }
+  catch {
+    throw quickError(400, 'invalid_serving_policy', 'Choose supported serving regions and route or block mode')
+  }
+
   const onboardingPatch = parseAppOnboardingPatch(body.onboarding)
   const canUpdateSettings = await checkPermission(c, 'app.update_settings', { appId })
   const auth = c.get('auth')
@@ -325,6 +339,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   // Single source of truth for settings fields. `need_onboarding` is writable on the
   // onboarding-completion path, so it is tracked separately.
   const extraSettingsValues = [
+    body.serving_regions,
+    body.serving_region_mode,
     body.name,
     body.icon,
     body.retention,
@@ -391,6 +407,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   ].some(value => value !== undefined)
 
   const settingsPayload: AppSettings = {
+    serving_regions: servingRegions,
+    serving_region_mode: servingRegionMode,
     name: body.name,
     icon_url: normalizedIcon ?? body.icon,
     retention: body.retention,

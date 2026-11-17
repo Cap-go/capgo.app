@@ -5,7 +5,9 @@ import { PgDialect } from 'drizzle-orm/pg-core'
 import { Hono } from 'hono/tiny'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
-import { app as syncApp, buildManifestDoc, createPluginStateSourceReader, drainPluginStateSync } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
+import { servingRegionReaderEpoch } from '../supabase/functions/_backend/plugin_runtime/utils/servingRegionRollout.js'
+import { app as syncApp, buildManifestDoc, createPluginStateSourceReader, drainPluginStateSync, drainServingPolicies } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
+import { getPgClient } from '../supabase/functions/_backend/utils/pg.ts'
 import { publicationProviders } from './plugin-state-publication-fixture.ts'
 
 interface Connection { id: number, inTransaction: boolean }
@@ -16,6 +18,11 @@ const provider = vi.hoisted(() => ({
   transaction: vi.fn(),
   close: vi.fn(),
   log: vi.fn(),
+}))
+
+// Exercise the readiness GET with an explicitly prepared activation epoch.
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/servingRegionRollout.js', () => ({
+  servingRegionReaderEpoch: 'fixture-reader-epoch',
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -82,6 +89,10 @@ describe('fresh plugin snapshot source transactions', () => {
     let claims = 0
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync(')) {
         expect(client.inTransaction).toBe(true)
         claims++
@@ -113,7 +124,7 @@ describe('fresh plugin snapshot source transactions', () => {
     expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
     expect(claims).toBe(1)
     expect(storage.publishedValue(await pluginStateVersionKey('com.test.freshsnapshot', '1.0.0'))).toMatchObject({ id: 202 })
-    expect(provider.transaction).toHaveBeenCalledTimes(4)
+    expect(provider.transaction).toHaveBeenCalledTimes(6)
     expect(provider.close).toHaveBeenCalledTimes(2)
   })
 
@@ -169,6 +180,10 @@ describe('fresh plugin snapshot source transactions', () => {
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       expect(client.inTransaction).toBe(true)
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('AS estimated_bytes'))
         return { rows: [{ estimated_bytes: 5 * 1024 * 1024 }] }
       if (statement.sql.includes('FROM public.app_versions av'))
@@ -213,6 +228,10 @@ describe('plugin state queue mutation transactions', () => {
     const cachedFirstClaim = claimResult(0)
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync(')) {
         if (!client.inTransaction) {
           // Stop a broken drain quickly after demonstrating replay of an old lease.
@@ -277,6 +296,10 @@ describe('plugin state queue mutation transactions', () => {
     const acknowledgements: unknown[][] = []
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       expect(client.inTransaction).toBe(true)
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'empty' } }] }
@@ -326,6 +349,10 @@ describe('plugin state queue mutation transactions', () => {
     const appId = 'com.test.explicitmutationrepair'
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       expect(client.inTransaction).toBe(true)
       expect(activeTransactions).toBe(1)
       if (statement.sql.includes('public.enqueue_plugin_state_full_sync(')) {
@@ -363,6 +390,10 @@ describe('competing full backfills', () => {
     const continuations: string[] = []
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
       if (statement.sql.includes('public.claim_plugin_state_sync('))
         return { rows: [{ result: { status: 'ok', lease_token: 'fixture-lease', generation: '1', has_more: false,
           apps: appIds.map(app_id => ({ app_id, jobs: [{ kind: 'full', ref: '' }], attempts: 1 })),
@@ -403,5 +434,244 @@ describe('competing full backfills', () => {
       + storage.pointers.list.mock.calls.length
     expect(operations).toBeLessThanOrEqual(800)
     expect(peakTransactions).toBeLessThanOrEqual(4)
+  })
+})
+
+
+describe('policy-only publication with payload sync disabled', () => {
+  it.each([false, true])('retries an R2 failure without payload history or coverage ACKs with KV bound=%s', async (withNamespace) => {
+    const storage = publicationProviders()
+    const appId = 'com.example.policy-only'
+    let claims = 0
+    let available = true
+    const acknowledgements: unknown[][] = []
+    const statements: string[] = []
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      expect(client.inTransaction).toBe(true)
+      const statement = dialect.sqlToQuery(query)
+      statements.push(statement.sql)
+      if (statement.sql.includes('public.claim_serving_policy_sync(')) {
+        if (!available)
+          return { rows: [] }
+        available = false
+        return { rows: [{ token: 'fixture-policy-lease', generation: String(++claims), app_id: appId, active_epoch: null }] }
+      }
+      if (statement.sql.includes('SELECT serving_regions, serving_region_mode FROM public.apps'))
+        return { rows: [{ serving_regions: ['NA'], serving_region_mode: 'block' }] }
+      if (statement.sql.includes('public.ack_serving_policy_sync(')) {
+        acknowledgements.push(statement.params)
+        return { rows: [] }
+      }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: false }] }
+      throw new Error('Unexpected payload query: ' + statement.sql)
+    })
+    storage.pointers.put.mockRejectedValueOnce(new Error('Synthetic R2 outage'))
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const env = { PLUGIN_STATE_POINTERS: storage.pointers, ...(withNamespace ? { PLUGIN_STATE: storage.namespace } : {}) }
+    expect(await (await app.request('/', { method: 'POST' }, env)).json()).toEqual({ claims: 1, apps: 0, failed: 1 })
+    available = true // periodic tick recovers the durable job after its cooldown
+    expect(await (await app.request('/', { method: 'POST' }, env)).json()).toEqual({ claims: 1, apps: 1, failed: 0 })
+    expect(acknowledgements).toEqual([['fixture-policy-lease', false], ['fixture-policy-lease', true]])
+    expect(storage.namespace.get).not.toHaveBeenCalled()
+    expect(storage.namespace.put).not.toHaveBeenCalled()
+    expect(storage.namespace.list).not.toHaveBeenCalled()
+    expect(JSON.parse(storage.objects.get('sr1:' + appId)!.body)).toMatchObject({ generation: '2', policy: { mode: 'route', regions: expect.arrayContaining(['EU', 'NA']) } })
+    expect(statements.some(value => /full_synced|app_synced|manifest|app_versions|ack_plugin_state/.test(value))).toBe(false)
+  })
+})
+
+
+describe('policy and payload failure isolation', () => {
+  it.each(['claim', 'ack'] as const)('continues payload publication after a policy %s failure', async (fault) => {
+    const storage = publicationProviders()
+    const appId = 'com.example.policy-payload-isolation'
+    const statements: string[] = []
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      expect(client.inTransaction).toBe(true)
+      const statement = dialect.sqlToQuery(query)
+      statements.push(statement.sql)
+      if (statement.sql.includes('public.claim_serving_policy_sync(')) {
+        if (fault === 'claim')
+          throw new Error('Synthetic policy epoch mismatch')
+        return { rows: [{ token: 'policy-lease', generation: '1', app_id: appId, active_epoch: null }] }
+      }
+      if (statement.sql.includes('SELECT serving_regions, serving_region_mode FROM public.apps'))
+        return { rows: [{ serving_regions: ['NA'], serving_region_mode: 'block' }] }
+      if (statement.sql.includes('public.ack_serving_policy_sync('))
+        throw new Error('Synthetic policy ACK failure')
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
+      if (statement.sql.includes('public.claim_plugin_state_sync(')) {
+        return { rows: [{ result: { status: 'ok', lease_token: 'payload-lease', generation: '2', has_more: false,
+          apps: [{ app_id: appId, jobs: [{ kind: 'version', ref: '1.0.0' }], attempts: 1 }],
+        } }] }
+      }
+      if (statement.sql.includes('FROM public.app_versions av'))
+        return { rows: [{ id: 202, owner_org: 'fixture-org', name: '1.0.0', deleted: false }] }
+      return { rows: [] }
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    const expectedSuccesses = fault === 'ack' ? 2 : 1
+    expect(await response.json()).toEqual({ claims: expectedSuccesses, apps: expectedSuccesses, failed: 1 })
+    expect(storage.publishedValue(await pluginStateVersionKey(appId, '1.0.0'))).toMatchObject({ id: 202 })
+    expect(statements.filter(value => value.includes('public.claim_plugin_state_sync('))).toHaveLength(1)
+    expect(statements.filter(value => value.includes('public.ack_plugin_state_sync_progress('))).toHaveLength(1)
+    expect(statements.filter(value => value.includes('public.claim_serving_policy_sync('))).toHaveLength(1)
+    expect(provider.log).toHaveBeenCalledWith(expect.objectContaining({ message: 'serving policy sync drain failed' }))
+  })
+})
+
+
+describe('policy and payload queue fairness', () => {
+  it.each(['deadline', 'operations', 'failure'] as const)('publishes and acknowledges payloads on successive drains with a sustained policy %s backlog', async (limiter) => {
+    const storage = publicationProviders()
+    const appId = 'com.example.policy-backlog-payload'
+    const names = ['1.0.0', '2.0.0', '3.0.0', '4.0.0']
+    const completed: number[] = []
+    if (limiter === 'failure') {
+      const put = storage.pointers.put.getMockImplementation()!
+      storage.pointers.put.mockImplementation(async (...args) => {
+        if (args[0].startsWith('sr1:'))
+          throw new Error('Synthetic persistent policy provider failure')
+        return put(...args)
+      })
+    }
+    let policyClaims = 0
+    let payloadGeneration = 1000
+    let now = 1_000_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      expect(client.inTransaction).toBe(true)
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync(')) {
+        const generation = String(++policyClaims)
+        return { rows: [{ token: `policy-lease-${generation}`, generation, app_id: `com.example.policy-backlog-${generation}`, active_epoch: null }] }
+      }
+      if (statement.sql.includes('SELECT serving_regions, serving_region_mode FROM public.apps')) {
+        if (limiter === 'deadline')
+          now += 1000
+        return { rows: [{ serving_regions: ['EU'], serving_region_mode: 'route' }] }
+      }
+      if (statement.sql.includes('public.ack_serving_policy_sync('))
+        return { rows: [] }
+      if (statement.sql.includes('public.plugin_state_sync_enabled()'))
+        return { rows: [{ enabled: true }] }
+      if (statement.sql.includes('public.claim_plugin_state_sync(')) {
+        return { rows: [{ result: { status: 'ok', lease_token: `payload-lease-${payloadGeneration}`, generation: String(payloadGeneration), has_more: false,
+          apps: [{ app_id: appId, jobs: names.map(ref => ({ kind: 'version', ref })), attempts: 1 }],
+        } }] }
+      }
+      if (statement.sql.includes('FROM public.app_versions av'))
+        return { rows: names.map((name, index) => ({ id: payloadGeneration + index, owner_org: 'fixture-org', name, deleted: false })) }
+      if (statement.sql.includes('public.ack_plugin_state_sync_progress(')) {
+        const match = /p_done\s*=>\s*\$(\d+)/.exec(statement.sql)
+        if (!match)
+          throw new Error('payload completion was not sent with ACK')
+        const done = statement.params[Number(match[1]) - 1]
+        if (Array.isArray(done) && done.includes(appId))
+          completed.push(payloadGeneration)
+        return { rows: [] }
+      }
+      if (statement.sql.includes('public.claim_plugin_state_gc('))
+        return { rows: [{ result: null }] }
+      throw new Error(`unexpected fairness query: ${statement.sql}`)
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    try {
+      for (let pass = 0; pass < 2; pass++) {
+        const operationsBefore = storage.namespace.put.mock.calls.length + storage.pointers.get.mock.calls.length + storage.pointers.put.mock.calls.length
+        const policiesBefore = policyClaims
+        const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+        expect(await response.json()).toMatchObject({ failed: limiter === 'failure' ? 1 : 0 })
+        expect(completed).toContain(payloadGeneration)
+        for (const [index, name] of names.entries())
+          expect(storage.publishedValue(await pluginStateVersionKey(appId, name))).toMatchObject({ id: payloadGeneration + index })
+        const operations = storage.namespace.put.mock.calls.length + storage.pointers.get.mock.calls.length + storage.pointers.put.mock.calls.length - operationsBefore
+        expect(operations).toBeLessThanOrEqual(800)
+        expect(policyClaims).toBeGreaterThan(policiesBefore)
+        if (limiter === 'failure')
+          expect(policyClaims - policiesBefore).toBe(1)
+        expect(now).toBeLessThan(1_000_000 + (pass + 1) * 20_000)
+        payloadGeneration += 1000
+      }
+      expect(completed).toEqual([1000, 2000])
+      expect(activeTransactions).toBe(0)
+    }
+    finally {
+      clock.mockRestore()
+    }
+  })
+})
+
+
+describe('policy publication iteration reservations', () => {
+  it.each([10, 11])('requires all 11 possible provider operations before leasing with %i slots left', async (remaining) => {
+    const storage = publicationProviders()
+    const budget = { remaining }
+    const result = { claims: 0, apps: 0, failed: 0 }
+    const acknowledgements: unknown[][] = []
+    storage.objects.set('sr1:ready', { etag: 'fixture-ready-etag', body: JSON.stringify({ f: 1, epoch: servingRegionReaderEpoch }) })
+    const put = storage.pointers.put.getMockImplementation()!
+    let attempts = 0
+    storage.pointers.put.mockImplementation(async (...args) => ++attempts < 5 ? null : put(...args))
+    provider.execute.mockImplementation(async (_client: Connection, query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync('))
+        return { rows: [{ token: 'fixture-policy-reservation', generation: '1', app_id: 'com.example.policy-reservation', active_epoch: servingRegionReaderEpoch }] }
+      if (statement.sql.includes('SELECT serving_regions, serving_region_mode FROM public.apps'))
+        return { rows: [{ serving_regions: ['EU'], serving_region_mode: 'route' }] }
+      if (statement.sql.includes('public.ack_serving_policy_sync(')) {
+        acknowledgements.push(statement.params)
+        return { rows: [] }
+      }
+      throw new Error(`unexpected policy reservation query: ${statement.sql}`)
+    })
+    await inContext(async (c) => {
+      const deadline = Date.now() + 10_000
+      await drainServingPolicies(await getPgClient(c), createPluginStateSourceReader(c, deadline), storage.pointers, budget, deadline, result)
+    })
+    if (remaining === 10) {
+      expect(provider.execute).not.toHaveBeenCalled()
+      expect(result).toEqual({ claims: 0, apps: 0, failed: 0 })
+      expect(budget.remaining).toBe(10)
+    }
+    else {
+      expect(result).toEqual({ claims: 1, apps: 1, failed: 0 })
+      expect(acknowledgements).toEqual([['fixture-policy-reservation', true]])
+      expect(storage.pointers.get).toHaveBeenCalledTimes(6)
+      expect(storage.pointers.put).toHaveBeenCalledTimes(5)
+      expect(budget.remaining).toBe(0)
+    }
+  })
+
+  it('bounds claims for deleted policy rows that use no provider operations', async () => {
+    const storage = publicationProviders()
+    const budget = { remaining: 22 }
+    const result = { claims: 0, apps: 0, failed: 0 }
+    let claims = 0
+    provider.execute.mockImplementation(async (_client: Connection, query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_serving_policy_sync(')) {
+        if (++claims > 2)
+          throw new Error('policy no-op claim limit exceeded')
+        return { rows: [{ token: `fixture-deleted-policy-${claims}`, generation: String(claims), app_id: `com.example.deleted-policy-${claims}`, active_epoch: null }] }
+      }
+      if (statement.sql.includes('SELECT serving_regions, serving_region_mode FROM public.apps') || statement.sql.includes('public.ack_serving_policy_sync('))
+        return { rows: [] }
+      throw new Error(`unexpected deleted policy query: ${statement.sql}`)
+    })
+    await inContext(async (c) => {
+      const deadline = Date.now() + 10_000
+      await drainServingPolicies(await getPgClient(c), createPluginStateSourceReader(c, deadline), storage.pointers, budget, deadline, result)
+    })
+    expect(result).toEqual({ claims: 2, apps: 2, failed: 0 })
+    expect(budget.remaining).toBe(22)
+    expect(storage.pointers.get).not.toHaveBeenCalled()
+    expect(storage.pointers.put).not.toHaveBeenCalled()
   })
 })

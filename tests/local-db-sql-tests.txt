@@ -46,6 +46,7 @@ tests/rbac-jwt-capgkey-priority.test.ts
 tests/rbac-permissions.test.ts
 tests/rbac-priority-guards.test.ts
 tests/rollout-auto-pause-order.test.ts
+tests/serving-policy-activation-concurrency.test.ts
 tests/storage-lifetimes-sql.test.ts
 tests/stripe-emulator.test.ts
 tests/user-bento-event-jsonb-patch.test.ts
