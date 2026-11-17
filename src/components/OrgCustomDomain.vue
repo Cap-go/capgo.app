@@ -151,9 +151,9 @@ async function copy(value: string) {
         <strong>{{ domain.hostname }}</strong>
         <span class="d-badge" :class="domain.status === 'active' ? 'd-badge-success' : 'd-badge-warning'">{{ t(`custom-domain-${domain.status}`) }}</span>
       </div>
-      <p v-if="domain.status === 'pending' && !failed && refreshCount < refreshDelays.length" class="text-sm text-slate-500" role="status">
+      <output v-if="domain.status === 'pending' && !failed && refreshCount < refreshDelays.length" class="block text-sm text-slate-500">
         {{ t('custom-domain-verifying') }}
-      </p>
+      </output>
       <p class="text-sm text-slate-500">
         {{ t('custom-domain-dns-help') }}
       </p>

@@ -177,12 +177,13 @@ settingsTest('saves the name and later settings when a serving-policy edit is re
     return route.fallback()
   })
   await page.locator('#update-app').getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText('Couldn\'t save these changes. Please try again.', { exact: true })).toBeVisible()
+  await expect(page.getByText('Policy update unavailable', { exact: true })).toHaveCount(0)
   await expect.poll(async () => {
     const saved = await admin.from('apps').select('name,allow_preview,serving_regions').eq('app_id', appId).single()
     return saved.data
   }).toEqual({ name: 'Saved despite policy failure', allow_preview: true, serving_regions: regions })
   expect(policyAttempts).toBe(1)
-  await expect(page.getByText('Policy update unavailable', { exact: true })).toBeVisible()
 })
 
 settingsTest('does not overwrite a newer policy when a stale form saves only the name', async ({ page, servingApp }) => {
