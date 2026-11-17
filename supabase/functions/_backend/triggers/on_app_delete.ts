@@ -49,13 +49,13 @@ async function deleteAppRows(c: Context<MiddlewareKeyVariables>, pg: PgClient, r
   await deleteByAppId('app_versions')
 }
 
-/** An app with the same id was created again in the same org: its storage prefix is live again. */
-async function appRecreated(pg: PgClient, record: AppRow) {
-  const result = await pg.query('SELECT 1 FROM public.apps WHERE app_id = $1 AND owner_org = $2 LIMIT 1', [record.app_id, record.owner_org])
-  return result.rows.length > 0
-}
-
-async function requeueStorageCleanup(c: Context<MiddlewareKeyVariables>, pg: PgClient, record: AppRow, nextPass: number) {
+/**
+ * Queues the next pass with a delay. public.queue_app_storage_cleanup_pass decides on the
+ * primary, under the same lock the apps INSERT trigger takes, whether the app id was created
+ * again in this org; a re-created app also drops passes that were already queued. Returns
+ * false when no pass was queued for that reason.
+ */
+async function requeueStorageCleanup(pg: PgClient, record: AppRow, nextPass: number): Promise<boolean> {
   const message = {
     function_name: 'on_app_delete',
     payload: {
@@ -67,7 +67,11 @@ async function requeueStorageCleanup(c: Context<MiddlewareKeyVariables>, pg: PgC
       storage_cleanup_pass: nextPass,
     },
   }
-  await pg.query('SELECT pgmq.send($1::text, $2::jsonb, $3::integer)', ['on_app_delete', JSON.stringify(message), STORAGE_CLEANUP_REQUEUE_DELAY_SECONDS])
+  const result = await pg.query<{ msg_id: string | number | null }>(
+    'SELECT public.queue_app_storage_cleanup_pass($1::text, $2::uuid, $3::jsonb, $4::integer) AS msg_id',
+    [record.app_id, record.owner_org, JSON.stringify(message), STORAGE_CLEANUP_REQUEUE_DELAY_SECONDS],
+  )
+  return result.rows[0]?.msg_id != null
 }
 
 /**
@@ -90,11 +94,6 @@ export async function cleanupDeletedAppResources(
 
     if (!record.owner_org)
       return
-
-    if (await appRecreated(pg, record)) {
-      cloudlog({ requestId: c.get('requestId'), message: 'app recreated, skip storage cleanup', app_id: record.app_id, pass })
-      return
-    }
 
     // Delete app icon from image storage
     // App icons are stored at: images/org/{org_id}/{app_id}/icon
@@ -125,7 +124,8 @@ export async function cleanupDeletedAppResources(
       }
       else {
         try {
-          await requeueStorageCleanup(c, pg, record, nextPass)
+          if (!await requeueStorageCleanup(pg, record, nextPass))
+            cloudlog({ requestId: c.get('requestId'), message: 'app recreated, stop storage cleanup', pass, app_id: record.app_id })
         }
         catch (error) {
           cloudlogErr({ requestId: c.get('requestId'), message: 'error requeuing app storage cleanup', error, pass, app_id: record.app_id })

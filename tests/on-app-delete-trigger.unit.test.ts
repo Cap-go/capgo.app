@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const appExists = { value: false }
 const pgQuery = vi.fn(async (sql: string, _params?: unknown[]) => {
-  if (sql.includes('SELECT 1 FROM public.apps'))
-    return { rows: appExists.value ? [{ '?column?': 1 }] : [], rowCount: appExists.value ? 1 : 0 }
+  // The SQL function returns NULL instead of queueing when the app id exists again in the org.
+  if (sql.includes('queue_app_storage_cleanup_pass'))
+    return { rows: [{ msg_id: appExists.value ? null : '42' }], rowCount: 1 }
   return { rows: [], rowCount: 0 }
 })
 const cleanupStarted = vi.fn()
@@ -88,7 +89,7 @@ function sqlStatements() {
 }
 
 function requeueCalls() {
-  return pgQuery.mock.calls.filter(([sql]) => sql.includes('pgmq.send'))
+  return pgQuery.mock.calls.filter(([sql]) => sql.includes('queue_app_storage_cleanup_pass'))
 }
 
 describe('on_app_delete trigger', () => {
@@ -137,8 +138,9 @@ describe('on_app_delete trigger', () => {
     expect(response.status).toBe(200)
     const calls = requeueCalls()
     expect(calls).toHaveLength(1)
-    const [queue, message, delay] = calls[0][1] as [string, string, number]
-    expect(queue).toBe('on_app_delete')
+    const [appId, ownerOrg, message, delay] = calls[0][1] as [string, string, string, number]
+    expect(appId).toBe('com.test.delete')
+    expect(ownerOrg).toBe('org-1')
     expect(delay).toBe(STORAGE_CLEANUP_REQUEUE_DELAY_SECONDS)
     expect(JSON.parse(message)).toEqual({
       function_name: 'on_app_delete',
@@ -156,7 +158,7 @@ describe('on_app_delete trigger', () => {
     expect(statements.some(sql => sql.includes('INSERT INTO public.deleted_apps'))).toBe(false)
     expect(statements.some(sql => sql.startsWith('DELETE FROM public.'))).toBe(false)
     expect(deleteObjectsWithPrefix).toHaveBeenCalledOnce()
-    expect(JSON.parse(requeueCalls()[0][1]![1] as string).payload.storage_cleanup_pass).toBe(4)
+    expect(JSON.parse(requeueCalls()[0][1]![2] as string).payload.storage_cleanup_pass).toBe(4)
   })
 
   it('stops requeuing after the pass budget', async () => {
@@ -176,13 +178,16 @@ describe('on_app_delete trigger', () => {
     expect(requeueCalls()).toHaveLength(1)
   })
 
-  it('leaves storage alone when the app id was recreated in the same org', async () => {
+  it('stops the chain when the database reports the app id was recreated in the org', async () => {
     appExists.value = true
+    deleteObjectsWithPrefix.mockResolvedValue({ deleted: 500, failed: 0, done: false })
 
-    await sendTrigger({ storage_cleanup_pass: 2 })
+    const response = await sendTrigger({ storage_cleanup_pass: 2 })
 
-    expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
-    expect(removeImageFolder).not.toHaveBeenCalled()
-    expect(requeueCalls()).toHaveLength(0)
+    expect(response.status).toBe(200)
+    // The guard is decided by the SQL function on the primary, never by a separate cached read.
+    expect(sqlStatements().some(sql => sql.includes('FROM public.apps'))).toBe(false)
+    expect(requeueCalls()).toHaveLength(1)
+    expect(cloudlogErr).not.toHaveBeenCalled()
   })
 })

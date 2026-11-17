@@ -149,6 +149,28 @@ describe('deleteObjectsWithPrefix', () => {
     expect(storage.keys).toEqual([])
   })
 
+  it('stops the single-delete fallback between waves at the deadline', async () => {
+    const prefix = 'orgs/org-1/apps/com.example.app/'
+    storage.keys = Array.from({ length: 100 }, (_, i) => `${prefix}${String(i).padStart(3, '0')}`)
+    storage.makeRequest.mockRejectedValue(Object.assign(new Error('not implemented'), { statusCode: 501 }))
+    let now = 1_000
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    storage.deleteObject.mockImplementation(async (key: string) => {
+      removeKeysFromStorage([key])
+      now += 100
+    })
+
+    try {
+      // Each wave of 16 deletes advances the clock by 1.6s: two waves fit before the deadline.
+      const result = await runInContext(c => s3.deleteObjectsWithPrefix(c, prefix, { deadline: 3_000 }))
+      expect(result).toEqual({ deleted: 32, failed: 0, done: false })
+      expect(storage.keys).toHaveLength(68)
+    }
+    finally {
+      dateNow.mockRestore()
+    }
+  })
+
   it('refuses an empty prefix', async () => {
     await expect(runInContext(c => s3.deleteObjectsWithPrefix(c, ''))).rejects.toThrow('non-empty prefix')
   })

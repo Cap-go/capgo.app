@@ -283,9 +283,18 @@ export function parseDeleteObjectsErrors(xml: string): string[] {
   return failed
 }
 
-async function deleteKeysOneByOne(c: Context, client: ReturnType<typeof initS3>, keys: string[]): Promise<string[]> {
+interface KeyDeleteResult {
+  /** Keys whose delete failed. */
+  failed: string[]
+  /** Keys not attempted because the deadline passed. */
+  skipped: number
+}
+
+async function deleteKeysOneByOne(c: Context, client: ReturnType<typeof initS3>, keys: string[], deadline?: number): Promise<KeyDeleteResult> {
   const failed: string[] = []
   for (let i = 0; i < keys.length; i += SINGLE_DELETE_CONCURRENCY) {
+    if (deadline !== undefined && Date.now() >= deadline)
+      return { failed, skipped: keys.length - i }
     await Promise.all(keys.slice(i, i + SINGLE_DELETE_CONCURRENCY).map(async (key) => {
       try {
         await client.deleteObject(key)
@@ -298,20 +307,21 @@ async function deleteKeysOneByOne(c: Context, client: ReturnType<typeof initS3>,
       }
     }))
   }
-  return failed
+  return { failed, skipped: 0 }
 }
 
 /**
  * Deletes up to DELETE_OBJECTS_MAX_KEYS keys with one DeleteObjects request.
- * Returns the keys that could not be deleted. A server that rejects the batch
- * request gets bounded parallel single-key deletes instead.
+ * A server that rejects the batch request gets bounded parallel single-key
+ * deletes instead, which stop between waves once `deadline` (epoch ms) passed.
  */
-async function deleteObjectKeys(c: Context, keys: string[], client = initS3(c, { serverSide: true })): Promise<string[]> {
+async function deleteObjectKeys(c: Context, keys: string[], options: { client?: ReturnType<typeof initS3>, deadline?: number } = {}): Promise<KeyDeleteResult> {
   if (keys.length === 0)
-    return []
+    return { failed: [], skipped: 0 }
   if (keys.length > DELETE_OBJECTS_MAX_KEYS)
     throw new Error(`deleteObjectKeys accepts at most ${DELETE_OBJECTS_MAX_KEYS} keys`)
 
+  const client = options.client ?? initS3(c, { serverSide: true })
   const body = buildDeleteObjectsBody(keys)
   try {
     // DeleteObjects requires a body integrity header: SHA-256 (accepted in place of Content-MD5).
@@ -330,11 +340,11 @@ async function deleteObjectKeys(c: Context, keys: string[], client = initS3(c, {
       statusCode: 200,
       returnBody: true,
     })
-    return parseDeleteObjectsErrors(await response.text())
+    return { failed: parseDeleteObjectsErrors(await response.text()), skipped: 0 }
   }
   catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'DeleteObjects failed, falling back to single deletes', count: keys.length, error: serializeStorageError(error) })
-    return deleteKeysOneByOne(c, client, keys)
+    return deleteKeysOneByOne(c, client, keys, options.deadline)
   }
 }
 
@@ -367,9 +377,12 @@ async function deleteObjectsWithPrefix(c: Context, prefix: string, options: { de
     }
     const nextToken = page.value ?? undefined
 
-    const failedKeys = await deleteObjectKeys(c, keys, client)
-    deleted += keys.length - failedKeys.length
-    failed += failedKeys.length
+    const result = await deleteObjectKeys(c, keys, { client, deadline: options.deadline })
+    deleted += keys.length - result.failed.length - result.skipped
+    failed += result.failed.length
+    // The deadline stopped the fallback mid-page: the rest of it is listed again next call.
+    if (result.skipped > 0)
+      return { deleted, failed, done: false }
 
     if (!nextToken)
       return { deleted, failed, done: failed === 0 }
