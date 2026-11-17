@@ -38,9 +38,9 @@ const USER_ID = '11111111-1111-4111-8111-111111111111'
 const ORG_ID = '22222222-2222-4222-8222-222222222222'
 const APP_ID = 'com.example.app'
 
-// Direct Postgres: every delete succeeds.
+// Direct Postgres: the owner_org lookup returns the org, every delete succeeds.
 const pgClient = {
-  query: vi.fn(async (_text: string): Promise<{ rows: { owner_org: string }[] }> => ({ rows: [] })),
+  query: vi.fn(async (_text: string): Promise<{ rows: { row: { owner_org: string } }[] }> => ({ rows: [] })),
 }
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -77,7 +77,7 @@ function file(name: string) {
 describe('app delete storage cleanup', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    pgClient.query.mockImplementation(async text => ({ rows: text.includes('SELECT owner_org FROM public.apps') ? [{ owner_org: ORG_ID }] : [] }))
+    pgClient.query.mockImplementation(async text => ({ rows: text.includes('SELECT owner_org FROM public.apps') ? [{ row: { owner_org: ORG_ID } }] : [] }))
     mocks.checkPermission.mockResolvedValue(true)
     mocks.deleteObjectsWithPrefix.mockResolvedValue(0)
     mocks.remove.mockResolvedValue({ data: [], error: null })
@@ -131,7 +131,7 @@ describe('app delete storage cleanup', () => {
     })
     pgClient.query.mockImplementation(async (text: string) => {
       if (text.includes('SELECT owner_org FROM public.apps'))
-        return { rows: [{ owner_org: ORG_ID }] }
+        return { rows: [{ row: { owner_org: ORG_ID } }] }
       if (text.startsWith('DELETE FROM public.apps'))
         order.push('delete app')
       return { rows: [] }
@@ -142,11 +142,12 @@ describe('app delete storage cleanup', () => {
     expect(response.status).toBe(200)
     expect(mocks.expireSimulatorSessions).toHaveBeenCalledWith(expect.anything(), ORG_ID)
     expect(order).toEqual(['settle', 'delete app'])
+    expect(pgClient.query.mock.calls.filter(([text]) => text.includes('SELECT owner_org FROM public.apps'))).toHaveLength(1)
   })
 
   it('still deletes the app when the simulator owner lookup fails', async () => {
     pgClient.query.mockImplementation(async (text) => {
-      if (text.startsWith('SELECT owner_org'))
+      if (text.includes('SELECT owner_org FROM public.apps'))
         throw new Error('temporary lookup failure')
       return { rows: [] }
     })
