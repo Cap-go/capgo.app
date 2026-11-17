@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, defineComponent, h, nextTick } from 'vue'
+import { createApp, defineComponent, h, nextTick, ref } from 'vue'
 import AppOnboardingBuilderChecklist from '../src/components/dashboard/AppOnboardingBuilderChecklist.vue'
 import { BUILDER_STEP_IDS } from '../src/services/builderOnboardingChecklist'
 
 const mocks = vi.hoisted(() => ({
-  manualFirst: { value: false },
+  manualFirst: null as unknown as { value: boolean },
   rememberSetupMethod: vi.fn(),
   onboarding: null as unknown,
 }))
@@ -66,7 +66,7 @@ function mount(value = onboarding()) {
 
 beforeEach(() => {
   vi.stubGlobal('matchMedia', () => ({ matches: true }))
-  mocks.manualFirst.value = false
+  mocks.manualFirst = ref(false)
   mocks.rememberSetupMethod.mockReset()
 })
 
@@ -107,6 +107,18 @@ describe('Builder setup method choice', () => {
     const { find } = mount()
     expect(find('builder-method-terminal')?.getAttribute('aria-pressed')).toBe('true')
     expect(find('builder-checklist-terminal')).not.toBeNull()
+  })
+
+  it('follows the saved method once the user loads, until the user picks one', async () => {
+    const { find } = mount()
+    mocks.manualFirst.value = true
+    await nextTick()
+    expect(find('builder-method-terminal')?.getAttribute('aria-pressed')).toBe('true')
+    find('builder-method-ai')!.click()
+    mocks.manualFirst.value = false
+    mocks.manualFirst.value = true
+    await nextTick()
+    expect(find('builder-method-ai')?.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('shows the steps of the platform the CLI or assistant started', async () => {

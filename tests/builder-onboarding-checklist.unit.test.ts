@@ -96,5 +96,6 @@ describe('builder setup progress card', () => {
     expect(maskBuilderCommand('npx @capgo/cli@latest build init -a ak_1234567890abcdef3f9a')).toBe('npx @capgo/cli@latest build init -a ak_••••••••3f9a')
     expect(maskBuilderCommand('npx @capgo/cli@latest build init -a 12345678-aaaa-bbbb-cccc-1234567890ab')).toBe('npx @capgo/cli@latest build init -a 123••••••••90ab')
     expect(maskBuilderCommand('')).toBe('')
+    expect(maskBuilderCommand('npx @capgo/cli@latest build init -a ak_1234567890abcdef3f9a --verbose')).toBe('npx @capgo/cli@latest build init -a ak_••••••••3f9a --verbose')
   })
 })

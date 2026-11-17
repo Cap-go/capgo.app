@@ -61,8 +61,9 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const capgo = useConsole()
 const setupMethod = useSetupMethodPreference()
-// The AI assistant is recommended unless the user last picked the manual way.
-const method = ref<BuilderSetupMethod>(setupMethod.manualFirst.value ? 'terminal' : 'ai')
+// The AI assistant is recommended unless the user last picked the manual way; a pick here wins.
+const pickedMethod = ref<BuilderSetupMethod | null>(null)
+const method = computed<BuilderSetupMethod>(() => pickedMethod.value ?? (setupMethod.manualFirst.value ? 'terminal' : 'ai'))
 const showApiKey = ref(false)
 const panelId = useId()
 const onboarding = ref(parseBuilderOnboarding(props.initialOnboarding))
@@ -264,7 +265,7 @@ function selectPlatform(platform: BuilderPlatform) {
 function selectMethod(next: BuilderSetupMethod) {
   if (method.value === next)
     return
-  method.value = next
+  pickedMethod.value = next
   emit('methodSelected', next)
   void setupMethod.rememberSetupMethod(next === 'terminal' ? 'manual' : 'ai')
 }
@@ -357,8 +358,8 @@ function statusLabel(status: BuilderStepStatus) {
 
       <AppOnboardingBuilderAiSetup v-if="method === 'ai'" @copy="emit('copyAi', 'checklist')" />
 
-      <section v-else class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/15 dark:bg-slate-900" aria-labelledby="builder-terminal-title" data-test="builder-checklist-terminal">
-        <h2 id="builder-terminal-title" class="flex items-center gap-3 text-base font-semibold text-slate-950 dark:text-white">
+      <section v-else class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/15 dark:bg-slate-900" :aria-labelledby="`${panelId}-terminal-title`" data-test="builder-checklist-terminal">
+        <h2 :id="`${panelId}-terminal-title`" class="flex items-center gap-3 text-base font-semibold text-slate-950 dark:text-white">
           <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-azure-500/30 text-sm text-sky-700 dark:text-azure-300" aria-hidden="true">1</span>
           {{ t('builder-checklist-terminal-title') }}
         </h2>
@@ -381,9 +382,9 @@ function statusLabel(status: BuilderStepStatus) {
       </section>
     </template>
 
-    <section class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900" aria-labelledby="builder-build-title" data-test="builder-checklist-build">
+    <section class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900" :aria-labelledby="`${panelId}-build-title`" data-test="builder-checklist-build">
       <div class="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="builder-build-title" class="text-lg font-semibold text-slate-950 dark:text-white">
+        <h2 :id="`${panelId}-build-title`" class="text-lg font-semibold text-slate-950 dark:text-white">
           {{ t('builder-checklist-build-title') }}
         </h2>
         <div v-if="showProgress" class="flex flex-wrap gap-2" data-test="builder-checklist-platforms">

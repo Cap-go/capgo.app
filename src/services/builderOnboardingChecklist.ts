@@ -70,5 +70,5 @@ export function startedBuilderPlatforms(state: BuilderOnboardingState): BuilderP
 
 /** Hides the API key at the end of the Builder setup command until the user reveals it. */
 export function maskBuilderCommand(command: string): string {
-  return command.replace(/(-a )(\S{3})\S+(\S{4})$/, '$1$2••••••••$3')
+  return command.replace(/(-a )(\S{3})\S+(\S{4})(?=\s|$)/, '$1$2••••••••$3')
 }
