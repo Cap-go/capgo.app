@@ -242,6 +242,8 @@ export async function sweepDueSimulatorSessions(c: Context): Promise<{ orgs: num
 }
 
 export async function expireSimulatorSessions(c: Context, orgId: string): Promise<void> {
+  const { syncInProgressSimulatorSessionsForOrgFromHost, stopDevicesForDueSimulatorExpiry } = await import('./simulator.ts')
+  await syncInProgressSimulatorSessionsForOrgFromHost(c, orgId)
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   let client: PgClient | null = null
   let dueForDeviceStop: Array<{ id: string, emulator_id: string | null, device_stopped_at: string | null }> = []
@@ -256,10 +258,8 @@ export async function expireSimulatorSessions(c: Context, orgId: string): Promis
     dueForDeviceStop = dueResult.rows
     await client.query('SELECT public.expire_simulator_sessions($1::uuid)', [orgId])
     await client.query('COMMIT')
-    if (dueForDeviceStop.length > 0) {
-      const { stopDevicesForDueSimulatorExpiry } = await import('./simulator.ts')
+    if (dueForDeviceStop.length > 0)
       await stopDevicesForDueSimulatorExpiry(c, dueForDeviceStop)
-    }
   }
   catch (error) {
     if (client) {

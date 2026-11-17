@@ -126,6 +126,26 @@ describe('simulator entrypoint activity bumps', () => {
     expect(pgState.queries.some(query => query.includes('bump_simulator_session_activity'))).toBe(true)
   })
 
+  it('does not bump activity on readSimulator status polls', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const target = typeof url === 'string' ? url : url instanceof Request ? url.url : url.toString()
+      if (target.includes('/v2/device-run-sessions/'))
+        return new Response(JSON.stringify({
+          data: {
+            id: 'emu-1',
+            url: 'https://host.test/s/x/',
+            status: 'running',
+            lastActivityAt: '2026-11-17T10:09:00.000Z',
+          },
+        }), { status: 200 })
+      return new Response('{}', { status: 404 })
+    }))
+    const { readSimulator } = await import('../supabase/functions/_backend/public/build/simulator.ts')
+    const response = await readSimulator(context, sessionId, { app_id: 'com.test.sim' }, userId, principal)
+    expect(response.status).toBe(200)
+    expect(pgState.queries.some(query => query.includes('bump_simulator_session_activity'))).toBe(false)
+  })
+
   it('bumps activity after the post-start wake path', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
       const target = typeof url === 'string' ? url : url instanceof Request ? url.url : url.toString()

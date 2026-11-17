@@ -545,6 +545,7 @@ async function fetchRemoteEmulatorSession(c: Context, emulatorId: string): Promi
     return found.data ?? null
   }
   catch (error) {
+    // The host uses 404/409 on GET when the device is already gone; live in-progress sessions return 200.
     if (error instanceof SimulatorHostError && simulatorHostStopIsFinal(error.status)) {
       return {
         id: emulatorId,
@@ -615,6 +616,34 @@ export async function syncInProgressSimulatorSessionsFromHost(
   for (const row of rows) {
     if (Date.now() >= deadline)
       break
+    try {
+      await syncSimulatorSessionFromHost(c, row, { orgId: row.owner_org, userId: row.requested_by })
+      synced++
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Simulator host sync failed for one session',
+        sessionId: row.id,
+        error,
+      })
+    }
+  }
+  return synced
+}
+
+export async function syncInProgressSimulatorSessionsForOrgFromHost(c: Context, orgId: string): Promise<number> {
+  const rows = await queryRead<SimulatorRow & { owner_org: string }>(c, `
+    SELECT id, owner_org, app_id, platform, status, url, emulator_id, started_at, last_activity_at,
+           device_stopped_at, requested_by, max_duration_minutes
+    FROM public.simulator_sessions
+    WHERE owner_org = $1::uuid
+      AND status = 'in-progress'
+      AND emulator_id IS NOT NULL
+      AND device_stopped_at IS NULL
+  `, [orgId])
+  let synced = 0
+  for (const row of rows) {
     try {
       await syncSimulatorSessionFromHost(c, row, { orgId: row.owner_org, userId: row.requested_by })
       synced++
