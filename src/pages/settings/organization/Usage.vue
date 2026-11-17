@@ -9,9 +9,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import CreditsCta from '~/components/CreditsCta.vue'
 import PageLoader from '~/components/PageLoader.vue'
-import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getUsageCreditDeductions } from '~/services/console'
+import { calculateCreditCost, getAllDashboard, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getUsageCreditDeductions } from '~/services/console'
 import { bytesToGb } from '~/services/conversion'
-import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
+import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal, normalizeToUtcStartOfDay } from '~/services/date'
 import { formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
@@ -50,11 +50,12 @@ watchEffect(async () => {
 })
 
 type UsageTotals = Record<'mau' | 'bandwidth' | 'storage' | 'build_time', number>
+type UsageOrganization = typeof organizationStore.currentOrganization
 
-async function estimateOverageCost(orgId: string, plan: Plan, usage: UsageTotals) {
+async function estimateOverageCost(orgId: string, org: UsageOrganization, plan: Plan, usage: UsageTotals) {
   // Credit-only orgs have no plan allowance: billing prices all usage
   // from the bottom of the tier ladder.
-  const creditsOnly = isCreditsOnlyOrg(organizationStore.currentOrganization)
+  const creditsOnly = isCreditsOnlyOrg(org)
   const included: UsageTotals = {
     mau: creditsOnly ? 0 : plan.mau,
     bandwidth: creditsOnly ? 0 : Math.round(plan.bandwidth * 1073741824),
@@ -78,7 +79,16 @@ async function estimateOverageCost(orgId: string, plan: Plan, usage: UsageTotals
   }
 }
 
-async function getUsage(orgId: string) {
+// Storage GB-hours used in the billing cycle. The dashboard only holds the last 30 UTC days,
+// which misses the first day of a 31 day cycle, so read the whole cycle.
+async function getCycleStorageByteHours(orgId: string, cycleStart: string, now: string) {
+  const { global } = await getAllDashboard(orgId, cycleStart, now)
+  return global.reduce((acc, entry) => acc + (entry.storage_byte_hours ?? 0), 0)
+}
+
+// `org` is the organization captured by loadData: the store may switch organization while this
+// awaits, and the plan, cycle and usage must all come from the same one.
+async function getUsage(orgId: string, org: UsageOrganization) {
   const usage = main.dashboard
 
   const planCurrent = await getCurrentPlanNameOrg(orgId)
@@ -105,13 +115,13 @@ async function getUsage(orgId: string) {
   detailPlanUsage = roundUsagePercents(detailPlanUsage)
 
   const nowEndOfDay = dayjs().endOf('day')
-  const billingStart = organizationStore.currentOrganization?.subscription_start
-    ? dayjs(organizationStore.currentOrganization.subscription_start).startOf('day')
+  const billingStart = org?.subscription_start
+    ? dayjs(org.subscription_start).startOf('day')
     : null
 
   const creditDeductions = await getUsageCreditDeductions(orgId, billingStart?.toISOString())
-  const billingEndRaw = organizationStore.currentOrganization?.subscription_end
-    ? dayjs(organizationStore.currentOrganization.subscription_end).endOf('day')
+  const billingEndRaw = org?.subscription_end
+    ? dayjs(org.subscription_end).endOf('day')
     : null
   const billingEnd = billingEndRaw && billingEndRaw.isBefore(nowEndOfDay) ? billingEndRaw : nowEndOfDay
 
@@ -157,9 +167,15 @@ async function getUsage(orgId: string) {
   const totalBandwidth = bytesToGb(totalBandwidthBytes)
   // Storage is billed in GB-hours over the cycle. The plan includes its GB x hours-in-cycle,
   // and overage is priced on the average stored (byte-hours / hours), like get_total_metrics.
-  const cycleStart = organizationStore.currentOrganization?.subscription_start ?? billingStart?.toISOString() ?? dayjs().subtract(30, 'day').toISOString()
-  const cycleEnd = organizationStore.currentOrganization?.subscription_end ?? dayjs(cycleStart).add(1, 'month').toISOString()
-  const totalStorageByteHours = relevantUsage.reduce((acc, entry) => acc + (entry.storage_byte_hours ?? 0), 0)
+  // Only the current cycle counts: an empty cycle uses no storage, even when the dashboard
+  // still shows the previous one.
+  const cycleStart = org?.subscription_start ?? dayjs().subtract(30, 'day').toISOString()
+  const cycleEnd = org?.subscription_end ?? dayjs(cycleStart).add(1, 'month').toISOString()
+  const totalStorageByteHours = await getCycleStorageByteHours(orgId, normalizeToUtcStartOfDay(new Date(cycleStart)).toISOString(), new Date(normalizeToUtcStartOfDay().getTime() + 86_400_000).toISOString())
+    .catch((error) => {
+      console.error('Error loading cycle storage usage:', error)
+      return usageInCycle.reduce((acc, entry) => acc + (entry.storage_byte_hours ?? 0), 0)
+    })
   const totalStorageBytes = billableStorageBytes(totalStorageByteHours, cycleStart, cycleEnd)
   const totalStorage = bytesToGb(totalStorageByteHours, 2)
   const includedStorage = currentPlan ? includedStorageGbHours(currentPlan.storage, cycleStart, cycleEnd) : 0
@@ -185,7 +201,7 @@ async function getUsage(orgId: string) {
   }
 
   const estimatedUsagePrice = currentPlan
-    ? await estimateOverageCost(orgId, currentPlan, {
+    ? await estimateOverageCost(orgId, org, currentPlan, {
         mau: totalMau,
         bandwidth: totalBandwidthBytes,
         storage: totalStorageBytes,
@@ -213,8 +229,8 @@ async function getUsage(orgId: string) {
     totalBuildTime,
     detailPlanUsage,
     cycle: {
-      subscription_anchor_start: formatLocalDate(organizationStore.currentOrganization?.subscription_start) || t('unknown'),
-      subscription_anchor_end: formatLocalDate(organizationStore.currentOrganization?.subscription_end) || t('unknown'),
+      subscription_anchor_start: formatLocalDate(org?.subscription_start) || t('unknown'),
+      subscription_anchor_end: formatLocalDate(org?.subscription_end) || t('unknown'),
     },
   }
 }
@@ -359,7 +375,8 @@ onMounted(async () => {
 
 async function loadData() {
   await Promise.all([organizationStore.awaitInitialLoad(), main.awaitInitialLoad()])
-  const gid = organizationStore?.currentOrganization?.gid ?? ''
+  const org = organizationStore?.currentOrganization
+  const gid = org?.gid ?? ''
 
   if (isLoading.value)
     return
@@ -372,7 +389,7 @@ async function loadData() {
     plans.value.push(...pls)
   }
 
-  const usageDetails = await getUsage(gid)
+  const usageDetails = await getUsage(gid, org)
   planUsageMap.value?.set(gid, usageDetails as any)
   isLoading.value = false
   initialLoad.value = false

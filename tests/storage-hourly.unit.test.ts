@@ -72,4 +72,22 @@ describe('calculateStorageHourlyRows', () => {
     ])
     expect(rows.every(row => row.owner_org === OWNER_ORG)).toBe(true)
   })
+
+  it('only counts hours after the current owner got the app', () => {
+    const rows = calculateStorageHourlyRows([
+      { version_id: 1, size: 100, timestamp: '2026-01-01T00:00:00.000Z' },
+    ], {
+      appId: APP_ID,
+      ownerOrg: OWNER_ORG,
+      cycleStart: '2026-01-01T00:00:00.000Z',
+      cycleEnd: '2026-02-01T00:00:00.000Z',
+      currentHour: '2026-01-03T00:00:00.000Z',
+      // Transferred to this org at noon on the 2nd: the former owner keeps the earlier hours.
+      accrualStart: '2026-01-02T12:00:00.000Z',
+    }).rows
+
+    expect(rows.map(row => [row.cycle_start, row.date, row.storage_byte_hours])).toEqual([
+      ['2026-01-01', '2026-01-02', 1200],
+    ])
+  })
 })

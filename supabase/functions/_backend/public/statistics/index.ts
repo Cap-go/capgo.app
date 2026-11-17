@@ -491,8 +491,10 @@ const HOURS_PER_DAY = 24
 function storageBytesFromByteHours(byteHours: number[], from: Date, now = dayjs().utc()): number[] {
   const firstDay = dayjs(from).utc().startOf('day')
   return byteHours.map((value, index) => {
-    const elapsedHours = now.diff(firstDay.add(index, 'day'), 'hour', true)
-    const hours = Math.min(HOURS_PER_DAY, Math.max(1, elapsedHours))
+    // Fractional hours: at 00:30 a bundle stored since midnight used half a byte-hour per byte.
+    const hours = Math.min(HOURS_PER_DAY, now.diff(firstDay.add(index, 'day'), 'hour', true))
+    if (hours <= 0)
+      return 0
     return Math.round((value ?? 0) / hours)
   })
 }

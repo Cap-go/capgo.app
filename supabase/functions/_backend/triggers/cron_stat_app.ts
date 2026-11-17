@@ -35,6 +35,13 @@ interface CycleInfo {
 
 interface AppOwnerOrgRow {
   owner_org: string
+  /** When the current owner got the app: its creation or its last transfer to that org. */
+  owned_since: string | null
+}
+
+interface CycleBoundsRow {
+  cycle_start: string | null
+  cycle_end: string | null
 }
 
 interface VersionNameRow {
@@ -70,6 +77,8 @@ interface StorageHourlyCalculationOptions {
   cycleStart: string
   cycleEnd: string
   currentHour?: string
+  /** Hours before this instant belong to another owner (or an earlier app with this ID). */
+  accrualStart?: string | null
 }
 
 interface StorageHourlyCalculationResult {
@@ -208,8 +217,10 @@ export function calculateStorageHourlyRows(
   const cycleEndMs = parseTimestampMs(options.cycleEnd)
   const currentHourMs = options.currentHour ? parseTimestampMs(options.currentHour) : Date.now()
   const calculationEndMs = Math.min(cycleEndMs, currentHourMs)
+  // Rows stay tagged with the cycle start; only the accrued window is clipped to the owner.
+  const windowStartMs = options.accrualStart ? Math.max(cycleStartMs, parseTimestampMs(options.accrualStart)) : cycleStartMs
 
-  if (calculationEndMs <= cycleStartMs)
+  if (calculationEndMs <= windowStartMs)
     return emptyStorageHourlyCalculationResult()
 
   assertStorageCycleWithinLimit(cycleStartMs, cycleEndMs)
@@ -219,7 +230,7 @@ export function calculateStorageHourlyRows(
   let skippedInvalidInterval = 0
 
   for (const version of versions.values()) {
-    const interval = getStorageInterval(version, cycleStartMs, calculationEndMs, cycleEndMs)
+    const interval = getStorageInterval(version, windowStartMs, calculationEndMs, cycleEndMs)
     if ('skipReason' in interval) {
       if (interval.skipReason === 'missingAddition')
         skippedMissingAddition++
@@ -320,47 +331,56 @@ async function upsertRows(
   )
 }
 
-async function refreshStorageHourly(
+// A refresh shortly after a rollover also finalizes the previous cycle: the hours between its last
+// refresh and its end are only recorded then. Later on, the completed cycle is left untouched.
+const STORAGE_PREVIOUS_CYCLE_FINALIZE_MS = 7 * DAY_MS
+
+async function readPreviousCycle(pg: PgClient, orgId: string, cycleStart: string): Promise<CycleBoundsRow | null> {
+  const { rows } = await pg.query<CycleBoundsRow>(
+    `SELECT cycle.cycle_start, cycle.cycle_end
+     FROM public.orgs o
+     LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
+     CROSS JOIN LATERAL public.billing_cycle_for_anchor(
+       si.subscription_anchor_start,
+       si.subscription_anchor_end,
+       $2::timestamptz - interval '1 second'
+     ) AS cycle
+     WHERE o.id = $1::uuid
+     LIMIT 1`,
+    [orgId, cycleStart],
+  )
+  return rows[0] ?? null
+}
+
+async function replaceCycleStorageHourly(
   c: Context,
   pg: PgClient,
-  appId: string,
-  ownerOrg: string,
-  cycleInfo: CycleInfo,
-  currentHour?: string,
+  events: VersionMetaStorageRow[],
+  options: StorageHourlyCalculationOptions,
 ) {
-  if (!cycleInfo.subscription_anchor_start || !cycleInfo.subscription_anchor_end)
-    throw simpleError('cannot_get_cycle_info', 'Cannot get cycle info', { cycleInfo })
-
-  const calculationEnd = currentHour ?? new Date().toISOString()
-  const events = await readVersionMetaStorageRows(pg, appId, calculationEnd)
-  const calculation = calculateStorageHourlyRows(events, {
-    appId,
-    ownerOrg,
-    cycleStart: cycleInfo.subscription_anchor_start,
-    cycleEnd: cycleInfo.subscription_anchor_end,
-    currentHour: calculationEnd,
-  })
+  const calculation = calculateStorageHourlyRows(events, options)
 
   if (calculation.skippedMissingAddition > 0 || calculation.skippedInvalidInterval > 0) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'storage hourly skipped invalid version metadata',
-      appId,
+      appId: options.appId,
       skippedMissingAddition: calculation.skippedMissingAddition,
       skippedInvalidInterval: calculation.skippedInvalidInterval,
     })
   }
 
-  const deleteRange = getStorageDailyDeleteRange(cycleInfo.subscription_anchor_start, cycleInfo.subscription_anchor_end)
+  const deleteRange = getStorageDailyDeleteRange(options.cycleStart, options.cycleEnd)
+  const cycleEndDay = formatUtcDay(floorToDay(parseTimestampMs(options.cycleEnd)))
   // One statement, so billing reads never see the cycle between the delete and the upsert.
   // Only this org's rows of this cycle are replaced: hours of a former owner of the app ID and
-  // the previous cycle's part of the boundary day stay untouched. Rows with a later cycle_start
+  // the other cycles' parts of the boundary days stay untouched. Rows with a later cycle_start
   // inside the cycle are legacy rows (cycle_start = date) of this cycle and are replaced too.
   await runSupabaseResultWithRetry(c, 'replace_daily_storage_hourly', async () => {
     await pg.query(
       `WITH new_rows AS (
          SELECT r.app_id, r.owner_org, r.cycle_start, r.date, r.storage_byte_hours, r.updated_at
-         FROM pg_catalog.jsonb_to_recordset($5::jsonb)
+         FROM pg_catalog.jsonb_to_recordset($6::jsonb)
            AS r(app_id varchar, owner_org uuid, cycle_start date, date date, storage_byte_hours double precision, updated_at timestamptz)
        ),
        removed AS (
@@ -368,6 +388,7 @@ async function refreshStorageHourly(
          WHERE dsh.app_id = $1
            AND dsh.owner_org = $2::uuid
            AND dsh.cycle_start >= $3::date
+           AND dsh.cycle_start < GREATEST($5::date, $3::date + 1)
            AND dsh.date >= $3::date
            AND dsh.date < $4::date
            AND NOT EXISTS (
@@ -381,10 +402,56 @@ async function refreshStorageHourly(
        ON CONFLICT (app_id, owner_org, cycle_start, date) DO UPDATE SET
          storage_byte_hours = EXCLUDED.storage_byte_hours,
          updated_at = EXCLUDED.updated_at`,
-      [appId, ownerOrg, deleteRange.startDay, deleteRange.endExclusiveDay, JSON.stringify(calculation.rows)],
+      [options.appId, options.ownerOrg, deleteRange.startDay, deleteRange.endExclusiveDay, cycleEndDay, JSON.stringify(calculation.rows)],
     )
     return { data: null, error: null }
   })
+
+  return calculation
+}
+
+async function refreshStorageHourly(
+  c: Context,
+  pg: PgClient,
+  appId: string,
+  ownerOrg: string,
+  cycleInfo: CycleInfo,
+  currentHour?: string,
+  ownedSince?: string | null,
+) {
+  if (!cycleInfo.subscription_anchor_start || !cycleInfo.subscription_anchor_end)
+    throw simpleError('cannot_get_cycle_info', 'Cannot get cycle info', { cycleInfo })
+
+  const calculationEnd = currentHour ?? new Date().toISOString()
+  const events = await readVersionMetaStorageRows(pg, appId, calculationEnd)
+  const cycleStart = cycleInfo.subscription_anchor_start
+  const calculation = await replaceCycleStorageHourly(c, pg, events, {
+    appId,
+    ownerOrg,
+    cycleStart,
+    cycleEnd: cycleInfo.subscription_anchor_end,
+    currentHour: calculationEnd,
+    accrualStart: ownedSince,
+  })
+
+  const cycleStartMs = parseTimestampMs(cycleStart)
+  if (parseTimestampMs(calculationEnd) - cycleStartMs < STORAGE_PREVIOUS_CYCLE_FINALIZE_MS) {
+    const previous = await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_previous_storage_cycle', async () => ({
+      data: await readPreviousCycle(pg, ownerOrg, cycleStart),
+      error: null,
+    }))
+    // Only a previous cycle that ends exactly where this one starts (a plan change can move the anchor).
+    if (previous.data?.cycle_start && previous.data.cycle_end && parseTimestampMs(previous.data.cycle_end) === cycleStartMs) {
+      await replaceCycleStorageHourly(c, pg, events, {
+        appId,
+        ownerOrg,
+        cycleStart: previous.data.cycle_start,
+        cycleEnd: previous.data.cycle_end,
+        currentHour: previous.data.cycle_end,
+        accrualStart: ownedSince,
+      })
+    }
+  }
 
   return calculation
 }
@@ -432,7 +499,19 @@ app.post('/', middlewareAPISecret, async (c) => {
 
 async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: string, orgId: string) {
   const appResult = await runSupabaseResultWithRetry<AppOwnerOrgRow>(c, 'load_app', async () => {
-    const result = await pg.query<AppOwnerOrgRow>('SELECT owner_org FROM public.apps WHERE app_id = $1 LIMIT 2', [appId])
+    const result = await pg.query<AppOwnerOrgRow>(
+      `SELECT apps.owner_org,
+         GREATEST(
+           apps.created_at,
+           (SELECT max((transfer.entry ->> 'transferred_at')::timestamptz)
+            FROM pg_catalog.unnest(apps.transfer_history) AS transfer(entry)
+            WHERE transfer.entry ->> 'transferred_to' = apps.owner_org::text)
+         ) AS owned_since
+       FROM public.apps
+       WHERE apps.app_id = $1
+       LIMIT 2`,
+      [appId],
+    )
     if (result.rows.length > 1)
       return { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } }
     return { data: result.rows[0] ?? null, error: null }
@@ -572,7 +651,7 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
 
   // Storage is billed from these byte-hours: a failure must fail the job so the
   // queue retries it, instead of leaving the cycle under-counted.
-  const storageHourly = await refreshStorageHourly(c, pg, appId, orgId, cycleInfo, body.currentHour)
+  const storageHourly = await refreshStorageHourly(c, pg, appId, orgId, cycleInfo, body.currentHour, appResult.data.owned_since)
 
   cloudlog({ requestId: c.get('requestId'), message: 'stats saved', mauLength: mau.length, bandwidthLength: bandwidth.length, storageHourlyLength: storageHourly.rows.length, versionUsageLength: versionUsage.length })
   await syncAppStatsRefresh(c, pg, appId)

@@ -45,6 +45,12 @@ describe('statistics storage series from byte-hours', () => {
     expect(statisticsTestUtils.storageBytesFromByteHours([240, 480, 180], from)).toEqual([10, 20, 30])
   })
 
+  it('uses fractional elapsed hours early in the day and skips days not started', () => {
+    vi.setSystemTime(new Date('2026-01-03T00:30:00.000Z'))
+    // Today: 1 GiB since midnight is 0.5 GiB-hours after 30 minutes.
+    expect(statisticsTestUtils.storageBytesFromByteHours([0, 0, GIB / 2, 5], from)).toEqual([0, 0, GIB, 0])
+  })
+
   it('returns levels and accumulated byte-hours by default', () => {
     expect(statisticsTestUtils.buildStorageSeries([240, 480, 180], from, false)).toEqual({
       storage: [10, 20, 30],
