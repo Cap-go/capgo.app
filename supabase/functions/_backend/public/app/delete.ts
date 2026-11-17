@@ -5,7 +5,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
-import { apikeyPrincipal, withRlsTransaction } from '../../utils/pg_rls.ts'
+import { apikeyPrincipal, queryJsonOne, withRlsTransaction } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
@@ -107,6 +107,14 @@ async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, 
   try {
     // Use the API key's RLS context for data queries - RLS will enforce access
     const apikeyRls = apikeyPrincipal(c, apikey.key)
+
+    // The app's org, read before any row is deleted: simulator sessions of a device that
+    // stopped by itself are settled for this org below, before the apps row goes away.
+    const app = await withRlsTransaction(pg, apikeyRls, client => queryJsonOne<{ owner_org: string }>(
+      client,
+      'SELECT owner_org FROM public.apps WHERE app_id = $1',
+      [appId],
+    )).catch(() => null)
 
     // Legacy per-user Supabase storage folder used by older CLI uploads.
     // The `apps` bucket stores objects under {user_id}/{app_id}/...
