@@ -1,5 +1,5 @@
 import type Stripe from 'stripe'
-import type { InvoiceDocument } from '../../shared/invoice-document.ts'
+import type { InvoiceBillingDetails, InvoiceDocument } from '../../shared/invoice-document.ts'
 import type { InAppBillingContext } from './stripe_in_app.ts'
 import { stripeAmountToMajorUnits } from '../../shared/stripe-amount.ts'
 import { simpleError } from './hono.ts'
@@ -79,7 +79,15 @@ export function buildInvoiceDocument(invoice: Stripe.Invoice, account: Stripe.Ac
   }
 }
 
-export async function getInvoiceDocument(ctx: InAppBillingContext, invoiceId: unknown): Promise<InvoiceDocument> {
+export function parseInvoiceBillingDetails(value: unknown): InvoiceBillingDetails {
+  if (value === undefined || value === 'issued')
+    return 'issued'
+  if (value === 'current')
+    return 'current'
+  throw simpleError('invalid_billing_details_source', 'Choose issued or current billing details')
+}
+
+export async function getInvoiceDocument(ctx: InAppBillingContext, invoiceId: unknown, billingDetails: InvoiceBillingDetails = 'issued'): Promise<InvoiceDocument> {
   if (typeof invoiceId !== 'string' || !/^in_[a-zA-Z0-9]+$/.test(invoiceId))
     throw simpleError('invalid_invoice', 'Invalid invoice')
   const invoice = await ctx.stripe.invoices.retrieve(invoiceId)
@@ -91,6 +99,17 @@ export async function getInvoiceDocument(ctx: InAppBillingContext, invoiceId: un
     throw simpleError('invoice_not_finalized', 'The invoice is not finalized')
   if (invoice.issuer?.type === 'account' || invoice.on_behalf_of)
     throw simpleError('unsupported_invoice_issuer', 'This invoice has a different issuer')
+  let documentInvoice = invoice
+  if (billingDetails === 'current') {
+    // Only the authorized customer's saved name/address can replace the printed details.
+    // Never overwrite the invoice's tax identity, dates, amounts or numbering.
+    const customer = await ctx.stripe.customers.retrieve(ctx.customerId)
+    if (customer.deleted)
+      throw simpleError('no_customer', 'No customer')
+    if (!customer.address?.line1 || !customer.address.country)
+      throw simpleError('missing_billing_address', 'Save a billing address before regenerating an invoice')
+    documentInvoice = { ...invoice, customer_name: customer.name ?? invoice.customer_name, customer_address: customer.address }
+  }
   const lines: Stripe.InvoiceLineItem[] = []
   for await (const line of ctx.stripe.invoices.listLineItems(invoiceId, { limit: 100 })) {
     if (lines.length >= 1000)
@@ -102,5 +121,5 @@ export async function getInvoiceDocument(ctx: InAppBillingContext, invoiceId: un
     Promise.all((invoice.account_tax_ids ?? []).map(tax => typeof tax === 'string' ? ctx.stripe.taxIds.retrieve(tax) : tax)),
     Promise.all([...new Set([...(invoice.total_taxes ?? []), ...lines.flatMap(line => line.taxes ?? [])].map(tax => tax.tax_rate_details?.tax_rate).filter((id): id is string => !!id))].map(id => ctx.stripe.taxRates.retrieve(id))),
   ])
-  return buildInvoiceDocument(invoice, account, lines, taxIds.filter((tax): tax is Stripe.TaxId => !tax.deleted), new Map(rates.map(rate => [rate.id, rate])))
+  return buildInvoiceDocument(documentInvoice, account, lines, taxIds.filter((tax): tax is Stripe.TaxId => !tax.deleted), new Map(rates.map(rate => [rate.id, rate])))
 }

@@ -1,7 +1,7 @@
 import type Stripe from 'stripe'
 import type { InAppBillingContext } from '../supabase/functions/_backend/utils/stripe_in_app'
 import { describe, expect, it, vi } from 'vitest'
-import { buildInvoiceDocument, getInvoiceDocument } from '../supabase/functions/_backend/utils/invoice_document'
+import { buildInvoiceDocument, getInvoiceDocument, parseInvoiceBillingDetails } from '../supabase/functions/_backend/utils/invoice_document'
 import { exampleAccount, exampleInvoice, exampleLines, exampleRate } from './fixtures/invoices/example'
 
 function document(overrides: Partial<Stripe.Invoice> = {}) {
@@ -10,6 +10,7 @@ function document(overrides: Partial<Stripe.Invoice> = {}) {
 function context(invoice = exampleInvoice, lines = exampleLines) {
   const stripe = {
     invoices: { retrieve: vi.fn().mockResolvedValue(invoice), listLineItems: vi.fn().mockImplementation(async function* () { yield* lines }) },
+    customers: { retrieve: vi.fn().mockResolvedValue({ id: 'cus_example', name: 'Updated Example Company', address: { line1: '456 Example Avenue', line2: null, city: 'Paris', state: null, postal_code: '75001', country: 'FR' } }), update: vi.fn() },
     accounts: { retrieve: vi.fn().mockResolvedValue(exampleAccount) },
     taxIds: { retrieve: vi.fn() },
     taxRates: { retrieve: vi.fn().mockResolvedValue(exampleRate) },
@@ -60,6 +61,36 @@ describe('owned invoice documents', () => {
     const result = await getInvoiceDocument(ctx, 'in_example')
     expect(stripe.taxRates.retrieve).toHaveBeenCalledWith('txr_example')
     expect(result.lines[0].tax).toBe('22%')
+  })
+  it.concurrent('regenerates only the name and address, preserving all issued financial and tax details', async () => {
+    const invoice = { ...exampleInvoice, customer_tax_ids: [{ type: 'eu_vat' as const, value: 'IT00000000000' }] }
+    const { ctx, stripe } = context(invoice)
+    const issued = await getInvoiceDocument(ctx, 'in_example')
+    expect(stripe.customers.retrieve).not.toHaveBeenCalled()
+    const current = await getInvoiceDocument(ctx, 'in_example', 'current')
+    expect(stripe.customers.retrieve).toHaveBeenCalledWith('cus_example')
+    expect(current.customer).toEqual(['Updated Example Company', '456 Example Avenue', '75001 Paris', 'France', 'billing@example.com', 'IT VAT IT00000000000'])
+    expect({ ...current, customer: [] }).toEqual({ ...issued, customer: [] })
+    expect(stripe.customers.update).not.toHaveBeenCalled()
+    expect(invoice.customer_address).toEqual(exampleInvoice.customer_address)
+    expect((await getInvoiceDocument(ctx, 'in_example')).customer).toEqual(issued.customer)
+  })
+  it.concurrent('rejects current-details requests before reading a different customer profile', async () => {
+    const { ctx, stripe } = context({ ...exampleInvoice, customer: 'cus_other' })
+    await expect(getInvoiceDocument(ctx, 'in_example', 'current')).rejects.toThrow()
+    expect(stripe.customers.retrieve).not.toHaveBeenCalled()
+  })
+  it.concurrent.each([{ deleted: true }, { address: null }, { address: { line1: '456 Example Avenue' } }])('rejects unavailable or incomplete current billing addresses', async (customer) => {
+    const { ctx, stripe } = context()
+    stripe.customers.retrieve.mockResolvedValue(customer)
+    await expect(getInvoiceDocument(ctx, 'in_example', 'current')).rejects.toThrow()
+    expect(stripe.invoices.listLineItems).not.toHaveBeenCalled()
+  })
+  it.concurrent('defaults to issued details and rejects unsupported selectors', () => {
+    expect(parseInvoiceBillingDetails(undefined)).toBe('issued')
+    expect(parseInvoiceBillingDetails('current')).toBe('current')
+    for (const value of [true, null, {}, 'another-customer'])
+      expect(() => parseInvoiceBillingDetails(value)).toThrow()
   })
   it.concurrent('fetches every line rather than the first embedded Stripe page', async () => {
     const lines = Array.from({ length: 101 }, (_, i) => ({ ...exampleLines[0], id: `il_${i}` }))

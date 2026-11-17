@@ -8,7 +8,7 @@ import { addBillingTaxId, getBillingProfile, removeBillingTaxId, updateBillingDe
 import { BILLING_COUNTRIES, BILLING_TAX_ID_TYPES } from '../../../supabase/functions/shared/billing-profile'
 
 const props = defineProps<{ orgId: string }>()
-const emit = defineEmits<{ denied: [] }>()
+const emit = defineEmits<{ denied: [], detailsSaved: [] }>()
 const { t, locale } = useI18n()
 const profile = ref<BillingProfile | null>(null)
 const loading = ref(true)
@@ -87,6 +87,7 @@ async function saveDetails() {
     if (!disposed && profile.value) {
       profile.value = { ...profile.value, ...details }
       editing.value = null
+      emit('detailsSaved')
     }
   }
   catch {

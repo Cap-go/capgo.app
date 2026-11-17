@@ -24,7 +24,7 @@ vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile.ts', () => 
   getBillingProfile: mocks.profile, updateBillingDetails: mocks.update, addBillingTaxId: mocks.add, removeBillingTaxId: mocks.remove,
 }))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_discounts.ts', () => ({ getBillingDiscounts: mocks.discounts }))
-vi.mock('../supabase/functions/_backend/utils/invoice_document.ts', () => ({ getInvoiceDocument: mocks.invoice }))
+vi.mock('../supabase/functions/_backend/utils/invoice_document.ts', async (importOriginal) => ({ ...await importOriginal<typeof import('../supabase/functions/_backend/utils/invoice_document.ts')>(), getInvoiceDocument: mocks.invoice }))
 const { app } = await import('../supabase/functions/_backend/private/stripe_billing')
 app.onError((_err, c) => c.json({ error: 'rejected' }, 400))
 const operations = [
@@ -80,4 +80,20 @@ it('does not expose promotion-code mutation on the billing API', async () => {
 it('marks invoice data private and uncacheable', async () => {
   const response = await request('invoice-document', { invoiceId: 'in_example' })
   expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+})
+
+it('requires current billing read permission in addition to invoice read permission for regeneration', async () => {
+  mocks.permission.mockImplementation((_c, permission) => permission === 'org.read_invoices')
+  expect((await request('invoice-document', { invoiceId: 'in_example', billingDetails: 'current' })).status).toBe(400)
+  expect(mocks.invoice).not.toHaveBeenCalled()
+})
+it('passes only the validated details selector, never a caller-supplied address', async () => {
+  const response = await request('invoice-document', { invoiceId: 'in_example', billingDetails: 'current', customerId: 'cus_other', address: { line1: 'Untrusted address' } })
+  expect(response.status).toBe(200)
+  expect(mocks.invoice).toHaveBeenCalledWith({ customerId: 'cus_resolved', billingAccount: 'us' }, 'in_example', 'current')
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+})
+it('rejects unsupported details selectors', async () => {
+  expect((await request('invoice-document', { invoiceId: 'in_example', billingDetails: true })).status).toBe(400)
+  expect(mocks.invoice).not.toHaveBeenCalled()
 })

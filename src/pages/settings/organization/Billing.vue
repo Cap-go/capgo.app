@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import type { BillingCard, BillingInvoice, BillingOverview, BillingSubscription } from '~/services/stripe'
+import type { BillingCard, BillingOverview, BillingSubscription } from '~/services/stripe'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import IconDownload from '~icons/heroicons/arrow-down-tray'
 import IconCard from '~icons/heroicons/credit-card'
 import IconExclamationTriangle from '~icons/heroicons/exclamation-triangle'
 import IconShieldCheck from '~icons/heroicons/shield-check'
+import BillingInvoices from '~/components/billing/BillingInvoices.vue'
 import BillingProfileSection from '~/components/billing/BillingProfileSection.vue'
 import BillingSubscriptionDiscounts from '~/components/billing/BillingSubscriptionDiscounts.vue'
 import CancelPlanModal from '~/components/billing/CancelPlanModal.vue'
@@ -19,7 +19,7 @@ import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
-import { cancelTrialPlan, formatStripeAmount, getBillingOverview, getInvoiceDocument, payOpenInvoice, removeBackupCard, resumeSubscription, scheduleTrialPlan } from '~/services/stripe'
+import { cancelTrialPlan, formatStripeAmount, getBillingOverview, payOpenInvoice, removeBackupCard, resumeSubscription, scheduleTrialPlan } from '~/services/stripe'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -33,7 +33,7 @@ displayStore.NavTitle = t('billing-portal-tab')
 
 const overview = ref<BillingOverview | null>(null)
 const isLoading = ref(true)
-const downloadingInvoice = ref<string | null>(null)
+const useCurrentBillingDetails = ref(false)
 const loadFailed = ref(false)
 const isPaying = ref(false)
 const isResuming = ref(false)
@@ -84,33 +84,6 @@ const subscriptionLine = computed(() => {
 
 function brandLabel(value: BillingCard) {
   return value.brand.charAt(0).toUpperCase() + value.brand.slice(1)
-}
-
-function invoiceStatusClass(status: BillingInvoice['status']) {
-  if (status === 'paid')
-    return 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300'
-  if (status === 'open')
-    return 'bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-200'
-  return 'bg-slate-50 text-slate-600 ring-slate-500/20 dark:bg-slate-500/10 dark:text-slate-300'
-}
-
-async function downloadInvoice(invoice: BillingInvoice) {
-  const id = orgId.value
-  downloadingInvoice.value = invoice.id
-  try {
-    const [document, { downloadInvoicePdf }] = await Promise.all([
-      getInvoiceDocument(id, invoice.id),
-      import('~/services/invoicePdf'),
-    ])
-    if (id === orgId.value)
-      await downloadInvoicePdf(document, id)
-  }
-  catch {
-    toast.error(t('billing-invoice-download-failed'))
-  }
-  finally {
-    downloadingInvoice.value = null
-  }
 }
 
 async function loadOverview() {
@@ -345,6 +318,7 @@ async function onSubscriptionUpdated(sub: BillingSubscription | null) {
 }
 
 watch(orgId, () => {
+  useCurrentBillingDetails.value = false
   permissionModal.value = null
   trialPlanOfferOrgId.value = null
   showStartNowModal.value = false
@@ -574,37 +548,9 @@ onMounted(async () => {
           </section>
         </div>
 
-        <BillingProfileSection :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
+        <BillingProfileSection :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" @details-saved="useCurrentBillingDetails = true" />
 
-        <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60" data-test="billing-invoices">
-          <h2 class="border-b border-slate-100 px-5 py-4 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:border-white/10 dark:text-slate-400">
-            {{ t('billing-invoices-heading') }}
-          </h2>
-          <p v-if="!invoices.length" class="px-5 py-6 text-sm text-slate-600 dark:text-slate-300">
-            {{ t('billing-no-invoices') }}
-          </p>
-          <ul v-else class="divide-y divide-slate-100 dark:divide-white/10">
-            <li v-for="invoice in invoices" :key="invoice.id" class="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 text-sm">
-              <span class="w-28 shrink-0 text-slate-900 dark:text-white">{{ formatLocalDate(invoice.created) }}</span>
-              <span class="min-w-0 flex-1 truncate text-slate-500 dark:text-slate-400">{{ invoice.number ?? invoice.id }}</span>
-              <span class="w-24 text-right font-medium text-slate-900 tabular-nums dark:text-white">{{ formatStripeAmount(invoice.total, invoice.currency) }}</span>
-              <span class="inline-flex w-24 justify-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset" :class="invoiceStatusClass(invoice.status)">
-                {{ t(`billing-invoice-status-${invoice.status ?? 'void'}`) }}
-              </span>
-              <button
-                v-if="invoice.number"
-                type="button"
-                :disabled="downloadingInvoice !== null"
-                class="d-btn d-btn-ghost d-btn-xs gap-1"
-                :aria-label="t('billing-download-invoice')"
-                @click="downloadInvoice(invoice)"
-              >
-                <IconDownload class="h-4 w-4" />
-                PDF
-              </button>
-            </li>
-          </ul>
-        </section>
+        <BillingInvoices :key="orgId" v-model:use-current-details="useCurrentBillingDetails" :org-id="orgId" :invoices="invoices" />
       </template>
     </div>
 

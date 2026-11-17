@@ -1,6 +1,6 @@
 import type { Stripe } from '@stripe/stripe-js'
 import type { BillingDetails, BillingProfile, BillingTaxId } from '../../supabase/functions/shared/billing-profile'
-import type { InvoiceDocument } from '../../supabase/functions/shared/invoice-document'
+import type { InvoiceBillingDetails, InvoiceDocument } from '../../supabase/functions/shared/invoice-document'
 import { loadStripe } from '@stripe/stripe-js'
 import { toast } from 'vue-sonner'
 import { i18n } from '~/modules/i18n'
@@ -458,6 +458,6 @@ export function getBillingDiscounts(orgId: string) {
   return callBilling<BillingDiscounts>('discounts', { orgId })
 }
 
-export function getInvoiceDocument(orgId: string, invoiceId: string) {
-  return callBilling<InvoiceDocument>('invoice-document', { orgId, invoiceId })
+export function getInvoiceDocument(orgId: string, invoiceId: string, billingDetails: InvoiceBillingDetails = 'issued') {
+  return callBilling<InvoiceDocument>('invoice-document', { orgId, invoiceId, billingDetails })
 }

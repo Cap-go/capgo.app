@@ -1,3 +1,5 @@
+export type InvoiceBillingDetails = 'issued' | 'current'
+
 export interface InvoiceDocument {
   number: string
   issued: string

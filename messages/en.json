@@ -1,4 +1,7 @@
 {
+  "billing-invoice-use-current-details": "Use current billing name and address",
+  "billing-invoice-current-details-help": "Regenerate a PDF with your saved name and address. Invoice numbers, dates, tax IDs and amounts stay as issued.",
+  "billing-invoice-regenerate": "Regenerate PDF",
   "billing-invoice-download-failed": "Could not download the invoice. Please try again.",
   "$schema": "https://inlang.com/schema/inlang-message-format",
   "2fa": "Manage 2FA",
@@ -4587,7 +4590,7 @@
   "cicd-guide-encryption-choice-encrypted": "Yes, restore my encryption key in CI",
   "cicd-guide-encryption-choice-plaintext": "No, my production app uses unencrypted bundles",
   "billing-details-heading": "Billing details",
-  "billing-details-desc": "Manage the name, email and address used by Stripe for future invoices. Finalized invoices stay unchanged.",
+  "billing-details-desc": "Update your billing details for future invoices. To correct an older PDF, save your name and address here, then select Use current billing name and address in Invoices.",
   "billing-invoice-details": "Invoice details",
   "billing-edit-details": "Edit billing details",
   "billing-save-details": "Save billing details",
