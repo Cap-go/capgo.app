@@ -151,3 +151,32 @@ SET
     || '120 Analytics Engine queries) to stay under the Cloudflare API limit',
     updated_at = pg_catalog.now()
 WHERE name = 'stat_app_queue';
+
+-- 4. cron_rollout_auto_pause checks at most 500 channels per run, oldest first.
+--    A channel whose Analytics Engine read fails is not evaluated and keeps its
+--    auto_pause_last_checked_at (the public channel API reports it as the last
+--    real check). Its failed attempt is recorded here instead, and the cron
+--    orders by the later of the two, so apps whose reads keep failing move
+--    behind the others instead of using up every run's time budget.
+--    Internal cron state: not replicated, no direct client access.
+CREATE TABLE IF NOT EXISTS "public"."channel_auto_pause_attempts" (
+    "channel_id" bigint PRIMARY KEY
+    REFERENCES "public"."channels" ("id") ON DELETE CASCADE,
+    "failed_at" timestamp with time zone NOT NULL
+);
+
+ALTER TABLE "public"."channel_auto_pause_attempts" OWNER TO "postgres";
+ALTER TABLE "public"."channel_auto_pause_attempts" ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Deny all direct access"
+ON "public"."channel_auto_pause_attempts"
+AS RESTRICTIVE
+FOR ALL
+TO PUBLIC
+USING (false)
+WITH CHECK (false);
+
+REVOKE ALL ON TABLE "public"."channel_auto_pause_attempts" FROM PUBLIC;
+REVOKE ALL ON TABLE "public"."channel_auto_pause_attempts" FROM "anon";
+REVOKE ALL ON TABLE "public"."channel_auto_pause_attempts" FROM "authenticated";
+GRANT ALL ON TABLE "public"."channel_auto_pause_attempts" TO "service_role";

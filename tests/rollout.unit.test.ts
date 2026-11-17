@@ -254,7 +254,7 @@ describe('rollout auto-pause channel loading', () => {
     expect(result.data).toEqual([{ id: 1 }, { id: 2 }])
     expect(queries).toHaveLength(1)
     expect(queries[0]!.text).toContain('ch.rollout_percentage_bps > 0')
-    expect(queries[0]!.text).toContain('ORDER BY ch.auto_pause_last_checked_at ASC NULLS FIRST, ch.id ASC')
+    expect(queries[0]!.text).toContain('ORDER BY GREATEST(ch.auto_pause_last_checked_at, attempt.failed_at) ASC NULLS FIRST, ch.id ASC')
     expect(queries[0]!.values).toEqual([500])
   })
 })

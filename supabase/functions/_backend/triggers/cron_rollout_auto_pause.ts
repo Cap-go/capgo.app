@@ -131,9 +131,17 @@ async function readChannelTotals(c: Context, windows: RolloutChannelWindow[], no
     })
   }
   // Postgres fallback (self-hosted, local): one read per channel, as before.
+  // A failed read must not count as zero installs and fails: give up on the chunk.
   const totals: RolloutChannelTotals[] = []
   for (const window of windows) {
-    const stats = await readStatsVersion(c, window.appId, window.start, now.toISOString(), window.channel)
+    let stats: Awaited<ReturnType<typeof readStatsVersion>>
+    try {
+      stats = await readStatsVersion(c, window.appId, window.start, now.toISOString(), window.channel, { throwOnError: true })
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Rollout auto-pause Postgres stats read failed', appId: window.appId, error })
+      return null
+    }
     totals.push(stats
       .filter(row => row.version_name === window.versionName)
       .reduce((acc, row) => {
@@ -166,6 +174,19 @@ async function stampCheckedChannels(pg: PgClient, channels: RolloutAutoPauseChan
     [now.toISOString(), channels.map(channel => channel.id), channels.map(channel => channel.rollout_version)],
   )
   return new Set(result.rows.map(row => Number(row.id)))
+}
+
+/** Records a failed evaluation attempt, which only affects the order of later runs. */
+async function recordFailedAttempts(pg: PgClient, channels: RolloutAutoPauseChannel[], now: Date) {
+  if (channels.length === 0)
+    return
+  await pg.query(
+    `INSERT INTO public.channel_auto_pause_attempts (channel_id, failed_at)
+    SELECT failed.id, $1::timestamptz
+    FROM pg_catalog.unnest($2::bigint[]) AS failed(id)
+    ON CONFLICT (channel_id) DO UPDATE SET failed_at = EXCLUDED.failed_at`,
+    [now.toISOString(), channels.map(channel => channel.id)],
+  )
 }
 
 async function triggerChannel(c: Context, pg: PgClient, { channel, versionName, result }: ChannelEvaluation, now: Date) {
@@ -244,9 +265,16 @@ async function evaluateChannelChunk(c: Context, pg: PgClient, channels: RolloutA
   }))
   const totals = await readChannelTotals(c, windows, now)
   if (!totals) {
-    // Analytics Engine failed or timed out: leave these channels unstamped so
-    // the next run (oldest-checked first) evaluates them again.
+    // The stats read failed or timed out: do not evaluate these channels and
+    // keep auto_pause_last_checked_at (no check happened). Record the attempt
+    // so the next runs try other apps first.
     cloudlog({ requestId: c.get('requestId'), message: 'Rollout auto-pause deferred channels after a stats read failure', channelIds: channels.map(channel => channel.id) })
+    try {
+      await recordFailedAttempts(pg, channels, now)
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Rollout auto-pause failed attempt record failed', channelIds: channels.map(channel => channel.id), error })
+    }
     return { checked: 0, triggered: 0 }
   }
 
@@ -369,12 +397,15 @@ async function loadAutoPauseChannels(pg: Parameters<typeof queryJson>[0], limit 
         ch.rollout_paused_at,
         (SELECT json_build_object('name', av.name) FROM public.app_versions av WHERE av.id = ch.rollout_version) AS rollout_version_info
       FROM public.channels ch
+      LEFT JOIN public.channel_auto_pause_attempts attempt ON attempt.channel_id = ch.id
       WHERE ch.rollout_enabled = true
         AND ch.auto_pause_enabled = true
         AND ch.rollout_percentage_bps > 0
         AND ch.rollout_version IS NOT NULL
         AND ch.rollout_paused_at IS NULL
-      ORDER BY ch.auto_pause_last_checked_at ASC NULLS FIRST, ch.id ASC
+      -- Oldest of the last check and the last failed attempt first: never
+      -- tried first, and apps whose reads keep failing move to the back.
+      ORDER BY GREATEST(ch.auto_pause_last_checked_at, attempt.failed_at) ASC NULLS FIRST, ch.id ASC
       LIMIT $1`,
       [limit],
     )

@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   readRolloutVersionTotalsCF: vi.fn(),
+  readStatsVersion: vi.fn(),
   sendEventToTracking: vi.fn(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({
+  readStatsVersion: mocks.readStatsVersion,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/cloudflare_rollout_stats.ts', async importOriginal => ({
@@ -68,6 +73,7 @@ const failing = { installs: 100, failures: 90 }
 
 beforeEach(() => {
   mocks.readRolloutVersionTotalsCF.mockReset()
+  mocks.readStatsVersion.mockReset()
   mocks.sendEventToTracking.mockReset()
 })
 
@@ -121,14 +127,45 @@ describe('rollout auto-pause batched evaluation', () => {
     expect(stampedIds).toEqual(channels.slice(0, 20).map(ch => ch.id))
   })
 
-  it('does not stamp channels whose stats could not be read', async () => {
+  it('does not stamp channels whose stats could not be read, and records the attempt', async () => {
     mocks.readRolloutVersionTotalsCF.mockResolvedValue(null)
-    const { pg } = fakePg()
+    const { pg, queries } = fakePg()
 
-    const result = await __rolloutAutoPauseTestUtils__.evaluateChannels(context(), pg as any, [channel(1), channel(2)] as any, NOW)
+    const result = await __rolloutAutoPauseTestUtils__.evaluateChannels(context(), pg as any, [channel(1, { app_id: 'app.x' }), channel(2, { app_id: 'app.x' })] as any, NOW)
 
     expect(result).toEqual({ checked: 0, triggered: 0, deferred: 0 })
-    expect(pg.query).not.toHaveBeenCalled()
+    expect(queries).toHaveLength(1)
+    expect(queries[0]!.text).toContain('INSERT INTO public.channel_auto_pause_attempts')
+    expect(queries[0]!.text).not.toContain('UPDATE public.channels')
+    expect(queries[0]!.values).toEqual([NOW.toISOString(), [1, 2]])
+  })
+
+  it('treats a failed Postgres fallback read as a failure, not as zero data', async () => {
+    const pgContext = { ...context(), env: {} } as unknown as Context
+    mocks.readStatsVersion.mockRejectedValueOnce(new Error('database unavailable'))
+    const { pg, queries } = fakePg()
+
+    const result = await __rolloutAutoPauseTestUtils__.evaluateChannels(pgContext, pg as any, [channel(1, { app_id: 'app.x' }), channel(2, { app_id: 'app.x' })] as any, NOW)
+
+    expect(mocks.readStatsVersion).toHaveBeenCalledTimes(1)
+    expect(mocks.readStatsVersion.mock.calls[0]![5]).toEqual({ throwOnError: true })
+    expect(result).toEqual({ checked: 0, triggered: 0, deferred: 0 })
+    expect(queries.map(query => query.text).join('\n')).not.toContain('UPDATE public.channels')
+    expect(queries[0]!.text).toContain('INSERT INTO public.channel_auto_pause_attempts')
+  })
+
+  it('evaluates through the Postgres fallback when Analytics Engine is not configured', async () => {
+    const pgContext = { ...context(), env: {} } as unknown as Context
+    mocks.readStatsVersion.mockResolvedValue([
+      { app_id: 'app.1', version_name: '1.0.1', date: '2026-11-17', get: 0, fail: 1, install: 1000, uninstall: 0 },
+      { app_id: 'app.1', version_name: '0.9.0', date: '2026-11-17', get: 0, fail: 900, install: 1000, uninstall: 0 },
+    ])
+    const { pg, queries } = fakePg()
+
+    const result = await __rolloutAutoPauseTestUtils__.evaluateChannels(pgContext, pg as any, [channel(1)] as any, NOW)
+
+    expect(result).toEqual({ checked: 1, triggered: 0, deferred: 0 })
+    expect(queries[0]!.text).toContain('UPDATE public.channels ch')
   })
 
   it('keeps notify and rollback actions', async () => {
