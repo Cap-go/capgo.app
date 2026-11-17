@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DeviceCountCache, MAX_DEVICES_PAGE_OFFSET as CONSOLE_MAX_DEVICES_PAGE_OFFSET, planDevicePageFetch, plannedDevicePage } from '../src/services/devicePagination'
-import { groupPreviousDeploysByChannel } from '../src/services/bundleComparePrevious'
+import { chunkChannelIds, groupPreviousDeploysByChannel } from '../src/services/bundleComparePrevious'
 import { organizationAccessKey, organizationBillingKey, organizationIdentityKey, organizationSecurityKey } from '../src/services/organizationWatchKeys'
 import { splitUpdateStatsAppIds, splitUpdateStatsWindow, toDailyVersionStat } from '../src/services/updateStats'
 import { buildReadDevicesCFQuery } from '../supabase/functions/_backend/utils/cloudflare.ts'
@@ -146,6 +146,13 @@ describe('organization watch keys', () => {
 })
 
 describe('bundle compare previous deployments', () => {
+  it('sends more than 1000 channels in chunks the RPC accepts', () => {
+    const channelIds = Array.from({ length: 1_500 }, (_, index) => index + 1)
+    const chunks = chunkChannelIds(channelIds)
+    expect(chunks.map(chunk => chunk.length)).toEqual([1_000, 500])
+    expect(chunks.flat()).toEqual(channelIds)
+  })
+
   it('groups one batched response per channel, in request order, skipping empty channels', () => {
     const grouped = groupPreviousDeploysByChannel([3, 1, 2], [
       { channel_id: 1, version_id: 10, created_at: '2026-11-02', deployed_at: null },

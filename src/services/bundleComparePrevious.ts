@@ -5,6 +5,17 @@ export interface PreviousDeployRow {
   deployed_at: string | null
 }
 
+/** Channels per get_channels_previous_deploys call (the RPC refuses more than 1000). */
+const MAX_CHANNELS_PER_LOOKBACK = 1000
+
+/** Split channel ids into disjoint chunks the lookback RPC accepts. */
+export function chunkChannelIds(channelIds: readonly number[], maxChannels = MAX_CHANNELS_PER_LOOKBACK): number[][] {
+  const chunks: number[][] = []
+  for (let index = 0; index < channelIds.length; index += maxChannels)
+    chunks.push(channelIds.slice(index, index + maxChannels))
+  return chunks
+}
+
 export interface PreviousDeployCandidate {
   versionId: number
   deployedAt: string | null

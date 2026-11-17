@@ -7,7 +7,7 @@ import { useI18n } from 'vue-i18n'
 import IconDown from '~icons/ic/round-keyboard-arrow-down'
 import IconSearch from '~icons/ic/round-search'
 import FormField from '~/components/forms/FormField.vue'
-import { groupPreviousDeploysByChannel } from '~/services/bundleComparePrevious'
+import { chunkChannelIds, groupPreviousDeploysByChannel } from '~/services/bundleComparePrevious'
 import { useConsole } from '~/services/console'
 import { readAllConsoleRows } from '~/services/consoleRows'
 import { formatLocalDate } from '~/services/date'
@@ -199,28 +199,31 @@ async function loadPreferredCompareVersions() {
   // us fall back to the next older non-deleted deployment instead.
   const PREFERRED_LOOKBACK = 20
   // One request for every channel's lookback (newest first per channel)
-  // instead of one deploy_history query per channel.
+  // instead of one deploy_history query per channel. The RPC takes at most
+  // 1000 channels per call, so larger sets are sent in chunks.
   const pendingChannelIds = [...channelIds]
-  const { data: lookbackRows, error: lookbackError } = await readAllConsoleRows<PreviousDeployRow>(
+  const lookbacks = await Promise.all(chunkChannelIds(pendingChannelIds).map(chunk => readAllConsoleRows<PreviousDeployRow>(
     (from, to) => capgo
       .rpc('get_channels_previous_deploys', {
         p_app_id: props.appId,
         p_exclude_version_id: currentVersionId,
-        p_channel_ids: pendingChannelIds,
-        p_cutoffs: pendingChannelIds.map(channelId => deployedAtByChannel.get(channelId) || null),
+        p_channel_ids: chunk,
+        p_cutoffs: chunk.map(channelId => deployedAtByChannel.get(channelId) || null),
         p_per_channel: PREFERRED_LOOKBACK,
       })
       .range(from, to),
-  )
+  )))
   if (requestId !== preferredCompareRequestId)
     return
 
+  const lookbackError = lookbacks.find(result => result.error)?.error
   if (lookbackError) {
     console.error('Failed to load previous deploy history', lookbackError)
     return
   }
+  const lookbackRows = lookbacks.flatMap(result => result.data ?? [])
 
-  const candidatesByChannel = groupPreviousDeploysByChannel(pendingChannelIds, lookbackRows ?? [])
+  const candidatesByChannel = groupPreviousDeploysByChannel(pendingChannelIds, lookbackRows)
 
   if (!candidatesByChannel.length)
     return
