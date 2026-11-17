@@ -498,6 +498,15 @@ async function finalizeFormerOwner(
     accrualStart: formerOwnedSince,
     writtenAt: options.writtenAt,
   })
+  // Transferred soon after the former owner's rollover: its previous cycle's last hours too.
+  await finalizePreviousCycle(c, pg, events, {
+    appId: options.appId,
+    ownerOrg: transferredFrom,
+    cycleStart: formerCycle.cycle_start,
+    calculationEndMs: transferredAtMs,
+    accrualStart: formerOwnedSince,
+    writtenAt: options.writtenAt,
+  })
 }
 
 async function refreshStorageHourly(

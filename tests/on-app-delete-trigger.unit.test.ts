@@ -281,4 +281,60 @@ describe('on_app_delete trigger', () => {
       vi.useRealTimers()
     }
   })
+
+  it('finalizes the former owner\'s previous cycle when the transfer follows its rollover', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-02-02T00:00:00.000Z'))
+    try {
+      pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('FROM public.version_meta')) {
+          const until = Date.parse(String(params?.[1]))
+          const rows = [{ timestamp: '2026-01-31T00:00:00.000Z', version_id: 1, size: 100 }]
+            .filter(row => Date.parse(row.timestamp) < until)
+          return { rows, rowCount: rows.length } as any
+        }
+        if (sql.includes('billing_cycle_for_anchor')) {
+          const before = Date.parse(String(params?.[1]))
+          return before <= Date.parse('2026-02-01T00:00:00.000Z')
+            ? { rows: [{ cycle_start: '2026-01-01T00:00:00.000Z', cycle_end: '2026-02-01T00:00:00.000Z' }], rowCount: 1 } as any
+            : { rows: [{ cycle_start: '2026-02-01T00:00:00.000Z', cycle_end: '2026-03-01T00:00:00.000Z' }], rowCount: 1 } as any
+        }
+        return { rows: [], rowCount: 0 }
+      })
+
+      const response = await app.request('http://local/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'DELETE',
+          table: 'apps',
+          occurred_at: '2026-02-01T12:00:00.000Z',
+          record: {
+            app_id: 'com.test.delete',
+            owner_org: 'org-new',
+            created_at: '2026-01-01T00:00:00.000Z',
+            transfer_history: [{ transferred_at: '2026-02-01T06:00:00.000Z', transferred_from: 'org-old', transferred_to: 'org-new' }],
+          },
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const replaced = pgQuery.mock.calls
+        .filter(([sql]) => sql.includes('replace_app_storage_hourly'))
+        .map(([, params]) => [params?.[1], params?.[2], JSON.parse(params?.[7] as string).reduce((sum: number, row: { storage_byte_hours: number }) => sum + row.storage_byte_hours, 0)])
+      expect(replaced).toEqual(expect.arrayContaining([
+        // The former owner's January cycle up to its end: Jan 31, 24 hours.
+        ['org-old', '2026-01-01', 2400],
+        // The former owner's February cycle up to the transfer: 6 hours.
+        ['org-old', '2026-02-01', 600],
+        // The new owner, from the transfer to the deletion: 6 hours.
+        ['org-new', '2026-02-01', 600],
+      ]))
+    }
+    finally {
+      pgQuery.mockReset()
+      pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+      vi.useRealTimers()
+    }
+  })
 })
