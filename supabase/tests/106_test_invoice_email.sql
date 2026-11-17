@@ -1,7 +1,7 @@
 -- pgTAP assertions intentionally use SQL statements returning function results.
 -- noqa: disable=LT05,LT09,AM04
 BEGIN;
-SELECT plan(14);
+SELECT plan(16);
 SELECT
     has_table('public', 'invoice_email_preferences', 'invoice preferences exist');
 SELECT
@@ -45,7 +45,11 @@ SELECT
 SELECT
     is(has_table_privilege('authenticated', 'public.invoice_email_deliveries', 'SELECT,INSERT,UPDATE'), false, 'members cannot access another org delivery outbox directly');
 SELECT
-    is(has_table_privilege('service_role', 'public.invoice_email_deliveries', 'SELECT,INSERT,UPDATE'), true, 'service can deliver invoices');
+    is(has_table_privilege('service_role', 'public.invoice_email_deliveries', 'SELECT'), true, 'service can read deliveries');
+SELECT
+    is(has_table_privilege('service_role', 'public.invoice_email_deliveries', 'INSERT'), true, 'service can enqueue deliveries');
+SELECT
+    is(has_table_privilege('service_role', 'public.invoice_email_deliveries', 'UPDATE'), true, 'service can record accepted recipients');
 SELECT
     col_default_is('public', 'invoice_email_preferences', 'enabled', 'true', 'invoice emails default on');
 SELECT

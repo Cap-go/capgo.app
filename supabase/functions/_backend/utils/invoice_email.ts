@@ -8,15 +8,16 @@ import { simpleError } from './hono.ts'
 import { closeClient, getPgClient, withPgTransaction } from './pg.ts'
 
 export async function getInvoiceEmailPreferences(c: Context, orgId: string, ctx: InAppBillingContext): Promise<InvoiceEmailPreferences> {
+  // The displayed default is optional; do not hold a DB connection during this lookup.
+  const customer = await ctx.stripe.customers.retrieve(ctx.customerId, {}, { timeout: 3_000, maxNetworkRetries: 0 }).catch(() => null)
   const pool = await getPgClient(c)
   try {
     const result = await pool.query<{ enabled: boolean, recipients: string[], management_email: string }>(`
       SELECT COALESCE(p.enabled, true) AS enabled, COALESCE(p.recipients, '{}') AS recipients, o.management_email
       FROM public.orgs o LEFT JOIN public.invoice_email_preferences p ON p.org_id = o.id WHERE o.id = $1
     `, [orgId])
-    const customer = await ctx.stripe.customers.retrieve(ctx.customerId)
     const row = result.rows[0]
-    return { enabled: row?.enabled ?? true, recipients: row?.recipients ?? [], defaultEmail: (!customer.deleted && customer.email) || row?.management_email || '' }
+    return { enabled: row?.enabled ?? true, recipients: row?.recipients ?? [], defaultEmail: (customer && !customer.deleted && customer.email?.trim()) || row?.management_email || '' }
   }
   finally {
     closeClient(c, pool)

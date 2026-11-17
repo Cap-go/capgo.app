@@ -98,6 +98,7 @@ it('marks invoice data private and uncacheable', async () => {
 it('requires current billing read permission in addition to invoice read permission for every invoice download', async () => {
   mocks.permission.mockImplementation((_c, permission) => permission === 'org.read_invoices')
   expect((await request('invoice-document', { invoiceId: 'in_example' })).status).toBe(400)
+  expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'org.read_billing', { orgId: 'org_example' })
   expect(mocks.invoice).not.toHaveBeenCalled()
 })
 it('ignores caller-supplied addresses, tax IDs, country and customer replacements', async () => {
