@@ -195,7 +195,7 @@ export function occupiedBuilderSlotsSql(excludeBuildRequestId?: string): string 
   `
 }
 
-const SIMULATOR_SESSIONS_DUE_FOR_EXPIRY_SQL = `
+export const SIMULATOR_SESSIONS_DUE_FOR_EXPIRY_SQL = `
   SELECT id, emulator_id, device_stopped_at
   FROM public.simulator_sessions
   WHERE owner_org = $1::uuid
