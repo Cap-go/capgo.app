@@ -151,14 +151,3 @@ SET
     || '120 Analytics Engine queries) to stay under the Cloudflare API limit',
     updated_at = pg_catalog.now()
 WHERE name = 'stat_app_queue';
-
--- 4. cron_rollout_auto_pause now takes the channels checked longest ago first
---    and stops after a bounded number per run. Keep that ordering an index scan
---    over the few channels with an active auto-paused rollout.
-CREATE INDEX IF NOT EXISTS "idx_channels_auto_pause_due"
-ON "public"."channels" ("auto_pause_last_checked_at" ASC NULLS FIRST, "id")
-WHERE rollout_enabled = true
-  AND auto_pause_enabled = true
-  AND rollout_percentage_bps > 0
-  AND rollout_version IS NOT NULL
-  AND rollout_paused_at IS NULL;
