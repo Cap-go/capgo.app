@@ -168,6 +168,20 @@ describe('deleted version storage boundaries', () => {
     expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), 'com.cleanup.test', 123, -1234)
   })
 
+  it('fails without zeroing the size when the removal storage event is not recorded', async () => {
+    // Storage is billed from version_meta: the retry must still find the size to record it.
+    createStatsMeta.mockResolvedValue({ error: new Error('connection reset') })
+    await expect(deleteIt(createContext(), createVersion())).rejects.toThrow()
+    expect(pgQuery).not.toHaveBeenCalledWith('UPDATE public.app_versions_meta SET size = 0 WHERE id = $1', [123])
+    expect(moveObjectToTrash).not.toHaveBeenCalled()
+  })
+
+  it('treats an already zero size as recorded', async () => {
+    createStatsMeta.mockResolvedValue({ error: 'size is 0' })
+    const response = await deleteIt(createContext(), createVersion())
+    expect(response.status).toBe(200)
+  })
+
   it('skips a noncanonical ZIP path', async () => {
     await deleteIt(createContext(), createVersion({ r2_path: 'orgs/org-1/apps/com.cleanup.test/9.9.9.zip' }))
     expect(moveObjectToTrash).not.toHaveBeenCalled()

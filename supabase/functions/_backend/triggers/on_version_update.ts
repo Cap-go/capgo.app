@@ -212,9 +212,21 @@ async function v2PathSize(c: Context, pg: PgClient, record: Database['public']['
     cloudlog({ requestId: c.get('requestId'), message: 'errorUpdate', error: errorUpdate, ...versionUpdateLogFields(record), size })
   }
   const { error } = await createStatsMeta(c, record.app_id, record.id, size)
-  if (error)
+  if (isLostStorageEvent(error)) {
+    // Storage is billed in GB-hours from version_meta: a missing upload event would never bill the
+    // bundle. Fail the job so the queue retries (both writes are idempotent).
     cloudlog({ requestId: c.get('requestId'), message: 'error createStatsMeta', error })
+    throw simpleError('cannot_record_storage_event', 'Cannot record the bundle storage event', { id: record.id }, error)
+  }
   return true
+}
+
+/**
+ * A storage event write that failed, as opposed to the intentional no-ops (`size is 0`, and the
+ * write guard of workers that must not write Supabase stats).
+ */
+function isLostStorageEvent(error: unknown) {
+  return !!error && error !== 'size is 0' && error !== 'supabase_write_forbidden'
 }
 
 /**
@@ -353,8 +365,12 @@ async function deleteVersionDatabaseState(c: Context, pg: PgClient, record: Data
   }
   else {
     const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size)
-    if (errorCreateStatsMeta)
+    if (isLostStorageEvent(errorCreateStatsMeta)) {
+      // Storage is billed in GB-hours from version_meta: without the removal event the bundle stays
+      // billed forever. Fail before zeroing the size, so the queue retry can still record it.
       cloudlog({ requestId: c.get('requestId'), message: 'error createStatsMeta', error: errorCreateStatsMeta })
+      throw simpleError('cannot_record_storage_event', 'Cannot record the bundle removal storage event', { id: record.id }, errorCreateStatsMeta)
+    }
 
     try {
       await pg.query('UPDATE public.app_versions_meta SET size = 0 WHERE id = $1', [record.id])

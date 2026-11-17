@@ -145,7 +145,7 @@ async function setStorageUsage(value: number) {
      SELECT $1, $2::uuid, (cycle.cycle_start AT TIME ZONE 'UTC')::date, (cycle.cycle_start AT TIME ZONE 'UTC')::date,
        $3::double precision * ((cycle.cycle_end AT TIME ZONE 'UTC')::date - (cycle.cycle_start AT TIME ZONE 'UTC')::date) * 24
      FROM public.get_org_billing_cycle($2::uuid) AS cycle
-     ON CONFLICT (app_id, owner_org, cycle_start, date) DO UPDATE SET storage_byte_hours = EXCLUDED.storage_byte_hours`,
+     ON CONFLICT (app_id, owner_org, cycle_start, date, segment_start) DO UPDATE SET storage_byte_hours = EXCLUDED.storage_byte_hours`,
     [APPNAME, TEST_ORG_ID, value],
   )
 }
