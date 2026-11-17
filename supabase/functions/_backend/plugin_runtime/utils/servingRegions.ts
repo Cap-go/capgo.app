@@ -4,8 +4,18 @@ export type ServingRegion = typeof SERVING_REGIONS[number]
 export type ServingRegionMode = 'route' | 'block'
 export interface ServingPolicy { regions: ServingRegion[], mode: ServingRegionMode }
 
+const servingRegionNames: readonly string[] = SERVING_REGIONS
+
+export function compareServingRegions(left: string, right: string) {
+  if (left < right)
+    return -1
+  if (left > right)
+    return 1
+  return 0
+}
+
 export function isServingRegion(value: unknown): value is ServingRegion {
-  return typeof value === 'string' && SERVING_REGIONS.some(region => region === value)
+  return typeof value === 'string' && servingRegionNames.includes(value)
 }
 
 export function parseServingRegions(value: unknown): ServingRegion[] {

@@ -22,6 +22,7 @@ import { parseServingPolicyDocument } from '../plugin_runtime/utils/servingPolic
 import type { KVNamespace, KVNamespacePutOptions, R2Bucket, R2Conditional, R2ListOptions } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { PluginStateAppDoc, PluginStateChannelRow, PluginStateDeviceDoc, PluginStateManifestDoc, PluginStateManifestFallbackDoc, PluginStatePlan, PluginStateStripe, PluginStateVersionDoc } from '../plugin_runtime/utils/pluginStateFormat.ts'
+import type { ServingPolicy } from '../plugin_runtime/utils/servingRegions.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
@@ -253,22 +254,26 @@ function reserveProviderOperation(budget: PublicationBudget) {
   budget.remaining--
 }
 
+async function validateServingPolicyActivation(pointers: PointerStore, policy: ServingPolicy, activeEpoch: string | null, budget: PublicationBudget) {
+  if (activeEpoch && activeEpoch !== servingRegionReaderEpoch)
+    throw new Error('Serving policy activation requires ready readers')
+  if (!isRestrictedServingPolicy(policy))
+    return
+  if (!activeEpoch || activeEpoch !== servingRegionReaderEpoch)
+    throw new Error('Serving policy activation requires ready readers')
+  reserveProviderOperation(budget)
+  const readiness = await pointers.get('sr1:ready')
+  const ready: unknown = readiness ? await readiness.json() : null
+  if (!ready || typeof ready !== 'object' || !('f' in ready) || ready.f !== 1 || !('epoch' in ready) || ready.epoch !== activeEpoch)
+    throw new Error('Serving policy activation requires all ingress gates to be ready')
+}
+
 /** Strong policy CAS is independent of the KV payload writer and its bindings. */
 export function createServingPolicyPublisher(pointers: PointerStore, generation: string, budget: PublicationBudget) {
   const reserve = () => reserveProviderOperation(budget)
   return async (appId: string, regions: unknown, mode: unknown, activeEpoch: string | null = null) => {
     const policy = parseServingPolicy(regions, mode)
-    if (activeEpoch && activeEpoch !== servingRegionReaderEpoch)
-      throw new Error('Serving policy activation requires ready readers')
-    if (isRestrictedServingPolicy(policy)) {
-      if (!activeEpoch || activeEpoch !== servingRegionReaderEpoch)
-        throw new Error('Serving policy activation requires ready readers')
-      reserve()
-      const readiness = await pointers.get('sr1:ready')
-      const ready: unknown = readiness ? await readiness.json() : null
-      if (!ready || typeof ready !== 'object' || !('f' in ready) || ready.f !== 1 || !('epoch' in ready) || ready.epoch !== activeEpoch)
-        throw new Error('Serving policy activation requires all ingress gates to be ready')
-    }
+    await validateServingPolicyActivation(pointers, policy, activeEpoch, budget)
     const key = servingPolicyKey(appId)
     for (let attempt = 0; attempt < MAX_PUBLICATION_ATTEMPTS; attempt++) {
       reserve()

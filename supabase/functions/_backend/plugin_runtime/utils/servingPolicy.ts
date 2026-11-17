@@ -4,7 +4,7 @@ import type { ServingPolicy, ServingRegion } from './servingRegions.ts'
 import { servingRegionReaderEpoch } from './servingRegionRollout.js'
 import { quickError } from './hono.ts'
 import { trustedIngressRegion } from './servingRegionIngress.ts'
-import { isRestrictedServingPolicy, parseServingPolicy, servingPolicyKey } from './servingRegions.ts'
+import { compareServingRegions, isRestrictedServingPolicy, parseServingPolicy, servingPolicyKey } from './servingRegions.ts'
 
 export interface ServingPolicyDocument { f: 1, app_id: string, generation: string, policy: ServingPolicy }
 const policies = new WeakMap<Request, ServingPolicy>()
@@ -142,5 +142,5 @@ export async function enforceServingPolicy(c: Context, appId: string) {
 /** Stable policy partition: tightened settings cannot reuse entries filled from disabled replicas. */
 export function servingCachePartition(c: Context) {
   const policy = requestServingPolicy(c)
-  return policy && isRestrictedServingPolicy(policy) ? [...policy.regions].sort((left, right) => left < right ? -1 : left > right ? 1 : 0).join(',') : null
+  return policy && isRestrictedServingPolicy(policy) ? [...policy.regions].sort(compareServingRegions).join(',') : null
 }

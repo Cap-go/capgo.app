@@ -3,6 +3,7 @@ import { requestServingPolicy } from './servingPolicy.ts'
 import { quickError } from './hono.ts'
 import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
+import type { ServingRegion } from './servingRegions.ts'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { getRuntimeKey } from 'hono/adapter'
@@ -145,7 +146,7 @@ function getReplicationLagInflight(c: Context) {
   return inflight
 }
 
-const READ_REPLICA_ROUTES: { region: string, binding: ReadReplicaHyperdriveBinding }[] = [
+const READ_REPLICA_ROUTES: { region: ServingRegion, binding: ReadReplicaHyperdriveBinding }[] = [
   { region: 'AS_JAPAN', binding: 'HYPERDRIVE_CAPGO_READ_AS_JAPAN' },
   { region: 'AS_INDIA', binding: 'HYPERDRIVE_CAPGO_READ_AS_INDIA' },
   { region: 'NA', binding: 'HYPERDRIVE_CAPGO_READ_NA' },
@@ -403,7 +404,7 @@ function findRegionalReadReplicaRoute(c: Context, dbRegion: string | undefined) 
 function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
   const policy = requestServingPolicy(c)
   if (policy && isRestrictedServingPolicy(policy)) {
-    const candidates = READ_REPLICA_ROUTES.filter(route => policy.regions.some(region => region === route.region) && c.env[route.binding])
+    const candidates = READ_REPLICA_ROUTES.filter(route => policy.regions.includes(route.region) && c.env[route.binding])
     const regional = candidates.find(route => route.region === dbRegion)
     const selected = regional && !isReplicaTooFarBehind(regional.binding)
       ? regional

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { parseServingPolicy } from '../../../supabase/functions/_backend/plugin_runtime/utils/servingRegions'
+import { compareServingRegions, parseServingPolicy } from '../../../supabase/functions/_backend/plugin_runtime/utils/servingRegions'
 
 const props = defineProps<{ disabled: boolean, appId: string }>()
 const regions = defineModel<string[]>('regions', { required: true })
@@ -24,13 +24,13 @@ async function checkActivation() {
       verification.value = 'pending'
       return
     }
-    if (!doc || doc.active !== true || typeof doc !== 'object' || !('app_id' in doc) || doc.app_id !== props.appId || !('policy' in doc)
+    if (doc.active !== true || !('policy' in doc)
       || !doc.policy || typeof doc.policy !== 'object' || !('regions' in doc.policy) || !('mode' in doc.policy)) {
       throw new Error('Invalid policy')
     }
     const published = parseServingPolicy(doc.policy.regions, doc.policy.mode)
     verification.value = published.mode === mode.value
-      && JSON.stringify([...published.regions].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)) === JSON.stringify([...regions.value].sort((left, right) => left < right ? -1 : left > right ? 1 : 0))
+      && JSON.stringify([...published.regions].sort(compareServingRegions)) === JSON.stringify([...regions.value].sort(compareServingRegions))
       ? 'active'
       : 'pending'
   }
@@ -71,9 +71,9 @@ const empty = computed(() => regions.value.length === 0)
     <button type="button" class="btn btn-sm btn-outline" @click="checkActivation">
       {{ t('serving-region-check') }}
     </button>
-    <p role="status">
+    <output class="block">
       {{ t(`serving-region-status-${verification}`) }}
-    </p>
+    </output>
     <p class="text-sm text-amber-700 dark:text-amber-400" data-test="serving-region-activation">
       {{ t('serving-region-activation') }}
     </p>
