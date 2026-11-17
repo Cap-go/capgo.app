@@ -39,6 +39,7 @@ const OUTCOME_ORDER: ChannelImpactOutcome[] = [
   'blocked_patch',
   'blocked_metadata',
   'blocked_misconfigured',
+  'blocked_private_channel',
   'blocked_under_native',
   'blocked_platform',
   'blocked_build_type',
@@ -349,6 +350,9 @@ const showImpact = computed(() => !isRevert.value || !!state.choice)
             </p>
             <p v-if="impact.outcomes.receive_below_native" class="text-sm text-amber-800 dark:text-amber-200">
               {{ t('channel-impact-warn-below-native', { count: fmt(impact.outcomes.receive_below_native), bundle: targetName }) }}
+            </p>
+            <p v-if="impact.outcomes.blocked_private_channel" class="text-sm text-slate-600 dark:text-slate-300">
+              {{ t('channel-impact-why-private-channel', { count: fmt(impact.outcomes.blocked_private_channel) }) }}
             </p>
             <p v-if="impact.outcomes.plugin_too_old" class="text-sm text-slate-600 dark:text-slate-300">
               {{ t('channel-impact-why-plugin-too-old', { count: fmt(impact.outcomes.plugin_too_old) }) }}

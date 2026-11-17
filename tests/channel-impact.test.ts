@@ -21,6 +21,7 @@ let authHeaders: Record<string, string>
 let channelId: number
 let foreignChannelId: number
 let majorBundleId: number
+let betaChannelId: number
 
 function postImpact(body: Record<string, unknown>) {
   return fetchTestRequest(getEndpointUrl('/private/channel_impact'), {
@@ -80,6 +81,16 @@ beforeAll(async () => {
   await insertDevices(1, { platform: 'ios', native: '2.0.1', bundle: '2.0.1', channel: 'production' })
   // Another channel: never counted here.
   await insertDevices(4, { platform: 'ios', native: '1.9.0', bundle: '1.9.4', channel: 'beta' })
+
+  // beta becomes private without self-assignment: of its 4 reporting devices only
+  // the one assigned through channel_devices can be served.
+  const [beta] = await executeSQL<{ id: number }>(`UPDATE public.channels SET allow_device_self_set = false, ios = true, disable_auto_update = 'none' WHERE app_id = $1 AND name = 'beta' RETURNING id`, [APPNAME])
+  betaChannelId = Number(beta.id)
+  await executeSQL(
+    `INSERT INTO public.channel_devices (app_id, channel_id, device_id, owner_org)
+     SELECT $1::text, $2::bigint, $3::text, owner_org FROM public.apps WHERE app_id = $1`,
+    [APPNAME, betaChannelId, `impact-${suffix}-beta-ios-1.9.0-1.9.4-1`],
+  )
 })
 
 afterAll(async () => {
@@ -125,6 +136,15 @@ describe('POST /private/channel_impact', () => {
     const body = await response.json() as any
     expect(response.status, JSON.stringify(body)).toBe(200)
     expect(body.impacts[0].rollout_receive).toBe(Math.round(body.impacts[0].receive / 2))
+  })
+
+  it('only counts assigned devices on a private channel without self-assignment', async () => {
+    const response = await postImpact({ app_id: APPNAME, channel_id: betaChannelId, targets: [{ kind: 'bundle', version_id: majorBundleId }] })
+    const body = await response.json() as any
+    expect(response.status, JSON.stringify(body)).toBe(200)
+    expect(body.total_devices).toBe(4)
+    expect(body.impacts[0].outcomes.blocked_private_channel).toBe(3)
+    expect(body.impacts[0].receive).toBe(1)
   })
 
   it('refuses channels of other apps and apps the caller cannot read', async () => {

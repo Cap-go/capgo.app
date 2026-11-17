@@ -5003,5 +5003,7 @@
   "channel-revert-choose-button": "Used in Capgo web console areas: composables. Role: button or action label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-rolled-back-to-bundle": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-impact-builds-or-newer": "Used in Capgo web console areas: components/channel. Role: UI phrase inserted into a sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "channel-impact-builds-exact": "Used in Capgo web console areas: components/channel. Role: UI phrase inserted into a sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "channel-impact-builds-exact": "Used in Capgo web console areas: components/channel. Role: UI phrase inserted into a sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-impact-outcome-blocked-private-channel": "Used in Capgo web console areas: components/channel. Role: short status label for a device in a list. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-impact-why-private-channel": "Used in Capgo web console areas: components/channel. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

@@ -21,6 +21,7 @@ export interface ChannelDevicePopulation {
 }
 
 interface PopulationRowCF {
+  forced?: number | string
   platform: number | string
   version_build: string
   version_name: string
@@ -66,7 +67,14 @@ function isoFromCF(value: string | null | undefined): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
 
-function deviceScopeInnerCF(appId: string, windowStart: Date) {
+/** 1 for devices assigned through channel_devices (override ids are already lowercased). */
+function forcedColumnCF(into: string[]) {
+  if (!into.length)
+    return '0'
+  return `if(lower(blob1) IN (${into.map(id => `'${escapeSqlString(id)}'`).join(', ')}), 1, 0)`
+}
+
+function deviceScopeInnerCF(appId: string, windowStart: Date, into: string[] = []) {
   // Schema: blob1=device_id, blob2=version_name, blob3=plugin_version, blob6=version_build,
   //         blob7=default_channel, double1=platform, double2=is_prod, double3=is_emulator
   return `SELECT
@@ -78,6 +86,7 @@ function deviceScopeInnerCF(appId: string, windowStart: Date) {
     argMax(double1, timestamp) AS platform,
     argMax(double2, timestamp) AS is_prod,
     argMax(double3, timestamp) AS is_emulator,
+    ${forcedColumnCF(into)} AS forced,
     max(timestamp) AS last_seen
   FROM device_info
   WHERE index1 = '${escapeSqlString(appId)}' AND timestamp > toDateTime('${escapeSqlString(formatDateCF(windowStart))}')
@@ -86,6 +95,7 @@ function deviceScopeInnerCF(appId: string, windowStart: Date) {
 
 export function buildChannelPopulationCFQuery(appId: string, channelName: string, overrides: ChannelDeviceOverrideIds | undefined, windowStart: Date, limit = CHANNEL_IMPACT_MAX_GROUPS) {
   return `SELECT
+  forced,
   platform,
   version_build,
   version_name,
@@ -96,10 +106,10 @@ export function buildChannelPopulationCFQuery(appId: string, channelName: string
   argMax(device_id, last_seen) AS sample_device_id,
   max(last_seen) AS latest_seen
 FROM (
-  ${deviceScopeInnerCF(appId, windowStart)}
+  ${deviceScopeInnerCF(appId, windowStart, overrides?.into)}
 )
 WHERE ${buildDeviceChannelScopeCF(channelName, overrides)}
-GROUP BY platform, version_build, version_name, plugin_version, is_prod, is_emulator
+GROUP BY forced, platform, version_build, version_name, plugin_version, is_prod, is_emulator
 ORDER BY device_count DESC
 LIMIT ${Math.max(1, Math.floor(limit))}`
 }
@@ -121,6 +131,7 @@ export function toPopulationGroupsCF(rows: PopulationRowCF[]): ChannelImpactDevi
     is_prod: flagFromCF(row.is_prod),
     is_emulator: flagFromCF(row.is_emulator),
     device_count: Number(row.device_count) || 0,
+    forced: Number(row.forced) === 1,
     sample_device_id: row.sample_device_id ?? '',
     last_seen: isoFromCF(row.latest_seen),
   }))
@@ -148,6 +159,7 @@ export async function readChannelDevicePopulationCF(c: Context, appId: string, c
 }
 
 interface PopulationRowSB {
+  forced: boolean | null
   platform: string | null
   version_build: string | null
   version_name: string | null
@@ -175,6 +187,7 @@ export async function readChannelDevicePopulationSB(c: Context, appId: string, c
         d.plugin_version,
         d.is_prod,
         d.is_emulator,
+        lower(d.device_id) = ANY($6::text[]) AS forced,
         count(*)::int AS device_count,
         (array_agg(d.device_id ORDER BY d.updated_at DESC))[1] AS sample_device_id,
         max(d.updated_at) AS last_seen
@@ -188,7 +201,7 @@ export async function readChannelDevicePopulationSB(c: Context, appId: string, c
           )
           OR lower(d.device_id) = ANY($6::text[])
         )
-      GROUP BY 1, 2, 3, 4, 5, 6
+      GROUP BY 1, 2, 3, 4, 5, 6, 7
       ORDER BY device_count DESC
       LIMIT $7`,
       [appId, windowStart.toISOString(), channelName, defaultPlatforms, elsewhere, into, CHANNEL_IMPACT_MAX_GROUPS],
@@ -201,6 +214,7 @@ export async function readChannelDevicePopulationSB(c: Context, appId: string, c
       is_prod: row.is_prod,
       is_emulator: row.is_emulator,
       device_count: Number(row.device_count) || 0,
+      forced: !!row.forced,
       sample_device_id: row.sample_device_id ?? '',
       last_seen: row.last_seen ? new Date(row.last_seen).toISOString() : null,
     }))

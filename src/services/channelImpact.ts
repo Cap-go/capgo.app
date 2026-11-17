@@ -13,6 +13,7 @@ export type ChannelImpactOutcome
     | 'blocked_patch'
     | 'blocked_metadata'
     | 'blocked_misconfigured'
+    | 'blocked_private_channel'
     | 'blocked_under_native'
     | 'blocked_platform'
     | 'blocked_build_type'

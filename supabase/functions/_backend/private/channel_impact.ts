@@ -53,6 +53,7 @@ interface ChannelRow {
   id: number
   name: string
   public: boolean
+  allow_device_self_set: boolean
   paused_at: string | null
   disable_auto_update: ChannelImpactStrategy
   disable_auto_update_under_native: boolean
@@ -118,7 +119,7 @@ async function readChannelRow(c: Context<MiddlewareKeyVariables>, body: ChannelI
   // channels, bundles and deploy history their role allows.
   return await withRlsContext(c, authPrincipal(c), client => queryJsonOne<ChannelRow>(
     client,
-    `SELECT ch.id, ch.name, ch.public, ch.paused_at,
+    `SELECT ch.id, ch.name, ch.public, ch.allow_device_self_set, ch.paused_at,
       ch.disable_auto_update, ch.disable_auto_update_under_native,
       ch.ios, ch.android, ch.electron,
       ch.allow_prod, ch.allow_dev, ch.allow_device, ch.allow_emulator,
@@ -188,6 +189,7 @@ function channelConfig(row: ChannelRow): ChannelImpactChannelConfig {
     allow_dev: !!row.allow_dev,
     allow_device: !!row.allow_device,
     allow_emulator: !!row.allow_emulator,
+    assigned_devices_only: !row.public && !row.allow_device_self_set,
   }
 }
 

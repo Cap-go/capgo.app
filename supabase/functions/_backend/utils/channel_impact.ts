@@ -31,6 +31,8 @@ export interface ChannelImpactDeviceGroup {
   is_prod: boolean | null
   is_emulator: boolean | null
   device_count: number
+  /** Assigned to the channel through channel_devices (console, API or self-assignment), not only reporting it. */
+  forced?: boolean
   /** Most recently seen device of this setup, shown as an example. */
   sample_device_id: string
   last_seen: string | null
@@ -46,6 +48,8 @@ export interface ChannelImpactChannelConfig {
   allow_dev: boolean
   allow_device: boolean
   allow_emulator: boolean
+  /** Private channel without self-assignment: only devices assigned through channel_devices are served. */
+  assigned_devices_only: boolean
 }
 
 export type ChannelImpactTarget
@@ -62,6 +66,7 @@ export const CHANNEL_IMPACT_OUTCOMES = [
   'blocked_patch',
   'blocked_metadata',
   'blocked_misconfigured',
+  'blocked_private_channel',
   'blocked_under_native',
   'blocked_platform',
   'blocked_build_type',
@@ -129,7 +134,7 @@ function parseVersion(value: string | null | undefined): SemVer | null {
 
 /** Mirrors the strategy, guard, platform and build-type gates of /updates for one device setup. */
 export function evaluateDeviceOutcome(
-  device: Pick<ChannelImpactDeviceGroup, 'platform' | 'version_build' | 'version_name' | 'plugin_version' | 'is_prod' | 'is_emulator'>,
+  device: Pick<ChannelImpactDeviceGroup, 'platform' | 'version_build' | 'version_name' | 'plugin_version' | 'is_prod' | 'is_emulator' | 'forced'>,
   channel: ChannelImpactChannelConfig,
   target: ChannelImpactTarget,
 ): ChannelImpactOutcome {
@@ -150,11 +155,17 @@ export function evaluateDeviceOutcome(
   if (device.platform === 'electron' && !channel.electron)
     return 'blocked_platform'
 
+  const bundle = target.kind === 'bundle' ? parseVersion(targetName) : null
+  if (target.kind === 'bundle' && bundle && channel.disable_auto_update === 'major' && bundle.major > native.major)
+    return 'blocked_major'
+
+  // A private channel without self-assignment only serves devices assigned to it;
+  // devices that merely report it get cannot_update_via_private_channel.
+  if (channel.assigned_devices_only && !device.forced)
+    return 'blocked_private_channel'
+
   if (target.kind === 'bundle') {
-    const bundle = parseVersion(targetName)
     if (bundle) {
-      if (channel.disable_auto_update === 'major' && bundle.major > native.major)
-        return 'blocked_major'
       if (channel.disable_auto_update === 'minor' && (bundle.major !== native.major || bundle.minor !== native.minor))
         return 'blocked_minor'
       if (channel.disable_auto_update === 'patch' && (bundle.major !== native.major || bundle.minor !== native.minor || bundle.patch !== native.patch))
@@ -194,7 +205,6 @@ export function evaluateDeviceOutcome(
     return 'revert_to_builtin'
   }
 
-  const bundle = parseVersion(targetName)
   if (bundle && lessThan(bundle, native))
     return 'receive_below_native'
   return 'receive'

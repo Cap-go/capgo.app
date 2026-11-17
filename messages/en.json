@@ -4748,5 +4748,7 @@
   "channel-revert-choose-button": "Choose an option",
   "channel-rolled-back-to-bundle": "Channel rolled back to {bundle}",
   "channel-impact-builds-or-newer": "store build {native} or newer",
-  "channel-impact-builds-exact": "a {native} store build"
+  "channel-impact-builds-exact": "a {native} store build",
+  "channel-impact-outcome-blocked-private-channel": "Keeps its bundle: not assigned to this private channel",
+  "channel-impact-why-private-channel": "{count} devices ask for this channel, but it is private and does not allow self-assignment, so only devices assigned to it from the console or the API get updates."
 }

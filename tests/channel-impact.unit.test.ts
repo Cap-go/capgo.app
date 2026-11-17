@@ -15,6 +15,7 @@ const openChannel: ChannelImpactChannelConfig = {
   allow_dev: true,
   allow_device: true,
   allow_emulator: true,
+  assigned_devices_only: false,
 }
 
 function group(overrides: Partial<ChannelImpactDeviceGroup>): ChannelImpactDeviceGroup {
@@ -65,6 +66,16 @@ describe('channel impact outcomes', () => {
     expect(evaluateDeviceOutcome(group({ is_prod: false }), { ...openChannel, allow_dev: false }, bundle('1.4.3'))).toBe('blocked_build_type')
     expect(evaluateDeviceOutcome(group({ is_emulator: true }), { ...openChannel, allow_emulator: false }, bundle('1.4.3'))).toBe('blocked_build_type')
     expect(evaluateDeviceOutcome(group({ version_build: '' }), openChannel, bundle('1.4.3'))).toBe('unknown_native')
+  })
+
+  it.concurrent('only serves assigned devices on a private channel without self-assignment', () => {
+    const privateChannel = { ...openChannel, assigned_devices_only: true }
+    expect(evaluateDeviceOutcome(group({ forced: false }), privateChannel, bundle('1.4.3'))).toBe('blocked_private_channel')
+    expect(evaluateDeviceOutcome(group({ forced: true }), privateChannel, bundle('1.4.3'))).toBe('receive')
+    expect(evaluateDeviceOutcome(group({ forced: false }), privateChannel, { kind: 'builtin' })).toBe('blocked_private_channel')
+    // Same order as /updates: the major gate answers first, the minor gate after.
+    expect(evaluateDeviceOutcome(group({ version_build: '1.0.0' }), { ...privateChannel, disable_auto_update: 'major' }, bundle('2.0.0'))).toBe('blocked_major')
+    expect(evaluateDeviceOutcome(group({ version_build: '1.0.0' }), { ...privateChannel, disable_auto_update: 'minor' }, bundle('1.1.0'))).toBe('blocked_private_channel')
   })
 
   it.concurrent('reverts to the store bundle only where the plugin supports it', () => {
@@ -119,6 +130,7 @@ describe('channel impact summary', () => {
       id: 7,
       name: 'production',
       public: true,
+      allow_device_self_set: false,
       paused_at: null,
       disable_auto_update: 'none' as const,
       disable_auto_update_under_native: true,
@@ -168,6 +180,8 @@ describe('channel population query', () => {
     // Analytics Engine rejects Integer literals against the Double platform column.
     expect(query).toContain('platform IN (1.0)')
     expect(query).toContain('LIMIT 500')
+    expect(query).toContain('if(lower(blob1) IN (\'forced-in\'), 1, 0) AS forced')
+    expect(query).toContain('GROUP BY forced, platform')
     expect(lintAnalyticsEngineSql(buildChannelPopulationCountCFQuery('com.example.app', 'production', overrides, windowStart))).toEqual([])
   })
 
@@ -178,6 +192,7 @@ describe('channel population query', () => {
 
   it.concurrent('maps Analytics Engine rows to device setups', () => {
     expect(toPopulationGroupsCF([{
+      forced: 1,
       platform: 1,
       version_build: '2.0.0',
       version_name: '2.0.0',
@@ -195,6 +210,7 @@ describe('channel population query', () => {
       is_prod: true,
       is_emulator: null,
       device_count: 12,
+      forced: true,
       sample_device_id: 'abc',
       last_seen: '2026-11-17T09:30:00.000Z',
     }])
