@@ -139,7 +139,7 @@ async function getData(options: { append?: boolean } = {}) {
     const currentJwt = currentSession.session.access_token
 
     try {
-      const response = await fetch(`${ getConsoleApiHost }/private/stats`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/stats`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -209,7 +209,7 @@ async function exportCsv() {
     }
     const currentJwt = currentSession.session.access_token
 
-    const response = await fetch(`${ getConsoleApiHost }/private/stats/export`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/stats/export`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

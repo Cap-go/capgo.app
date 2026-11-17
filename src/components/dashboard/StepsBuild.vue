@@ -74,7 +74,7 @@ const dialogStore = useDialogV2Store()
 const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
 const config = getLocalConfig()
 const initialOnboarding = props.onboarding
-const localCommand = isLocal(config.apiHost) ? ` --api-host ${ getConsoleApiHost }` : ''
+const localCommand = isLocal(config.apiHost) ? ` --api-host ${getConsoleApiHost()}` : ''
 
 const platformBuildCounts = computed<PlatformBuildCounts>(() => ({
   ios: props.platformBuildCounts?.ios ?? 0,

@@ -44,7 +44,7 @@ async function getDevice() {
     const currentJwt = currentSession.session.access_token
 
     try {
-      const response = await fetch(`${ getConsoleApiHost }/private/devices`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/devices`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

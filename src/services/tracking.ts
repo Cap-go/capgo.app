@@ -88,7 +88,7 @@ export async function sendEvent(payload: TrackOptions): Promise<null> {
 
       try {
         // 10 second timeout using AbortSignal
-        const response = await fetch(`${ getConsoleApiHost }/private/events`, {
+        const response = await fetch(`${getConsoleApiHost()}/private/events`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${currentJwt}`,

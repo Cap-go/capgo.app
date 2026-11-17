@@ -132,7 +132,7 @@ async function setChannelDeviceOverride(deviceId: string) {
   if (!currentJwt)
     throw new Error('Missing session')
 
-  const response = await fetch(`${ getConsoleApiHost }/private/channel_device`, {
+  const response = await fetch(`${getConsoleApiHost()}/private/channel_device`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

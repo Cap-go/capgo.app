@@ -80,7 +80,7 @@ export function useUpdateDeliveryStats(
         return
       }
 
-      const response = await fetch(`${ getConsoleApiHost }/private/update_delivery_stats`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/update_delivery_stats`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

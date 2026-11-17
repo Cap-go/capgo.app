@@ -406,7 +406,7 @@ async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_s
       headers.Authorization = `Bearer ${token}`
     }
 
-    const response = await fetch(`${ getConsoleApiHost }/private/sso/check-domain`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/sso/check-domain`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ email }),

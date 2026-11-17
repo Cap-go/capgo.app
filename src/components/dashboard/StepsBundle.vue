@@ -44,7 +44,7 @@ interface Step {
 }
 
 const config = getLocalConfig()
-const localCommand = isLocal(config.apiHost) ? ` --api-host ${ getConsoleApiHost }` : ``
+const localCommand = isLocal(config.apiHost) ? ` --api-host ${getConsoleApiHost()}` : ``
 const steps = ref<Step[]>([
   {
     title: t('add-another-bundle'),

@@ -26,7 +26,7 @@ async function start(platform: 'ios' | 'android') {
   error.value = ''
   pending.value = platform
   try {
-    const response = await fetch(`${ getConsoleApiHost }/private/simulator/`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/simulator/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -54,7 +54,7 @@ async function refreshSessions() {
   const known = [...runningSimulators(appId)]
   await Promise.all(known.map(async (session) => {
     const remains = await sessionRemainsAfterLookup(async () => {
-      const response = await fetch(`${ getConsoleApiHost }/private/simulator/${session.id}?app_id=${encodeURIComponent(appId)}`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/simulator/${session.id}?app_id=${encodeURIComponent(appId)}`, {
         headers: { authorization: `Bearer ${await sessionToken()}` },
       })
       if (!response.ok)
@@ -75,7 +75,7 @@ async function stop(id: string) {
   error.value = ''
   stoppingId.value = id
   try {
-    const response = await fetch(`${ getConsoleApiHost }/private/simulator/${id}/stop`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/simulator/${id}/stop`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

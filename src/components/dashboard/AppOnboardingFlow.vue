@@ -299,7 +299,7 @@ const publishAppQuestionPrimaryActionLabel = computed(() => hasSelectedDevelopme
   ? t('unified-onboarding-continue-intent')
   : t('organization-onboarding-development-environment-skip'))
 
-const localCommand = isLocal(config.apiHost) ? ` --api-host ${ getConsoleApiHost }` : ''
+const localCommand = isLocal(config.apiHost) ? ` --api-host ${getConsoleApiHost()}` : ''
 // TODO(2027-03-19): Remove v3 compatibility after all existing OTA checklists have migrated.
 const usesOtaTodoList = computed(() => !!createdApp.value && hasSupportedOtaTodoList(parseAppOnboarding(createdApp.value.onboarding)))
 const usesDualTodoList = computed(() => !!createdApp.value && hasDualOnboardingChecklists(createdApp.value.onboarding))

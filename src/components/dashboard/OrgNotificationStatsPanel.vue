@@ -111,7 +111,7 @@ async function fetchStats() {
       return
     }
 
-    const response = await fetch(`${ getConsoleApiHost }/private/org_notification_stats`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/org_notification_stats`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,

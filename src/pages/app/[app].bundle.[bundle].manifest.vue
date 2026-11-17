@@ -251,7 +251,7 @@ async function fetchManifestDownloadSize(entries: ManifestEntry[]): Promise<Mani
   if (!getConsoleApiHost() || !packageId.value || !version.value?.name)
     return null
 
-  const response = await fetch(`${ getConsoleApiHost }/updates/manifest_size`, {
+  const response = await fetch(`${getConsoleApiHost()}/updates/manifest_size`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

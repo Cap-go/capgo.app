@@ -383,7 +383,7 @@ async function countDevices(options?: { includeDateRange?: boolean }) {
   const searchTerm = getSearchTerm()
 
   try {
-    const response = await fetch(`${ getConsoleApiHost }/private/devices`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/devices`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -540,7 +540,7 @@ async function fetchDevicesPage(cursor: string | undefined | null) {
     return
   const currentJwt = currentSession.session.access_token
 
-  const response = await fetch(`${ getConsoleApiHost }/private/devices`, {
+  const response = await fetch(`${getConsoleApiHost()}/private/devices`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -784,7 +784,7 @@ async function exportDevices(format: 'csv' | 'json') {
       toast.error(t('not-logged-in'))
       return
     }
-    const response = await fetch(`${ getConsoleApiHost }/private/devices/export`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/devices/export`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

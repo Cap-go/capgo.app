@@ -39,8 +39,8 @@
           "custom_domain": true
         },
         {
-          "pattern": "console.capgo.com.cn",
-          "custom_domain": true
+          "pattern": "console.capgo.com.cn/*",
+          "zone_name": "capgo.app"
         }
       ]
     }

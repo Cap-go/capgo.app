@@ -83,8 +83,8 @@ function addApp(rule: SsoRoleMapping['rules'][number]) {
 async function save(roleMapping: SsoRoleMapping | null): Promise<boolean> {
   const { data: session } = await capgo.auth.getSession()
   const url = shared.value
-    ? `${ getConsoleApiHost }/private/sso/providers/${providerId.value}/links/${props.orgId}`
-    : `${ getConsoleApiHost }/private/sso/providers/${providerId.value}`
+    ? `${getConsoleApiHost()}/private/sso/providers/${providerId.value}/links/${props.orgId}`
+    : `${getConsoleApiHost()}/private/sso/providers/${providerId.value}`
   const response = await fetch(url, {
     method: shared.value ? 'PUT' : 'PATCH',
     headers: {

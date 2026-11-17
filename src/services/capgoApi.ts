@@ -1,6 +1,6 @@
-import { getConsoleApiHost } from '~/services/consoleApiHost'
 import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/database.types'
+import { getConsoleApiHost } from '~/services/consoleApiHost'
 import { FunctionsFetchError, FunctionsHttpError } from '~/services/consoleClient'
 import { useConsole } from './console'
 

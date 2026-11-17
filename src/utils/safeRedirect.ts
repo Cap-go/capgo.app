@@ -1,5 +1,5 @@
-import { getConsoleApiHost } from '~/services/consoleApiHost'
 import type { LocationQuery } from 'vue-router'
+import { getConsoleApiHost } from '~/services/consoleApiHost'
 import { isLocalDevHost } from './urlSafety'
 
 function hasControlCharacters(path: string): boolean {

@@ -294,7 +294,7 @@ async function notificationFetch<T = any>(path: string, init: RequestInit = {}):
   const headers = await authHeaders()
   const requestHeaders = new Headers(init.headers)
   Object.entries(headers).forEach(([key, value]) => requestHeaders.set(key, value))
-  const response = await fetch(`${ getConsoleApiHost }/notifications${path}`, {
+  const response = await fetch(`${getConsoleApiHost()}/notifications${path}`, {
     ...init,
     headers: requestHeaders,
   })

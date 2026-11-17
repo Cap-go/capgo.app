@@ -28,7 +28,7 @@ export function useSSORouting() {
         headers.Authorization = `Bearer ${token}`
       }
 
-      const response = await fetch(`${ getConsoleApiHost }/private/sso/check-domain`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/sso/check-domain`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ email }),

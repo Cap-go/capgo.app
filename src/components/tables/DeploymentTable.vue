@@ -65,7 +65,7 @@ async function getData() {
     const currentJwt = currentSession.session.access_token
 
     try {
-      const response = await fetch(`${ getConsoleApiHost }/private/stats`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/stats`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

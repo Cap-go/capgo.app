@@ -75,7 +75,7 @@ export function useBundleInstallStats(
         return
       }
 
-      const response = await fetch(`${ getConsoleApiHost }/private/bundle_install_stats`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/bundle_install_stats`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

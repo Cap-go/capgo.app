@@ -129,7 +129,7 @@ export function useReleaseLive(
       if (!sessionData.session)
         throw new Error('not_authenticated')
 
-      const response = await fetch(`${ getConsoleApiHost }/private/release_live`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/release_live`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

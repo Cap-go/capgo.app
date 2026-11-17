@@ -432,7 +432,7 @@ async function notificationAuthHeaders() {
 }
 
 async function notificationFetch<T>(path: string, init: RequestInit = {}) {
-  const response = await fetch(`${ getConsoleApiHost }/notifications${path}`, {
+  const response = await fetch(`${getConsoleApiHost()}/notifications${path}`, {
     ...init,
     headers: {
       ...(await notificationAuthHeaders()),
@@ -1476,7 +1476,7 @@ function getChannelCurlCommand() {
 
   const jsonBody = JSON.stringify(requestBody, null, 2)
 
-  return `curl -X POST '${ getConsoleApiHost }/updates' \\
+  return `curl -X POST '${getConsoleApiHost()}/updates' \\
   -H 'Content-Type: application/json' \\
   -d '${jsonBody}'`
 }

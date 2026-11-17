@@ -1,5 +1,6 @@
 import type { ConsoleDataClient, ConsoleQuery, FunctionInvokeOptions, RealtimeChannel, RealtimeChannelStatus } from '../../supabase/functions/_backend/utils/console_contract'
 import type { Database } from '~/types/database.types'
+import { getConsoleApiHost } from '~/services/consoleApiHost'
 import { createConsoleAuthClient, resolveConsoleApiBase } from '~/services/consoleAuth'
 
 export type { AuthChangeEvent, AuthError, Factor, RealtimeChannel, Session, User } from '../../supabase/functions/_backend/utils/console_contract'
@@ -31,8 +32,6 @@ export class FunctionsFetchError extends Error {
     this.name = 'FunctionsFetchError'
   }
 }
-
-import { getConsoleApiHost } from '~/services/consoleApiHost'
 
 function resolveBaseURL() {
   return resolveConsoleApiBase(getConsoleApiHost())

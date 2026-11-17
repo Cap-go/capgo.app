@@ -140,7 +140,7 @@ async function getInstallSourceCounts(appId: string) {
   if (!currentJwt)
     throw new Error('Cannot count install sources without a session')
 
-  const response = await fetch(`${ getConsoleApiHost }/private/devices`, {
+  const response = await fetch(`${getConsoleApiHost()}/private/devices`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

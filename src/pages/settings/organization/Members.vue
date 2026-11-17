@@ -868,7 +868,7 @@ async function deleteRbacMember(member: OrganizationMemberRow) {
     return false
   }
 
-  const response = await fetch(`${ getConsoleApiHost }/organization/members`, {
+  const response = await fetch(`${getConsoleApiHost()}/organization/members`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',

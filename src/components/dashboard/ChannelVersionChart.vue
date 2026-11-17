@@ -47,7 +47,7 @@ async function fetchStats() {
     const { data: sessionData } = await capgo.auth.getSession()
     if (!sessionData.session)
       return
-    const response = await fetch(`${ getConsoleApiHost }/private/channel_stats`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/channel_stats`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

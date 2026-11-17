@@ -300,7 +300,7 @@ async function fetchInsights() {
       return
     }
 
-    const response = await fetch(`${ getConsoleApiHost }/private/stats/insights`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/stats/insights`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

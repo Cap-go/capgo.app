@@ -30,7 +30,7 @@ export function useNativeObserveStats<T>(
         return
       }
 
-      const response = await fetch(`${ getConsoleApiHost }/private/native_observe_stats`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/native_observe_stats`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

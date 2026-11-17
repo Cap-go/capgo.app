@@ -33,7 +33,7 @@ export async function provisionSsoUser(session: Session): Promise<SsoProvisionin
         return controller.signal
       })()
   try {
-    const response = await fetch(`${ getConsoleApiHost }/private/sso/provision-user`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/sso/provision-user`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${session.access_token}`,

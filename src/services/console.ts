@@ -4,12 +4,12 @@ import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/database.types'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { createConsoleAuthClient, resolveConsoleApiBase } from '~/services/consoleAuth'
 import { CHINA_API_HOST, getConsoleApiHost } from '~/services/consoleApiHost'
+import { createConsoleAuthClient, resolveConsoleApiBase } from '~/services/consoleAuth'
 import { createConsoleClient } from '~/services/consoleClient'
 import { sortCreditPricingSteps } from './creditPricing'
 
-export { CHINA_API_HOST, CHINA_CONSOLE_URL, getConsoleApiHost, getConsoleWebOrigin } from '~/services/consoleApiHost'
+export { CHINA_CONSOLE_URL, getConsoleApiHost } from '~/services/consoleApiHost'
 
 let consoleClient: ConsoleClient<Database> = null as any
 
