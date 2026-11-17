@@ -34,10 +34,10 @@ async function downloadInvoice(invoice: BillingInvoice) {
       import('~/services/invoicePdf'),
     ])
     if (!disposed && id === props.orgId)
-      await downloadInvoicePdf(document, id)
+      await downloadInvoicePdf(document, id, () => !disposed && id === props.orgId)
   }
   catch {
-    if (!disposed)
+    if (!disposed && id === props.orgId)
       toast.error(t('billing-invoice-download-failed'))
   }
   finally {

@@ -71,13 +71,13 @@ describe('automatic invoice downloads', () => {
     expect(document.querySelector('[data-test="billing-invoices"] input')).toBeNull()
     expect(document.querySelector('[data-test="billing-invoices"]')?.textContent).not.toMatch(/Regenerate|Use current/)
     await click('[data-test="billing-download-invoice"]')
-    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledWith({ number: invoice.number, customer: [details.address.line1] }, 'org_example'))
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledWith({ number: invoice.number, customer: [details.address.line1] }, 'org_example', expect.any(Function)))
     await saveAddress()
     expect(mocks.save).toHaveBeenCalledWith('org_example', { ...details, address: { ...details.address, line1: '456 Example Avenue' } })
     expect(document.querySelector('dialog')).toBeNull()
     expect(document.querySelector('[data-test="billing-download-invoice"]')?.textContent?.trim()).toBe('PDF')
     await click('[data-test="billing-invoice-link"]')
-    await vi.waitFor(() => expect(mocks.download).toHaveBeenLastCalledWith({ number: invoice.number, customer: ['456 Example Avenue'] }, 'org_example'))
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenLastCalledWith({ number: invoice.number, customer: ['456 Example Avenue'] }, 'org_example', expect.any(Function)))
     expect(mocks.invoice.mock.calls).toEqual([['org_example', invoice.id], ['org_example', invoice.id]])
   })
   it('uses an ordinary invoice download after a VAT number replacement', async () => {
@@ -105,7 +105,7 @@ describe('automatic invoice downloads', () => {
     Array.from(document.querySelectorAll<HTMLButtonElement>('dialog button')).find(button => button.textContent?.trim() === 'Done')!.click()
     await settle()
     await click('[data-test="billing-invoice-link"]')
-    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledWith({ number: invoice.number, customer: [newTaxId.value] }, 'org_example'))
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledWith({ number: invoice.number, customer: [newTaxId.value] }, 'org_example', expect.any(Function)))
     expect(mocks.invoice).toHaveBeenCalledWith('org_example', invoice.id)
   })
   it('does not download unsaved details after a rejected save', async () => {
@@ -123,6 +123,23 @@ describe('automatic invoice downloads', () => {
     await vi.waitFor(() => expect(mocks.error).toHaveBeenCalled())
     expect(mocks.download).not.toHaveBeenCalled()
     expect(mocks.invoice).toHaveBeenCalledTimes(1)
+  })
+  it('invalidates a download already loading its assets when the view is disposed', async () => {
+    let canDownload!: () => boolean
+    let finish!: () => void
+    mocks.download.mockImplementationOnce((_document, _org, valid) => {
+      canDownload = valid
+      return new Promise<void>(resolve => { finish = resolve })
+    })
+    await mount()
+    await click('[data-test="billing-download-invoice"]')
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalled())
+    expect(canDownload()).toBe(true)
+    app?.unmount()
+    app = undefined
+    expect(canDownload()).toBe(false)
+    finish()
+    await settle()
   })
   it('discards an in-flight document when leaving the organization view', async () => {
     let complete!: (document: unknown) => void

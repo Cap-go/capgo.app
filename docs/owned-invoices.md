@@ -15,6 +15,13 @@ sequence. There is no new numbering scheme, counter reset, or duplicate invoice
 issuance. Disabling Stripe's subscription invoice creation is not part of this
 change: [subscriptions automatically generate invoices](https://docs.stripe.com/invoicing).
 
+Monthly and yearly subscriptions, one-time credit purchases and automatic credit
+top-ups use the same document pipeline. Each line keeps its issued period,
+quantity, unit price and amount; subscription duration is not inferred. Capgo's
+credit grants, balances and usage deductions are unchanged. These downloads
+still require Stripe invoice records; this PR does not remove paid one-time
+invoice creation or Stripe Billing fees.
+
 The authenticated `private/stripe_billing/invoice-document` endpoint requires
 `org.read_invoices`, resolves the customer and Stripe account server-side, then
 checks that the requested invoice belongs to that customer. It returns only the
@@ -47,10 +54,11 @@ Caller-supplied replacement identities, addresses and tax IDs are ignored.
 
 An issued invoice's billing and tax countries remain fixed:
 
-- A saved address replaces the printed address only when its country matches the
-  issued billing country. A moved, incomplete or missing address retains the
-  issued address. Missing historical country data is never inferred from today's
-  profile.
+- A saved address replaces the printed address only when it has a nonempty
+  `line1` and its country matches the issued billing country. City, state and
+  postal code are not required by this download check. A different country or a
+  missing street/country retains the issued address. Missing historical country
+  data is never inferred from today's profile.
 - An existing tax number can be replaced only by a single saved ID of the same
   tax type and country. Different-country, different-type, ambiguous, removed or
   unknown-jurisdiction IDs retain the issued number. For EU VAT, the number's

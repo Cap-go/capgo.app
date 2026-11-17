@@ -1,4 +1,4 @@
-import type Stripe from 'stripe'
+import Stripe from 'stripe'
 
 // Entirely fictional billing identity and amounts, safe for public visual examples.
 export const exampleInvoice = {
@@ -23,3 +23,26 @@ export const exampleAccount = {
   business_profile: { support_email: 'support@capgo.app' },
 } as Stripe.Account
 export const exampleRate = { id: 'txr_example', display_name: 'VAT - Italy', percentage: 22 } as Stripe.TaxRate
+
+export const invoiceScenarios = [
+  { name: 'monthly subscription', reason: 'subscription_cycle', description: 'Solo (monthly)', end: '2026-12-01', quantity: 1, unitAmount: 1200, subtotal: 1200, tax: 264, total: 1464, period: 'Nov 1–Dec 1, 2026', price: '€12.00', amount: '€14.64' },
+  { name: 'yearly subscription', reason: 'subscription_cycle', description: 'Solo (yearly)', end: '2027-11-01', quantity: 1, unitAmount: 12000, subtotal: 12000, tax: 2640, total: 14640, period: 'Nov 1, 2026–Nov 1, 2027', price: '€120.00', amount: '€146.40' },
+  { name: 'credit purchase', reason: 'manual', description: 'Usage credits', end: '2026-11-01', quantity: 25, unitAmount: 100, subtotal: 2500, tax: 550, total: 3050, period: 'Nov 1, 2026', price: '€1.00', amount: '€30.50' },
+  { name: 'automatic credit top-up', reason: 'manual', description: 'Automatic credit top-up', end: '2026-11-01', quantity: 10, unitAmount: 100, subtotal: 1000, tax: 220, total: 1220, period: 'Nov 1, 2026', price: '€1.00', amount: '€12.20' },
+] as const
+
+export function invoiceScenario(scenario: typeof invoiceScenarios[number]) {
+  const taxes = [{ ...exampleInvoice.total_taxes![0], amount: scenario.tax, taxable_amount: scenario.subtotal }]
+  const invoice: Stripe.Invoice = {
+    ...exampleInvoice, billing_reason: scenario.reason, status: 'paid', due_date: null,
+    subtotal: scenario.subtotal, subtotal_excluding_tax: scenario.subtotal,
+    total_excluding_tax: scenario.subtotal, total: scenario.total, amount_due: scenario.total,
+    amount_paid: scenario.total, amount_remaining: 0, total_taxes: taxes,
+  }
+  const lines = [{
+    ...exampleLines[0], description: scenario.description, quantity: scenario.quantity,
+    amount: scenario.subtotal, taxes, pricing: { ...exampleLines[0].pricing!, unit_amount_decimal: Stripe.Decimal.from(scenario.unitAmount) },
+    period: { start: exampleInvoice.created, end: Date.parse(`${scenario.end}T00:00:00Z`) / 1000 },
+  }]
+  return { invoice, lines }
+}

@@ -12,7 +12,8 @@ export const invoiceFonts = {
 export function invoicePdfDefinition(invoice: InvoiceDocument, billingUrl = 'https://console.capgo.app/settings/organization/billing'): TDocumentDefinitions {
   const textLines = (lines: string[]): Content => ({ stack: lines.map(text => ({ text })), lineHeight: 1.24 })
   const hasTax = invoice.lines.some(line => line.tax)
-  const compactNotes = invoice.notes.length <= 1 && invoice.notes.join('\n').length <= 65
+  const noteText = invoice.notes.join('\n')
+  const compactNotes = invoice.notes.length <= 1 && noteText.length <= 65 && !/[\r\n\u2028\u2029]/.test(noteText)
   const bottomMargin = compactNotes && invoice.notes.length ? 82 : 60
   const details = [
     ['Invoice number', invoice.number],
@@ -71,7 +72,6 @@ export function invoicePdfDefinition(invoice: InvoiceDocument, billingUrl = 'htt
       {
         table: {
           headerRows: 1,
-          dontBreakRows: true,
           widths: hasTax ? ['*', 36, 64.5, 48.75, 60.75] : ['*', 36, 64.5, 60.75],
           body: [
             ['Description', 'Qty', 'Unit price', ...(hasTax ? ['Tax'] : []), 'Amount'].map<TableCell>((text, i) => ({ text, fontSize: 7.5, alignment: i > 0 ? 'right' : 'left' })),
@@ -119,24 +119,49 @@ export function invoicePdfDefinition(invoice: InvoiceDocument, billingUrl = 'htt
   }
 }
 
-export async function downloadInvoicePdf(invoice: InvoiceDocument, orgId: string) {
-  const [{ default: pdfMake }, assets] = await Promise.all([
+export async function downloadInvoicePdf(invoice: InvoiceDocument, orgId: string, canDownload: () => boolean = () => true) {
+  if (!canDownload())
+    return
+  const [{ default: pdfMake }, { saveAs }, assets] = await Promise.all([
     import('pdfmake/build/pdfmake'),
+    import('file-saver'),
     Promise.all(invoiceAssetFiles.map(async (name) => {
-      const response = await fetch(new URL(`/invoice/${name}`, window.location.origin))
+      const response = await fetch(new URL(`/invoice/${name}`, window.location.origin), { signal: AbortSignal.timeout(30_000) })
       if (!response.ok)
         throw new Error(`Failed to load invoice asset: ${name}`)
       const bytes = new Uint8Array(await response.arrayBuffer())
       let binary = ''
       for (const byte of bytes)
-        binary += String.fromCharCode(byte)
+        binary += String.fromCodePoint(byte)
       return [name, btoa(binary)]
     })),
   ])
+  if (!canDownload())
+    return
   const billingUrl = new URL('/settings/organization/billing', window.location.origin)
   billingUrl.searchParams.set('oid', orgId)
-  await new Promise<void>((resolve) => {
-    pdfMake.createPdf(invoicePdfDefinition(invoice, billingUrl.toString()), undefined, invoiceFonts, Object.fromEntries(assets))
-      .download(`invoice-${invoice.number.replace(/[^\w-]/g, '_')}.pdf`, resolve)
-  })
+  // Assets are already local. The synchronous stream API exposes font/layout
+  // failures that pdfmake's callback-only download API otherwise swallows.
+  const stream = pdfMake.createPdf(invoicePdfDefinition(invoice, billingUrl.toString()), undefined, invoiceFonts, Object.fromEntries(assets)).getStream()
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  let blob: Blob
+  try {
+    blob = await new Promise<Blob>((resolve, reject) => {
+      const chunks: Uint8Array<ArrayBuffer>[] = []
+      stream.on('data', (chunk: Uint8Array) => chunks.push(new Uint8Array(chunk)))
+      stream.on('error', reject)
+      stream.on('end', () => resolve(new Blob(chunks, { type: 'application/pdf' })))
+      timeout = setTimeout(() => {
+        reject(new Error('Invoice PDF rendering timed out'))
+        stream.destroy()
+      }, 60_000)
+      stream.end()
+    })
+  }
+  finally {
+    clearTimeout(timeout)
+  }
+  if (!canDownload())
+    return
+  saveAs(blob, `invoice-${invoice.number.replace(/[^\w-]/g, '_')}.pdf`)
 }

@@ -2,7 +2,7 @@ import type Stripe from 'stripe'
 import type { InAppBillingContext } from '../supabase/functions/_backend/utils/stripe_in_app'
 import { describe, expect, it, vi } from 'vitest'
 import { applySavedInvoiceDetails, buildInvoiceDocument, getInvoiceDocument } from '../supabase/functions/_backend/utils/invoice_document'
-import { exampleAccount, exampleInvoice, exampleLines, exampleRate } from './fixtures/invoices/example'
+import { exampleAccount, exampleInvoice, exampleLines, exampleRate, invoiceScenario, invoiceScenarios } from './fixtures/invoices/example'
 
 function document(overrides: Partial<Stripe.Invoice> = {}) {
   return buildInvoiceDocument({ ...exampleInvoice, ...overrides }, exampleAccount, exampleLines, [], new Map([[exampleRate.id, exampleRate]]))
@@ -19,6 +19,23 @@ function context(invoice = exampleInvoice, lines = exampleLines) {
 }
 
 describe('owned invoice documents', () => {
+  it.concurrent.each(invoiceScenarios)('downloads a $name with its issued period, quantity and paid total', async (scenario) => {
+    const { invoice, lines } = invoiceScenario(scenario)
+    const { ctx } = context(invoice, lines)
+    const result = await getInvoiceDocument(ctx, invoice.id)
+    expect(result.number).toBe(invoice.number)
+    expect(result.lines).toEqual([expect.objectContaining({ description: scenario.description, period: scenario.period, quantity: String(scenario.quantity), unitPrice: scenario.price })])
+    expect(result.totals).toContainEqual({ label: 'Total', amount: scenario.amount })
+    expect(result.totals).toContainEqual({ label: 'Amount paid', amount: scenario.amount })
+    expect(result.summary).toBe(`${scenario.amount} paid`)
+  })
+  it.concurrent('prints the applied zero tax rate instead of the statutory rate', () => {
+    const taxes = [{ ...exampleInvoice.total_taxes![0], amount: 0 }]
+    const result = buildInvoiceDocument({ ...exampleInvoice, total_taxes: taxes, total: 1200, amount_due: 1200, amount_remaining: 1200 }, exampleAccount, [{ ...exampleLines[0], taxes }], [], new Map([[exampleRate.id, { ...exampleRate, effective_percentage: 0 }]]))
+    expect(result.lines[0].tax).toBe('0%')
+    expect(result.totals).toContainEqual({ label: 'VAT - Italy (0% on €12.00)', amount: '€0.00' })
+    expect(result.totals).toContainEqual({ label: 'Total', amount: '€12.00' })
+  })
   it.concurrent('retains the finalized number and customer snapshot without exposing Stripe payment links', () => {
     const result = document()
     expect(result.number).toBe('EXAMPLE1-00042')

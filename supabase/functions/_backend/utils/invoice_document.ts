@@ -15,27 +15,21 @@ function address(value: Stripe.Address | null | undefined): string[] {
   return [value.line1, value.line2, [value.postal_code, value.city, value.state].filter(Boolean).join(' '), value.country ? new Intl.DisplayNames(['en'], { type: 'region' }).of(value.country) : null].filter((line): line is string => !!line)
 }
 
-export function buildInvoiceDocument(invoice: Stripe.Invoice, account: Stripe.Account, lines: Stripe.InvoiceLineItem[], taxIds: Stripe.TaxId[], rates: Map<string, Stripe.TaxRate>): InvoiceDocument {
-  if (!invoice.number || !invoice.status || invoice.status === 'draft')
-    throw simpleError('invoice_not_finalized', 'The invoice is not finalized')
-  const money = (amount: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: invoice.currency.toUpperCase(), currencyDisplay: 'symbol', maximumFractionDigits: 8 }).format(stripeAmountToMajorUnits(amount, invoice.currency))
-  const totals: InvoiceDocument['totals'] = [{ label: 'Subtotal', amount: money(invoice.subtotal) }]
-  for (const discount of invoice.total_discount_amounts ?? [])
-    totals.push({ label: 'Discount', amount: money(-discount.amount) })
-  for (const credit of invoice.total_pretax_credit_amounts ?? []) {
-    if (credit.type !== 'discount')
-      totals.push({ label: 'Pre-tax credit', amount: money(-credit.amount) })
-  }
-  if (invoice.total_excluding_tax != null && invoice.total_taxes?.length)
-    totals.push({ label: 'Total excluding tax', amount: money(invoice.total_excluding_tax) })
-  for (const tax of invoice.total_taxes ?? []) {
-    const rate = rates.get(tax.tax_rate_details?.tax_rate ?? '')
-    const label = [rate?.display_name ?? 'Tax', rate?.percentage != null ? `(${rate.percentage}%${tax.taxable_amount != null ? ` on ${money(tax.taxable_amount)}` : ''})` : '', tax.tax_behavior === 'inclusive' ? '(included)' : ''].filter(Boolean).join(' ')
-    totals.push({ label, amount: money(tax.amount) })
-  }
-  if (invoice.amount_shipping)
-    totals.push({ label: 'Shipping', amount: money(invoice.amount_shipping) })
-  totals.push({ label: 'Total', amount: money(invoice.total) })
+type Money = (amount: number) => string
+
+function taxPercentage(rate: Stripe.TaxRate | undefined) {
+  return rate?.rate_type === 'flat_amount' ? null : rate?.effective_percentage ?? rate?.percentage
+}
+
+function taxLabel(tax: NonNullable<Stripe.Invoice['total_taxes']>[number], rate: Stripe.TaxRate | undefined, money: Money) {
+  const percentage = taxPercentage(rate)
+  const taxableAmount = tax.taxable_amount == null ? '' : ` on ${money(tax.taxable_amount)}`
+  const percentageLabel = percentage == null ? '' : `(${percentage}%${taxableAmount})`
+  return [rate?.display_name ?? 'Tax', percentageLabel, tax.tax_behavior === 'inclusive' ? '(included)' : ''].filter(Boolean).join(' ')
+}
+
+function paymentTotals(invoice: Stripe.Invoice, money: Money): InvoiceDocument['totals'] {
+  const totals: InvoiceDocument['totals'] = []
   if (invoice.starting_balance)
     totals.push({ label: 'Starting customer balance', amount: money(invoice.starting_balance) })
   if (invoice.pre_payment_credit_notes_amount || invoice.post_payment_credit_notes_amount)
@@ -47,36 +41,103 @@ export function buildInvoiceDocument(invoice: Stripe.Invoice, account: Stripe.Ac
     totals.push({ label: 'Amount overpaid', amount: money(invoice.amount_overpaid) })
   if (invoice.amount_remaining !== invoice.amount_due)
     totals.push({ label: 'Amount remaining', amount: money(invoice.amount_remaining), strong: true })
+  return totals
+}
+
+function invoiceTotals(invoice: Stripe.Invoice, rates: Map<string, Stripe.TaxRate>, money: Money): InvoiceDocument['totals'] {
+  const totals: InvoiceDocument['totals'] = [{ label: 'Subtotal', amount: money(invoice.subtotal) }]
+  for (const discount of invoice.total_discount_amounts ?? [])
+    totals.push({ label: 'Discount', amount: money(-discount.amount) })
+  for (const credit of invoice.total_pretax_credit_amounts ?? []) {
+    if (credit.type !== 'discount')
+      totals.push({ label: 'Pre-tax credit', amount: money(-credit.amount) })
+  }
+  if (invoice.total_excluding_tax != null && invoice.total_taxes?.length)
+    totals.push({ label: 'Total excluding tax', amount: money(invoice.total_excluding_tax) })
+  for (const tax of invoice.total_taxes ?? []) {
+    const rate = rates.get(tax.tax_rate_details?.tax_rate ?? '')
+    totals.push({ label: taxLabel(tax, rate, money), amount: money(tax.amount) })
+  }
+  if (invoice.amount_shipping)
+    totals.push({ label: 'Shipping', amount: money(invoice.amount_shipping) })
+  totals.push({ label: 'Total', amount: money(invoice.total) })
+  return [...totals, ...paymentTotals(invoice, money)]
+}
+
+function invoiceNotes(invoice: Stripe.Invoice) {
   const notes = [invoice.footer].filter((line): line is string => !!line)
   if (invoice.customer_tax_exempt === 'reverse' || invoice.total_taxes?.some(tax => tax.taxability_reason === 'reverse_charge'))
     notes.push('Tax to be paid on reverse charge basis.')
   if (invoice.customer_tax_exempt === 'exempt')
     notes.push('Customer is tax exempt.')
+  return notes
+}
+
+function invoiceSummary(invoice: Stripe.Invoice, money: Money) {
+  if (invoice.status === 'paid') {
+    const paidDate = invoice.status_transitions.paid_at ? ` ${date(invoice.status_transitions.paid_at)}` : ''
+    return `${money(invoice.amount_paid)} paid${paidDate}`
+  }
+  if (invoice.status === 'void')
+    return 'Void'
+  if (invoice.status === 'uncollectible')
+    return 'Uncollectible'
+  const dueDate = invoice.due_date ? ` ${date(invoice.due_date)}` : ''
+  return `${money(invoice.amount_remaining)} due${dueDate}`
+}
+
+function taxIdLabel(tax: { type: string, value?: string | null }) {
+  const label = tax.type === 'eu_vat' ? `${tax.value?.slice(0, 2)} VAT` : tax.type.toUpperCase().replaceAll('_', ' ')
+  return `${label} ${tax.value}`
+}
+
+function invoiceSeller(invoice: Stripe.Invoice, account: Stripe.Account, taxIds: Stripe.TaxId[]) {
+  return [
+    invoice.account_name ?? account.business_profile?.name ?? '',
+    account.company?.name !== invoice.account_name ? account.company?.name ?? '' : '',
+    ...address(account.company?.address ?? account.business_profile?.support_address),
+    account.business_profile?.support_email ?? '',
+    ...taxIds.map(taxIdLabel),
+  ].filter(Boolean)
+}
+
+function invoiceLine(line: Stripe.InvoiceLineItem, rates: Map<string, Stripe.TaxRate>, money: Money): InvoiceDocument['lines'][number] {
+  const period = line.period
+    ? new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' }).formatRange(new Date(line.period.start * 1000), new Date(line.period.end * 1000)).split('–').map(part => part.trim()).join('–')
+    : ''
+  return {
+    description: line.description ?? 'Subscription',
+    period,
+    quantity: line.quantity == null ? '' : String(line.quantity),
+    unitPrice: line.pricing?.unit_amount_decimal != null ? money(Number(line.pricing.unit_amount_decimal)) : '',
+    amount: money(line.amount),
+    tax: (line.taxes ?? []).map((tax) => {
+      const percentage = taxPercentage(rates.get(tax.tax_rate_details?.tax_rate ?? ''))
+      if (percentage == null)
+        return money(tax.amount)
+      const inclusive = tax.tax_behavior === 'inclusive' ? ' (incl.)' : ''
+      return `${percentage}%${inclusive}`
+    }).join('\n'),
+  }
+}
+
+export function buildInvoiceDocument(invoice: Stripe.Invoice, account: Stripe.Account, lines: Stripe.InvoiceLineItem[], taxIds: Stripe.TaxId[], rates: Map<string, Stripe.TaxRate>): InvoiceDocument {
+  if (!invoice.number || !invoice.status || invoice.status === 'draft')
+    throw simpleError('invoice_not_finalized', 'The invoice is not finalized')
+  const money: Money = amount => new Intl.NumberFormat('en-US', { style: 'currency', currency: invoice.currency.toUpperCase(), currencyDisplay: 'symbol', maximumFractionDigits: 8 }).format(stripeAmountToMajorUnits(amount, invoice.currency))
   return {
     number: invoice.number,
     issued: date(invoice.effective_at ?? invoice.status_transitions.finalized_at ?? invoice.created),
     due: invoice.due_date ? date(invoice.due_date) : null,
     status: invoice.status,
-    summary: invoice.status === 'paid'
-      ? `${money(invoice.amount_paid)} paid${invoice.status_transitions.paid_at ? ` ${date(invoice.status_transitions.paid_at)}` : ''}`
-      : invoice.status === 'void' ? 'Void' : invoice.status === 'uncollectible' ? 'Uncollectible' : `${money(invoice.amount_remaining)} due${invoice.due_date ? ` ${date(invoice.due_date)}` : ''}`,
-    seller: [invoice.account_name ?? account.business_profile?.name ?? '', account.company?.name !== invoice.account_name ? account.company?.name ?? '' : '', ...address(account.company?.address ?? account.business_profile?.support_address), account.business_profile?.support_email ?? '', ...taxIds.map(tax => `${tax.type === 'eu_vat' ? `${tax.value?.slice(0, 2)} VAT` : tax.type.toUpperCase().replaceAll('_', ' ')} ${tax.value}`)].filter(Boolean),
-    customer: [invoice.customer_name ?? '', ...address(invoice.customer_address), invoice.customer_email ?? '', ...invoice.customer_tax_ids?.map(tax => `${tax.type === 'eu_vat' ? `${tax.value?.slice(0, 2)} VAT` : tax.type.toUpperCase().replaceAll('_', ' ')} ${tax.value}`) ?? []].filter(Boolean),
+    summary: invoiceSummary(invoice, money),
+    seller: invoiceSeller(invoice, account, taxIds),
+    customer: [invoice.customer_name ?? '', ...address(invoice.customer_address), invoice.customer_email ?? '', ...invoice.customer_tax_ids?.map(taxIdLabel) ?? []].filter(Boolean),
     fields: invoice.custom_fields ?? [],
     description: invoice.description,
-    lines: lines.map(line => ({
-      description: line.description ?? 'Subscription',
-      period: line.period ? new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' }).formatRange(new Date(line.period.start * 1000), new Date(line.period.end * 1000)).replace(/\s*–\s*/g, '–') : '',
-      quantity: line.quantity == null ? '' : String(line.quantity),
-      unitPrice: line.pricing?.unit_amount_decimal != null ? money(Number(line.pricing.unit_amount_decimal)) : '',
-      amount: money(line.amount),
-      tax: (line.taxes ?? []).map((tax) => {
-        const rate = rates.get(tax.tax_rate_details?.tax_rate ?? '')
-        return rate?.percentage != null ? `${rate.percentage}%${tax.tax_behavior === 'inclusive' ? ' (incl.)' : ''}` : money(tax.amount)
-      }).join('\n'),
-    })),
-    totals,
-    notes,
+    lines: lines.map(line => invoiceLine(line, rates, money)),
+    totals: invoiceTotals(invoice, rates, money),
+    notes: invoiceNotes(invoice),
   }
 }
 

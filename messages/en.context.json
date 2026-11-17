@@ -769,6 +769,7 @@
   "billing-field-postal_code": "Used in Capgo web console. Role: UI label about \"billing field postal_code\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "billing-field-state": "Used in Capgo web console. Role: UI label about \"billing field state\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "billing-invoice-details": "Used in Capgo web console areas: components/billing. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "billing-invoice-download-failed": "Error toast shown when an invoice PDF cannot be downloaded from the organization billing page. Ask the customer to retry; preserve Capgo product names and placeholders.",
   "billing-invoice-paid": "Used in Capgo web console areas: components/billing, components/dashboard, pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "billing-invoice-status-draft": "Used in Capgo web console. Role: short UI label about \"billing invoice status draft\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "billing-invoice-status-open": "Used in Capgo web console. Role: short UI label about \"billing invoice status open\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
