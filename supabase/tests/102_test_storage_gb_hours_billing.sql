@@ -326,12 +326,24 @@ SELECT public.replace_app_storage_hourly(
     gen_random_uuid()
 ) FROM gbh_ctx;
 
+-- ...and nothing either after a transfer recorded since it loaded the app,
+-- even one to the same org (a new ownership segment).
+SELECT public.replace_app_storage_hourly(
+    live_app, org_id, DATE '2026-04-01', DATE '2026-05-01', DATE '2026-05-01', '2026-04-01T00:00:00Z',
+    '[{"cycle_start": "2026-04-01", "date": "2026-04-03", "storage_byte_hours": 55}]'::jsonb,
+    '2026-04-04T00:00:00Z',
+    true,
+    (SELECT apps.id FROM public.apps WHERE apps.app_id = gbh_ctx.live_app),
+    NULL,
+    1
+) FROM gbh_ctx;
+
 SELECT
     is(
         (SELECT count(*)::integer FROM public.daily_storage_hourly
          WHERE app_id = (SELECT live_app FROM gbh_ctx) AND cycle_start = DATE '2026-04-01'),
         0,
-        'a live refresh of an earlier incarnation of the app writes nothing'
+        'a live refresh of an earlier incarnation or ownership segment of the app writes nothing'
     );
 
 SELECT
@@ -392,8 +404,8 @@ SELECT
 
 SELECT
     ok(
-        NOT has_function_privilege('authenticated', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz)', 'EXECUTE')
-        AND NOT has_function_privilege('anon', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz)', 'EXECUTE'),
+        NOT has_function_privilege('authenticated', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz, integer)', 'EXECUTE')
+        AND NOT has_function_privilege('anon', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz, integer)', 'EXECUTE'),
         'replace_app_storage_hourly is not callable by clients'
     );
 

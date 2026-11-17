@@ -171,7 +171,8 @@ CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
     p_written_at timestamptz,
     p_require_current_owner boolean DEFAULT true,
     p_app_uuid uuid DEFAULT NULL,
-    p_calculated_until timestamptz DEFAULT NULL
+    p_calculated_until timestamptz DEFAULT NULL,
+    p_transfer_count integer DEFAULT NULL
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -187,13 +188,16 @@ BEGIN
   -- deletion finalizers write rows clipped on purpose and skip this check.
   -- p_app_uuid (apps.id when the refresh loaded the app) also binds it to that
   -- incarnation: an app deleted and recreated by the same org mid-refresh is
-  -- another row, so the stale refresh writes nothing.
+  -- another row, so the stale refresh writes nothing. p_transfer_count (the
+  -- transfer_history length it loaded) binds it to that ownership segment: a
+  -- transfer recorded since, even to the same org, starts a new segment.
   IF p_require_current_owner THEN
     PERFORM 1
     FROM public.apps
     WHERE apps.app_id = p_app_id
       AND apps.owner_org = p_owner_org
       AND (p_app_uuid IS NULL OR apps.id = p_app_uuid)
+      AND (p_transfer_count IS NULL OR COALESCE(pg_catalog.array_length(apps.transfer_history, 1), 0) = p_transfer_count)
     FOR SHARE;
     IF NOT FOUND THEN
       RETURN;
@@ -254,10 +258,10 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz) TO service_role;
+ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz, integer) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz, integer) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz, integer) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 2c. Cycle storage usage for the console

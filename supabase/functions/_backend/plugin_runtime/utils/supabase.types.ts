@@ -5246,6 +5246,7 @@ export type Database = {
           p_require_current_owner?: boolean
           p_rows: Json
           p_segment_start: string
+          p_transfer_count?: number
           p_written_at: string
         }
         Returns: undefined

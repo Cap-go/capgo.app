@@ -52,6 +52,8 @@ interface FormerOwnerSegment {
 interface StorageOwnership {
   /** apps.id loaded by the refresh; live writes are refused for another incarnation. */
   appUuid?: string | null
+  /** transfer_history length loaded by the refresh; live writes are refused after a new transfer. */
+  transferCount?: number | null
   /** When the current owner got the app: its creation or its last transfer to that org. */
   ownedSince: string | null
   /** Every earlier owner's segment, oldest first. */
@@ -107,6 +109,8 @@ interface StorageHourlyCalculationOptions {
   requireCurrentOwner?: boolean
   /** apps.id the refresh loaded: a live write is refused once the app ID is another incarnation. */
   appUuid?: string | null
+  /** transfer_history length the refresh loaded: a live write is refused after a new transfer. */
+  transferCount?: number | null
 }
 
 interface StorageHourlyCalculationResult {
@@ -433,7 +437,8 @@ async function replaceCycleStorageHourly(
          p_written_at => $8::timestamptz,
          p_require_current_owner => $9::boolean,
          p_app_uuid => $10::uuid,
-         p_calculated_until => $11::timestamptz
+         p_calculated_until => $11::timestamptz,
+         p_transfer_count => $12::integer
        )`,
       [
         options.appId,
@@ -448,6 +453,7 @@ async function replaceCycleStorageHourly(
         options.appUuid ?? null,
         // How far this calculation went: the finalization checks compare against it.
         new Date(Math.min(parseTimestampMs(options.cycleEnd), options.currentHour ? parseTimestampMs(options.currentHour) : parseTimestampMs(writtenAt))).toISOString(),
+        options.transferCount ?? null,
       ],
     )
     return { data: null, error: null }
@@ -492,7 +498,7 @@ async function finalizePreviousCycle(
   c: Context,
   pg: PgClient,
   events: VersionMetaStorageRow[],
-  options: { appId: string, ownerOrg: string, cycleStart: string, calculationEndMs: number, accrualStart: string | null, writtenAt: string, requireCurrentOwner?: boolean, appUuid?: string | null },
+  options: { appId: string, ownerOrg: string, cycleStart: string, calculationEndMs: number, accrualStart: string | null, writtenAt: string, requireCurrentOwner?: boolean, appUuid?: string | null, transferCount?: number | null },
 ) {
   let laterCycleStart = options.cycleStart
   for (let walked = 0; walked < MAX_UNFINISHED_PREVIOUS_CYCLES; walked++) {
@@ -522,6 +528,7 @@ async function finalizePreviousCycle(
       writtenAt: options.writtenAt,
       requireCurrentOwner: options.requireCurrentOwner,
       appUuid: options.appUuid,
+      transferCount: options.transferCount,
     })
     laterCycleStart = previous.cycle_start
   }
@@ -605,6 +612,7 @@ async function refreshStorageHourly(
     accrualStart: ownership.ownedSince,
     writtenAt,
     appUuid: ownership.appUuid,
+    transferCount: ownership.transferCount,
   })
 
   await finalizePreviousCycle(c, pg, events, {
@@ -615,6 +623,7 @@ async function refreshStorageHourly(
     accrualStart: ownership.ownedSince,
     writtenAt,
     appUuid: ownership.appUuid,
+    transferCount: ownership.transferCount,
   })
 
   await finalizeFormerOwners(c, pg, events, { appId, formerOwners: ownership.formerOwners, calculationEndMs, writtenAt })
@@ -929,6 +938,7 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
   // queue retries it, instead of leaving the cycle under-counted.
   const storageHourly = await refreshStorageHourly(c, pg, appId, orgId, cycleInfo, body.currentHour, {
     appUuid: appResult.data.id,
+    transferCount: appResult.data.transfer_history?.length ?? 0,
     ...appStorageOwnership(appResult.data),
   })
 
