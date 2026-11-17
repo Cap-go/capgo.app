@@ -545,8 +545,8 @@ async function fetchRemoteEmulatorSession(c: Context, emulatorId: string): Promi
     return found.data ?? null
   }
   catch (error) {
-    // The host uses 404/409 on GET when the device is already gone; live in-progress sessions return 200.
-    if (error instanceof SimulatorHostError && simulatorHostStopIsFinal(error.status)) {
+    // GET /v2/device-run-sessions/:id returns 404 when the session is gone (ios_linux_emulator cloud/worker.ts ~136-138); it does not return 409.
+    if (error instanceof SimulatorHostError && error.status === 404) {
       return {
         id: emulatorId,
         url: '',
