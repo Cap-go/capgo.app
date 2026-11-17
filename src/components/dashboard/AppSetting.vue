@@ -245,6 +245,9 @@ async function deleteApp() {
   isDeletingApp.value = true
   sendOnboardingEvent('app_deletion_confirmed', getDeletionEventProperties())
   try {
+    // Settle the app's simulators first: one whose device already stopped is billed up to that stop,
+    // not up to this deletion.
+    await invokeCapgoApi(`private/simulator/?app_id=${encodeURIComponent(props.appId)}`, { method: 'GET', retries: 0 }).catch(() => undefined)
     const org = organizationStore.getOrgByAppId(props.appId)
     const { error: errorIcon } = await capgo.storage
       .from(`images`)
