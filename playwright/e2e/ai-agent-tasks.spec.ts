@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
 import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { expect, test } from '../support/commands'
-import { consoleQueryFromResponse, consoleQueryJson, consoleQueryMethod, routeConsoleQuery } from '../support/consoleQuery'
+import { consoleQueryFromResponse, consoleQueryJson, consoleQueryMethod, forwardConsoleQuery, routeConsoleQuery } from '../support/consoleQuery'
 
 function localAdminClient() {
   const { ports } = getSupabaseWorktreeConfig()
@@ -24,6 +24,13 @@ function isAgentChannelCount(response: Response) {
     return false
   const options = query.operations.find(operation => operation.method === 'select')?.args[1]
   return !!options && typeof options === 'object' && options.head === true
+}
+
+// Whether a console permission response (batched or single) evaluated `permission`.
+function checksPermission(response: Response, permission: string) {
+  const args = consoleQueryFromResponse(response)?.args[0] as { p_permission_key?: string, p_checks?: Array<{ permission_key?: string }> } | undefined
+  return args?.p_permission_key === permission
+    || (args?.p_checks ?? []).some(check => check.permission_key === permission)
 }
 
 // Copying waits for the API key first, so poll until the prompt lands.
@@ -124,6 +131,16 @@ test.describe('AI agent alternatives to manual actions', () => {
     // No usable key of their own, and no right to create one: answer "no" for key management and
     // role assignment; every other permission keeps its real result.
     const deniedPermissions = new Set(['org.manage_apikeys', 'app.manage_apikeys', 'org.update_user_roles'])
+    // Permission checks go out as one batched rbac_check_permissions call: forward it and
+    // rewrite only the denied entries.
+    await routeConsoleQuery(page, 'rbac_check_permissions', (route, query) => {
+      const checks = (query.args[0] as { p_checks?: Array<{ permission_key?: string }> } | undefined)?.p_checks ?? []
+      return forwardConsoleQuery(route, (row: { idx: number, allowed: boolean }) => {
+        const key = checks[row.idx]?.permission_key
+        return key && deniedPermissions.has(key) ? { ...row, allowed: false } : row
+      })
+    })
+    // Single-check fallback path (used only if the batch RPC fails).
     await routeConsoleQuery(page, 'rbac_check_permission', (route, query) => {
       const key = (query.args[0] as { p_permission_key?: string } | undefined)?.p_permission_key
       return key && deniedPermissions.has(key)
@@ -139,7 +156,7 @@ test.describe('AI agent alternatives to manual actions', () => {
     await expect(page.locator('[data-test="add-app-setup-mode"]')).toHaveCount(0)
 
     // Wait for the card's own permission answer, so the absence below is not just "not yet".
-    const keyCheck = page.waitForResponse(response => (consoleQueryFromResponse(response)?.args[0] as { p_permission_key?: string } | undefined)?.p_permission_key === 'app.manage_apikeys')
+    const keyCheck = page.waitForResponse(response => checksPermission(response, 'app.manage_apikeys'))
     await page.goto('/app/com.demo.app/bundles/new')
     await keyCheck
     await expect(page.getByRole('button', { name: 'Invite a technical teammate' })).toBeVisible()

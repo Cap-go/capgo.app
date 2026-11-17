@@ -89,7 +89,7 @@ describe('native-aware Capgo release workflow', () => {
     }
   })
 
-  it.concurrent('pins every deployment execution and retry to the triggering immutable tag', async () => {
+  it.concurrent('retargets full retries once and pins every job to that immutable attempt target', async () => {
     const workflowSource = await readWorkflow(workflowPaths.deploy)
     const workflow = parseWorkflow(workflowSource)
     const jobs = workflow.jobs ?? {}
@@ -118,10 +118,10 @@ describe('native-aware Capgo release workflow', () => {
     expect(workflowSource).toContain('deploy_sha: ${{ steps.target.outputs.deploy_sha }}')
     expect(workflowSource).toContain('is_alpha: ${{ steps.target.outputs.is_alpha }}')
     expect(workflowSource).toContain('requires_schema_types_sync: ${{ steps.scope.outputs.requires_schema_types_sync }}')
-    expect(workflowSource).toContain('bun scripts/resolve-deploy-tag.ts --resolve "${{ github.ref_name }}"')
-    expect(workflowSource).toContain('bun scripts/resolve-deploy-tag.ts --assert-current "${{ github.ref_name }}"')
+    expect(workflowSource).toContain('bun scripts/resolve-deploy-tag.ts --attempt "${{ github.ref_name }}"')
+    expect(workflowSource).toContain('bun scripts/resolve-deploy-tag.ts --assert-current "${{ steps.target.outputs.deploy_tag }}"')
     expect(workflowSource).not.toContain('resolve-deploy-tag.ts "$mode"')
-    expect(workflowSource).toContain('bun scripts/deploy-scope.ts "${{ steps.target.outputs.deploy_tag }}"')
+    expect(workflowSource).toContain('bun scripts/deploy-state.ts begin')
     expect(targetCheckout).toMatchObject({
       uses: 'actions/checkout@v6',
       with: { ref: '${{ steps.target.outputs.deploy_sha }}' },
@@ -147,6 +147,40 @@ describe('native-aware Capgo release workflow', () => {
     const supabaseDeployIndex = workflowSource.indexOf('  supabase_deploy:')
     expect(supabaseDeployIndex).toBeGreaterThan(-1)
     expect(workflowSource.slice(supabaseDeployIndex)).not.toContain('github.ref')
+  })
+
+  it.concurrent('persists intent before deployment and completes actual operations even after failed dependencies', async () => {
+    const source = await readWorkflow(workflowPaths.deploy)
+    const jobs = parseWorkflow(source).jobs ?? {}
+    expect(jobs.changes?.permissions).toMatchObject({ contents: 'write', actions: 'read' })
+    const scope = jobs.changes?.steps?.find(step => step.name === 'Resolve deploy scope')
+    expect(scope?.run).toContain('deploy-state.ts begin')
+    expect(scope?.env?.DEPLOY_SHA).toBe('${{ steps.target.outputs.deploy_sha }}')
+    const completion = jobs.record_deployments
+    expect(completion?.if).toBe('${{ always() && needs.changes.result == \'success\' }}')
+    expect(completion?.needs).toEqual(expect.arrayContaining([
+      'changes',
+      'read_replica_schema',
+      'supabase_deploy',
+      'read_replica_subscription',
+      'deploy_api',
+      'deploy_translation_worker',
+      'deploy_files',
+      'deploy_gotrue_worker',
+      'deploy_plugin_regions',
+    ]))
+    expect(completion?.permissions).toMatchObject({ contents: 'write', actions: 'read' })
+    const record = completion?.steps?.find(step => step.name === 'Record actual attempt operations with CAS')
+    expect(record?.run).toContain('deploy-state.ts complete')
+    expect(record?.env).toMatchObject({
+      DEPLOY_TAG: '${{ needs.changes.outputs.deploy_tag }}',
+      DEPLOY_SHA: '${{ needs.changes.outputs.deploy_sha }}',
+      DEPLOY_STATE_OID: '${{ needs.changes.outputs.state_oid }}',
+    })
+    expect(source).not.toContain('github.event.workflow_run.head_sha')
+    expect(source).toContain('matrix: ${{ fromJSON(needs.changes.outputs.plugin_matrix) }}')
+    expect(source).toContain('plugin_matrix: ${{ steps.scope.outputs.plugin_matrix }}')
+    expect(jobs.deploy_gotrue_worker?.needs).toEqual(['changes'])
   })
 
   it.concurrent('keeps post-merge tests and publishes release refs atomically', async () => {

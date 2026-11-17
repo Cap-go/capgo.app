@@ -5,6 +5,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { stripeEnabled, useConsole } from '~/services/console'
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
+import { invalidatePermissionCache } from '~/services/permissions'
 import { clearSimulatorSessions } from '~/services/simulatorSessions'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
 import { clearWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
@@ -365,6 +366,13 @@ export const useOrganizationStore = defineStore('organization', () => {
       })
   }
 
+  // Cached permission results belong to one org and role set: drop them when
+  // the active org or the caller's role in it changes.
+  watch(
+    () => [currentOrganization.value?.gid, currentOrganization.value?.role, currentRole.value],
+    () => invalidatePermissionCache(),
+  )
+
   watch([currentOrganization, stripeEnabled], async ([currentOrganizationRaw, stripeEnabledValue], [previousOrganization]) => {
     if (!currentOrganizationRaw) {
       currentRole.value = null
@@ -699,6 +707,7 @@ export const useOrganizationStore = defineStore('organization', () => {
           listener.data.subscription.unsubscribe()
           clearSimulatorSessions()
           clearWebsitePaidUserCookie()
+          invalidatePermissionCache()
           // Remove all from orgs
           _organizations.value = new Map()
           _organizationsByAppId.value = new Map()
@@ -737,6 +746,9 @@ export const useOrganizationStore = defineStore('organization', () => {
     })
 
     syncWebsitePaidUserCookieFromOrganizations(mappedData)
+    // A refreshed org list can carry new roles or bindings (invite accepted,
+    // role changed): re-check permissions instead of serving cached results.
+    invalidatePermissionCache()
     _organizations.value = new Map(mappedData.map(item => [item.gid, item as Organization]))
     if (loadImages)
       void loadOrganizationLogos(mappedData, logoLoadRun)

@@ -1,0 +1,14 @@
+{%- assign skip_trial_email = false -%}
+{%- if visitor.tags contains "offer=direct" or visitor.tags contains "onboarding_disabled" -%}
+  {%- assign skip_trial_email = true -%}
+{%- endif -%}
+{%- if visitor.tags contains "customer" or visitor.tags contains "paying" or visitor.tags contains "payingMonthly" or visitor.tags contains "recently_paid" -%}
+  {%- assign skip_trial_email = true -%}
+{%- endif -%}
+{%- for tag in visitor.tags -%}
+  {%- assign tag_prefix = tag | slice: 0, 5 -%}
+  {%- if tag_prefix == "plan:" -%}
+    {%- assign skip_trial_email = true -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if skip_trial_email -%}true{%- else -%}false{%- endif -%}

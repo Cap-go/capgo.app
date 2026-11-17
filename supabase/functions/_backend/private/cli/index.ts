@@ -9,7 +9,7 @@ import { versionedRoute } from '../../utils/api_version.ts'
 import { parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { apikeyPrincipal, queryJson, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
-import { checkPermission } from '../../utils/rbac.ts'
+import { checkPermission, checkPermissionsBatch } from '../../utils/rbac.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { MAX_MANIFEST_ENTRIES } from '../../utils/manifest_limits.ts'
 import { isValidAppId } from '../../utils/utils.ts'
@@ -153,7 +153,6 @@ type CliPlanAction = Database['public']['Enums']['action_type']
 type CliPlanStatus = 'allowed' | 'billing_denied' | 'permission_denied'
 
 const ALL_PLAN_ACTIONS: CliPlanAction[] = ['mau', 'storage', 'bandwidth', 'build_time']
-const ORG_PERMISSION_CHECK_BATCH = 10
 
 interface CliScope {
   org_id?: string
@@ -174,60 +173,124 @@ function assertValidAppId(appId: string | undefined) {
     throw quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: appId })
 }
 
-async function planActionsAllowed(supabase: CallerClient, orgId: string, actions: CliPlanAction[], appId?: string): Promise<boolean> {
-  const result = appId
-    ? await rpc<boolean>(supabase, 'public.is_allowed_action_org_action(orgid => $1, actions => $2::public.action_type[], appid => $3)', [orgId, actions, appId])
-    : await rpc<boolean>(supabase, 'public.is_allowed_action_org_action(orgid => $1, actions => $2::public.action_type[])', [orgId, actions])
-  const data = unwrap(result, 'cannot_check_billing', 'Cannot check org plan actions')
-  return data === true
+interface PlanStatusRow {
+  app_allowed: boolean | null
+  org_allowed: boolean | null
+  is_paying: boolean | null
+  trial_days: number | null
+  has_credits: boolean | null
 }
 
 /**
- * Metered plan gate. App-scoped checks run with the caller key, so a denial there
- * while the org-wide check passes means the key cannot read app billing, not that
- * the plan is exhausted.
+ * Metered plan gate and unpaid-trial lookup in one statement. The CASE guards keep the
+ * evaluation of the former sequential RPCs: the org-wide check runs only when the
+ * app-scoped one did not allow, and the trial/paying/credits RPCs only when allowed.
+ * `OFFSET 0` keeps each level from being flattened, so every RPC runs at most once.
  */
-async function meteredPlanStatus(supabase: CallerClient, orgId: string, plan: 'all' | 'upload', appId?: string): Promise<CliPlanStatus> {
-  if (plan === 'all' && !appId) {
-    const data = unwrap(await rpc<boolean>(supabase, 'public.is_allowed_action_org(orgid => $1)', [orgId]), 'cannot_check_billing', 'Cannot check org plan allowance')
-    return data === true ? 'allowed' : 'billing_denied'
-  }
+function planStatusSql(plan: 'all' | 'upload', appId?: string): string {
+  const appCheck = appId
+    ? 'public.is_allowed_action_org_action(orgid => p.org_id, actions => p.actions, appid => p.app_id)'
+    : 'NULL::boolean'
+  const orgCheck = plan === 'all' && !appId
+    ? 'public.is_allowed_action_org(orgid => a.org_id)'
+    : 'public.is_allowed_action_org_action(orgid => a.org_id, actions => a.actions)'
+  const credits = appId
+    ? 'public.has_usage_credits_org(orgid => s.org_id, appid => s.app_id)'
+    : 'public.has_usage_credits_org(orgid => s.org_id)'
+  return `SELECT s.app_allowed, s.org_allowed,
+  CASE WHEN s.allowed THEN public.is_paying_org(orgid => s.org_id) END AS is_paying,
+  CASE WHEN s.allowed THEN public.is_trial_org(orgid => s.org_id) END AS trial_days,
+  CASE WHEN s.allowed THEN ${credits} END AS has_credits
+FROM (
+  SELECT o.org_id, o.app_id, o.app_allowed, o.org_allowed,
+    (o.app_allowed IS TRUE OR (o.app_id IS NULL AND o.org_allowed IS TRUE)) AS allowed
+  FROM (
+    SELECT a.org_id, a.app_id, a.app_allowed,
+      CASE WHEN a.app_allowed IS TRUE THEN NULL ELSE ${orgCheck} END AS org_allowed
+    FROM (
+      SELECT p.org_id, p.actions, p.app_id, ${appCheck} AS app_allowed
+      FROM (SELECT $1::uuid AS org_id, $2::public.action_type[] AS actions, $3::character varying AS app_id) p
+      OFFSET 0
+    ) a
+    OFFSET 0
+  ) o
+  OFFSET 0
+) s`
+}
+
+interface PlanCheck {
+  status: CliPlanStatus
+  /** Days left in an unpaid trial (no paid plan, no usage credits), else null. */
+  trialDaysLeft: number | null
+}
+
+/**
+ * App-scoped checks run with the caller key, so a denial there while the org-wide
+ * check passes means the key cannot read app billing, not that the plan is exhausted.
+ */
+async function meteredPlanCheck(supabase: CallerClient, orgId: string, plan: 'all' | 'upload', appId?: string): Promise<PlanCheck> {
   const actions: CliPlanAction[] = plan === 'upload' ? ['storage'] : ALL_PLAN_ACTIONS
-  if (appId && await planActionsAllowed(supabase, orgId, actions, appId))
-    return 'allowed'
-  const orgAllowed = await planActionsAllowed(supabase, orgId, actions)
+  const row = unwrap(
+    await settle(queryJsonOne<PlanStatusRow>(supabase, planStatusSql(plan, appId), [orgId, actions, appId ?? null])),
+    'cannot_check_billing',
+    'Cannot check org plan status',
+  )
+  const appAllowed = row?.app_allowed === true
+  const orgAllowed = row?.org_allowed === true
+  let status: CliPlanStatus
   if (appId)
-    return orgAllowed ? 'permission_denied' : 'billing_denied'
-  return orgAllowed ? 'allowed' : 'billing_denied'
+    status = appAllowed ? 'allowed' : orgAllowed ? 'permission_denied' : 'billing_denied'
+  else
+    status = orgAllowed ? 'allowed' : 'billing_denied'
+  if (status !== 'allowed')
+    return { status, trialDaysLeft: null }
+  const trialDays = row?.trial_days
+  if (row?.is_paying === true || row?.has_credits === true || typeof trialDays !== 'number' || trialDays <= 0)
+    return { status, trialDaysLeft: null }
+  return { status, trialDaysLeft: trialDays }
 }
 
-/** Days left in an unpaid trial (no paid plan, no usage credits), else null. */
-async function unpaidTrialDaysLeft(supabase: CallerClient, orgId: string, appId?: string): Promise<number | null> {
-  const [payingResult, trialResult, creditsResult] = await Promise.all([
-    rpc<boolean>(supabase, 'public.is_paying_org(orgid => $1)', [orgId]),
-    rpc<number>(supabase, 'public.is_trial_org(orgid => $1)', [orgId]),
-    appId
-      ? rpc<boolean>(supabase, 'public.has_usage_credits_org(orgid => $1, appid => $2)', [orgId, appId])
-      : rpc<boolean>(supabase, 'public.has_usage_credits_org(orgid => $1)', [orgId]),
-  ])
-  const isPaying = unwrap(payingResult, 'cannot_check_billing', 'Cannot check paying org status')
-  const trialDays = unwrap(trialResult, 'cannot_check_billing', 'Cannot check trial org status')
-  const hasCredits = unwrap(creditsResult, 'cannot_check_billing', 'Cannot check usage credits')
-  if (isPaying === true || hasCredits === true || typeof trialDays !== 'number' || trialDays <= 0)
-    return null
-  return trialDays
+interface PreflightIdentityRow {
+  user_id: string | null
+  rejected_2fa: boolean | null
+  app: { app_id: string, owner_org: string } | null
 }
 
-async function rejectedBy2fa(supabase: CallerClient, scope: { app_id?: string, org_id?: string }): Promise<boolean> {
-  if (scope.app_id) {
-    const data = unwrap(await rpc<boolean>(supabase, 'public.reject_access_due_to_2fa_for_app(app_id => $1)', [scope.app_id]), 'cannot_check_2fa', 'Cannot check app 2FA access')
-    return data === true
+/**
+ * Actor, org 2FA policy and app row in one round trip. The CASE guards keep the
+ * previous order: no 2FA lookup without an actor, and no app read without an actor
+ * or when 2FA rejects (a key blocked by org policy learns nothing else about the app).
+ */
+const PREFLIGHT_IDENTITY_SQL = `SELECT r.user_id, r.rejected_2fa,
+  CASE WHEN r.user_id IS NOT NULL AND r.rejected_2fa IS NOT TRUE AND r.app_id IS NOT NULL THEN
+    (SELECT pg_catalog.to_json(v) FROM (SELECT ap.app_id, ap.owner_org FROM public.apps ap WHERE ap.app_id = r.app_id) v)
+  END AS app
+FROM (
+  SELECT a.user_id, a.app_id,
+    CASE
+      WHEN a.user_id IS NULL OR NOT a.check_2fa THEN false
+      WHEN a.app_id IS NOT NULL THEN public.reject_access_due_to_2fa_for_app(app_id => a.app_id)
+      WHEN a.org_id IS NOT NULL THEN public.reject_access_due_to_2fa_for_org(org_id => a.org_id)
+      ELSE false
+    END AS rejected_2fa
+  FROM (
+    SELECT public.request_actor_user_id() AS user_id, $1::character varying AS app_id, $2::uuid AS org_id, $3::boolean AS check_2fa
+    OFFSET 0
+  ) a
+  OFFSET 0
+) r`
+
+async function preflightIdentity(supabase: CallerClient, body: CliPreflightBody): Promise<PreflightIdentityRow> {
+  const row = unwrap(
+    await settle(queryJsonOne<PreflightIdentityRow>(supabase, PREFLIGHT_IDENTITY_SQL, [body.app_id ?? null, body.org_id ?? null, body.check_2fa !== false])),
+    'cannot_resolve_identity',
+    'Cannot resolve CLI identity',
+  )
+  return {
+    user_id: row?.user_id || null,
+    rejected_2fa: row?.rejected_2fa === true,
+    app: row?.app ?? null,
   }
-  if (scope.org_id) {
-    const data = unwrap(await rpc<boolean>(supabase, 'public.reject_access_due_to_2fa_for_org(org_id => $1)', [scope.org_id]), 'cannot_check_2fa', 'Cannot check org 2FA access')
-    return data === true
-  }
-  return false
 }
 
 async function visibleApp(supabase: CallerClient, appId: string) {
@@ -288,14 +351,12 @@ app.get('/organizations', middlewareKey(), versionedRoute<CliContext>({
       return c.json(organizations as unknown)
 
     // `allowed` tells the CLI which orgs the key may use for this command.
-    const rows: unknown[] = []
-    for (let index = 0; index < organizations.length; index += ORG_PERMISSION_CHECK_BATCH) {
-      const batch = organizations.slice(index, index + ORG_PERMISSION_CHECK_BATCH)
-      rows.push(...await Promise.all(batch.map(async org => ({
-        ...org,
-        allowed: await checkPermission(c, permission as Permission, { orgId: org.gid }),
-      }))))
-    }
+    // One pooled client and one batched statement for every org.
+    const allowed = await checkPermissionsBatch(c, organizations.map(org => ({
+      permission: permission as Permission,
+      scope: { orgId: org.gid },
+    })))
+    const rows = organizations.map((org, idx) => ({ ...org, allowed: allowed[idx] }))
     return c.json(rows)
   },
 }))
@@ -305,9 +366,12 @@ app.post('/permissions', middlewareKey(), versionedRoute<CliContext>({
     const body = await parseJson(c, permissionsBodySchema)
     assertValidAppId(body.app_id)
     const scope = permissionScope(body)
-    const entries = await Promise.all([...new Set(body.permissions)].map(async permission =>
-      [permission, await checkPermission(c, permission as Permission, scope)] as const,
-    ))
+    const permissions = [...new Set(body.permissions)]
+    const allowed = await checkPermissionsBatch(c, permissions.map(permission => ({
+      permission: permission as Permission,
+      scope,
+    })))
+    const entries = permissions.map((permission, idx) => [permission, allowed[idx]] as const)
     return c.json({ permissions: Object.fromEntries(entries) })
   },
 }))
@@ -329,12 +393,13 @@ export async function runCliPreflight(c: CliContext, body: CliPreflightBody): Pr
 }
 
 async function runCliPreflightAsCaller(c: CliContext, supabase: CallerClient, body: CliPreflightBody): Promise<CliPreflightResult> {
-  const userId = await actorUserId(supabase)
+  const identity = await preflightIdentity(supabase, body)
+  const userId = identity.user_id
   if (!userId)
     return invalidApikey()
 
   // 2FA first: a key blocked by org policy learns nothing else about the app.
-  if (body.check_2fa !== false && await rejectedBy2fa(supabase, body)) {
+  if (identity.rejected_2fa) {
     return quickError(403, '2fa_required', 'Two-factor authentication is required by this organization', {
       app_id: body.app_id ?? null,
       org_id: body.org_id ?? null,
@@ -346,40 +411,63 @@ async function runCliPreflightAsCaller(c: CliContext, supabase: CallerClient, bo
   // not turn into an app visibility check.
   const channelScoped = body.channel_id !== undefined && body.permission?.startsWith('channel.') === true
   const needsApp = !channelScoped && (body.permission !== undefined || body.plan !== undefined)
-  const appRow = body.app_id ? await visibleApp(supabase, body.app_id) : null
+  const appRow = body.app_id ? identity.app : null
   if (body.app_id && !appRow && needsApp)
     return quickError(404, 'app_not_found', 'App not found', { app_id: body.app_id })
   const orgId = body.org_id ?? appRow?.owner_org ?? null
 
-  if (body.permission && !(await checkPermission(c, body.permission as Permission, permissionScope(body)))) {
-    return quickError(403, 'permission_denied', `Missing permission ${body.permission}`, {
-      permission: body.permission,
-      app_id: body.app_id ?? null,
-      org_id: body.org_id ?? null,
-      channel_id: body.channel_id ?? null,
-    })
+  // The RBAC check needs the service role, so it runs on its own pooled connection
+  // while the caller transaction reads plan status and warnings. Results are still
+  // applied in the original order, so the first failing step decides the response.
+  const plan = body.plan
+  const [permissionResult, callerResult] = await Promise.all([
+    body.permission ? settle(checkPermission(c, body.permission as Permission, permissionScope(body))) : null,
+    // Each step is settled, so this never rejects; errors are rethrown below in order.
+    (async () => {
+      const planCheck = plan && orgId ? await settle(meteredPlanCheck(supabase, orgId, plan, body.app_id)) : null
+      const allowed = !plan || planCheck?.data?.status === 'allowed'
+      const warnings = allowed && body.cli_version && orgId ? await settle(cliWarnings(supabase, orgId, body.cli_version)) : null
+      return { planCheck, warnings }
+    })(),
+  ])
+
+  if (permissionResult) {
+    if (permissionResult.error)
+      throw permissionResult.error
+    if (!permissionResult.data) {
+      return quickError(403, 'permission_denied', `Missing permission ${body.permission}`, {
+        permission: body.permission,
+        app_id: body.app_id ?? null,
+        org_id: body.org_id ?? null,
+        channel_id: body.channel_id ?? null,
+      })
+    }
   }
+  const { planCheck, warnings } = callerResult
 
   let trialDaysLeft: number | null = null
-  if (body.plan) {
+  if (plan) {
     if (!orgId)
       return quickError(404, 'app_not_found', 'App not found', { app_id: body.app_id ?? null })
-    const status = await meteredPlanStatus(supabase, orgId, body.plan, body.app_id)
+    if (planCheck?.error)
+      throw planCheck.error
+    const { status, trialDaysLeft: daysLeft } = planCheck!.data!
     if (status === 'permission_denied')
       return quickError(403, 'plan_permission_denied', 'The API key cannot read plan usage for this app', { org_id: orgId, app_id: body.app_id ?? null })
     if (status === 'billing_denied')
-      return quickError(402, 'plan_upgrade_required', 'Plan upgrade required', { org_id: orgId, plan: body.plan })
-    trialDaysLeft = await unpaidTrialDaysLeft(supabase, orgId, body.app_id)
+      return quickError(402, 'plan_upgrade_required', 'Plan upgrade required', { org_id: orgId, plan })
+    trialDaysLeft = daysLeft
   }
 
-  const warnings = body.cli_version && orgId ? await cliWarnings(supabase, orgId, body.cli_version) : []
+  if (warnings?.error)
+    throw warnings.error
 
   return {
     user_id: userId,
     org_id: orgId,
     app_id: appRow?.app_id ?? null,
     trial_days_left: trialDaysLeft,
-    warnings,
+    warnings: warnings?.data ?? [],
   }
 }
 

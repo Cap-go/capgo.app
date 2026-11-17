@@ -1,3 +1,4 @@
+import { enforceServingPolicy } from '../utils/servingPolicy.ts'
 // channel self old function
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
@@ -695,6 +696,7 @@ async function parseChannelSelfPluginRequest(
 
   const bodyParsed = parsePluginBody<DeviceLink>(c, body, schema, requireDevice)
 
+  await enforceServingPolicy(c, bodyParsed.app_id)
   const ipLimit = await assertChannelSelfIPRateLimit(c, bodyParsed.app_id)
   if (ipLimit) {
     return { response: ipLimit }

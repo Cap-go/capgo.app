@@ -171,11 +171,13 @@ export const useMainStore = defineStore('main', () => {
         totalDevices.value = dashboard.value[monthDay]?.mau ?? 0
         totalDownload.value = dashboard.value[monthDay]?.get ?? 0
 
-        const storage = await getTotalStorage()
+        const storage = await getTotalStorage(currentOrgId)
         if (!isCurrent())
           return
         totalStorage.value = storage
-        totalStats.value = getTotalStats()
+        // Storage is a point-in-time size, so summing the daily buckets would overstate it.
+        // Use the org's current total storage (bytes) like the plan limits do.
+        totalStats.value = { ...getTotalStats(), storage }
 
         const plan = await findBestPlan(totalStats.value)
         if (!isCurrent())

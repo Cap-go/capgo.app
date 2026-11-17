@@ -432,6 +432,8 @@ export type Database = {
       }
       apps: {
         Row: {
+          serving_regions: string[]
+          serving_region_mode: string
           allow_device_custom_id: boolean
           allow_preview: boolean
           android_store_url: string | null
@@ -465,6 +467,8 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          serving_regions?: string[]
+          serving_region_mode?: string
           allow_device_custom_id?: boolean
           allow_preview?: boolean
           android_store_url?: string | null
@@ -498,6 +502,8 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          serving_regions?: string[]
+          serving_region_mode?: string
           allow_device_custom_id?: boolean
           allow_preview?: boolean
           android_store_url?: string | null
@@ -2895,6 +2901,7 @@ export type Database = {
           name: string
           native_build_concurrency: number
           native_build_queue_priority: number
+          observe_events: number
           price_m: number
           price_m_id: string
           price_y: number
@@ -2922,6 +2929,7 @@ export type Database = {
           name?: string
           native_build_concurrency?: number
           native_build_queue_priority?: number
+          observe_events?: number
           price_m?: number
           price_m_id: string
           price_y?: number
@@ -2949,6 +2957,7 @@ export type Database = {
           name?: string
           native_build_concurrency?: number
           native_build_queue_priority?: number
+          observe_events?: number
           price_m?: number
           price_m_id?: string
           price_y?: number
@@ -5781,6 +5790,14 @@ export type Database = {
           p_permission_key: string
         }
         Returns: boolean
+      }
+      rbac_check_permissions: {
+        Args: { p_checks: Json }
+        Returns: {
+          allowed: boolean
+          idx: number
+          key: string
+        }[]
       }
       rbac_denied_channel_ids_for_permission: {
         Args: { p_permission_key: string }

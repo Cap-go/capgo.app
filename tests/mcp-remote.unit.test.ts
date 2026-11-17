@@ -312,6 +312,20 @@ describe('hosted MCP protocol', () => {
     ])
   })
 
+  it.concurrent('pages organization members and bounds notification limits', async () => {
+    const { ctx, calls } = fakeContext()
+    const call = (id: number, name: string, args: Record<string, unknown>) => handleJsonRpcMessage({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }, ctx)
+    const orgId = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    await call(30, 'capgo_list_organization_members', { orgId, limit: 50, offset: 100 })
+    expect(calls).toEqual([{ method: 'GET', path: '/organization/members', query: { orgId, limit: 50, offset: 100 } }])
+    const tooMany = await call(31, 'capgo_list_organization_members', { orgId, limit: 1001 })
+    const sendTooMany = await call(32, 'capgo_send_notification', { appId: 'com.example.app', target: { broadcast: true }, limit: 100_001 })
+    const checkTooMany = await call(33, 'capgo_trigger_update_check', { appId: 'com.example.app', limit: 100_001 })
+    expect(calls).toHaveLength(1)
+    for (const response of [tooMany, sendTooMany, checkTooMany])
+      expect(response?.result).toMatchObject({ isError: true })
+  })
+
   it.concurrent('rejects build timeouts outside the API range before calling it', async () => {
     const { ctx, calls } = fakeContext()
     const response = await handleJsonRpcMessage({
@@ -680,6 +694,10 @@ describe('hosted MCP errors always give a way out', () => {
       'capgo_subscribe_events',
       'capgo_list_event_subscriptions',
       'capgo_unsubscribe_events',
+      'capgo_plan_mobile_app',
+      'capgo_recommend_plugins',
+      'capgo_get_mobile_checklist',
+      'capgo_check_mobile_readiness',
     ])
     const tools = (listTools() as Array<{ name: string, inputSchema: Record<string, any> }>).filter(tool => !localTools.has(tool.name))
     for (const tool of tools) {

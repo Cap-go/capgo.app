@@ -2,6 +2,8 @@ import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
 import { cloudlogErr, serializeError } from './logging.ts'
 
+import { servingCachePartition } from './servingPolicy.ts'
+
 const CACHE_METHOD = 'GET'
 
 /** Hot-path Cache API reads must not block /updates P999 when CF Cache stalls. */
@@ -130,6 +132,9 @@ export class CacheHelper {
     const url = new URL(this.context.req.url)
     url.pathname = path
     url.search = ''
+    const servingPartition = servingCachePartition(this.context)
+    if (servingPartition)
+      url.searchParams.set('serving_regions', servingPartition)
     Object.entries(params).forEach(([key, value]) => {
       url.searchParams.set(key, value)
     })

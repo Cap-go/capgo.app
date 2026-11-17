@@ -22,7 +22,7 @@ import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageErr
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { checkCompatibilityNativePackages, isCompatible } from '~/services/nativePackageCompatibility'
-import { checkPermissions } from '~/services/permissions'
+import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -694,9 +694,12 @@ async function loadPromoteTargets() {
     return
   }
 
-  const eligible = await Promise.all((data ?? []).map(async row => (
-    await checkPermissions([...promoteTargetPermissions], { appId: source.app_id, channelId: row.id }) ? row : null
-  )))
+  const rows = data ?? []
+  const allowed = await checkPermissionsBatch(rows.map(row => ({
+    permissions: [...promoteTargetPermissions],
+    scope: { appId: source.app_id, channelId: row.id },
+  })))
+  const eligible = rows.map((row, idx) => (allowed[idx] ? row : null))
   // Ignore stale results if the user navigated to another channel meanwhile.
   if (channel.value?.id !== source.id)
     return
