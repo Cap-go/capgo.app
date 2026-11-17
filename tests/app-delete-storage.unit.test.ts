@@ -35,12 +35,16 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
 }))
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
-const ORG_ID = '22222222-2222-4222-8222-222222222222'
 const APP_ID = 'com.example.app'
+const ORG_ID = '22222222-2222-4222-8222-222222222222'
 
-// Direct Postgres: every delete succeeds.
+// Direct Postgres: the owner_org lookup returns the org, every delete succeeds.
 const pgClient = {
-  query: vi.fn<(text: string, params?: unknown[]) => Promise<{ rows: Array<{ owner_org: string }> }>>(),
+  query: vi.fn(async (text: string) => {
+    if (text.includes('SELECT owner_org FROM public.apps'))
+      return { rows: [{ row: { owner_org: ORG_ID } }] }
+    return { rows: [] as unknown[] }
+  }),
 }
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -83,9 +87,6 @@ describe('app delete storage cleanup', () => {
     mocks.list.mockResolvedValue({ data: [], error: null })
     mocks.removeImageFolder.mockResolvedValue(0)
     mocks.expireSimulatorSessions.mockResolvedValue(undefined)
-    pgClient.query.mockImplementation(async (text) => ({
-      rows: text.includes('SELECT owner_org FROM public.apps') ? [{ owner_org: ORG_ID }] : [],
-    }))
   })
 
   it('leaves R2 cleanup to on_app_delete and paginates the legacy apps bucket', async () => {
@@ -133,7 +134,7 @@ describe('app delete storage cleanup', () => {
     })
     pgClient.query.mockImplementation(async (text: string) => {
       if (text.includes('SELECT owner_org FROM public.apps'))
-        return { rows: [{ owner_org: ORG_ID }] }
+        return { rows: [{ row: { owner_org: ORG_ID } }] }
       if (text.startsWith('DELETE FROM public.apps'))
         order.push('delete app')
       return { rows: [] }
