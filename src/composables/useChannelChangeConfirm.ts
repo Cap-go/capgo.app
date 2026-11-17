@@ -1,4 +1,5 @@
 import type { ChannelImpactBundleRef, ChannelImpactResponse, ChannelImpactResult, ChannelImpactTargetRequest } from '~/services/channelImpact'
+import type { BundleChannelCompatibility } from '~/services/nativePackageCompatibility'
 import type { DialogV2Button } from '~/stores/dialogv2'
 import { computed, reactive, watch } from 'vue'
 import { i18n } from '~/modules/i18n'
@@ -19,12 +20,7 @@ const CHANNEL_CHANGE_CONFIRM_BUTTON_ID = 'channel-change-confirm'
 export type ChannelChangeAction = 'set' | 'promote' | 'rollout' | 'revert'
 export type RevertChoice = 'previous' | 'builtin'
 
-export interface ChannelChangeCompatibility {
-  /** Native packages of the bundle that the channel's current bundle does not ship (or ships in another version). */
-  packages: string[]
-  /** Dependencies page of the bundle, diffed against the channel's current bundle. */
-  dependenciesPath: string
-}
+export type ChannelChangeCompatibility = BundleChannelCompatibility
 
 export interface ChannelChangeOptions {
   appId: string
@@ -42,6 +38,12 @@ export interface ChannelChangeOptions {
   /** Progressive rollout stopped by this change (revert, or a new stable bundle). */
   stopsRolloutTarget?: string | null
   compatibility?: ChannelChangeCompatibility | null
+  /**
+   * Revert: the native-package warning for rolling back to the previous bundle,
+   * checked once the impact response names that bundle. Throws when it cannot
+   * be checked; the roll back choice then stays blocked.
+   */
+  previousCompatibility?: (previous: ChannelImpactBundleRef) => Promise<ChannelChangeCompatibility | null>
   /** Overrides the default title and confirm label (e.g. "Rollback to this version" from the history table). */
   title?: string
   confirmText?: string
@@ -49,7 +51,13 @@ export interface ChannelChangeOptions {
 
 export type ChannelChangeResult
   = | { confirmed: true, choice: RevertChoice | null, previousBundle: ChannelImpactBundleRef | null }
-    | { confirmed: false, next: 'select-bundle' | 'view-dependencies' | null }
+    | { confirmed: false, next: 'select-bundle' | 'view-dependencies' | null, dependenciesPath?: string }
+
+interface PreviousCompatibility {
+  loading: boolean
+  failed: boolean
+  value: ChannelChangeCompatibility | null
+}
 
 interface ChannelChangeState {
   options: ChannelChangeOptions | null
@@ -57,8 +65,11 @@ interface ChannelChangeState {
   loading: boolean
   failed: boolean
   choice: RevertChoice | null
+  previousCompat: PreviousCompatibility
   requestId: number
 }
+
+const NO_PREVIOUS_COMPAT: PreviousCompatibility = { loading: false, failed: false, value: null }
 
 const state = reactive<ChannelChangeState>({
   options: null,
@@ -66,6 +77,7 @@ const state = reactive<ChannelChangeState>({
   loading: false,
   failed: false,
   choice: null,
+  previousCompat: { ...NO_PREVIOUS_COMPAT },
   requestId: 0,
 })
 
@@ -99,8 +111,10 @@ async function loadImpact(options: ChannelChangeOptions) {
         throw error
       response = await fetchChannelImpact({ appId: options.appId, channelId: options.channelId, targets: [{ kind: 'builtin' }] })
     }
-    if (requestId === state.requestId)
+    if (requestId === state.requestId) {
       state.response = response
+      void checkPreviousCompatibility(options, response, requestId)
+    }
   }
   catch (error) {
     console.error('Cannot load channel impact', error)
@@ -111,6 +125,42 @@ async function loadImpact(options: ChannelChangeOptions) {
     if (requestId === state.requestId)
       state.loading = false
   }
+}
+
+/** Revert: the native-package warning for the previous bundle, once the response names it. */
+async function checkPreviousCompatibility(options: ChannelChangeOptions, response: ChannelImpactResponse, requestId: number) {
+  const previous = response.previous_bundle
+  if (options.action !== 'revert' || !previous || !options.previousCompatibility)
+    return
+  state.previousCompat = { loading: true, failed: false, value: null }
+  try {
+    const value = await options.previousCompatibility(previous)
+    if (requestId === state.requestId)
+      state.previousCompat = { loading: false, failed: false, value }
+  }
+  catch (error) {
+    console.error('Cannot check the native packages of the previous bundle', error)
+    if (requestId === state.requestId)
+      state.previousCompat = { loading: false, failed: true, value: null }
+  }
+}
+
+/** The native-package warning that applies to the change shown now. */
+function activeCompatibility(options: ChannelChangeOptions | null, choice: RevertChoice | null): ChannelChangeCompatibility | null {
+  if (!options)
+    return null
+  if (options.action === 'revert')
+    return choice === 'previous' ? state.previousCompat.value : null
+  return options.compatibility ?? null
+}
+
+/** Revert can only be confirmed once a choice is made and, for the previous bundle, its native packages were checked. */
+function confirmBlocked(options: ChannelChangeOptions) {
+  if (options.action !== 'revert')
+    return false
+  if (!state.choice)
+    return true
+  return state.choice === 'previous' && (state.previousCompat.loading || state.previousCompat.failed)
 }
 
 /** Impact of the change currently shown (the picked revert choice, or the single target). */
@@ -130,6 +180,7 @@ export function useChannelChangeState() {
     state,
     impact: computed(() => selectImpact(state.response, state.options?.action, state.choice)),
     previousBundle: computed(() => state.response?.previous_bundle ?? null),
+    compatibility: computed(() => activeCompatibility(state.options, state.choice)),
   }
 }
 
@@ -186,6 +237,7 @@ export async function confirmChannelChange(options: ChannelChangeOptions): Promi
     return { confirmed: false, next: null }
   state.options = options
   state.choice = null
+  state.previousCompat = { ...NO_PREVIOUS_COMPAT }
   void loadImpact(options)
 
   let next: 'select-bundle' | 'view-dependencies' | null = null
@@ -200,7 +252,8 @@ export async function confirmChannelChange(options: ChannelChangeOptions): Promi
         },
       })
     }
-    if (options.compatibility) {
+    const compatibility = activeCompatibility(options, state.choice)
+    if (compatibility) {
       buttons.push({
         text: t('view-dependencies'),
         role: 'secondary',
@@ -209,14 +262,13 @@ export async function confirmChannelChange(options: ChannelChangeOptions): Promi
         },
       })
     }
-    const revertUnchosen = options.action === 'revert' && !state.choice
     buttons.push({
       id: CHANNEL_CHANGE_CONFIRM_BUTTON_ID,
       text: confirmLabel(options, state.choice, state.response?.previous_bundle ?? null),
-      role: options.action === 'revert' || options.compatibility ? 'danger' : 'primary',
-      disabled: revertUnchosen,
+      role: options.action === 'revert' || compatibility ? 'danger' : 'primary',
+      disabled: confirmBlocked(options),
       handler: () => {
-        if (options.action === 'revert' && !state.choice)
+        if (confirmBlocked(options))
           return false
       },
     })
@@ -231,8 +283,9 @@ export async function confirmChannelChange(options: ChannelChangeOptions): Promi
     buttons: buildButtons(),
   })
 
-  // The confirm label follows the revert choice ("Roll back to 1.2.3" / "Revert to store version").
-  const stopWatching = watch(() => [state.choice, state.response?.previous_bundle?.name], () => {
+  // The buttons follow the revert choice ("Roll back to 1.2.3" / "Revert to store version")
+  // and the native-package check of the previous bundle.
+  const stopWatching = watch(() => [state.choice, state.response?.previous_bundle?.name, state.previousCompat.loading, state.previousCompat.failed, state.previousCompat.value], () => {
     if (dialogStore.showDialog && dialogStore.dialogOptions?.id === CHANNEL_CHANGE_DIALOG_ID)
       dialogStore.dialogOptions = { ...dialogStore.dialogOptions, buttons: buildButtons() }
   })
@@ -245,15 +298,17 @@ export async function confirmChannelChange(options: ChannelChangeOptions): Promi
   stopWatching()
   const choice = state.choice
   const previousBundle = state.response?.previous_bundle ?? null
+  const dependenciesPath = activeCompatibility(options, choice)?.dependenciesPath
   state.requestId++
   state.options = null
   state.response = null
   state.loading = false
   state.failed = false
   state.choice = null
+  state.previousCompat = { ...NO_PREVIOUS_COMPAT }
 
   if (canceled || next || !confirmedByButton)
-    return { confirmed: false, next }
+    return { confirmed: false, next, dependenciesPath }
   return { confirmed: true, choice, previousBundle }
 }
 

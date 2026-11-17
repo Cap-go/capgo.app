@@ -26,7 +26,7 @@ import { readChannelRollbackContext } from '~/services/channelRollback'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate, formatLocalDate } from '~/services/date'
-import { findIncompatibleNativePackages } from '~/services/nativePackageCompatibility'
+import { bundleChannelCompatibility, readBundleChannelCompatibility } from '~/services/nativePackageCompatibility'
 import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/versions'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -509,12 +509,7 @@ async function bundleCompatibility(
   channelName: string,
   compareVersionId?: number | null,
 ): Promise<ChannelChangeCompatibility | null> {
-  const packages = await findIncompatibleNativePackages(appVersion.app_id, channelName, (appVersion.native_packages as any) ?? [])
-  if (!packages.length)
-    return null
-  // Pre-select the channel's current bundle so the Dependencies page opens already diffed.
-  const compareQuery = compareVersionId ? `?compare=${compareVersionId}` : ''
-  return { packages, dependenciesPath: `/app/${route.params.app}/bundle/${appVersion.id}/dependencies${compareQuery}` }
+  return bundleChannelCompatibility(appVersion.app_id, channelName, appVersion.id, (appVersion.native_packages as any) ?? [], compareVersionId)
 }
 
 /** Name of the bundle a channel serves, or null for the store version. */
@@ -837,17 +832,23 @@ async function handleRevert() {
   // Either way any progressive rollout stops, otherwise rollout devices would
   // keep getting the rollout bundle.
   const stopsRollout = !!channel.value.rollout_version || !!channel.value.rollout_enabled
+  const { app_id: appId, name: channelName } = channel.value
+  const currentVersionId = channel.value.version?.id
   const result = await confirmChannelChange({
-    appId: channel.value.app_id,
+    appId,
     channelId: channel.value.id,
-    channelName: channel.value.name,
+    channelName,
     action: 'revert',
     currentBundleName: servedBundleName(channel.value.version?.name),
     stopsRolloutTarget: stopsRollout ? (channel.value.rollout_version_info?.name ?? null) : null,
+    // Rolling back can bring native packages the current bundle does not ship.
+    previousCompatibility: previous => readBundleChannelCompatibility(appId, channelName, previous.id, currentVersionId),
   })
   if (!result.confirmed) {
     if (result.next === 'select-bundle')
       await openSelectStableVersion(true)
+    else if (result.next === 'view-dependencies' && result.dependenciesPath)
+      await router.push(result.dependenciesPath)
     return
   }
 
@@ -1264,6 +1265,10 @@ async function onSelectAutoUpdate(value: Database['public']['Enums']['disable_up
     toast.info(t('cloud-replication-delay'))
     if (stillOnChannel(channelId) && channel.value?.disable_auto_update)
       channel.value.disable_auto_update = value
+    // A read started before the save would bring the old strategy back: a
+    // forced read supersedes it and refreshes the cached row too.
+    if (stillOnChannel(channelId))
+      void loadChannel(channelId, true)
   }
 
   closeAutoUpdateDropdown()

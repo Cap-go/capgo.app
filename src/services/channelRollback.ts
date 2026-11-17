@@ -1,9 +1,11 @@
+import type { ChannelChangeCompatibility } from '~/composables/useChannelChangeConfirm'
 import { toast } from 'vue-sonner'
 import { confirmChannelChange } from '~/composables/useChannelChangeConfirm'
 import { i18n } from '~/modules/i18n'
 import { invalidateChannelImpact } from '~/services/channelImpact'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { useConsole } from '~/services/console'
+import { readBundleChannelCompatibility } from '~/services/nativePackageCompatibility'
 
 export interface ChannelRollbackContext {
   channelName: string
@@ -58,6 +60,8 @@ export async function confirmAndRollbackChannel(options: {
   channelId: number
   bundle: { id: number, name: string }
   stillSameChannel: () => boolean
+  /** Opens the bundle's Dependencies page when the user asks for it from the native-package warning. */
+  viewDependencies: (path: string) => void | Promise<unknown>
 }): Promise<boolean> {
   const { t } = i18n.global
   const context = await readChannelRollbackContext(options.channelId)
@@ -67,6 +71,19 @@ export async function confirmAndRollbackChannel(options: {
     toast.error(t('channel-impact-bundle-read-failed'))
     return false
   }
+  // An older bundle can need native packages the channel's current bundle does
+  // not ship: warn like setting a bundle does, and never skip the check.
+  let compatibility: ChannelChangeCompatibility | null
+  try {
+    compatibility = await readBundleChannelCompatibility(options.appId, context.channelName, options.bundle.id, context.versionId)
+  }
+  catch (error) {
+    console.error('Cannot check native package compatibility', error)
+    toast.error(t('channel-impact-compat-check-failed'))
+    return false
+  }
+  if (!options.stillSameChannel())
+    return false
   const result = await confirmChannelChange({
     appId: options.appId,
     channelId: options.channelId,
@@ -79,8 +96,14 @@ export async function confirmAndRollbackChannel(options: {
     stopsRolloutTarget: context.versionId === options.bundle.id ? null : context.rolloutTargetName,
     title: t('rollback-to-version'),
     confirmText: t('rollback'),
+    compatibility,
   })
-  if (!result.confirmed || !options.stillSameChannel())
+  if (!result.confirmed) {
+    if (result.next === 'view-dependencies' && result.dependenciesPath)
+      await options.viewDependencies(result.dependenciesPath)
+    return false
+  }
+  if (!options.stillSameChannel())
     return false
   try {
     const { data: updated, error } = await useConsole()

@@ -478,6 +478,7 @@ async function handleRollback(item: DeployHistory) {
     channelId,
     bundle: { id: item.version_id, name: item.version.name },
     stillSameChannel,
+    viewDependencies: path => router.push(path),
   })
   if (!rolledBack)
     return

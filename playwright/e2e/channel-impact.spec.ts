@@ -9,13 +9,14 @@ test.describe('channel change impact preview (isolated app)', () => {
   const appId = `com.impact.e2e.${randomUUID().slice(0, 8)}`
   let channelId = 0
 
-  async function insertBundle(name: string) {
+  async function insertBundle(name: string, nativePackages: { name: string, version: string }[] = []) {
     const [row] = await executeSQL<{ id: number }>(
-      `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, r2_path, storage_provider, checksum)
-       SELECT a.app_id, $2::text, a.owner_org, a.user_id, 'orgs/' || a.owner_org || '/apps/' || a.app_id || '/' || $2::text || '.zip', 'r2', 'deadbeef'
+      `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, r2_path, storage_provider, checksum, native_packages)
+       SELECT a.app_id, $2::text, a.owner_org, a.user_id, 'orgs/' || a.owner_org || '/apps/' || a.app_id || '/' || $2::text || '.zip', 'r2', 'deadbeef',
+         ARRAY(SELECT jsonb_array_elements($3::jsonb))
        FROM public.apps a WHERE a.app_id = $1
        RETURNING id`,
-      [appId, name],
+      [appId, name, JSON.stringify(nativePackages)],
     )
     return Number(row.id)
   }
@@ -33,8 +34,9 @@ test.describe('channel change impact preview (isolated app)', () => {
     await resetAndSeedAppData(appId)
     const [channel] = await executeSQL<{ id: number }>(`SELECT id FROM public.channels WHERE app_id = $1 AND name = 'production'`, [appId])
     channelId = Number(channel.id)
-    const previous = await insertBundle('1.9.3')
-    const current = await insertBundle('1.9.4')
+    // The previous bundle needs a camera plugin major the current bundle does not ship.
+    const previous = await insertBundle('1.9.3', [{ name: '@capacitor/camera', version: '7.0.0' }])
+    const current = await insertBundle('1.9.4', [{ name: '@capacitor/camera', version: '6.0.0' }])
     await insertBundle('2.0.0')
     await executeSQL(`UPDATE public.channels SET ios = true, android = true, disable_auto_update = 'major', disable_auto_update_under_native = true, version = $2 WHERE id = $1`, [channelId, previous])
     await executeSQL(`UPDATE public.channels SET version = $2 WHERE id = $1`, [channelId, current])
@@ -77,7 +79,11 @@ test.describe('channel change impact preview (isolated app)', () => {
     await page.locator('[data-test="channel-revert-choice-previous"]').click()
     await expect(impact.locator('[data-test="channel-impact-headline"]')).toContainText('9 of 10 active devices (90%) will get 1.9.3')
     await expect(page.locator('[data-test="channel-change-confirm"]')).toHaveText('Roll back to 1.9.3')
+    // Rolling back brings back native packages the current bundle does not ship.
+    await expect(page.locator('[data-test="channel-change-compat"]')).toContainText('@capacitor/camera')
+    await expect(page.getByRole('button', { name: 'View dependencies', exact: true })).toBeVisible()
     await page.locator('[data-test="channel-revert-choice-builtin"]').click()
+    await expect(page.locator('[data-test="channel-change-compat"]')).toHaveCount(0)
     await expect(impact.locator('[data-test="channel-impact-headline"]')).toContainText('10 of 10 active devices (100%) will go back to the store version')
     await expect(page.locator('[data-test="channel-change-confirm"]')).toHaveText('Revert to store version')
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()

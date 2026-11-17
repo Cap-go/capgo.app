@@ -16,7 +16,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 // most three real example devices that show what happens and why.
 const { t } = useI18n()
 const dialogStore = useDialogV2Store()
-const { state, impact, previousBundle } = useChannelChangeState()
+const { state, impact, previousBundle, compatibility } = useChannelChangeState()
 
 const open = computed(() => dialogStore.showDialog && dialogStore.dialogOptions?.id === CHANNEL_CHANGE_DIALOG_ID && !!state.options)
 const options = computed(() => state.options)
@@ -289,17 +289,25 @@ function choose(choice: 'previous' | 'builtin') {
 
       <!-- Native package compatibility, in one short block -->
       <div
-        v-if="options.compatibility"
+        v-if="compatibility"
         class="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-100"
         data-test="channel-change-compat"
       >
         <IconWarning class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <p class="min-w-0">
           <span class="font-semibold">{{ t('channel-impact-compat-title') }}:</span>
-          {{ options.compatibility.packages.join(', ') }}.
+          {{ compatibility.packages.join(', ') }}.
           {{ compatHint }}
         </p>
       </div>
+      <p
+        v-if="isRevert && state.choice === 'previous' && state.previousCompat.failed"
+        class="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-100"
+        data-test="channel-revert-compat-failed"
+      >
+        <IconWarning class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+        <span class="min-w-0">{{ t('channel-revert-compat-check-failed', { bundle: previousBundle?.name ?? '' }) }}</span>
+      </p>
 
       <p v-if="isRevert && !state.choice" class="text-sm text-slate-500 dark:text-slate-400">
         {{ t('channel-revert-pick-prompt') }}

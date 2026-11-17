@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ChannelChangeCompatibility } from '~/composables/useChannelChangeConfirm'
 import type { BundleSummaryWithNativePackages } from '~/services/bundleColumns'
 import type { LinkedChannel } from '~/services/bundleLinkedChannels'
 import type { ChannelPromotionTarget } from '~/services/channelPromotion'
@@ -29,7 +30,7 @@ import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageErr
 import { useConsole } from '~/services/console'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
-import { findIncompatibleNativePackages } from '~/services/nativePackageCompatibility'
+import { bundleChannelCompatibility } from '~/services/nativePackageCompatibility'
 import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { openVersion } from '~/services/versions'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -307,9 +308,9 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
 
   try {
     const bundle = version.value
-    let packages: string[]
+    let compatibility: ChannelChangeCompatibility | null
     try {
-      packages = await findIncompatibleNativePackages(bundle.app_id, chan.name, (bundle.native_packages as any) ?? [])
+      compatibility = await bundleChannelCompatibility(bundle.app_id, chan.name, bundle.id, (bundle.native_packages as any) ?? [], chan.version)
     }
     catch (error) {
       // Never skip the native package warning because the check itself failed.
@@ -317,9 +318,6 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
       toast.error(t('channel-impact-compat-check-failed'))
       return
     }
-    // Pre-select the channel's current bundle so the Dependencies page opens already diffed.
-    const dependenciesPath = `/app/${packageId.value}/bundle/${bundle.id}/dependencies${chan.version ? `?compare=${chan.version}` : ''}`
-    const compatibility = packages.length ? { packages, dependenciesPath } : null
     const names = await readChannelBundleNames(chan, bundle.id)
     if (!names)
       return
@@ -334,8 +332,8 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
       compatibility,
     })
     if (!result.confirmed) {
-      if (result.next === 'view-dependencies')
-        await router.push(dependenciesPath)
+      if (result.next === 'view-dependencies' && compatibility)
+        await router.push(compatibility.dependenciesPath)
       return
     }
     await setChannel(chan, bundle.id)
