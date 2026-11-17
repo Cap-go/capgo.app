@@ -19,7 +19,7 @@ import BuildLiveProgress from '~/components/dashboard/BuildLiveProgress.vue'
 import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'
 import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
-import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
+import { getConsoleApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -74,7 +74,7 @@ const dialogStore = useDialogV2Store()
 const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
 const config = getLocalConfig()
 const initialOnboarding = props.onboarding
-const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ''
+const localCommand = isLocal(config.apiHost) ? ` --api-host ${ getConsoleApiHost }` : ''
 
 const platformBuildCounts = computed<PlatformBuildCounts>(() => ({
   ios: props.platformBuildCounts?.ios ?? 0,

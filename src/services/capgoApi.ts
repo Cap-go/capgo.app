@@ -1,3 +1,4 @@
+import { getConsoleApiHost } from '~/services/consoleApiHost'
 import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/database.types'
 import { FunctionsFetchError, FunctionsHttpError } from '~/services/consoleClient'
@@ -192,7 +193,7 @@ export async function invokeCapgoApi<T = any>(
   if (body != null && !hasContentType && !(body instanceof FormData))
     headers['Content-Type'] = 'application/json'
 
-  const apiHost = normalizeApiHost(import.meta.env.VITE_API_HOST as string)
+  const apiHost = normalizeApiHost(getConsoleApiHost())
   const url = `${apiHost}/${path.replace(/^\//, '')}`
 
   return invokeWithRetry<T>(async () => {

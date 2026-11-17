@@ -10,7 +10,7 @@ import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
 import SsoRoleMappingDialog from '~/components/organizations/SsoRoleMappingDialog.vue'
 import Spinner from '~/components/Spinner.vue'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { isSuperAdminRole, useOrganizationStore } from '~/stores/organization'
@@ -165,7 +165,7 @@ async function fetchProviders() {
   isLoading.value = true
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/providers/${orgId}`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/sso/providers/${orgId}`, {
       method: 'GET',
       headers,
     })
@@ -196,7 +196,7 @@ async function fetchLinks() {
   const orgId = props.orgId
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/providers/${orgId}/links`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/sso/providers/${orgId}/links`, {
       method: 'GET',
       headers,
     })
@@ -225,7 +225,7 @@ async function shareProvider(): Promise<boolean> {
     return false
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/providers/${provider.id}/links`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/sso/providers/${provider.id}/links`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ org_id: org.gid }),
@@ -276,7 +276,7 @@ function stopSharing(providerId: string, orgId: string, domain: string, orgName:
         handler: async () => {
           try {
             const headers = await getAuthHeaders()
-            const response = await fetch(`${defaultApiHost}/private/sso/providers/${providerId}/links/${orgId}`, {
+            const response = await fetch(`${ getConsoleApiHost }/private/sso/providers/${providerId}/links/${orgId}`, {
               method: 'DELETE',
               headers,
             })
@@ -301,7 +301,7 @@ function stopSharing(providerId: string, orgId: string, domain: string, orgName:
 async function fetchSpMetadata() {
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/sp-metadata`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/sso/sp-metadata`, {
       method: 'GET',
       headers,
     })
@@ -343,7 +343,7 @@ async function addProvider() {
   isSubmitting.value = true
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/providers`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/sso/providers`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -383,7 +383,7 @@ async function verifyDns(providerId: string) {
   isVerifying.value = providerId
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/verify-dns`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/sso/verify-dns`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ provider_id: providerId }),
@@ -428,7 +428,7 @@ async function deleteProvider(provider: SsoProvider) {
         handler: async () => {
           try {
             const headers = await getAuthHeaders()
-            const response = await fetch(`${defaultApiHost}/private/sso/providers/${provider.id}`, {
+            const response = await fetch(`${ getConsoleApiHost }/private/sso/providers/${provider.id}`, {
               method: 'DELETE',
               headers,
             })
@@ -457,7 +457,7 @@ async function deleteProvider(provider: SsoProvider) {
 async function updateProviderStatus(providerId: string, status: 'active' | 'disabled') {
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/providers/${providerId}`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/sso/providers/${providerId}`, {
       method: 'PATCH',
       headers,
       body: JSON.stringify({ status }),
@@ -487,7 +487,7 @@ async function toggleEnforceSso(provider: SsoProvider) {
   try {
     const headers = await getAuthHeaders()
     const newValue = !provider.enforce_sso
-    const response = await fetch(`${defaultApiHost}/private/sso/providers/${provider.id}`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/sso/providers/${provider.id}`, {
       method: 'PATCH',
       headers,
       body: JSON.stringify({ enforce_sso: newValue }),

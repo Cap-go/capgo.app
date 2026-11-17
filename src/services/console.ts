@@ -5,14 +5,17 @@ import type { Database } from '~/types/database.types'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { createConsoleAuthClient, resolveConsoleApiBase } from '~/services/consoleAuth'
+import { CHINA_API_HOST, getConsoleApiHost } from '~/services/consoleApiHost'
 import { createConsoleClient } from '~/services/consoleClient'
 import { sortCreditPricingSteps } from './creditPricing'
 
+export { CHINA_API_HOST, CHINA_CONSOLE_URL, getConsoleApiHost, getConsoleWebOrigin } from '~/services/consoleApiHost'
+
 let consoleClient: ConsoleClient<Database> = null as any
 
-export const defaultApiHost = import.meta.env.VITE_API_HOST as string
-
 export const PROD_API_URL = 'https://api.capgo.app'
+
+export const suggestChinaConsole = ref(false)
 
 export interface CapgoConfig {
   /** Capgo API this build talks to; everything (data, auth, files) goes through it. */
@@ -24,13 +27,13 @@ export interface CapgoConfig {
 
 /** Anything that is not the Capgo cloud API (local, preprod, dev, self-host). */
 export function isLocal(apiHost: string) {
-  return apiHost !== PROD_API_URL
+  return apiHost !== PROD_API_URL && apiHost !== CHINA_API_HOST
 }
 
 export function getLocalConfig() {
   const stripeEnabledEnv = import.meta.env.VITE_STRIPE_ENABLED as string | undefined
   return {
-    apiHost: defaultApiHost,
+    apiHost: getConsoleApiHost(),
     host: import.meta.env.VITE_APP_URL as string,
     hostWeb: import.meta.env.LANDING_URL as string,
     stripeEnabled: stripeEnabledEnv === undefined ? true : stripeEnabledEnv !== 'false',
@@ -107,7 +110,7 @@ function isSpoofedAdminJwtUsable(jwt: string) {
 
 // A throwaway auth client: the admin session must never replace the stored user session.
 function createSpoofAdminAuth() {
-  return createConsoleAuthClient({ baseURL: resolveConsoleApiBase(defaultApiHost), persistSession: false })
+  return createConsoleAuthClient({ baseURL: resolveConsoleApiBase(getConsoleApiHost()), persistSession: false })
 }
 
 async function refreshSpoofedAdminSession(session: SpoofedAdminSession): Promise<SpoofedAdminSession | null> {
@@ -127,16 +130,47 @@ export function mergeRemoteConfig(localConfig: CapgoConfig, remoteConfig: Partia
   }
 }
 
+const CHINA_CONFIG_PROBE_MS = 4_000
+
+async function fetchPrivateConfig(apiHost: string) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), CHINA_CONFIG_PROBE_MS)
+  try {
+    const response = await fetch(`${apiHost}/private/config`, { signal: controller.signal })
+    clearTimeout(timeout)
+    return response
+  }
+  catch (error) {
+    clearTimeout(timeout)
+    throw error
+  }
+}
+
+async function probeChinaApiReachable() {
+  if (getConsoleApiHost() !== PROD_API_URL)
+    return false
+  try {
+    const response = await fetchPrivateConfig(CHINA_API_HOST)
+    return response.ok
+  }
+  catch {
+    return false
+  }
+}
+
 export async function getRemoteConfig() {
   const localConfig = getLocalConfig()
   if (import.meta.env.MODE === 'development')
     return localConfig
 
+  const apiHost = getConsoleApiHost()
   try {
-    const response = await fetch(`${defaultApiHost}/private/config`)
+    const response = await fetchPrivateConfig(apiHost)
     if (!response.ok) {
       console.log('Local config', localConfig)
       stripeEnabled.value = localConfig.stripeEnabled ?? stripeEnabled.value
+      if (await probeChinaApiReachable())
+        suggestChinaConsole.value = true
       return localConfig as CapgoConfig
     }
     const data = await response.json() as Partial<CapgoConfig>
@@ -148,6 +182,8 @@ export async function getRemoteConfig() {
   catch {
     console.log('Local config', localConfig)
     stripeEnabled.value = localConfig.stripeEnabled ?? stripeEnabled.value
+    if (await probeChinaApiReachable())
+      suggestChinaConsole.value = true
     return localConfig as CapgoConfig
   }
 }
@@ -259,7 +295,7 @@ export async function downloadUrl(provider: string, userId: string, appId: strin
   const currentJwt = currentSession.session.access_token
 
   try {
-    const response = await fetch(`${defaultApiHost}/files/download_link`, {
+    const response = await fetch(`${getConsoleApiHost()}/files/download_link`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${currentJwt}`,
@@ -449,7 +485,7 @@ export type Plan = Omit<Database['public']['Tables']['plans']['Row'], 'regional_
 
 export async function getPlans(): Promise<Plan[]> {
   try {
-    const response = await fetch(`${defaultApiHost}/private/plans`)
+    const response = await fetch(`${getConsoleApiHost()}/private/plans`)
 
     if (!response.ok) {
       return []
@@ -504,7 +540,7 @@ export async function getCreditPricingSteps(orgId?: string): Promise<CreditPrici
   try {
     const capgo = useConsole()
     const { data: currentSession } = await capgo.auth.getSession()
-    const endpoint = new URL(`${defaultApiHost}/private/credits`)
+    const endpoint = new URL(`${getConsoleApiHost()}/private/credits`)
 
     if (orgId)
       endpoint.searchParams.set('org_id', orgId)

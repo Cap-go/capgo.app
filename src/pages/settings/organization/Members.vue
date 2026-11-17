@@ -17,7 +17,7 @@ import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
 import { fetchSsoManagedAccess } from '~/services/ssoManaged'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -868,7 +868,7 @@ async function deleteRbacMember(member: OrganizationMemberRow) {
     return false
   }
 
-  const response = await fetch(`${defaultApiHost}/organization/members`, {
+  const response = await fetch(`${ getConsoleApiHost }/organization/members`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',

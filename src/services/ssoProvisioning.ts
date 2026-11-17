@@ -1,5 +1,5 @@
 import type { Session, User } from '~/services/consoleClient'
-import { defaultApiHost } from '~/services/console'
+import { getConsoleApiHost } from '~/services/console'
 
 export interface SsoProvisioningResult {
   merged: boolean
@@ -33,7 +33,7 @@ export async function provisionSsoUser(session: Session): Promise<SsoProvisionin
         return controller.signal
       })()
   try {
-    const response = await fetch(`${defaultApiHost}/private/sso/provision-user`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/sso/provision-user`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${session.access_token}`,

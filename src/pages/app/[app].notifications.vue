@@ -14,7 +14,7 @@ import IconSearch from '~icons/lucide/search'
 import IconSend from '~icons/lucide/send'
 import IconZap from '~icons/lucide/zap'
 import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { useDisplayStore } from '~/stores/display'
 
@@ -294,7 +294,7 @@ async function notificationFetch<T = any>(path: string, init: RequestInit = {}):
   const headers = await authHeaders()
   const requestHeaders = new Headers(init.headers)
   Object.entries(headers).forEach(([key, value]) => requestHeaders.set(key, value))
-  const response = await fetch(`${defaultApiHost}/notifications${path}`, {
+  const response = await fetch(`${ getConsoleApiHost }/notifications${path}`, {
     ...init,
     headers: requestHeaders,
   })

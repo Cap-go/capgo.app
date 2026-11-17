@@ -7,7 +7,7 @@ import { useRouter } from 'vue-router'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import { Line } from '~/components/dashboard/lazyCharts'
 import { createTooltipConfig } from '~/services/chartTooltip'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 
@@ -47,7 +47,7 @@ async function fetchStats() {
     const { data: sessionData } = await capgo.auth.getSession()
     if (!sessionData.session)
       return
-    const response = await fetch(`${defaultApiHost}/private/channel_stats`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/channel_stats`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

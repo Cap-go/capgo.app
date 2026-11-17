@@ -5,7 +5,7 @@ const mockSignOut = vi.fn()
 const mockGetSpoofedAdminJwt = vi.fn()
 
 vi.mock('~/services/console', () => ({
-  defaultApiHost: 'https://api.capgo.test',
+  getConsoleApiHost: () => 'https://api.capgo.test',
   getSpoofedAdminJwt: mockGetSpoofedAdminJwt,
   useConsole: () => ({
     auth: {

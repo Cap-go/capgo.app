@@ -3,7 +3,7 @@ import type { LegacyCheckFailures } from '~/composables/useReleaseLive'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { chartLabelCountForPeriodDays } from '~/services/date'
 
 export interface BundleInstallStatsItem {
@@ -75,7 +75,7 @@ export function useBundleInstallStats(
         return
       }
 
-      const response = await fetch(`${defaultApiHost}/private/bundle_install_stats`, {
+      const response = await fetch(`${ getConsoleApiHost }/private/bundle_install_stats`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

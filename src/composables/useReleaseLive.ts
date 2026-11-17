@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import { ref, watch } from 'vue'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 
 export const RELEASE_LIVE_POLL_INTERVAL_MS = 60_000
 
@@ -129,7 +129,7 @@ export function useReleaseLive(
       if (!sessionData.session)
         throw new Error('not_authenticated')
 
-      const response = await fetch(`${defaultApiHost}/private/release_live`, {
+      const response = await fetch(`${ getConsoleApiHost }/private/release_live`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

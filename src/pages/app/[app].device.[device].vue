@@ -16,7 +16,7 @@ import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentio
 import EmptyState from '~/components/EmptyState.vue'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { useDeviceUpdateFormat } from '~/composables/useDeviceUpdateFormat'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatDate, formatDistanceToNow } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useAppDetailStore } from '~/stores/appDetail'
@@ -161,7 +161,7 @@ async function getDevice() {
     const currentJwt = currentSession.session.access_token
 
     try {
-      const response = await fetch(`${defaultApiHost}/private/devices`, {
+      const response = await fetch(`${ getConsoleApiHost }/private/devices`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -231,7 +231,7 @@ async function upsertDevChannel(device: string, channelId: number) {
   if (!currentJwt)
     throw new Error('Missing session')
 
-  const response = await fetch(`${defaultApiHost}/private/channel_device`, {
+  const response = await fetch(`${ getConsoleApiHost }/private/channel_device`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -253,7 +253,7 @@ async function delDevChannel(device: string) {
   if (!currentJwt)
     throw new Error('Missing session')
 
-  const response = await fetch(`${defaultApiHost}/private/channel_device`, {
+  const response = await fetch(`${ getConsoleApiHost }/private/channel_device`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
@@ -397,7 +397,7 @@ function getCurlCommand() {
   const requestBody = transformDeviceToUpdateRequest(device.value, packageId.value)
   const jsonBody = JSON.stringify(requestBody, null, 2)
 
-  return String.raw`curl -X POST '${defaultApiHost}/updates' \
+  return String.raw`curl -X POST '${ getConsoleApiHost }/updates' \
   -H 'Content-Type: application/json' \
   -d '${jsonBody}'`
 }

@@ -1,3 +1,4 @@
+import { getConsoleApiHost } from '~/services/consoleApiHost'
 import type { LocationQuery } from 'vue-router'
 import { isLocalDevHost } from './urlSafety'
 
@@ -137,12 +138,17 @@ export function getAllowedConfirmationHosts() {
   const hosts = new Set<string>()
 
   addConfiguredHost(hosts, import.meta.env.VITE_APP_URL)
-  addConfiguredHost(hosts, import.meta.env.VITE_API_HOST)
+  addConfiguredHost(hosts, getConsoleApiHost())
 
   // Production fallbacks only; the repo config file stays out of the bundle (it carries backend keys).
   if (hosts.size === 0) {
     addConfiguredHost(hosts, 'console.capgo.app')
+    addConfiguredHost(hosts, 'console.capgo.com.cn')
     addConfiguredHost(hosts, 'api.capgo.app')
+    addConfiguredHost(hosts, 'api.capgo.com.cn')
+  }
+  else {
+    addConfiguredHost(hosts, 'console.capgo.com.cn')
   }
 
   return [...hosts]

@@ -10,6 +10,7 @@ import FormField from '~/components/forms/FormField.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
 import { useConsoleTurnstileCaptcha } from '~/composables/useConsoleTurnstileCaptcha'
 import { useConsole } from '~/services/console'
+import { getConsoleWebOrigin } from '~/services/consoleApiHost'
 import { requestConsoleCaptchaFallbackEmail } from '~/services/consoleCaptchaFallback'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -80,7 +81,7 @@ function finishWithError(message: string, error?: unknown) {
 }
 
 async function sendRecoverFallback(email: string) {
-  const redirectTo = `${import.meta.env.VITE_APP_URL}/forgot_password?step=2`
+  const redirectTo = `${getConsoleWebOrigin()}/forgot_password?step=2`
   recoverFallbackSending.value = true
   try {
     const { error } = await requestConsoleCaptchaFallbackEmail(email, 'recover', redirectTo)
@@ -97,7 +98,7 @@ async function sendRecoverFallback(email: string) {
 }
 
 async function resetPasswordWithCaptcha(email: string) {
-  const redirectTo = `${import.meta.env.VITE_APP_URL}/forgot_password?step=2`
+  const redirectTo = `${getConsoleWebOrigin()}/forgot_password?step=2`
   return await capgo.auth.resetPasswordForEmail(email, { redirectTo, captchaToken: turnstileToken.value })
 }
 

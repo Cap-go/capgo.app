@@ -4,7 +4,7 @@ import { trackBuilderOnboardingStep } from '../cli/src/build/onboarding/telemetr
 const sendEventMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../cli/src/utils.ts', () => ({
-  defaultApiHost: 'https://api.capgo.app',
+  getConsoleApiHost: () => 'https://api.capgo.app',
   getRemoteConfig: vi.fn().mockResolvedValue({ hostApi: 'https://api.capgo.app' }),
   sendEvent: sendEventMock,
 }))

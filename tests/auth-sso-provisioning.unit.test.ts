@@ -211,7 +211,7 @@ vi.mock('~/services/console', () => ({
       from: context.mockFrom,
     }
   },
-  defaultApiHost: 'https://api.capgo.test',
+  getConsoleApiHost: () => 'https://api.capgo.test',
 }))
 
 vi.mock('~/stores/main', () => ({

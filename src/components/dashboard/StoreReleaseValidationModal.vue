@@ -9,7 +9,7 @@ import IconCircleDot from '~icons/lucide/circle-dot'
 import IconSettings from '~icons/lucide/settings-2'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconStore from '~icons/lucide/store'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -140,7 +140,7 @@ async function getInstallSourceCounts(appId: string) {
   if (!currentJwt)
     throw new Error('Cannot count install sources without a session')
 
-  const response = await fetch(`${defaultApiHost}/private/devices`, {
+  const response = await fetch(`${ getConsoleApiHost }/private/devices`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

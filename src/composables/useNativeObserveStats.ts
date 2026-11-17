@@ -2,7 +2,7 @@ import type { MaybeRefOrGetter, Ref } from 'vue'
 import { ref, toValue } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 
 export function useNativeObserveStats<T>(
   appId: MaybeRefOrGetter<string>,
@@ -30,7 +30,7 @@ export function useNativeObserveStats<T>(
         return
       }
 
-      const response = await fetch(`${defaultApiHost}/private/native_observe_stats`, {
+      const response = await fetch(`${ getConsoleApiHost }/private/native_observe_stats`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

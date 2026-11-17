@@ -77,6 +77,7 @@ describe('security response headers', () => {
     'https://preprod.capgo.app',
     'https://development.capgo.app',
     'https://console.capgo.app',
+    'https://console.capgo.com.cn',
     'https://console.preprod.capgo.app',
     'capacitor://localhost',
     'ionic://localhost',

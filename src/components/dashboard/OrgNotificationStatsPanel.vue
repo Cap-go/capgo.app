@@ -7,7 +7,7 @@ import IconRefresh from '~icons/lucide/refresh-cw'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import PageHeader from '~/components/PageHeader.vue'
 import Spinner from '~/components/Spinner.vue'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
 
 type PeriodDayOption = 1 | 3 | 7 | 30
@@ -111,7 +111,7 @@ async function fetchStats() {
       return
     }
 
-    const response = await fetch(`${defaultApiHost}/private/org_notification_stats`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/org_notification_stats`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,

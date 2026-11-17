@@ -19,7 +19,7 @@ import { Bar } from '~/components/dashboard/lazyCharts'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter, updaterFailureCategory, updaterFailureHelpKey, updaterInsightActions } from '~/services/statsActions'
@@ -300,7 +300,7 @@ async function fetchInsights() {
       return
     }
 
-    const response = await fetch(`${defaultApiHost}/private/stats/insights`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/stats/insights`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

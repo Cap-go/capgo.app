@@ -37,7 +37,7 @@ vi.mock('~/components/dashboard/lazyCharts', async () => {
 vi.mock('~/stores/organization', () => ({
   useOrganizationStore: () => ({ currentOrganization: { subscription_start: '2026-10-01T00:00:00Z' } }),
 }))
-vi.mock('~/services/console', () => ({ defaultApiHost: 'https://example.com' }))
+vi.mock('~/services/console', () => ({ getConsoleApiHost: () => 'https://example.com' }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }) }))
 
 let mountedApp: App | undefined

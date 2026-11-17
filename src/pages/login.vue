@@ -18,7 +18,7 @@ import IconMfa from '~icons/simple-icons/2fas'
 import FormField from '~/components/forms/FormField.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
 import { useConsoleTurnstileCaptcha } from '~/composables/useConsoleTurnstileCaptcha'
-import { autoAuth, defaultApiHost, hashEmail, useConsole } from '~/services/console'
+import { autoAuth, getConsoleApiHost, hashEmail, useConsole } from '~/services/console'
 import { requestConsoleCaptchaFallbackEmail } from '~/services/consoleCaptchaFallback'
 import { hideLoader } from '~/services/loader'
 import { openSupport } from '~/services/support'
@@ -406,7 +406,7 @@ async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_s
       headers.Authorization = `Bearer ${token}`
     }
 
-    const response = await fetch(`${defaultApiHost}/private/sso/check-domain`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/sso/check-domain`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ email }),

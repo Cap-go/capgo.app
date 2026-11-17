@@ -12,7 +12,7 @@ import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -132,7 +132,7 @@ async function setChannelDeviceOverride(deviceId: string) {
   if (!currentJwt)
     throw new Error('Missing session')
 
-  const response = await fetch(`${defaultApiHost}/private/channel_device`, {
+  const response = await fetch(`${ getConsoleApiHost }/private/channel_device`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

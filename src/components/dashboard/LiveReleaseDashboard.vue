@@ -16,7 +16,7 @@ import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { groupCompatibilityEvents } from '~/services/compatibilityEvents'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter, updaterInsightActions } from '~/services/statsActions'
 
@@ -72,7 +72,7 @@ async function fetchInsights() {
     const { data: sessionData } = await capgo.auth.getSession()
     if (!sessionData.session)
       return
-    const response = await fetch(`${defaultApiHost}/private/stats/insights`, {
+    const response = await fetch(`${ getConsoleApiHost }/private/stats/insights`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

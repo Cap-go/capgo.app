@@ -32,8 +32,10 @@ export class FunctionsFetchError extends Error {
   }
 }
 
+import { getConsoleApiHost } from '~/services/consoleApiHost'
+
 function resolveBaseURL() {
-  return resolveConsoleApiBase(import.meta.env.VITE_API_HOST as string | undefined)
+  return resolveConsoleApiBase(getConsoleApiHost())
 }
 
 const EVENTS_MAX_BACKOFF_MS = 30_000

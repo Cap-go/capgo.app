@@ -1254,6 +1254,7 @@
   "cannot_invite_user_without_account": "Cannot invite user without account",
   "captcha": "Captcha",
   "captcha-fail": "Captcha validation failed",
+  "china-console-suggestion": "Having trouble reaching the API from your network? Try the China console at",
   "captcha-new-user-org-d-tooltip": "Complete the captcha to confirm you are human and help prevent automated invitation abuse.",
   "captcha-not-available": "Captcha not available",
   "captcha-required": "Captcha is required for this action!",

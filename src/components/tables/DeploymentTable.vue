@@ -6,7 +6,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { getTimeWindowPageRange } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
@@ -65,7 +65,7 @@ async function getData() {
     const currentJwt = currentSession.session.access_token
 
     try {
-      const response = await fetch(`${defaultApiHost}/private/stats`, {
+      const response = await fetch(`${ getConsoleApiHost }/private/stats`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

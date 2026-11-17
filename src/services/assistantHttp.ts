@@ -1,5 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 
 export interface HttpResult {
   status: number
@@ -51,7 +51,7 @@ export async function assistantOpenAIRequest(
   const sessionToken = data.session?.access_token
   if (error || !sessionToken)
     throw new Error('assistant_session_required')
-  const response = await assistantRequest(`${defaultApiHost}/private/assistant/${path}`, {
+  const response = await assistantRequest(`${ getConsoleApiHost }/private/assistant/${path}`, {
     ...init,
     signal,
     headers: { ...init.headers, 'authorization': `Bearer ${sessionToken}`, 'x-chatgpt-token': accessToken },

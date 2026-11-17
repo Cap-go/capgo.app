@@ -2,7 +2,7 @@ import type { Locale } from 'vue-i18n'
 import type { UserModule } from '~/types'
 import { createI18n } from 'vue-i18n'
 import sourceMessages from '../../messages/en.json'
-import { defaultApiHost } from '../services/console'
+import { getConsoleApiHost } from '../services/console'
 
 const FALLBACK_LOCALE = 'en' as const
 const LANGUAGE_STORAGE_KEY = 'lang'
@@ -167,7 +167,7 @@ async function fetchRemoteMessages(lang: string, knownChecksum?: string): Promis
   if (pending)
     return pending
 
-  const request = fetch(`${defaultApiHost || ''}/translation/messages`, {
+  const request = fetch(`${getConsoleApiHost() || ''}/translation/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
