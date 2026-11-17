@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(19);
+SELECT plan(21);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -143,14 +143,47 @@ SELECT is(
   'recent activity keeps a simulator alive past five minutes idle'
 );
 
-UPDATE public.simulator_sessions
-SET last_activity_at = now()
-WHERE id = '99000000-0000-4000-8000-000000000005';
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, last_activity_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000006',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'ios',
+  'in-progress',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '15 minutes',
+  now() - interval '4 minutes'
+);
 
 SELECT is(
   public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
   0,
-  'bumping activity resets the idle timer'
+  'four minutes idle is still inside the five minute window'
+);
+
+UPDATE public.simulator_sessions
+SET last_activity_at = now()
+WHERE id = '99000000-0000-4000-8000-000000000006';
+
+SELECT is(
+  (SELECT COALESCE(last_activity_at, started_at) > now() - interval '5 minutes'
+   FROM public.simulator_sessions
+   WHERE id = '99000000-0000-4000-8000-000000000006'),
+  true,
+  'bumping activity moves the row back inside the idle window'
+);
+
+UPDATE public.simulator_sessions
+SET last_activity_at = now() - interval '6 minutes'
+WHERE id = '99000000-0000-4000-8000-000000000006';
+
+SELECT is(
+  public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+  1,
+  'six minutes idle expires after the bump is gone'
 );
 
 SELECT is(

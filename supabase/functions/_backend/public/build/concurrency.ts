@@ -209,6 +209,37 @@ const SIMULATOR_SESSIONS_DUE_FOR_EXPIRY_SQL = `
   FOR UPDATE
 `
 
+const ORGS_WITH_DUE_SIMULATOR_SESSIONS_SQL = `
+  SELECT DISTINCT owner_org::text AS owner_org
+  FROM public.simulator_sessions
+  WHERE status IN ('new', 'queued', 'starting', 'in-progress')
+    AND (
+      COALESCE(started_at, created_at) <= now() - make_interval(mins => max_duration_minutes)
+      OR COALESCE(last_activity_at, started_at, created_at) <= now() - make_interval(mins => $1)
+    )
+  LIMIT 500
+`
+
+export async function sweepDueSimulatorSessions(c: Context): Promise<{ orgs: number, orphanedDevices: number }> {
+  let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
+  try {
+    pgPool = await getPgClient(c, true)
+    const orgs = await pgPool.query<{ owner_org: string }>(
+      ORGS_WITH_DUE_SIMULATOR_SESSIONS_SQL,
+      [SIMULATOR_IDLE_TIMEOUT_MINUTES],
+    )
+    for (const row of orgs.rows)
+      await expireSimulatorSessions(c, row.owner_org)
+    const { stopOrphanedSimulatorDevices } = await import('./simulator.ts')
+    const orphanedDevices = await stopOrphanedSimulatorDevices(c)
+    return { orgs: orgs.rows.length, orphanedDevices }
+  }
+  finally {
+    if (pgPool)
+      await closeClient(c, pgPool)
+  }
+}
+
 export async function expireSimulatorSessions(c: Context, orgId: string): Promise<void> {
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   let client: PgClient | null = null

@@ -2,8 +2,18 @@ ALTER TABLE public.simulator_sessions
   ADD COLUMN IF NOT EXISTS last_activity_at timestamptz;
 
 UPDATE public.simulator_sessions
+SET last_activity_at = now()
+WHERE last_activity_at IS NULL
+  AND status IN ('new', 'queued', 'starting', 'in-progress');
+
+UPDATE public.simulator_sessions
 SET last_activity_at = COALESCE(started_at, created_at)
 WHERE last_activity_at IS NULL;
+
+-- Idle window is five minutes here and SIMULATOR_IDLE_TIMEOUT_MINUTES (5) in the API worker.
+CREATE INDEX IF NOT EXISTS simulator_sessions_idle_sweep_idx
+  ON public.simulator_sessions (last_activity_at)
+  WHERE status IN ('new', 'queued', 'starting', 'in-progress');
 
 -- Stop when the session hits its max duration or five minutes without API activity.
 CREATE OR REPLACE FUNCTION public.expire_simulator_sessions(p_org_id uuid)
@@ -119,7 +129,7 @@ BEGIN
     );
     elapsed := LEAST(
       session_row.max_duration_minutes * 60,
-      GREATEST(0, round(extract(epoch FROM (effective_stop - opened_at)))::bigint)
+      GREATEST(1, round(extract(epoch FROM (effective_stop - opened_at)))::bigint)
     );
   END IF;
     IF elapsed > 0 THEN

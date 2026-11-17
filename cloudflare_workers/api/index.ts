@@ -91,6 +91,8 @@ import { app as cron_delta_storage_gc } from '../../supabase/functions/_backend/
 import { app as cron_clear_versions } from '../../supabase/functions/_backend/triggers/cron_clear_versions.ts'
 import { app as cron_email } from '../../supabase/functions/_backend/triggers/cron_email.ts'
 import { app as cron_onboarding_refresh_apps } from '../../supabase/functions/_backend/triggers/cron_onboarding_refresh_apps.ts'
+import { sweepDueSimulatorSessions } from '../../supabase/functions/_backend/public/build/concurrency.ts'
+import { app as cron_expire_simulator_sessions } from '../../supabase/functions/_backend/triggers/cron_expire_simulator_sessions.ts'
 import { app as cron_reconcile_build_status } from '../../supabase/functions/_backend/triggers/cron_reconcile_build_status.ts'
 import { app as cron_rollout_auto_pause } from '../../supabase/functions/_backend/triggers/cron_rollout_auto_pause.ts'
 import { app as cron_stat_app } from '../../supabase/functions/_backend/triggers/cron_stat_app.ts'
@@ -240,6 +242,7 @@ appTriggers.route('/cron_email', cron_email)
 appTriggers.route('/cron_clear_versions', cron_clear_versions)
 appTriggers.route('/cron_clean_orphan_images', cron_clean_orphan_images)
 appTriggers.route('/cron_delta_storage_gc', cron_delta_storage_gc)
+appTriggers.route('/cron_expire_simulator_sessions', cron_expire_simulator_sessions)
 appTriggers.route('/cron_reconcile_build_status', cron_reconcile_build_status)
 appTriggers.route('/canceled_org_retention_alerts', canceled_org_retention_alerts)
 appTriggers.route('/credit_usage_alerts', credit_usage_alerts)
@@ -283,11 +286,23 @@ appTriggers.route('/webhook_dispatcher', webhook_dispatcher)
 app.route('/triggers', appTriggers)
 app.route('/private', appPrivate)
 
+appScheduled.post('/expire-simulator-sessions', async (c) => {
+  const result = await sweepDueSimulatorSessions(c)
+  return c.json({ ...BRES, ...result })
+})
+
 appScheduled.post('/flush-plugin-notifications', async (c) => {
   c.set('deliverPluginNotificationsInProcess', true)
   const result = await flushQueuedPluginNotifications(c)
   return c.json({ ...BRES, ...result })
 })
+
+async function runScheduledSimulatorExpiry(env: Bindings, ctx: ExecutionContext) {
+  const request = new Request('https://api-scheduled.capgo.internal/expire-simulator-sessions', { method: 'POST' })
+  const response = await appScheduled.fetch(request, env, ctx)
+  if (!response.ok)
+    throw new Error(`expire-simulator-sessions HTTP ${response.status} ${response.statusText}`)
+}
 
 async function runScheduledPluginNotificationFlush(env: Bindings, ctx: ExecutionContext) {
   const request = new Request('https://api-scheduled.capgo.internal/flush-plugin-notifications', { method: 'POST' })
@@ -322,6 +337,7 @@ export default {
   fetch: app.fetch,
   queue: processApiQueueBatch,
   scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
+    ctx.waitUntil(runScheduledSimulatorExpiry(env, ctx))
     ctx.waitUntil(runScheduledPluginNotificationFlush(env, ctx))
     ctx.waitUntil(ensureQueueDispatcher(env).catch((error) => {
       console.error(JSON.stringify({ event: 'queue_dispatcher_ensure_failed', error: error instanceof Error ? error.message : 'Unknown error' }))

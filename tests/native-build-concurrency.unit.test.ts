@@ -257,6 +257,9 @@ function mockPgClient(options: {
       if (query === 'BEGIN' || query === 'COMMIT' || query === 'ROLLBACK')
         return { rowCount: null, rows: [] }
 
+      if (query.includes('DISTINCT owner_org'))
+        return { rowCount: 0, rows: [] }
+
       if (query.includes('emulator_id') && query.includes('device_stopped_at'))
         return { rowCount: 0, rows: [] }
 

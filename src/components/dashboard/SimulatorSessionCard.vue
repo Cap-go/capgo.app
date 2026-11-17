@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconSmartphone from '~icons/lucide/smartphone'
 import { defaultApiHost, useConsole } from '../../services/console'
@@ -67,8 +67,21 @@ async function refreshSessions() {
   }))
 }
 
+const CONSOLE_SIMULATOR_HEARTBEAT_MS = 60_000
+
+let heartbeatTimer: ReturnType<typeof setInterval> | undefined
+
 onMounted(() => {
   void refreshSessions()
+  heartbeatTimer = setInterval(() => {
+    if (sessions.value.length > 0)
+      void refreshSessions()
+  }, CONSOLE_SIMULATOR_HEARTBEAT_MS)
+})
+
+onUnmounted(() => {
+  if (heartbeatTimer)
+    clearInterval(heartbeatTimer)
 })
 
 async function stop(id: string) {

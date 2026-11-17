@@ -231,7 +231,7 @@ async function bestEffortStopSimulatorDevice(c: Context, row: Pick<SimulatorRow,
     if (!simulatorHostStopIsFinal(remoteStatus))
       return null
     try {
-      return rememberDeviceStop(c, row.id, new Date().toISOString())
+      return await rememberDeviceStop(c, row.id, new Date().toISOString())
     }
     catch (rememberError) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'Idle expiry could not record device stop time', sessionId: row.id, error: rememberError })
@@ -265,6 +265,20 @@ async function finalizeExpiredSimulatorSession(
   if (!billingRecorded)
     return
   await markSession(c, input.row.id, 'stopped')
+}
+
+export async function stopOrphanedSimulatorDevices(c: Context, limit = 50): Promise<number> {
+  const rows = await queryWrite<Pick<SimulatorRow, 'id' | 'emulator_id' | 'device_stopped_at'>>(c, `
+    SELECT id, emulator_id, device_stopped_at
+    FROM public.simulator_sessions
+    WHERE status = 'stopped'
+      AND emulator_id IS NOT NULL
+      AND device_stopped_at IS NULL
+    ORDER BY updated_at ASC
+    LIMIT $1
+  `, [limit])
+  await stopDevicesForDueSimulatorExpiry(c, rows)
+  return rows.length
 }
 
 export async function stopDevicesForDueSimulatorExpiry(
@@ -421,7 +435,7 @@ interface SimulatorRow {
   max_duration_minutes: number
 }
 
-function simulatorSessionPastExpiry(
+export function simulatorSessionPastExpiry(
   row: Pick<SimulatorRow, 'started_at' | 'last_activity_at' | 'max_duration_minutes'>,
   now = Date.now(),
 ): boolean {

@@ -6,6 +6,7 @@ import { app as cron_delta_storage_gc } from '../_backend/triggers/cron_delta_st
 import { app as cron_clear_versions } from '../_backend/triggers/cron_clear_versions.ts'
 import { app as cron_email } from '../_backend/triggers/cron_email.ts'
 import { app as cron_onboarding_refresh_apps } from '../_backend/triggers/cron_onboarding_refresh_apps.ts'
+import { app as cron_expire_simulator_sessions } from '../_backend/triggers/cron_expire_simulator_sessions.ts'
 import { app as cron_reconcile_build_status } from '../_backend/triggers/cron_reconcile_build_status.ts'
 import { app as cron_rollout_auto_pause } from '../_backend/triggers/cron_rollout_auto_pause.ts'
 import { app as cron_stat_app } from '../_backend/triggers/cron_stat_app.ts'
@@ -71,6 +72,7 @@ appGlobal.route('/cron_sync_sub', cron_sync_sub)
 appGlobal.route('/cron_clear_versions', cron_clear_versions)
 appGlobal.route('/cron_clean_orphan_images', cron_clean_orphan_images)
 appGlobal.route('/cron_delta_storage_gc', cron_delta_storage_gc)
+appGlobal.route('/cron_expire_simulator_sessions', cron_expire_simulator_sessions)
 appGlobal.route('/cron_reconcile_build_status', cron_reconcile_build_status)
 appGlobal.route('/cron_rollout_auto_pause', cron_rollout_auto_pause)
 appGlobal.route('/cron_onboarding_refresh_apps', cron_onboarding_refresh_apps)
