@@ -1,3 +1,4 @@
+import { completeCurrencyTransition } from '../utils/billing_currency_transition.ts'
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { MiddlewareKeyVariablesStripe } from '../utils/hono_middleware_stripe.ts'
@@ -31,6 +32,7 @@ import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
 import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
+import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { buildTransferInvoiceFooter, getStripeCustomerEmailFromEvent, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import type { TrialPlanFirstInvoiceState } from '../utils/stripe_trial_plan.ts'
 import { cancelTrialPlanScheduleForSubscription, isTrialPlanFirstInvoiceUnpaid, isTrialPlanSubscription, settleTrialPlanFirstInvoice } from '../utils/stripe_trial_plan.ts'
@@ -1771,7 +1773,7 @@ async function handleCustomerProfileStripeEvent(
   if (org) {
     const customer = await loadStripeCustomer(c, stripeData)
     await assertStripeBillingAccount(c, customer)
-    await syncStripeCustomerCountry(c, stripeData.data.customer_id)
+    await syncBillingProfile(c, { customerId: stripeData.data.customer_id, billingAccount: getWebhookBillingAccount(c), stripe: getStripe(c, getWebhookBillingAccount(c)) })
     await ensureCustomerMetadata(c, stripeData.data.customer_id, org.id, org.created_by)
     const billingOrg = await syncOrgManagementEmailFromStripeCustomer(
       c,
@@ -2300,6 +2302,15 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
   const customer = await loadStripeCustomer(c, stripeData)
 
   await assertStripeBillingAccount(c, customer)
+  if (stripeEvent.type === 'customer.subscription.deleted' && await completeCurrencyTransition(c, {
+    customerId: stripeData.data.customer_id,
+    currentSubscriptionId: customer.subscription_id,
+    billingAccount: getWebhookBillingAccount(c),
+    stripe: getStripe(c, getWebhookBillingAccount(c)),
+    publishableKey: '',
+  }, stripeEvent.data.object))
+    return c.json(BRES)
+
   await ensureCustomerMetadata(c, stripeData.data.customer_id, org.id, org.created_by)
   stripeData.data.customer_country = await syncStripeCustomerCountry(c, stripeData.data.customer_id)
 

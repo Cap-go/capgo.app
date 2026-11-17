@@ -3373,6 +3373,8 @@ export type Database = {
           canceled_at: string | null
           churn_reason: string | null
           created_at: string
+          billing_address: Json | null
+          billing_currency: string | null
           customer_country: string | null
           customer_id: string
           extra_mau: number
@@ -3403,6 +3405,8 @@ export type Database = {
           canceled_at?: string | null
           churn_reason?: string | null
           created_at?: string
+          billing_address?: Json | null
+          billing_currency?: string | null
           customer_country?: string | null
           customer_id: string
           extra_mau?: number
@@ -3433,6 +3437,8 @@ export type Database = {
           canceled_at?: string | null
           churn_reason?: string | null
           created_at?: string
+          billing_address?: Json | null
+          billing_currency?: string | null
           customer_country?: string | null
           customer_id?: string
           extra_mau?: number

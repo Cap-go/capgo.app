@@ -22,3 +22,4 @@ tests/r2-objects-schema.test.ts
 tests/custom-domains-schema.test.ts
 tests/cicd-reminder-dismissal.db.test.ts
 tests/cicd-setup-method.db.test.ts
+tests/billing-profile-storage.test.ts

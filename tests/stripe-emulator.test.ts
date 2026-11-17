@@ -17,6 +17,8 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
 // stripe.ts / stripe_billing.ts now query Postgres directly; replay those reads on the
 // supabase-js style mockedSupabaseAdmin so each case keeps its fixture.
 async function replayOnSupabaseAdmin(text: string, values: unknown[] = []) {
+  if (text.includes('pg_advisory') || text === 'SELECT 1')
+    return []
   const admin = mockedSupabaseAdmin()
   const unwrap = ({ data, error }: { data: unknown, error: unknown }) => {
     if (error)

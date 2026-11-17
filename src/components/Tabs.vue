@@ -124,8 +124,8 @@ const labelClass = 'md:block text-xs md:text-sm font-medium whitespace-nowrap tr
 
 <template>
   <div v-if="!nativeNavbarSegmentsSupported" class="w-full min-w-0 shrink-0">
-    <div class="min-w-0 pb-0">
-      <ul ref="primaryList" :class="[ulPrimaryClass, noWrap ? noWrapClass : 'flex-wrap', primaryOverflowClass]">
+    <div class="flex items-start min-w-0 pb-0">
+      <ul ref="primaryList" class="flex-1 min-w-0" :class="[ulPrimaryClass, noWrap ? noWrapClass : 'flex-wrap', primaryOverflowClass]">
         <li v-for="(tab, i) in tabs" :key="i" class="relative flex items-end mr-1 md:mr-2" :class="{ 'z-20': activeTab === tab.key }" :data-tab-group="tab.group">
           <span v-if="startsNewGroup(tabs, i)" class="self-center w-px h-5 mr-1 md:mr-2 bg-slate-300 dark:bg-slate-700" aria-hidden="true" />
           <button
@@ -142,6 +142,7 @@ const labelClass = 'md:block text-xs md:text-sm font-medium whitespace-nowrap tr
           </button>
         </li>
       </ul>
+      <slot name="primary-end" />
     </div>
     <div class="relative -mt-px border-t bg-blue-50 dark:bg-slate-800/40 border-blue-200/60 dark:border-blue-800/70" :class="secondaryTabs?.length ? 'z-10' : 'z-0'">
       <ul v-if="secondaryTabs?.length" :class="[ulSecondaryClass, noWrap ? noWrapClass : 'flex-wrap']">
@@ -177,5 +178,8 @@ const labelClass = 'md:block text-xs md:text-sm font-medium whitespace-nowrap tr
         </li>
       </ul>
     </div>
+  </div>
+  <div v-else-if="$slots['primary-end']" class="flex justify-end">
+    <slot name="primary-end" />
   </div>
 </template>
