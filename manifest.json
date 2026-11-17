@@ -9,7 +9,12 @@
         "runId": "44009613542",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.61.0",
+        "sha": "a1b14c95653ed37b11d65bcb5b440a1de5842812",
+        "runId": "44082384316",
+        "attempt": 1
+      }
     },
     "api": {
       "success": {
