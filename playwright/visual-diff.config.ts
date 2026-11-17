@@ -683,6 +683,10 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
         address: { line1: '123 Example Street', line2: '', city: 'Berlin', state: '', postal_code: '10115', country: 'DE' },
         taxIds: [{ id: 'txi_visual', type: 'eu_vat', value: 'DE123456789', status: 'verified' }],
       } }))
+      await page.route('**/private/stripe_billing/currency', route => route.fulfill({ json: {
+        currency: 'eur', currencies: ['eur', 'usd'], subscriptionId: 'sub_visual',
+        endsAt: '2030-01-01T00:00:00Z', pendingCurrency: null, regionalDiscountEligible: false,
+      } }))
       await page.route('**/private/stripe_billing/discounts', route => route.fulfill({ json: {
         discounts: [{ name: 'Example offer', code: 'EXAMPLE10', percentOff: 10, amountOff: null, currency: null, endsAt: null }],
       } }))
@@ -691,6 +695,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       if (process.env.VISUAL_DIFF_PHASE === 'after') {
         await page.locator('[data-test="billing-profile-details"]').waitFor()
         await page.locator('[data-test="billing-subscription"] [data-test="billing-discounts"]').waitFor()
+        await page.locator('[data-test="billing-currency"]').getByText('EUR', { exact: true }).waitFor()
       }
     },
   },
@@ -906,7 +911,23 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.getByLabel('Enter the verification code', { exact: true }).waitFor()
     },
   },
-  { slug: 'organization-credits', path: '/settings/organization/credits', auth: true },
+  {
+    slug: 'organization-credits',
+    path: '/settings/organization/credits',
+    auth: true,
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 1280, height: 1400 })
+      await page.route('**/private/config', route => route.fulfill({ json: { stripeEnabled: true } }))
+      await page.route('**/private/credits/quote', route => route.fulfill({ json: { currency: 'eur', unitAmount: 92, unitPrice: 0.92 } }))
+      await page.route('**/private/credits/auto-top-up', route => route.fulfill({ json: {
+        enabled: false, threshold: 10, monthlyLimit: 0, monthlyTotal: 0, hasPaymentMethod: true,
+      } }))
+      await page.reload()
+      if (process.env.VISUAL_DIFF_PHASE === 'after')
+        await page.getByText('Billed in EUR', { exact: false }).waitFor()
+      await page.locator('[data-test="credits-top-up-submit"]').waitFor()
+    },
+  },
   { slug: 'apps', path: '/apps', auth: true },
   {
     slug: 'apps-sidebar-collapsed',
