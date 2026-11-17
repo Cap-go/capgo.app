@@ -135,7 +135,11 @@ CREATE TABLE IF NOT EXISTS public.daily_storage_hourly_refreshes (
     owner_org uuid NOT NULL,
     cycle_start date NOT NULL,
     segment_start timestamptz NOT NULL,
+    -- When the refresh started (orders refreshes).
     written_at timestamptz NOT NULL,
+    -- How far its calculation went (finalization checks: a backfill with an
+    -- earlier end does not count as covering what came after).
+    calculated_until timestamptz NOT NULL,
     PRIMARY KEY (app_id, owner_org, cycle_start, segment_start)
 );
 
@@ -166,7 +170,8 @@ CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
     p_rows jsonb,
     p_written_at timestamptz,
     p_require_current_owner boolean DEFAULT true,
-    p_app_uuid uuid DEFAULT NULL
+    p_app_uuid uuid DEFAULT NULL,
+    p_calculated_until timestamptz DEFAULT NULL
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -197,16 +202,18 @@ BEGIN
 
   -- Advance the watermark, or stop: a refresh that started later already
   -- replaced this cycle and segment. The row lock serializes concurrent ones.
-  INSERT INTO public.daily_storage_hourly_refreshes AS refresh (app_id, owner_org, cycle_start, segment_start, written_at)
+  INSERT INTO public.daily_storage_hourly_refreshes AS refresh (app_id, owner_org, cycle_start, segment_start, written_at, calculated_until)
   VALUES (
     p_app_id,
     p_owner_org,
     p_cycle_start_day,
     p_segment_start,
-    p_written_at
+    p_written_at,
+    COALESCE(p_calculated_until, p_written_at)
   )
   ON CONFLICT (app_id, owner_org, cycle_start, segment_start) DO UPDATE
-    SET written_at = EXCLUDED.written_at
+    SET written_at = EXCLUDED.written_at,
+        calculated_until = EXCLUDED.calculated_until
     WHERE refresh.written_at <= EXCLUDED.written_at;
   IF NOT FOUND THEN
     RETURN;
@@ -247,10 +254,10 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid) TO service_role;
+ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 2c. Cycle storage usage for the console
@@ -368,15 +375,15 @@ BEGIN
               AND stored.deleted = false
           )
           OR EXISTS (
-            -- Compared with the latest storage refresh's cutoff (taken before
-            -- it read version_meta), not stats_updated_at (its completion):
-            -- a removal while a refresh was running still gets refreshed.
+            -- Compared with how far the latest storage refresh calculated (it
+            -- read version_meta up to there), not stats_updated_at (its
+            -- completion): a removal while a refresh ran still gets refreshed.
             SELECT 1
             FROM public.version_meta event
             WHERE event.app_id = a.app_id
               AND event.timestamp > COALESCE(
                 (
-                  SELECT pg_catalog.timezone('UTC', max(refresh.written_at))
+                  SELECT pg_catalog.timezone('UTC', max(refresh.calculated_until))
                   FROM public.daily_storage_hourly_refreshes refresh
                   WHERE refresh.app_id = a.app_id
                     AND refresh.owner_org = a.owner_org

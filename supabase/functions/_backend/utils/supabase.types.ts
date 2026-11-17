@@ -1498,6 +1498,7 @@ export type Database = {
       daily_storage_hourly_refreshes: {
         Row: {
           app_id: string
+          calculated_until: string
           cycle_start: string
           owner_org: string
           segment_start: string
@@ -1505,6 +1506,7 @@ export type Database = {
         }
         Insert: {
           app_id: string
+          calculated_until: string
           cycle_start: string
           owner_org: string
           segment_start: string
@@ -1512,6 +1514,7 @@ export type Database = {
         }
         Update: {
           app_id?: string
+          calculated_until?: string
           cycle_start?: string
           owner_org?: string
           segment_start?: string
@@ -6087,6 +6090,7 @@ export type Database = {
         Args: {
           p_app_id: string
           p_app_uuid?: string
+          p_calculated_until?: string
           p_cycle_end_day: string
           p_cycle_start_day: string
           p_end_exclusive_day: string

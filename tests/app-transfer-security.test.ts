@@ -143,6 +143,7 @@ describe('app transfer security', () => {
     await refresh.connect()
     const today = new Date().toISOString().slice(0, 10)
     let refreshWrittenAt = 0
+    let refreshCommittingAt = 0
     try {
       await refresh.query('BEGIN')
       const [{ written_at }] = (await refresh.query<{ written_at: string }>(
@@ -168,23 +169,34 @@ describe('app transfer security', () => {
         p_new_org_id: destinationOrgId,
       }).then(result => result)
 
-      // The transfer is blocked on the refresh's lock.
+      // The transfer reaches the app row and blocks on the refresh's lock: a backend waits on an
+      // ungranted lock, and the transfer has not answered while the lock is held.
       let waiting = false
-      for (let attempt = 0; attempt < 50 && !waiting; attempt++) {
+      for (let attempt = 0; attempt < 100 && !waiting; attempt++) {
         const { rows } = await refresh.query<{ waiting: boolean }>(
           `SELECT EXISTS (
-             SELECT 1 FROM pg_catalog.pg_stat_activity
-             WHERE pid <> pg_catalog.pg_backend_pid()
-               AND wait_event_type = 'Lock'
-               AND query ILIKE '%transfer_app%'
+             SELECT 1 FROM pg_catalog.pg_locks
+             WHERE NOT granted AND pid <> pg_catalog.pg_backend_pid()
            ) AS waiting`,
         )
         waiting = rows[0]?.waiting ?? false
         if (!waiting)
           await new Promise(resolve => setTimeout(resolve, 100))
       }
-      expect(waiting).toBe(true)
+      if (!waiting) {
+        const early = await Promise.race([transferPromise, new Promise(resolve => setTimeout(resolve, 2000, 'still pending'))])
+        throw new Error(`transfer_app did not wait on the refresh lock: ${JSON.stringify(early)}`)
+      }
+      const settled = await Promise.race([
+        transferPromise.then(() => 'answered'),
+        new Promise(resolve => setTimeout(resolve, 500, 'pending')),
+      ])
+      expect(settled).toBe('pending')
 
+      // The last instant of the refresh, just before it commits: the transfer started earlier
+      // (it is waiting), so its transaction-start now() would be before this.
+      const [{ committing_at }] = (await refresh.query<{ committing_at: string }>('SELECT pg_catalog.clock_timestamp()::text AS committing_at')).rows
+      refreshCommittingAt = Date.parse(committing_at)
       await refresh.query('COMMIT')
       const transferResult = await transferPromise
       expect(transferResult.error).toBeNull()
@@ -230,6 +242,7 @@ describe('app transfer security', () => {
     const transferredAt = Date.parse(String((appRow.transfer_history![0] as { transferred_at: string }).transferred_at))
     expect(transferredAt).toBeGreaterThan(refreshWrittenAt)
     expect(transferredAt).toBeGreaterThan(Date.parse(watermark.written_at))
+    expect(transferredAt).toBeGreaterThan(refreshCommittingAt)
     expect(versionRows.length).toBeGreaterThan(0)
     expect(versionRows.every(version => version.owner_org === destinationOrgId)).toBe(true)
   })

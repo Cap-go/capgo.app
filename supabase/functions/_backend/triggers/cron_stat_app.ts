@@ -432,7 +432,8 @@ async function replaceCycleStorageHourly(
          p_rows => $7::jsonb,
          p_written_at => $8::timestamptz,
          p_require_current_owner => $9::boolean,
-         p_app_uuid => $10::uuid
+         p_app_uuid => $10::uuid,
+         p_calculated_until => $11::timestamptz
        )`,
       [
         options.appId,
@@ -445,6 +446,8 @@ async function replaceCycleStorageHourly(
         writtenAt,
         options.requireCurrentOwner ?? true,
         options.appUuid ?? null,
+        // How far this calculation went: the finalization checks compare against it.
+        new Date(Math.min(parseTimestampMs(options.cycleEnd), options.currentHour ? parseTimestampMs(options.currentHour) : parseTimestampMs(writtenAt))).toISOString(),
       ],
     )
     return { data: null, error: null }
@@ -453,10 +456,10 @@ async function replaceCycleStorageHourly(
   return calculation
 }
 
-/** Start time of the latest refresh applied to an app/org/cycle/segment, if any. */
+/** How far the latest refresh of an app/org/cycle/segment calculated, if any. */
 async function readStorageRefreshedAt(pg: PgClient, appId: string, ownerOrg: string, cycleStartDay: string, segmentStart: string) {
-  const { rows } = await pg.query<{ written_at: string | Date | null }>(
-    `SELECT written_at
+  const { rows } = await pg.query<{ calculated_until: string | Date | null }>(
+    `SELECT calculated_until
      FROM public.daily_storage_hourly_refreshes
      WHERE app_id = $1
        AND owner_org = $2::uuid
@@ -464,7 +467,7 @@ async function readStorageRefreshedAt(pg: PgClient, appId: string, ownerOrg: str
        AND segment_start = $4::timestamptz`,
     [appId, ownerOrg, cycleStartDay, segmentStart],
   )
-  return toIsoTimestamp(rows[0]?.written_at)
+  return toIsoTimestamp(rows[0]?.calculated_until)
 }
 
 async function readSegmentRefreshedAt(c: Context, pg: PgClient, appId: string, ownerOrg: string, cycleStart: string, ownedSince: string | null) {

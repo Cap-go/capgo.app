@@ -349,7 +349,7 @@ describe('on_app_delete trigger', () => {
     try {
       pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
         if (sql.includes('FROM public.daily_storage_hourly_refreshes'))
-          return { rows: finalizedAt ? [{ written_at: finalizedAt }] : [], rowCount: finalizedAt ? 1 : 0 } as any
+          return { rows: finalizedAt ? [{ calculated_until: finalizedAt }] : [], rowCount: finalizedAt ? 1 : 0 } as any
         if (sql.includes('FROM public.version_meta')) {
           const until = Date.parse(String(params?.[1]))
           const rows = [{ timestamp: '2026-01-01T00:00:00.000Z', version_id: 1, size: 100 }]
@@ -447,7 +447,7 @@ describe('on_app_delete trigger', () => {
     pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
       if (sql.includes('FROM public.daily_storage_hourly_refreshes')) {
         const writtenAt = refreshedAt[`${params?.[1]}|${params?.[2]}`]
-        return { rows: writtenAt ? [{ written_at: writtenAt }] : [], rowCount: writtenAt ? 1 : 0 } as any
+        return { rows: writtenAt ? [{ calculated_until: writtenAt }] : [], rowCount: writtenAt ? 1 : 0 } as any
       }
       if (sql.includes('FROM public.version_meta')) {
         const until = Date.parse(String(params?.[1]))

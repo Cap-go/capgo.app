@@ -392,8 +392,8 @@ SELECT
 
 SELECT
     ok(
-        NOT has_function_privilege('authenticated', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid)', 'EXECUTE')
-        AND NOT has_function_privilege('anon', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid)', 'EXECUTE'),
+        NOT has_function_privilege('authenticated', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz)', 'EXECUTE')
+        AND NOT has_function_privilege('anon', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz)', 'EXECUTE'),
         'replace_app_storage_hourly is not callable by clients'
     );
 
@@ -515,8 +515,8 @@ SELECT 'com.test.gbhours.lastbundle', '', 'GB hours last bundle', org_id, '6aa76
 INSERT INTO public.app_stats_refresh_state (app_id, owner_org, stats_updated_at)
 SELECT 'com.test.gbhours.lastbundle', org_id, pg_catalog.timezone('UTC', now()) - interval '21 hours' FROM gbh_ctx
 ON CONFLICT (app_id) DO UPDATE SET stats_updated_at = EXCLUDED.stats_updated_at, stats_refresh_requested_at = NULL;
-INSERT INTO public.daily_storage_hourly_refreshes (app_id, owner_org, cycle_start, segment_start, written_at)
-SELECT 'com.test.gbhours.lastbundle', org_id, CURRENT_DATE - 10, '-infinity', now() - interval '2 days' FROM gbh_ctx;
+INSERT INTO public.daily_storage_hourly_refreshes (app_id, owner_org, cycle_start, segment_start, written_at, calculated_until)
+SELECT 'com.test.gbhours.lastbundle', org_id, CURRENT_DATE - 10, '-infinity', now() - interval '2 days', now() - interval '2 days' FROM gbh_ctx;
 INSERT INTO public.version_meta (timestamp, app_id, version_id, size) VALUES
 (pg_catalog.timezone('UTC', now()) - interval '40 days', 'com.test.gbhours.lastbundle', 9100201, 100),
 (pg_catalog.timezone('UTC', now()) - interval '1 day', 'com.test.gbhours.lastbundle', 9100201, -100);
