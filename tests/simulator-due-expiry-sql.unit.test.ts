@@ -40,19 +40,29 @@ afterAll(async () => {
   await db.close()
 })
 
+async function queryDueIds(skipIds: string[]): Promise<string[]> {
+  await db.exec('BEGIN')
+  try {
+    const { rows } = await db.query<{ id: string }>(
+      SIMULATOR_SESSIONS_DUE_FOR_EXPIRY_SQL,
+      [orgId, skipIds],
+    )
+    return rows.map(row => row.id).sort()
+  }
+  finally {
+    await db.exec('ROLLBACK')
+  }
+}
+
 describe('simulator due-for-expiry device stop SQL', () => {
-  it('returns idle-not-skipped and max-due rows only', async () => {
+  it('returns idle-not-skipped and max-due rows when skip list is set', async () => {
     const skipIds = [idleSkippedId, maxDueSkippedId]
-    await db.exec('BEGIN')
-    try {
-      const { rows } = await db.query<{ id: string }>(
-        SIMULATOR_SESSIONS_DUE_FOR_EXPIRY_SQL,
-        [orgId, skipIds],
-      )
-      expect(rows.map(row => row.id).sort()).toEqual([idleDueId, maxDueSkippedId].sort())
-    }
-    finally {
-      await db.exec('ROLLBACK')
-    }
+    await expect(queryDueIds(skipIds)).resolves.toEqual([idleDueId, maxDueSkippedId].sort())
+  })
+
+  it('returns every idle due row when skip list is empty', async () => {
+    await expect(queryDueIds([])).resolves.toEqual(
+      [idleDueId, idleSkippedId, maxDueSkippedId].sort(),
+    )
   })
 })
