@@ -71,8 +71,11 @@ describe('serving policy', () => {
   it('fails closed on a Deno gateway failure before any app data', async () => {
     const { app, env, dataAccess } = harness(() => document())
     const { PLUGIN_STATE_POINTERS: _binding, ...denoEnv } = env
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ active: false }, { status: 503 })))
-    expect((await app.fetch(request(), denoEnv)).status).toBe(503)
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ active: false }, { status: 503 }))
+    vi.stubGlobal('fetch', fetcher)
+    expect((await app.fetch(request(), { ...denoEnv, PLUGIN_REGION_TARGETS: configs.plugin_region_targets.preprod })).status).toBe(503)
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe('https://plugin.preprod.capgo.app/serving_policy/' + appId)
     expect(dataAccess).not.toHaveBeenCalled()
   })
 

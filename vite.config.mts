@@ -315,15 +315,23 @@ function frontendEnvironmentPlugin(): Plugin {
 
 function consoleResponseHeadersPlugin(): Plugin {
   let outputDirectory: string
+  let servingPolicyUrl: string | undefined
   return {
     name: 'capgo-console-response-headers',
     apply: 'build',
     configResolved(config) {
       outputDirectory = path.resolve(config.root, config.build.outDir)
+      const definition = config.define['import.meta.env.VITE_SERVING_POLICY_URL']
+      if (definition !== undefined) {
+        const value: unknown = typeof definition === 'string' ? JSON.parse(definition) : definition
+        if (typeof value !== 'string')
+          throw new Error('The compiled serving policy URL must be a string')
+        servingPolicyUrl = value
+      }
     },
     writeBundle() {
       const headersPath = path.join(outputDirectory, '_headers')
-      writeFileSync(headersPath, withConsoleContentSecurityPolicy(readFileSync(headersPath, 'utf8')))
+      writeFileSync(headersPath, withConsoleContentSecurityPolicy(readFileSync(headersPath, 'utf8'), { servingPolicyUrl }))
     },
   }
 }
