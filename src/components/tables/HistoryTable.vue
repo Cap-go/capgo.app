@@ -5,7 +5,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { z } from 'zod'
-import { confirmAndRollbackChannel } from '~/services/channelRollback'
+import { confirmAndRollbackChannel, readChannelRollbackContext } from '~/services/channelRollback'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { createHistoryContextLoader } from '~/services/historyContext'
@@ -92,31 +92,16 @@ async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promi
   if (!props.channelId)
     return true
 
-  try {
-    const { data, error } = await capgo
-      .from('channels')
-      .select('name, version, current:app_versions!channels_version_fkey(name), rollout:app_versions!channels_rollout_version_fkey(name)')
-      .eq('id', props.channelId)
-      .single()
-
-    if (error) {
-      console.error('Error fetching current version:', error)
-      return false
-    }
-
-    if (isCurrent()) {
-      currentVersionId.value = data.version
-      channelName.value = data.name
-      const currentName = (data.current as { name: string } | null)?.name ?? null
-      currentVersionName.value = currentName && !['builtin', 'unknown'].includes(currentName) ? currentName : null
-      rolloutTargetName.value = (data.rollout as { name: string } | null)?.name ?? null
-    }
-    return true
-  }
-  catch (error) {
-    console.error('Error fetching current version:', error)
+  const context = await readChannelRollbackContext(props.channelId)
+  if (!context)
     return false
+  if (isCurrent()) {
+    currentVersionId.value = context.versionId
+    channelName.value = context.channelName
+    currentVersionName.value = context.versionName
+    rolloutTargetName.value = context.rolloutTargetName
   }
+  return true
 }
 
 // Check if an item is the current version

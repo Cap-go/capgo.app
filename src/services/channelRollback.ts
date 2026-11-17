@@ -5,6 +5,41 @@ import { invalidateChannelImpact } from '~/services/channelImpact'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { useConsole } from '~/services/console'
 
+export interface ChannelRollbackContext {
+  channelName: string
+  versionId: number | null
+  /** Bundle the channel serves, or null for the store version. */
+  versionName: string | null
+  /** A rollback sets a new stable bundle, which resets any configured rollout. */
+  rolloutTargetName: string | null
+}
+
+/** What the history tables need about a channel to offer a rollback; null when it cannot be read. */
+export async function readChannelRollbackContext(channelId: number): Promise<ChannelRollbackContext | null> {
+  try {
+    const { data, error } = await useConsole()
+      .from('channels')
+      .select('name, version, current:app_versions!channels_version_fkey(name), rollout:app_versions!channels_rollout_version_fkey(name)')
+      .eq('id', channelId)
+      .single()
+    if (error || !data) {
+      console.error('Error fetching current version:', error)
+      return null
+    }
+    const currentName = (data.current as { name: string } | null)?.name ?? null
+    return {
+      channelName: data.name,
+      versionId: data.version,
+      versionName: currentName && !['builtin', 'unknown'].includes(currentName) ? currentName : null,
+      rolloutTargetName: (data.rollout as { name: string } | null)?.name ?? null,
+    }
+  }
+  catch (error) {
+    console.error('Error fetching current version:', error)
+    return null
+  }
+}
+
 /**
  * "Rollback to this version" from the history tables: the same impact confirm
  * as setting a bundle, then the write. Everything stays bound to the channel

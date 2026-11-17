@@ -38,45 +38,6 @@ const loading = ref(true)
 const hasDevices = ref(false)
 // Cached row first, then a background refresh; stale reads never apply (see useChannelRecord).
 const { channel, load: loadChannel, beginNavigation } = useChannelRecord<Database['public']['Tables']['channels']['Row'] & Channel>({
-  read: async (channelId) => {
-    const { data, error } = await capgo
-      .from('channels')
-      .select(`
-          id,
-          name,
-          public,
-          owner_org,
-          version:app_versions!channels_version_fkey(
-            id,
-            name,
-            app_id,
-            created_at,
-            min_update_version,
-            storage_provider,
-            link,
-            comment
-          ),
-          created_at,
-          app_id,
-          allow_emulator,
-          allow_device,
-          allow_dev,
-          allow_prod,
-          allow_device_self_set,
-          disable_auto_update_under_native,
-          disable_auto_update,
-          ios,
-          android,
-          updated_at
-        `)
-      .eq('id', channelId)
-      .single()
-    if (error) {
-      console.error('no channel', error)
-      return null
-    }
-    return data
-  },
   normalize: row => withBuiltinChannelVersion(row) as any,
 })
 const deviceIdInput = ref('')

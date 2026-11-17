@@ -103,68 +103,6 @@ const id = ref<number>(0)
 const loading = ref(true)
 // Cached row first, then a background refresh; stale reads never apply (see useChannelRecord).
 const { channel, load: loadChannel, beginNavigation } = useChannelRecord<Database['public']['Tables']['channels']['Row'] & Channel>({
-  read: async (channelId) => {
-    const { data, error } = await capgo
-      .from('channels')
-      .select(`
-          id,
-          name,
-          public,
-          owner_org,
-          version:app_versions!channels_version_fkey(
-            id,
-            name,
-            app_id,
-            created_at,
-            min_update_version,
-            storage_provider,
-            link,
-            comment
-          ),
-          rollout_version,
-          rollout_percentage_bps,
-          rollout_enabled,
-          rollout_id,
-          rollout_paused_at,
-          rollout_pause_reason,
-          rollout_cache_ttl_seconds,
-          paused_at,
-          auto_pause_enabled,
-          auto_pause_window_minutes,
-          auto_pause_failure_rate_bps,
-          auto_pause_confidence,
-          auto_pause_min_attempts,
-          auto_pause_min_failures,
-          auto_pause_action,
-          auto_pause_cooldown_minutes,
-          auto_pause_last_triggered_at,
-          rollout_version_info:app_versions!channels_rollout_version_fkey(
-            id,
-            name
-          ),
-          created_at,
-          app_id,
-          allow_emulator,
-          allow_device,
-          allow_dev,
-          allow_prod,
-          allow_device_self_set,
-          disable_auto_update_under_native,
-          disable_auto_update,
-          update_package,
-          ios,
-          android,
-          electron,
-          updated_at
-        `)
-      .eq('id', channelId)
-      .single()
-    if (error) {
-      console.error('no channel', error)
-      return null
-    }
-    return data
-  },
   normalize: row => withBuiltinChannelVersion(row) as any,
 })
 const defaultUploadChannel = ref<string | null>(null)
