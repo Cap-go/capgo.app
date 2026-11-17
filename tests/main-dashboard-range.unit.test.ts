@@ -101,6 +101,18 @@ describe('main store dashboard range normalization', () => {
     expect(store.totalDownload).toBe(2220)
   })
 
+  it('loads the current organization storage and feeds it to the plan suggestion', async () => {
+    const { useMainStore } = await import('../src/stores/main.ts')
+    const store = useMainStore()
+
+    await store.updateDashboard('org-123')
+
+    expect(mockGetTotalStorage).toHaveBeenCalledWith('org-123')
+    expect(store.totalStorage).toBe(321)
+    expect(store.totalStats.storage).toBe(321)
+    expect(mockFindBestPlan).toHaveBeenCalledWith(expect.objectContaining({ storage: 321 }))
+  })
+
   it('coalesces concurrent global dashboard statistics requests but still allows a later refresh', async () => {
     const { useMainStore } = await import('../src/stores/main.ts')
     const store = useMainStore()

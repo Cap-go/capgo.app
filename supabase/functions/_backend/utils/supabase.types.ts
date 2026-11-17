@@ -432,6 +432,8 @@ export type Database = {
       }
       apps: {
         Row: {
+          serving_regions: string[]
+          serving_region_mode: string
           allow_device_custom_id: boolean
           allow_preview: boolean
           android_store_url: string | null
@@ -465,6 +467,8 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          serving_regions?: string[]
+          serving_region_mode?: string
           allow_device_custom_id?: boolean
           allow_preview?: boolean
           android_store_url?: string | null
@@ -498,6 +502,8 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          serving_regions?: string[]
+          serving_region_mode?: string
           allow_device_custom_id?: boolean
           allow_preview?: boolean
           android_store_url?: string | null

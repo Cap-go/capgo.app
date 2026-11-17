@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(15);
+SELECT plan(16);
 
 -- Access: only postgres reads private.settings; the API roles cannot reach it.
 SELECT ok(
@@ -66,6 +66,9 @@ SELECT is(
     0,
     'no function outside the vault schema references vault'
 );
+
+-- Vault matched private.settings, so the migration dropped it.
+SELECT hasnt_extension('supabase_vault', 'supabase_vault is dropped');
 
 -- The seed fills the settings the functions need.
 SELECT

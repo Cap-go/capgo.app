@@ -1,3 +1,4 @@
+import { servingCachePartition } from './servingPolicy.ts'
 import type { KVNamespace } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { PluginStateAppDoc, PluginStateDeviceDoc, PluginStateManifestDoc, PluginStateManifestFallbackDoc, PluginStateVersionDoc } from './pluginStateFormat.ts'
@@ -105,6 +106,8 @@ function forcedMode(c: AnyContext): 'kv' | 'db' | null {
 
 /** True when this device's requests are served from the plugin state (before the document is read). */
 export function shouldUsePluginState(c: AnyContext, appId: string, deviceId: string) {
+  if (servingCachePartition(c))
+    return false
   if (!getStore(c))
     return false
   const forced = forcedMode(c)

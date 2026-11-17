@@ -6,10 +6,13 @@
  */
 
 import configs from '../configs.json'
+import { servingPolicyStatusBaseUrl } from './serving-policy-status-url'
+import { getRightKey } from './utils.mjs'
 
 export interface ConsoleCspOptions {
   /** Local Vite dev server — allow http/ws to localhost. */
   dev?: boolean
+  servingPolicyUrl?: string
 }
 
 function joinSources(sources: string[]) {
@@ -55,20 +58,16 @@ function getDeployTimeConnectOverrides(): string[] {
   return overrides
 }
 
-function getConfiguredConnectSources(dev: boolean): string[] {
+function getConfiguredConnectSources(dev: boolean, servingPolicyUrl?: string): string[] {
   const sources = new Set<string>()
-  const envKeys = dev
-    ? (['prod', 'preprod', 'development', 'local'] as const)
-    : (['prod'] as const)
-
-  for (const env of envKeys) {
-    const apiDomain = configs.api_domain?.[env]
-    if (typeof apiDomain === 'string')
-      addConnectOrigin(sources, apiDomain)
-  }
+  const apiDomains = dev ? Object.values(configs.api_domain) : [getRightKey('api_domain')]
+  for (const apiDomain of apiDomains)
+    addConnectOrigin(sources, apiDomain)
 
   for (const raw of getDeployTimeConnectOverrides())
     addConnectOrigin(sources, raw)
+
+  addConnectOrigin(sources, servingPolicyUrl ?? process.env.VITE_SERVING_POLICY_URL ?? servingPolicyStatusBaseUrl(getRightKey('plugin_region_targets')))
 
   return [...sources]
 }
@@ -132,7 +131,7 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
     'https://auth.openai.com', // assistant ChatGPT sign-in token exchange
     'https://api.openai.com', // assistant model calls
     ...PREVIEW_CONNECT_SOURCES,
-    ...getConfiguredConnectSources(dev),
+    ...getConfiguredConnectSources(dev, options.servingPolicyUrl),
     ...(dev
       ? [
           'http://localhost:*',
@@ -178,3 +177,9 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
 }
 
 export const CONSOLE_CONTENT_SECURITY_POLICY = buildConsoleContentSecurityPolicy()
+
+export function withConsoleContentSecurityPolicy(headers: string, options: ConsoleCspOptions = {}): string {
+  if (!/^  Content-Security-Policy: .+$/m.test(headers))
+    throw new Error('No Content-Security-Policy line found in console headers')
+  return headers.replace(/^  Content-Security-Policy: .+$/m, `  Content-Security-Policy: ${buildConsoleContentSecurityPolicy(options)}`)
+}

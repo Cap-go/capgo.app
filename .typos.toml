@@ -97,3 +97,16 @@ loca = "loca" # localtunnel host suffix *.loca.lt detected by the iOS capacitor-
 adress = "adress" # Preserve the requested request_actor_email_adress RPC name.
 jod = "jod" # ISO 4217 Jordanian dinar (three-decimal Stripe currency in stripe-amount.ts)
 # Add more project-specific terms as needed
+
+# Cloudflare colo identifiers and a city name in the routing data are intentional.
+[type.cloudflare-colo-map]
+extend-glob = ["**/servingRegionIngress.ts"]
+
+[type.cloudflare-colo-map.extend-words]
+ANC = "ANC"
+Arica = "Arica"
+EVN = "EVN"
+HEL = "HEL"
+IST = "IST"
+MUC = "MUC"
+TPE = "TPE"
