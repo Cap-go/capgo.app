@@ -21,6 +21,8 @@ const stoppedHere = new Set<string>()
 // While a simulator runs, check every 30 seconds: one that stopped by itself leaves the list.
 const REFRESH_MS = 30_000
 let timer: ReturnType<typeof setInterval> | undefined
+// Only the latest list request may update the card: an older answer can still say running.
+let listRequest = 0
 
 const finished = computed(() => recent.value.filter(item => item.status !== 'in-progress').slice(0, 5))
 
@@ -43,6 +45,7 @@ async function sessionToken() {
 async function loadSessions() {
   const appId = props.appId
   const epoch = simulatorEpoch()
+  const request = ++listRequest
   try {
     const response = await fetch(`${defaultApiHost}/private/simulator/?app_id=${encodeURIComponent(appId)}`, {
       headers: { authorization: `Bearer ${await sessionToken()}` },
@@ -50,7 +53,7 @@ async function loadSessions() {
     if (!response.ok)
       return false
     const payload = await response.json() as { data?: SimulatorSummary[], idle_minutes?: number, max_minutes?: number }
-    if (epoch !== simulatorEpoch() || appId !== props.appId || !Array.isArray(payload.data))
+    if (request !== listRequest || epoch !== simulatorEpoch() || appId !== props.appId || !Array.isArray(payload.data))
       return false
     recent.value = payload.data
     limits.value = { idle: payload.idle_minutes ?? limits.value.idle, max: payload.max_minutes ?? limits.value.max }
@@ -85,15 +88,24 @@ async function refresh() {
   await refreshSessions(await loadSessions())
 }
 
+// A session stopped here that the (cached) list still shows running: its build time is not listed yet.
+function awaitingSummary() {
+  return recent.value.some(item => item.status === 'in-progress' && stoppedHere.has(item.id))
+}
+
+function shouldRefresh() {
+  return document.visibilityState === 'visible' && (sessions.value.length > 0 || awaitingSummary())
+}
+
 function onVisible() {
-  if (document.visibilityState === 'visible' && sessions.value.length > 0)
+  if (shouldRefresh())
     void refresh()
 }
 
 onMounted(() => {
   void refresh()
   timer = setInterval(() => {
-    if (sessions.value.length > 0 && document.visibilityState === 'visible')
+    if (shouldRefresh())
       void refresh()
   }, REFRESH_MS)
   document.addEventListener('visibilitychange', onVisible)

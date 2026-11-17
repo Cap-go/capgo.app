@@ -75,6 +75,19 @@ describe('running simulator sessions', () => {
     expect(runningSimulators(appId)).toHaveLength(0)
   })
 
+  it('keeps a just-started session that a cached list still shows as starting', () => {
+    const appId = 'ee.forgr.starting'
+    rememberSimulator(appId, { id: '9d3a2f51-4e72-41bd-8f66-3e018a5d44f7', url: 'https://ios-emulator.capgo.app/s/new/' })
+    applySimulatorList(appId, [
+      { id: '9d3a2f51-4e72-41bd-8f66-3e018a5d44f7', platform: 'ios', status: 'starting', url: null, started_at: null, finished_at: null, build_time_seconds: null, billable_seconds: null },
+    ])
+    expect(runningSimulators(appId)).toEqual([{ id: '9d3a2f51-4e72-41bd-8f66-3e018a5d44f7', url: 'https://ios-emulator.capgo.app/s/new/' }])
+    applySimulatorList(appId, [
+      { id: '9d3a2f51-4e72-41bd-8f66-3e018a5d44f7', platform: 'ios', status: 'errored', url: null, started_at: null, finished_at: null, build_time_seconds: null, billable_seconds: null },
+    ])
+    expect(runningSimulators(appId)).toEqual([])
+  })
+
   it('formats simulator time the way the usage page does', () => {
     expect(formatSimulatorDuration(null)).toBe('')
     expect(formatSimulatorDuration(42)).toBe('42s')

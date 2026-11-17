@@ -13,7 +13,7 @@ DECLARE
   elapsed bigint;
 BEGIN
   FOR session_row IN
-    SELECT id, app_id, platform, requested_by, max_duration_minutes,
+    SELECT id, app_id, platform, requested_by, max_duration_minutes, started_at, device_stopped_at,
            COALESCE(started_at, created_at) AS opened_at,
            COALESCE(device_stopped_at, now()) AS closed_at
     FROM public.simulator_sessions
@@ -25,6 +25,17 @@ BEGIN
       )
     FOR UPDATE
   LOOP
+    -- A device stopped before the session started ran nothing for the user: like an explicit
+    -- stop, it costs nothing. (The created_at fallback stays for maximum-duration cleanup only.)
+    IF session_row.device_stopped_at IS NOT NULL AND session_row.started_at IS NULL THEN
+      UPDATE public.simulator_sessions
+      SET status = 'stopped',
+          finished_at = session_row.device_stopped_at,
+          updated_at = now()
+      WHERE id = session_row.id;
+      expired_count := expired_count + 1;
+      CONTINUE;
+    END IF;
     elapsed := LEAST(
       session_row.max_duration_minutes * 60,
       GREATEST(1, round(extract(epoch FROM (session_row.closed_at - session_row.opened_at)))::bigint)

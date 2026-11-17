@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(21);
+SELECT plan(24);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -168,6 +168,46 @@ SELECT is(
   (SELECT finished_at FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000004'),
   (SELECT device_stopped_at FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000004'),
   'the session ends when its device stopped'
+);
+
+-- Its device stopped before the session started: nothing ran, nothing is billed.
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, created_at, started_at, device_stopped_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000005',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'ios',
+  'starting',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '2 minutes',
+  NULL,
+  now() - interval '1 minute'
+);
+
+SELECT is(
+  public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+  1,
+  'a session whose device stopped before it started is settled'
+);
+
+SELECT is(
+  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000005'),
+  'stopped',
+  'an unstarted session releases its builder slot'
+);
+
+SELECT is(
+  (
+    SELECT count(*)
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id = '99000000-0000-4000-8000-000000000005'
+  ),
+  0::bigint,
+  'an unstarted session is not billed'
 );
 
 INSERT INTO public.orgs (id, created_by, management_email, name)

@@ -26,6 +26,7 @@ describe('simulator card refresh', () => {
   afterEach(() => {
     clearSimulatorSessions()
     vi.unstubAllGlobals()
+    vi.useRealTimers()
   })
 
   it('removes a missing or stopped session and keeps one whose lookup fails', async () => {
@@ -73,6 +74,66 @@ describe('simulator card refresh', () => {
     expect(runningSimulators(appId)).toHaveLength(0)
     expect(container.textContent).toContain('simulator-auto-stop')
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    app.unmount()
+  })
+
+  it('keeps checking after the last stop until the list shows its build time', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const last = 'bf524173-6094-4d3f-8188-50a3027f6619'
+    rememberSimulator(appId, { id: last, url: 'https://ios-emulator.capgo.app/s/last/' })
+    const running = { id: last, platform: 'ios', status: 'in-progress', url: 'https://ios-emulator.capgo.app/s/last/', started_at: '2026-11-09T12:00:00.000Z', finished_at: null, build_time_seconds: null, billable_seconds: null }
+    const settled = { ...running, status: 'stopped', url: null, finished_at: '2026-11-09T12:07:00.000Z', build_time_seconds: 420, billable_seconds: 840 }
+    let lists = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST' && url.endsWith(`/private/simulator/${last}/stop`))
+        return new Response(JSON.stringify({ data: { id: last, status: 'stopped' } }), { status: 200 })
+      if (url.includes('/private/simulator/?app_id=')) {
+        lists++
+        // The first two answers come from the cache: the session still shows running.
+        return new Response(JSON.stringify({ data: [lists <= 2 ? running : settled] }), { status: 200 })
+      }
+      throw new Error(`unexpected ${url}`)
+    }))
+    const container = document.createElement('div')
+    const app = createApp(SimulatorSessionCard, { appId })
+    app.mount(container)
+    await vi.waitFor(() => expect(lists).toBe(1))
+    const stop = [...container.querySelectorAll('button')].find(button => button.textContent?.includes('stop-simulator'))
+    stop?.click()
+    await vi.waitFor(() => expect(lists).toBe(2))
+    expect(runningSimulators(appId)).toHaveLength(0)
+    expect(container.textContent).not.toContain('simulator-ran-for')
+    vi.advanceTimersByTime(30_000)
+    await vi.waitFor(() => expect(container.textContent).toContain('simulator-ran-for'))
+    expect(runningSimulators(appId)).toHaveLength(0)
+    app.unmount()
+  })
+
+  it('ignores a list answer that a newer request superseded', async () => {
+    const other = 'c0635284-7105-4e4e-9299-61b4138f772a'
+    const running = { id: other, platform: 'ios', status: 'in-progress', url: 'https://ios-emulator.capgo.app/s/other/', started_at: '2026-11-09T12:00:00.000Z', finished_at: null, build_time_seconds: null, billable_seconds: null }
+    const settled = { ...running, status: 'stopped', url: null, finished_at: '2026-11-09T12:07:00.000Z', build_time_seconds: 420, billable_seconds: 840 }
+    const answers: Array<(response: Response) => void> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/private/simulator/?app_id='))
+        return new Promise<Response>(resolve => answers.push(resolve))
+      throw new Error(`unexpected ${url}`)
+    }))
+    const container = document.createElement('div')
+    const app = createApp(SimulatorSessionCard, { appId })
+    app.mount(container)
+    await vi.waitFor(() => expect(answers).toHaveLength(1))
+    document.dispatchEvent(new Event('visibilitychange'))
+    rememberSimulator(appId, { id: other, url: running.url })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.waitFor(() => expect(answers).toHaveLength(2))
+    // The newer request answers first: the session stopped. The older one still says running.
+    answers[1]!(new Response(JSON.stringify({ data: [settled] }), { status: 200 }))
+    await vi.waitFor(() => expect(container.textContent).toContain('simulator-ran-for'))
+    answers[0]!(new Response(JSON.stringify({ data: [running] }), { status: 200 }))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(runningSimulators(appId)).toHaveLength(0)
+    expect(container.textContent).toContain('simulator-ran-for')
     app.unmount()
   })
 })
