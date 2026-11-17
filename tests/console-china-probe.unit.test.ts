@@ -1,3 +1,4 @@
+// China console probe and banner behavior (unit).
 import { describe, expect, it, vi } from 'vitest'
 import {
   isChinaCapgoConsoleHostname,
