@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(20);
+SELECT plan(22);
 
 -- Grants: authenticated callers only, never anonymous.
 SELECT
@@ -67,10 +67,13 @@ INSERT INTO public.compatibility_events (
 )
 VALUES
 ('046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'com.demo.app', 'default_channel_version_changed', 'ios', 990001, 'production', '2.0.0', '1.0.0'),
-('046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'com.demo.app', 'default_channel_version_changed', 'ios', 990002, 'production', '2.0.0', '1.0.0');
+('046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'com.demo.app', 'default_channel_version_changed', 'ios', 990002, 'production', '2.0.0', '1.0.0'),
+('046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'com.demo.app', 'default_channel_version_changed', 'ios', 990003, 'production', '2.0.0', '1.0.0');
 
 CREATE TEMP TABLE fanout_events AS
-SELECT array_agg(id ORDER BY id) AS ids FROM public.compatibility_events WHERE channel_id IN (990001, 990002);
+SELECT
+    (SELECT array_agg(id ORDER BY id) FROM public.compatibility_events WHERE channel_id IN (990001, 990002)) AS ids,
+    (SELECT id FROM public.compatibility_events WHERE channel_id = 990003) AS rollback_id;
 GRANT SELECT ON fanout_events TO authenticated;
 
 SELECT tests.authenticate_as('test_user');
@@ -208,6 +211,21 @@ SELECT
         ),
         2::bigint,
         'every event of the batch is accepted with the reason and the caller'
+    );
+
+-- All or nothing: an authorized event followed by an unknown id accepts neither.
+SELECT
+    throws_ok(
+        $$SELECT public.acknowledge_compatibility_events(ARRAY[(SELECT rollback_id FROM fanout_events), 999999999]::bigint[], 'partial')$$,
+        'not_authorized',
+        'one refused id fails the whole batch'
+    );
+
+SELECT
+    is(
+        (SELECT resolved_at FROM public.compatibility_events WHERE id = (SELECT rollback_id FROM fanout_events)),
+        NULL,
+        'the authorized event of a refused batch is rolled back (still unresolved)'
     );
 
 SELECT tests.clear_authentication();

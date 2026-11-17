@@ -5,6 +5,9 @@ import { readAllConsoleRows } from '~/services/consoleRows'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from './organization'
 
+/** Reuse the organization store's app catalog only while it is this recent. */
+const ORG_STORE_APPS_MAX_AGE_MS = 5 * 60_000
+
 export const useDashboardAppsStore = defineStore('dashboardApps', () => {
   const apps = ref<{ app_id: string, name: string | null }[]>([])
   const isLoading = ref(false)
@@ -61,7 +64,8 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
 
     // The organization store already holds this organization's apps (same
     // columns): reuse them instead of querying the apps table again.
-    const storeApps = force ? undefined : organizationStore.getFreshOrgApps(orgId)
+    // Bounded age: a rename elsewhere does not change app_count.
+    const storeApps = force ? undefined : organizationStore.getFreshOrgApps(orgId, ORG_STORE_APPS_MAX_AGE_MS)
     if (storeApps) {
       apps.value = storeApps
         .map(app => ({ app_id: app.app_id, name: app.name }))

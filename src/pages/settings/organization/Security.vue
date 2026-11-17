@@ -304,6 +304,9 @@ async function loadData() {
       }),
     ])
     const { data: orgData, error: orgError } = orgResult
+    // Another organization was selected meanwhile: its own load applies.
+    if (currentOrganization.value?.gid !== orgId)
+      return
 
     if (orgError) {
       console.error('Error loading org settings:', orgError)
@@ -326,8 +329,8 @@ async function loadData() {
 
     // Members with their 2FA and password policy compliance status
     await Promise.all([
-      loadMembersWithMfaStatus(members),
-      loadMembersWithPasswordPolicyStatus(members),
+      loadMembersWithMfaStatus(members, orgId),
+      loadMembersWithPasswordPolicyStatus(members, orgId),
     ])
   }
   catch (error) {
@@ -339,23 +342,29 @@ async function loadData() {
   }
 }
 
-async function loadMembersWithMfaStatus(preloadedMembers?: OrgMembers | null) {
-  if (!currentOrganization.value?.gid || !hasOrgPerm.value)
+async function loadMembersWithMfaStatus(preloadedMembers?: OrgMembers | null, scopeOrgId?: string) {
+  // Members preloaded by loadData belong to scopeOrgId: never mix them with
+  // another organization's status, and drop results once the org changed.
+  const orgId = scopeOrgId ?? currentOrganization.value?.gid
+  if (!orgId || orgId !== currentOrganization.value?.gid || !hasOrgPerm.value)
     return
+  const isCurrentOrg = () => currentOrganization.value?.gid === orgId
 
   try {
     // Get org members (reuse the list loadData already fetched)
     const members = preloadedMembers === undefined
-      ? await fetchOrgMembers(currentOrganization.value.gid)
+      ? await fetchOrgMembers(orgId)
       : preloadedMembers
-    if (!members)
+    if (!members || !isCurrentOrg())
       return
 
     // Get 2FA status for all members
     const { data: mfaStatus, error: mfaError } = await capgo
       .rpc('check_org_members_2fa_enabled', {
-        org_id: currentOrganization.value.gid,
+        org_id: orgId,
       })
+    if (!isCurrentOrg())
+      return
 
     if (mfaError) {
       console.error('Error loading MFA status:', mfaError)
@@ -398,9 +407,13 @@ async function loadMembersWithMfaStatus(preloadedMembers?: OrgMembers | null) {
   }
 }
 
-async function loadMembersWithPasswordPolicyStatus(preloadedMembers?: OrgMembers | null) {
-  if (!currentOrganization.value?.gid || !hasOrgPerm.value)
+async function loadMembersWithPasswordPolicyStatus(preloadedMembers?: OrgMembers | null, scopeOrgId?: string) {
+  // Members preloaded by loadData belong to scopeOrgId: never mix them with
+  // another organization's status, and drop results once the org changed.
+  const orgId = scopeOrgId ?? currentOrganization.value?.gid
+  if (!orgId || orgId !== currentOrganization.value?.gid || !hasOrgPerm.value)
     return
+  const isCurrentOrg = () => currentOrganization.value?.gid === orgId
 
   // Only load if password policy is enabled
   const config = currentOrganization.value?.password_policy_config
@@ -410,16 +423,18 @@ async function loadMembersWithPasswordPolicyStatus(preloadedMembers?: OrgMembers
   try {
     // Get org members (reuse the list loadData already fetched)
     const members = preloadedMembers === undefined
-      ? await fetchOrgMembers(currentOrganization.value.gid)
+      ? await fetchOrgMembers(orgId)
       : preloadedMembers
-    if (!members)
+    if (!members || !isCurrentOrg())
       return
 
     // Get password policy compliance status for all members
     const { data: complianceStatus, error: complianceError } = await capgo
       .rpc('check_org_members_password_policy', {
-        org_id: currentOrganization.value.gid,
+        org_id: orgId,
       })
+    if (!isCurrentOrg())
+      return
 
     if (complianceError) {
       console.error('Error loading password policy compliance status:', complianceError)
@@ -1018,6 +1033,12 @@ async function saveApikeyPolicy() {
 // Reload when the organization or a security setting it carries changes, not
 // when the store swaps in a refreshed copy (logo load, unrelated settings save).
 watch(() => organizationSecurityKey(currentOrganization.value), loadData)
+// loadData can run before the permission check resolves (members are skipped
+// then): load them once access is granted.
+watch(hasOrgPerm, (allowed, wasAllowed) => {
+  if (allowed && !wasAllowed)
+    void loadData()
+})
 
 onMounted(async () => {
   await organizationStore.dedupFetchOrganizations()

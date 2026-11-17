@@ -1,7 +1,18 @@
 /** Days per get_update_daily_counts request (the RPC refuses windows over 370 days). */
 export const UPDATE_STATS_MAX_WINDOW_DAYS = 366
 
+/** Apps per get_update_daily_counts request (the RPC refuses more than 1000). */
+export const UPDATE_STATS_MAX_APPS = 1000
+
 const DAY_MS = 24 * 60 * 60 * 1000
+
+/** Split app ids into disjoint chunks the daily update RPC accepts. */
+export function splitUpdateStatsAppIds(appIds: readonly string[], maxApps = UPDATE_STATS_MAX_APPS): string[][] {
+  const chunks: string[][] = []
+  for (let index = 0; index < appIds.length; index += maxApps)
+    chunks.push(appIds.slice(index, index + maxApps))
+  return chunks
+}
 
 export interface UpdateStatsWindow {
   /** Inclusive start date, YYYY-MM-DD (UTC). */

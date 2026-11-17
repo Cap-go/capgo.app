@@ -271,9 +271,13 @@ function stopRefreshPolling() {
   isRefreshPolling.value = false
 }
 
-async function reloadChartsAfterRefresh() {
+// Set when the user asked for the refresh (Reload button): the app list is
+// refetched too, so apps created elsewhere show up. Automatic refreshes keep it.
+let refreshAppCatalogAfterPoll = false
+
+async function reloadChartsAfterRefresh(options: { refreshAppCatalog?: boolean } = {}) {
   clearUsageCaches()
-  await reloadAllCharts()
+  await reloadAllCharts(options)
 }
 
 async function pollRefreshState() {
@@ -291,7 +295,7 @@ async function pollRefreshState() {
       const orgCacheReady = isOrgCacheReadyForRefresh(orgState.stats_updated_at, appState.stats_refresh_requested_at)
       if (appSettled && orgCacheReady) {
         stopRefreshPolling()
-        await reloadChartsAfterRefresh()
+        await reloadChartsAfterRefresh({ refreshAppCatalog: refreshAppCatalogAfterPoll })
         return
       }
     }
@@ -309,7 +313,7 @@ async function pollRefreshState() {
       const orgCacheReady = isOrgCacheReadyForRefresh(orgState.stats_updated_at, orgState.stats_refresh_requested_at)
       if (orgSettled && orgCacheReady) {
         stopRefreshPolling()
-        await reloadChartsAfterRefresh()
+        await reloadChartsAfterRefresh({ refreshAppCatalog: refreshAppCatalogAfterPoll })
         return
       }
     }
@@ -349,6 +353,7 @@ async function queueScopeRefresh(auto = false): Promise<boolean> {
       touchRefreshStateClock()
 
       if (result.requested_at && isChartRefreshInProgress(result.requested_at, localAppStatsUpdatedAt.value, refreshStateClock.value)) {
+        refreshAppCatalogAfterPoll = !auto
         startRefreshPolling()
         return true
       }
@@ -365,13 +370,14 @@ async function queueScopeRefresh(auto = false): Promise<boolean> {
       })
 
       if (result.requested_at && isChartRefreshInProgress(result.requested_at, localOrgStatsUpdatedAt.value, refreshStateClock.value)) {
+        refreshAppCatalogAfterPoll = !auto
         startRefreshPolling()
         return true
       }
     }
 
     if (!auto) {
-      await reloadChartsAfterRefresh()
+      await reloadChartsAfterRefresh({ refreshAppCatalog: true })
     }
     return false
   }
@@ -386,7 +392,7 @@ async function queueScopeRefresh(auto = false): Promise<boolean> {
 
 async function handleReloadClick() {
   if (props.forceDemo || !hasRefreshableScope.value || (!isCurrentScopeStale.value && !isCurrentScopeRefreshing.value)) {
-    await reloadChartsAfterRefresh()
+    await reloadChartsAfterRefresh({ refreshAppCatalog: true })
     return
   }
 

@@ -52,6 +52,9 @@ async function refreshPendingOnboardingApp() {
     return
 
   await organizationStore.awaitInitialLoad()
+  // A newer lookup (route change) started while this one waited.
+  if (lookupRun !== onboardingLookupRun)
+    return
 
   const singleOrganization = selectableOrganizations.value.length === 1
     ? selectableOrganizations.value[0]

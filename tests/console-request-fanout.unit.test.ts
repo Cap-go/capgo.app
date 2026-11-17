@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { DeviceCountCache, MAX_DEVICES_PAGE_OFFSET as CONSOLE_MAX_DEVICES_PAGE_OFFSET, planDevicePageFetch, plannedDevicePage } from '../src/services/devicePagination'
 import { groupPreviousDeploysByChannel } from '../src/services/bundleComparePrevious'
 import { organizationAccessKey, organizationBillingKey, organizationIdentityKey, organizationSecurityKey } from '../src/services/organizationWatchKeys'
-import { splitUpdateStatsWindow, toDailyVersionStat } from '../src/services/updateStats'
+import { splitUpdateStatsAppIds, splitUpdateStatsWindow, toDailyVersionStat } from '../src/services/updateStats'
 import { buildReadDevicesCFQuery } from '../supabase/functions/_backend/utils/cloudflare.ts'
 import { devicesOffsetClause, MAX_DEVICES_PAGE_OFFSET } from '../supabase/functions/_backend/utils/devicesPageOffset.ts'
 import { devicesPageOffsetSchema } from '../supabase/functions/_backend/utils/privateAnalyticsValidation.ts'
@@ -99,6 +99,14 @@ describe('update stats aggregation', () => {
       const previousEnd = Date.parse(`${windows[index - 1]!.end}T00:00:00Z`)
       expect(Date.parse(`${windows[index]!.start}T00:00:00Z`) - previousEnd).toBe(86_400_000)
     }
+  })
+
+  it('splits more than 1000 apps into disjoint chunks the RPC accepts', () => {
+    const appIds = Array.from({ length: 2_001 }, (_, index) => `com.example.app${index}`)
+    const chunks = splitUpdateStatsAppIds(appIds)
+    expect(chunks.map(chunk => chunk.length)).toEqual([1_000, 1_000, 1])
+    expect(chunks.flat()).toEqual(appIds)
+    expect(splitUpdateStatsAppIds([])).toEqual([])
   })
 
   it('maps aggregated rows (bigint counts may arrive as strings)', () => {

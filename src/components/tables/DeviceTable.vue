@@ -144,7 +144,7 @@ function onDateRangeApply(payload: { start: Date, end: Date, mode: DateRangePres
   // Apply payload first so refresh does not race v-model flush and keep the old window.
   dateRangeMode.value = payload.mode
   dateRange.value = [payload.start, payload.end]
-  void refreshData()
+  void refreshData({ keepCountCache: true })
 }
 
 function clearDeviceViewFilters(clearFilters: () => void) {
@@ -377,13 +377,25 @@ function getDeviceIdsFilterBody() {
   }
 }
 
-async function countDevices(options?: { includeDateRange?: boolean }) {
+/** Device count for the current filters, or null when the request failed. */
+async function countDevices(options?: { includeDateRange?: boolean }): Promise<number | null> {
+  // Snapshot the filters before awaiting, so the body matches the filters the
+  // caller saw (and the count cache key it computed).
+  const body = JSON.stringify({
+    count: true,
+    appId: props.appId,
+    ...getDevicesFilterBody(),
+    ...getDeviceIdsFilterBody(),
+    search: getSearchTerm(),
+    order: getActiveOrder(columns.value),
+    customIdMode: filters.value.CustomId,
+    ...(options?.includeDateRange === false ? {} : getDateRangePayload()),
+  })
   const { data: currentSession } = await capgo.auth.getSession()!
   if (!currentSession.session)
-    return 0
+    return null
 
   const currentJwt = currentSession.session.access_token
-  const searchTerm = getSearchTerm()
 
   try {
     const response = await fetch(`${defaultApiHost}/private/devices`, {
@@ -392,21 +404,12 @@ async function countDevices(options?: { includeDateRange?: boolean }) {
         'Content-Type': 'application/json',
         'authorization': `Bearer ${currentJwt ?? ''}`,
       },
-      body: JSON.stringify({
-        count: true,
-        appId: props.appId,
-        ...getDevicesFilterBody(),
-        ...getDeviceIdsFilterBody(),
-        search: searchTerm,
-        order: getActiveOrder(columns.value),
-        customIdMode: filters.value.CustomId,
-        ...(options?.includeDateRange === false ? {} : getDateRangePayload()),
-      }),
+      body,
     })
 
     if (!response.ok) {
       console.log('Cannot get devices', response.status)
-      return 0
+      return null
     }
 
     const dataD = await response.json() as { count: number }
@@ -414,7 +417,7 @@ async function countDevices(options?: { includeDateRange?: boolean }) {
   }
   catch (err) {
     console.log('Cannot get devices', err)
-    return 0
+    return null
   }
 }
 
@@ -437,10 +440,11 @@ async function recountDevices(loadId: number) {
   ])
   if (loadId !== activeLoadId.value)
     return false
-  if (cachedAllCount === undefined)
+  // Cache successful counts only (a zero included), so a failure is retried.
+  if (cachedAllCount === undefined && allCount !== null)
     unfilteredCountCache.set(unfilteredKey, allCount)
-  total.value = filteredCount
-  unfilteredTotal.value = allCount
+  total.value = filteredCount ?? 0
+  unfilteredTotal.value = allCount ?? 0
   return true
 }
 
@@ -509,10 +513,12 @@ async function reload() {
   }
 }
 
-async function refreshData() {
+async function refreshData(options: { keepCountCache?: boolean } = {}) {
   cancelScheduledReload()
-  // Explicit refresh (toolbar or app change): counts must be fresh.
-  unfilteredCountCache.clear()
+  // Explicit refresh (toolbar or app change): counts must be fresh. A date
+  // range change keeps the cache: that count ignores the date range.
+  if (!options.keepCountCache)
+    unfilteredCountCache.clear()
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
@@ -958,7 +964,7 @@ async function exportDevices(format: 'csv' | 'json') {
               <button
                 type="button"
                 class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
-                @click="refreshData"
+                @click="refreshData()"
               >
                 {{ t('devices-empty-refresh') }}
               </button>

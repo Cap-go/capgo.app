@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
     currentOrganization: { gid: 'org-many-apps' },
     dedupFetchOrganizations: vi.fn(async () => undefined),
     awaitInitialLoad: vi.fn(async (): Promise<void> => undefined),
-    getFreshOrgApps: vi.fn((_orgId: string): { app_id: string, name: string | null }[] | undefined => undefined),
+    getFreshOrgApps: vi.fn((_orgId: string, _maxAgeMs?: number): { app_id: string, name: string | null }[] | undefined => undefined),
   },
   eq: vi.fn(),
   setAppNameResolver: vi.fn(),
@@ -185,7 +185,7 @@ describe('global dashboard shared app loading', () => {
     await store.fetchApps()
 
     expect(mocks.eq).not.toHaveBeenCalled()
-    expect(mocks.organization.getFreshOrgApps).toHaveBeenCalledWith('org-many-apps')
+    expect(mocks.organization.getFreshOrgApps).toHaveBeenCalledWith('org-many-apps', 5 * 60_000)
     expect(store.appIds).toEqual(['com.example.a', 'com.example.b'])
     expect(store.appNames).toEqual({ 'com.example.a': 'com.example.a', 'com.example.b': 'B' })
     expect(store.isLoaded).toBe(true)

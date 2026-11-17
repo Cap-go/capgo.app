@@ -81,13 +81,13 @@ const total = ref(0)
 const currentVersionId = ref<number | null>(null)
 
 // Fetch current channel's version_id (only relevant for channel mode)
-async function fetchCurrentVersion() {
+async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promise<boolean> {
   // Skip if in bundle mode
   if (props.bundleId)
-    return
+    return true
 
   if (!props.channelId)
-    return
+    return true
 
   try {
     const { data, error } = await capgo
@@ -98,13 +98,16 @@ async function fetchCurrentVersion() {
 
     if (error) {
       console.error('Error fetching current version:', error)
-      return
+      return false
     }
 
-    currentVersionId.value = data.version
+    if (isCurrent())
+      currentVersionId.value = data.version
+    return true
   }
   catch (error) {
     console.error('Error fetching current version:', error)
+    return false
   }
 }
 
@@ -216,23 +219,36 @@ async function openOneVersion(item: DeployHistory) {
 // Members only depend on the organization and channel: load them once per
 // scope instead of on every page or search change. The current bundle is also
 // kept per scope, but an explicit reload refetches it (it can change from the
-// CLI or another browser while the page is open).
-let historyContextKey = ''
+// CLI or another browser while the page is open). Each part is cached only
+// after it loaded, and results of a superseded scope are dropped.
+let membersScopeKey = ''
+let versionScopeKey = ''
+let historyContextGeneration = 0
+function historyScopeKey() {
+  return JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null, props.bundleId ?? null])
+}
 async function loadHistoryContext(options: { refreshCurrentVersion?: boolean } = {}) {
-  const key = JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null, props.bundleId ?? null])
-  if (key === historyContextKey) {
-    if (options.refreshCurrentVersion)
-      await fetchCurrentVersion()
+  const key = historyScopeKey()
+  const generation = ++historyContextGeneration
+  const isCurrent = () => generation === historyContextGeneration && key === historyScopeKey()
+  const needVersion = options.refreshCurrentVersion === true || versionScopeKey !== key
+  const needMembers = membersScopeKey !== key
+  if (!needVersion && !needMembers)
     return
-  }
-  const [, loadedMembers] = await Promise.all([
-    fetchCurrentVersion(),
-    organizationStore.getMembers(),
+  const [versionLoaded, loadedMembers] = await Promise.all([
+    needVersion ? fetchCurrentVersion(isCurrent) : Promise.resolve(true),
+    needMembers ? organizationStore.getMembers() : Promise.resolve(null),
   ])
-  members.value = loadedMembers
-  // An empty list means the members request failed: retry on the next load.
-  if (loadedMembers.length > 0)
-    historyContextKey = key
+  if (!isCurrent())
+    return
+  if (needVersion && versionLoaded)
+    versionScopeKey = key
+  if (loadedMembers) {
+    members.value = loadedMembers
+    // An empty list means the members request failed: retry on the next load.
+    if (loadedMembers.length > 0)
+      membersScopeKey = key
+  }
 }
 
 async function fetchDeployHistory(options: { refreshCurrentVersion?: boolean } = {}) {

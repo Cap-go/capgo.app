@@ -13,7 +13,7 @@ import { readAllConsoleRows } from '~/services/consoleRows'
 import { addUtcDays, formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 import { calculateDemoEvolution, calculateDemoTotal, generateDemoUpdateStatsData } from '~/services/demoChartData'
 import { formatNumberValue } from '~/services/formatLocale'
-import { splitUpdateStatsWindow, toDailyVersionStat } from '~/services/updateStats'
+import { splitUpdateStatsAppIds, splitUpdateStatsWindow, toDailyVersionStat } from '~/services/updateStats'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { createUndefinedArray, incrementArrayValue } from '~/utils/chartOptimizations'
@@ -131,13 +131,16 @@ const hasData = computed(() => effectiveTotalUpdates.value > 0 || isDemoMode.val
 // every daily_version row of the window (one per app, bundle and day).
 async function fetchDailyVersionStats(targetAppIds: string[], startDate: string, endDate: string, isCurrent: () => boolean) {
   const capgo = useConsole()
-  const windows = splitUpdateStatsWindow(startDate, endDate)
-  const results = await Promise.all(windows.map(window => readAllConsoleRows<UpdateDailyCount>((from, to) => {
+  // The RPC accepts at most 1000 apps and 370 days per call: one request per
+  // app chunk and date window. Chunks hold disjoint apps, so rows never overlap.
+  const requests = splitUpdateStatsAppIds(targetAppIds).flatMap(appIds =>
+    splitUpdateStatsWindow(startDate, endDate).map(window => ({ appIds, window })))
+  const results = await Promise.all(requests.map(({ appIds, window }) => readAllConsoleRows<UpdateDailyCount>((from, to) => {
     if (!isCurrent())
       return Promise.resolve({ data: [], error: null })
     return capgo
       .rpc('get_update_daily_counts', {
-        p_app_ids: targetAppIds,
+        p_app_ids: appIds,
         p_start: window.start,
         p_end: window.end,
       })

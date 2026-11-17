@@ -17,12 +17,14 @@ const PENDING_ONBOARDING = {
   steps: {},
 }
 
+let lastProgress: { applyOnboarding: (value: unknown) => void } | undefined
+
 async function mountProgress(initialOnboarding: unknown = PENDING_ONBOARDING, active = ref(true)) {
   const { useAppOnboardingCliProgress } = await import('../src/composables/useAppOnboardingCliProgress')
   const host = document.createElement('div')
   const app = createApp(defineComponent({
     setup() {
-      useAppOnboardingCliProgress('com.example.app', initialOnboarding, active)
+      lastProgress = useAppOnboardingCliProgress('com.example.app', initialOnboarding, active)
       return () => h('div')
     },
   }))
@@ -187,5 +189,16 @@ describe('useAppOnboardingCliProgress polling', () => {
     expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls)
     app.unmount()
   })
-})
 
+  it('replaces a backed-off timer when a write applies progress', async () => {
+    const { CLI_PROGRESS_POLL_FAST_PHASE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
+    invokeCapgoApiMock.mockResolvedValue({ data: { onboarding: PENDING_ONBOARDING }, error: null })
+    const app = await mountProgress()
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_FAST_PHASE_MS + 5 * 60_000)
+    const calls = invokeCapgoApiMock.mock.calls.length
+    lastProgress!.applyOnboarding({ ...PENDING_ONBOARDING, steps: { add_channel: { status: 'done' } } })
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls + 1)
+    app.unmount()
+  })
+})

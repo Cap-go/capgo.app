@@ -98,6 +98,15 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
     }, pollDelay)
   }
 
+  // Progress seen: poll at the base delay again, replacing a backed-off timer.
+  function pollSoon() {
+    resetBackoff()
+    if (pollTimer !== undefined) {
+      clearPollTimer()
+      scheduleNextPoll()
+    }
+  }
+
   function startPolling() {
     if (!canPoll())
       return
@@ -151,7 +160,7 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
         const snapshot = JSON.stringify([data.onboarding, data.hasChannel ?? null])
         if (snapshot !== lastSnapshot) {
           if (lastSnapshot !== undefined)
-            resetBackoff()
+            pollSoon()
           lastSnapshot = snapshot
         }
         rawOnboarding.value = data.onboarding
@@ -182,7 +191,7 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
   function applyOnboarding(value: unknown) {
     generation += 1
     refreshing = false
-    resetBackoff()
+    pollSoon()
     rawOnboarding.value = value
     reportedOnboarding.value = parseAppOnboarding(value)
   }

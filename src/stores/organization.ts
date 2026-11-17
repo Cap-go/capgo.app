@@ -196,6 +196,9 @@ export const useOrganizationStore = defineStore('organization', () => {
   const STORAGE_KEY = 'capgo_current_org_id'
   let organizationLogoLoadRun = 0
   let organizationAppIconLoadRun = 0
+  // Catalog requests have their own generation: an icon load starting while a
+  // catalog request is in flight must not discard its response.
+  let organizationAppCatalogLoadRun = 0
 
   const getMemberImageKey = (member: { uid?: string | null, id?: number | string | null, email?: string | null }) => {
     return String(member.uid ?? member.id ?? member.email ?? '')
@@ -444,7 +447,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
     }
 
-    const appIconLoadRun = ++organizationAppIconLoadRun
+    const catalogLoadRun = ++organizationAppCatalogLoadRun
     // Paged: the API caps one request at CONSOLE_PAGE_ROWS rows.
     const { error, data } = await readAllConsoleRows<{
       app_id: string
@@ -466,8 +469,9 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
     }
 
-    if (appIconLoadRun !== organizationAppIconLoadRun)
+    if (catalogLoadRun !== organizationAppCatalogLoadRun)
       return
+    const appIconLoadRun = ++organizationAppIconLoadRun
 
     const organizationsByAppId = new Map<string, Organization>()
     const appsByOrgId = new Map<string, OrganizationApp[]>()
