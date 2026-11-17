@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateStorageHourlyRows } from '../supabase/functions/_backend/triggers/cron_stat_app.ts'
+import { appStorageOwnership, calculateStorageHourlyRows } from '../supabase/functions/_backend/triggers/cron_stat_app.ts'
 
 const APP_ID = 'com.storage-hourly.test'
 const OWNER_ORG = '11111111-2222-4333-8444-555555555555'
@@ -104,5 +104,39 @@ describe('calculateStorageHourlyRows', () => {
     }).rows
 
     expect(rows.map(row => row.updated_at)).toEqual(['2026-01-01T03:00:05.000Z'])
+  })
+
+  it('derives every ownership segment from the transfer history', () => {
+    expect(appStorageOwnership({
+      owner_org: 'org-c',
+      created_at: '2026-01-01T00:00:00.000Z',
+      transfer_history: [
+        { transferred_at: '2026-03-01T00:00:00.000Z', transferred_from: 'org-b', transferred_to: 'org-c' },
+        { transferred_at: '2026-02-01T00:00:00.000Z', transferred_from: 'org-a', transferred_to: 'org-b' },
+      ],
+    })).toEqual({
+      ownedSince: '2026-03-01T00:00:00.000Z',
+      formerOwners: [
+        { orgId: 'org-a', ownedSince: '2026-01-01T00:00:00.000Z', transferredAt: '2026-02-01T00:00:00.000Z' },
+        { orgId: 'org-b', ownedSince: '2026-02-01T00:00:00.000Z', transferredAt: '2026-03-01T00:00:00.000Z' },
+      ],
+    })
+  })
+
+  it('keeps an org that owned the app twice as two segments', () => {
+    expect(appStorageOwnership({
+      owner_org: 'org-a',
+      created_at: '2026-01-01T00:00:00.000Z',
+      transfer_history: [
+        { transferred_at: '2026-02-01T00:00:00.000Z', transferred_from: 'org-a', transferred_to: 'org-b' },
+        { transferred_at: '2026-03-01T00:00:00.000Z', transferred_from: 'org-b', transferred_to: 'org-a' },
+      ],
+    })).toEqual({
+      ownedSince: '2026-03-01T00:00:00.000Z',
+      formerOwners: [
+        { orgId: 'org-a', ownedSince: '2026-01-01T00:00:00.000Z', transferredAt: '2026-02-01T00:00:00.000Z' },
+        { orgId: 'org-b', ownedSince: '2026-02-01T00:00:00.000Z', transferredAt: '2026-03-01T00:00:00.000Z' },
+      ],
+    })
   })
 })

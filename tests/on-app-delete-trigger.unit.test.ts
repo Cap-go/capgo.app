@@ -131,12 +131,12 @@ describe('on_app_delete trigger', () => {
       expect(response.status).toBe(200)
       const replace = pgQuery.mock.calls.find(([sql]) => sql.includes('replace_app_storage_hourly'))
       // The app row is gone, so the deletion finalizer skips the current-owner check.
-      expect(replace?.[1]?.[9]).toBe(false)
-      // Whole-cycle segment: the app existed since the cycle start.
-      expect(replace?.[1]?.slice(0, 7)).toEqual(['com.test.delete', 'org-1', '2026-01-01', '2026-02-01', '2026-02-01', '2026-01-01T00:00:00.000Z', true])
+      expect(replace?.[1]?.[8]).toBe(false)
+      // The segment is when the owner got the app (its creation here).
+      expect(replace?.[1]?.slice(0, 6)).toEqual(['com.test.delete', 'org-1', '2026-01-01', '2026-02-01', '2026-02-01', '2026-01-01T00:00:00.000Z'])
       // 100 bytes for the 6 hours between the upload and the deletion, not up to the handler's
       // clock (12:00): the queue delay is not billed.
-      expect(JSON.parse(replace?.[1]?.[7] as string)).toEqual([{ cycle_start: '2026-01-01', date: '2026-01-10', storage_byte_hours: 600 }])
+      expect(JSON.parse(replace?.[1]?.[6] as string)).toEqual([{ cycle_start: '2026-01-01', date: '2026-01-10', storage_byte_hours: 600 }])
     }
     finally {
       pgQuery.mockReset()
@@ -212,7 +212,7 @@ describe('on_app_delete trigger', () => {
       expect(response.status).toBe(200)
       const replaced = pgQuery.mock.calls
         .filter(([sql]) => sql.includes('replace_app_storage_hourly'))
-        .map(([, params]) => [params?.[2], JSON.parse(params?.[7] as string)])
+        .map(([, params]) => [params?.[2], JSON.parse(params?.[6] as string)])
       expect(replaced).toEqual([
         // The deletion's cycle: 6 hours on February 1st.
         ['2026-02-01', [{ cycle_start: '2026-02-01', date: '2026-02-01', storage_byte_hours: 600 }]],
@@ -269,7 +269,7 @@ describe('on_app_delete trigger', () => {
       expect(response.status).toBe(200)
       const replaced = pgQuery.mock.calls
         .filter(([sql]) => sql.includes('replace_app_storage_hourly'))
-        .map(([, params]) => [params?.[1], params?.[5], JSON.parse(params?.[7] as string)])
+        .map(([, params]) => [params?.[1], params?.[5], JSON.parse(params?.[6] as string)])
       expect(replaced).toEqual([
         // The new owner, from the transfer to the deletion: 6 hours.
         ['org-new', '2026-01-10T06:00:00.000Z', [{ cycle_start: '2026-01-01', date: '2026-01-10', storage_byte_hours: 600 }]],
@@ -323,7 +323,7 @@ describe('on_app_delete trigger', () => {
       expect(response.status).toBe(200)
       const replaced = pgQuery.mock.calls
         .filter(([sql]) => sql.includes('replace_app_storage_hourly'))
-        .map(([, params]) => [params?.[1], params?.[2], JSON.parse(params?.[7] as string).reduce((sum: number, row: { storage_byte_hours: number }) => sum + row.storage_byte_hours, 0)])
+        .map(([, params]) => [params?.[1], params?.[2], JSON.parse(params?.[6] as string).reduce((sum: number, row: { storage_byte_hours: number }) => sum + row.storage_byte_hours, 0)])
       expect(replaced).toEqual(expect.arrayContaining([
         // The former owner's January cycle up to its end: Jan 31, 24 hours.
         ['org-old', '2026-01-01', 2400],
@@ -380,7 +380,7 @@ describe('on_app_delete trigger', () => {
       expect(response.status).toBe(200)
       const former = pgQuery.mock.calls
         .filter(([sql, params]) => sql.includes('replace_app_storage_hourly') && params?.[1] === 'org-old')
-        .map(([, params]) => JSON.parse(params?.[7] as string))
+        .map(([, params]) => JSON.parse(params?.[6] as string))
       // 29 days after the transfer: still finalized once (12 hours), never again afterwards.
       expect(former).toEqual(expectFormer ? [[{ cycle_start: '2026-01-01', date: '2026-01-01', storage_byte_hours: 1200 }]] : [])
     }
@@ -435,6 +435,97 @@ describe('on_app_delete trigger', () => {
       expect(response.status).toBeGreaterThanOrEqual(500)
       const formerFebruary = pgQuery.mock.calls.filter(([sql, params]) => sql.includes('replace_app_storage_hourly') && params?.[1] === 'org-old' && params?.[2] === '2026-02-01')
       expect(formerFebruary).toHaveLength(0)
+    }
+    finally {
+      pgQuery.mockReset()
+      pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+      vi.useRealTimers()
+    }
+  })
+
+  function mockMonthlyCycles(events: Array<{ timestamp: string, version_id: number, size: number }>, refreshedAt: Record<string, string> = {}) {
+    pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('FROM public.daily_storage_hourly_refreshes')) {
+        const writtenAt = refreshedAt[`${params?.[1]}|${params?.[2]}`]
+        return { rows: writtenAt ? [{ written_at: writtenAt }] : [], rowCount: writtenAt ? 1 : 0 } as any
+      }
+      if (sql.includes('FROM public.version_meta')) {
+        const until = Date.parse(String(params?.[1]))
+        const rows = events.filter(row => Date.parse(row.timestamp) < until)
+        return { rows, rowCount: rows.length } as any
+      }
+      if (sql.includes('billing_cycle_for_anchor')) {
+        // Calendar months.
+        const before = new Date(Date.parse(String(params?.[1])) - 1000)
+        const start = new Date(Date.UTC(before.getUTCFullYear(), before.getUTCMonth(), 1))
+        const end = new Date(Date.UTC(before.getUTCFullYear(), before.getUTCMonth() + 1, 1))
+        return { rows: [{ cycle_start: start.toISOString(), cycle_end: end.toISOString() }], rowCount: 1 } as any
+      }
+      return { rows: [], rowCount: 0 }
+    })
+  }
+
+  async function deleteApp(record: Record<string, unknown>, occurredAt: string) {
+    const response = await app.request('http://local/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'DELETE', table: 'apps', occurred_at: occurredAt, record }),
+    })
+    expect(response.status).toBe(200)
+    return pgQuery.mock.calls
+      .filter(([sql]) => sql.includes('replace_app_storage_hourly'))
+      .map(([, params]) => [params?.[1], params?.[2], JSON.parse(params?.[6] as string).reduce((sum: number, row: { storage_byte_hours: number }) => sum + row.storage_byte_hours, 0)])
+  }
+
+  it('finalizes every former owner of a transfer chain', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-20T00:00:00.000Z'))
+    try {
+      mockMonthlyCycles([{ timestamp: '2026-01-31T00:00:00.000Z', version_id: 1, size: 100 }])
+      const replaced = await deleteApp({
+        app_id: 'com.test.delete',
+        owner_org: 'org-c',
+        created_at: '2026-01-01T00:00:00.000Z',
+        transfer_history: [
+          { transferred_at: '2026-02-01T00:00:00.000Z', transferred_from: 'org-a', transferred_to: 'org-b' },
+          { transferred_at: '2026-03-01T00:00:00.000Z', transferred_from: 'org-b', transferred_to: 'org-c' },
+        ],
+      }, '2026-03-10T00:00:00.000Z')
+
+      expect(replaced).toEqual(expect.arrayContaining([
+        // org-a, January 31st up to its transfer.
+        ['org-a', '2026-01-01', 2400],
+        // org-b, all of February up to its transfer.
+        ['org-b', '2026-02-01', 100 * 28 * 24],
+        // org-c, March 1st to the deletion.
+        ['org-c', '2026-03-01', 100 * 9 * 24],
+      ]))
+    }
+    finally {
+      pgQuery.mockReset()
+      pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    ['not finalized yet', {}, true],
+    ['finalized by a refresh after the rollover', { 'org-1|2026-01-01': '2026-02-01T02:00:00.000Z' }, false],
+  ] as const)('finalizes the previous cycle long after the rollover when %s', async (_label, refreshedAt, expectJanuary) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-02-21T00:00:00.000Z'))
+    try {
+      mockMonthlyCycles([{ timestamp: '2026-01-31T00:00:00.000Z', version_id: 1, size: 100 }], refreshedAt)
+      const replaced = await deleteApp({
+        app_id: 'com.test.delete',
+        owner_org: 'org-1',
+        created_at: '2026-01-01T00:00:00.000Z',
+        transfer_history: [],
+      }, '2026-02-20T00:00:00.000Z')
+
+      const january = replaced.filter(([org, cycle]) => org === 'org-1' && cycle === '2026-01-01')
+      // 20 days after the rollover, January 31st is still recorded once.
+      expect(january).toEqual(expectJanuary ? [['org-1', '2026-01-01', 2400]] : [])
     }
     finally {
       pgQuery.mockReset()

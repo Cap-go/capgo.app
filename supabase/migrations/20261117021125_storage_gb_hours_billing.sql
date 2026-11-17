@@ -35,8 +35,8 @@ DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
 ALTER TABLE public.daily_storage_hourly ADD COLUMN IF NOT EXISTS cycle_start date;
 UPDATE public.daily_storage_hourly SET cycle_start = date WHERE cycle_start IS NULL;
 ALTER TABLE public.daily_storage_hourly ALTER COLUMN cycle_start SET NOT NULL;
--- * segment_start: when the accruing ownership segment of the app began inside
---   the cycle (the cycle start, the app creation, or a transfer to the org).
+-- * segment_start: when the accruing ownership segment of the app began (the
+--   app creation or a transfer to the org; -infinity when unknown).
 --   A deleted app ID recreated by the same org within the cycle accrues in a
 --   new segment, so refreshing it never replaces the earlier incarnation's
 --   hours. Existing rows get '-infinity' (legacy), which the next refresh of
@@ -51,8 +51,8 @@ COMMENT ON COLUMN public.daily_storage_hourly.cycle_start IS
 'UTC date of the start of the billing cycle these hours belong to.';
 
 COMMENT ON COLUMN public.daily_storage_hourly.segment_start IS
-'Start of the ownership segment that accrued these hours (cycle start, app '
-'creation or transfer); -infinity for whole-day legacy rows.';
+'Start of the ownership segment that accrued these hours (app creation or '
+'transfer to the org); -infinity when unknown and for legacy rows.';
 
 COMMENT ON TABLE public.daily_storage_hourly IS
 'Storage usage in byte-hours per app and UTC day (GB-hours x 2^30), written by '
@@ -110,27 +110,26 @@ COMMENT ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) IS
 -- ---------------------------------------------------------------------------
 -- cron_stat_app calls this with the rows it calculated from version_meta.
 -- One statement, so billing reads never see the cycle between the delete and
--- the upsert. Only rows of p_owner_org and of its segment p_segment_start,
--- whose cycle_start is in [p_cycle_start_day, p_cycle_end_day) and whose day
--- is in [p_cycle_start_day, p_end_exclusive_day), are replaced: hours of
--- another owner or of an earlier incarnation of the app ID, and the other
--- cycles' parts of a boundary day, stay. Legacy rows of the org's cycle
--- (-infinity, written before this migration) are always replaced: the old
--- refresh overwrote every row of the app ID in the cycle, so they only hold
--- the current app's hours, which the refresh recalculates. A whole-cycle
--- refresh (p_replace_legacy: the segment starts at the cycle start) also
--- replaces a whole-cycle segment whose anchor time moved.
+-- the upsert. Only rows of p_owner_org and of its ownership segment
+-- p_segment_start (when that owner got the app: creation or transfer), whose
+-- cycle_start is in [p_cycle_start_day, p_cycle_end_day) and whose day is in
+-- [p_cycle_start_day, p_end_exclusive_day), are replaced: hours of another
+-- owner or of an earlier incarnation of the app ID, and the other cycles'
+-- parts of a boundary day, stay. The segment does not depend on the cycle, so
+-- an anchor that moves within the cycle's first day (either way) keeps the
+-- same rows and watermark. Legacy rows of the org's cycle (-infinity, written
+-- before this migration) are always replaced: the old refresh overwrote every
+-- row of the app ID in the cycle, so they only hold the current app's hours,
+-- which the refresh recalculates.
 -- p_written_at is taken by the caller before it reads version_meta: a row
 -- written by a refresh that started later is never deleted or overwritten,
 -- whatever order the refreshes finish in.
 -- Latest refresh of each app/org/cycle/segment. replace_app_storage_hourly only
 -- runs when its refresh started after the recorded one, so a refresh finishing
 -- late can neither overwrite a newer result nor re-insert a day a newer refresh
--- removed. Whole-cycle refreshes (p_replace_legacy) all share the segment key
--- '-infinity': if the anchor time moves within the cycle's first day, a late
--- refresh under the old anchor is refused instead of re-inserting the segment
--- the newer one replaced. Partial segments (a later incarnation or owner)
--- keep their own key. Internal: no client access.
+-- removed. The segment key is the ownership segment's start (not the cycle's),
+-- so every refresh of a segment shares its watermark even when the anchor
+-- time moves within the cycle's first day. Internal: no client access.
 CREATE TABLE IF NOT EXISTS public.daily_storage_hourly_refreshes (
     app_id character varying NOT NULL,
     owner_org uuid NOT NULL,
@@ -164,7 +163,6 @@ CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
     p_cycle_end_day date,
     p_end_exclusive_day date,
     p_segment_start timestamptz,
-    p_replace_legacy boolean,
     p_rows jsonb,
     p_written_at timestamptz,
     p_require_current_owner boolean DEFAULT true,
@@ -204,7 +202,7 @@ BEGIN
     p_app_id,
     p_owner_org,
     p_cycle_start_day,
-    CASE WHEN p_replace_legacy THEN '-infinity'::timestamptz ELSE p_segment_start END,
+    p_segment_start,
     p_written_at
   )
   ON CONFLICT (app_id, owner_org, cycle_start, segment_start) DO UPDATE
@@ -230,7 +228,6 @@ BEGIN
       AND (
         dsh.segment_start = p_segment_start
         OR dsh.segment_start = '-infinity'::timestamptz
-        OR (p_replace_legacy AND dsh.segment_start < p_segment_start)
       )
       AND dsh.updated_at <= p_written_at
       AND NOT EXISTS (
@@ -250,10 +247,10 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean, uuid) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean, uuid) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean, uuid) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, boolean, jsonb, timestamptz, boolean, uuid) TO service_role;
+ALTER FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 2c. Cycle storage usage for the console

@@ -37,22 +37,25 @@ interface AppOwnerOrgRow {
   owner_org: string
   /** apps.id: identifies this incarnation of the app ID. */
   id: string | null
-  /** When the current owner got the app: its creation or its last transfer to that org. */
-  owned_since: string | null
-  /** Last transfer to the current owner, if any, and the org that owned the app before it. */
-  transferred_at: string | null
-  transferred_from: string | null
-  /** When that former owner got the app. */
-  former_owned_since: string | null
+  created_at: string | Date | null
+  transfer_history: unknown[] | null
+}
+
+/** A former owner's ownership segment, which ended at a transfer away from it. */
+interface FormerOwnerSegment {
+  orgId: string
+  /** When that org got the app (creation or transfer to it), null when unknown. */
+  ownedSince: string | null
+  transferredAt: string
 }
 
 interface StorageOwnership {
   /** apps.id loaded by the refresh; live writes are refused for another incarnation. */
   appUuid?: string | null
+  /** When the current owner got the app: its creation or its last transfer to that org. */
   ownedSince: string | null
-  transferredAt: string | null
-  transferredFrom: string | null
-  formerOwnedSince: string | null
+  /** Every earlier owner's segment, oldest first. */
+  formerOwners: FormerOwnerSegment[]
 }
 
 interface CycleBoundsRow {
@@ -363,10 +366,18 @@ async function upsertRows(
   )
 }
 
-// Refreshes during this window after a cycle rollover or an app transfer also finalize the
-// completed cycle (or the former owner's hours): the hours between its last refresh and the
-// rollover or transfer are only recorded then. Later on, completed periods are left untouched.
-const STORAGE_FINALIZE_WINDOW_MS = 7 * DAY_MS
+// Former owners are finalized for transfers in this window. An older transfer's billing periods
+// are long closed, so its owner is not recomputed on every refresh.
+const FORMER_OWNER_LOOKBACK_MS = 100 * DAY_MS
+
+/**
+ * Key of an ownership segment in daily_storage_hourly and its watermark: when the owner got the
+ * app (creation or transfer), '-infinity' when unknown (like rows written before segments). It does
+ * not depend on the cycle, so a moved anchor keeps the same segment.
+ */
+function storageSegmentKey(ownedSince: string | null | undefined): string {
+  return ownedSince ?? '-infinity'
+}
 
 /** The billing cycle of `orgId` that contains the instant just before `before`. */
 async function readCycleBefore(pg: PgClient, orgId: string, before: string): Promise<CycleBoundsRow | null> {
@@ -407,12 +418,8 @@ async function replaceCycleStorageHourly(
   const deleteRange = getStorageDailyDeleteRange(options.cycleStart, options.cycleEnd)
   const cycleEndDay = formatUtcDay(floorToDay(parseTimestampMs(options.cycleEnd)))
   const writtenAt = options.writtenAt ?? new Date().toISOString()
-  // The ownership segment these hours accrue in: an earlier incarnation of the app ID, or the
-  // former owner, keeps its own rows. A segment starting at the cycle start is a whole-cycle refresh.
-  const cycleStartMs = parseTimestampMs(options.cycleStart)
-  const segmentStartMs = options.accrualStart ? Math.max(cycleStartMs, parseTimestampMs(options.accrualStart)) : cycleStartMs
-  // replace_app_storage_hourly replaces only this org's rows of this cycle and segment, in one
-  // statement, and never a row written by a refresh that started after writtenAt.
+  // replace_app_storage_hourly replaces only this org's rows of this cycle and ownership segment, in
+  // one statement, and never a row written by a refresh that started after writtenAt.
   await runSupabaseResultWithRetry(c, 'replace_daily_storage_hourly', async () => {
     await pg.query(
       `SELECT public.replace_app_storage_hourly(
@@ -422,11 +429,10 @@ async function replaceCycleStorageHourly(
          p_cycle_end_day => $4::date,
          p_end_exclusive_day => $5::date,
          p_segment_start => $6::timestamptz,
-         p_replace_legacy => $7::boolean,
-         p_rows => $8::jsonb,
-         p_written_at => $9::timestamptz,
-         p_require_current_owner => $10::boolean,
-         p_app_uuid => $11::uuid
+         p_rows => $7::jsonb,
+         p_written_at => $8::timestamptz,
+         p_require_current_owner => $9::boolean,
+         p_app_uuid => $10::uuid
        )`,
       [
         options.appId,
@@ -434,8 +440,7 @@ async function replaceCycleStorageHourly(
         deleteRange.startDay,
         cycleEndDay,
         deleteRange.endExclusiveDay,
-        new Date(segmentStartMs).toISOString(),
-        segmentStartMs === cycleStartMs,
+        storageSegmentKey(options.accrualStart),
         JSON.stringify(calculation.rows.map(row => ({ cycle_start: row.cycle_start, date: row.date, storage_byte_hours: row.storage_byte_hours }))),
         writtenAt,
         options.requireCurrentOwner ?? true,
@@ -446,41 +451,6 @@ async function replaceCycleStorageHourly(
   })
 
   return calculation
-}
-
-/**
- * Shortly after a rollover, records the previous cycle's hours up to its end: the interval between
- * its last refresh and the rollover is only recorded then. Used by live refreshes and by the
- * deletion finalizer (an app deleted before its first refresh of the new cycle).
- */
-async function finalizePreviousCycle(
-  c: Context,
-  pg: PgClient,
-  events: VersionMetaStorageRow[],
-  options: { appId: string, ownerOrg: string, cycleStart: string, calculationEndMs: number, accrualStart: string | null, writtenAt: string, requireCurrentOwner?: boolean, appUuid?: string | null },
-) {
-  const cycleStartMs = parseTimestampMs(options.cycleStart)
-  if (options.calculationEndMs - cycleStartMs >= STORAGE_FINALIZE_WINDOW_MS)
-    return
-  const previous = (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_previous_storage_cycle', async () => ({
-    data: await readCycleBefore(pg, options.ownerOrg, options.cycleStart),
-    error: null,
-  }))).data
-  // Only a previous cycle that ends exactly where this one starts (a plan change can move the anchor).
-  if (!previous?.cycle_start || !previous.cycle_end || parseTimestampMs(previous.cycle_end) !== cycleStartMs)
-    return
-  await replaceCycleStorageHourly(c, pg, events, {
-    appId: options.appId,
-    ownerOrg: options.ownerOrg,
-    cycleStart: previous.cycle_start,
-    cycleEnd: previous.cycle_end,
-    // Never past the calculation's own end (a backfill with an earlier currentHour).
-    currentHour: new Date(Math.min(parseTimestampMs(previous.cycle_end), options.calculationEndMs)).toISOString(),
-    accrualStart: options.accrualStart,
-    writtenAt: options.writtenAt,
-    requireCurrentOwner: options.requireCurrentOwner,
-    appUuid: options.appUuid,
-  })
 }
 
 /** Start time of the latest refresh applied to an app/org/cycle/segment, if any. */
@@ -497,63 +467,102 @@ async function readStorageRefreshedAt(pg: PgClient, appId: string, ownerOrg: str
   return toIsoTimestamp(rows[0]?.written_at)
 }
 
+async function readSegmentRefreshedAt(c: Context, pg: PgClient, appId: string, ownerOrg: string, cycleStart: string, ownedSince: string | null) {
+  return (await runSupabaseResultWithRetry<string | null>(c, 'read_storage_refresh', async () => ({
+    data: await readStorageRefreshedAt(pg, appId, ownerOrg, formatUtcDay(floorToDay(parseTimestampMs(cycleStart))), storageSegmentKey(ownedSince)),
+    error: null,
+  }))).data
+}
+
 /**
- * After a transfer, the former owner's refreshes stop: records its hours from its last refresh up
- * to the transfer, in the former owner's billing cycle that contains it. Runs from the new owner's
- * refreshes and from the deletion finalizer (an app deleted before its first refresh there).
+ * Records the previous cycle's hours up to its end until a refresh that started after that end has
+ * done it (its watermark): the interval between the cycle's last refresh and the rollover is only
+ * recorded then, however late the first refresh after the rollover comes. Used by live refreshes,
+ * the deletion finalizer and the former-owner finalizer.
  */
-async function finalizeFormerOwner(
+async function finalizePreviousCycle(
   c: Context,
   pg: PgClient,
   events: VersionMetaStorageRow[],
-  options: { appId: string, ownerOrg: string, ownership: StorageOwnership, calculationEndMs: number, writtenAt: string },
+  options: { appId: string, ownerOrg: string, cycleStart: string, calculationEndMs: number, accrualStart: string | null, writtenAt: string, requireCurrentOwner?: boolean, appUuid?: string | null },
 ) {
-  const { transferredAt, transferredFrom, formerOwnedSince } = options.ownership
-  if (!transferredAt || !transferredFrom || transferredFrom === options.ownerOrg)
-    return
-  const transferredAtMs = parseTimestampMs(transferredAt)
-  if (transferredAtMs > options.calculationEndMs)
-    return
-  const formerCycle = (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_former_owner_cycle', async () => ({
-    data: await readCycleBefore(pg, transferredFrom, transferredAt),
+  const cycleStartMs = parseTimestampMs(options.cycleStart)
+  const previous = (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_previous_storage_cycle', async () => ({
+    data: await readCycleBefore(pg, options.ownerOrg, options.cycleStart),
     error: null,
   }))).data
-  if (!formerCycle?.cycle_start || !formerCycle.cycle_end)
+  // Only a previous cycle that ends exactly where this one starts (a plan change can move the anchor).
+  if (!previous?.cycle_start || !previous.cycle_end || parseTimestampMs(previous.cycle_end) !== cycleStartMs)
     return
-  // No time window: an idle app's first refresh after the transfer can come much later. Finalize
-  // once, until a refresh of the former owner's segment started after the transfer.
-  const formerCycleStartMs = parseTimestampMs(formerCycle.cycle_start)
-  const formerSegmentStartMs = formerOwnedSince ? Math.max(formerCycleStartMs, parseTimestampMs(formerOwnedSince)) : formerCycleStartMs
-  // Whole-cycle refreshes share the '-infinity' watermark key (see replace_app_storage_hourly).
-  const formerSegmentStart = formerSegmentStartMs === formerCycleStartMs ? '-infinity' : new Date(formerSegmentStartMs).toISOString()
-  const finalizedAt = (await runSupabaseResultWithRetry<string | null>(c, 'read_former_owner_refresh', async () => ({
-    data: await readStorageRefreshedAt(pg, options.appId, transferredFrom, formatUtcDay(floorToDay(formerCycleStartMs)), formerSegmentStart),
-    error: null,
-  }))).data
-  if (finalizedAt && parseTimestampMs(finalizedAt) >= transferredAtMs)
+  const previousEndMs = parseTimestampMs(previous.cycle_end)
+  // Nothing of that cycle is owned by this segment.
+  if (options.accrualStart && parseTimestampMs(options.accrualStart) >= previousEndMs)
     return
-  // Transferred soon after the former owner's rollover: its previous cycle's last hours too. It runs
-  // first: the transfer cycle's replace advances the watermark checked above, so finalization only
-  // counts as done once both cycles succeeded, and a failed job retries both.
-  await finalizePreviousCycle(c, pg, events, {
-    appId: options.appId,
-    ownerOrg: transferredFrom,
-    cycleStart: formerCycle.cycle_start,
-    calculationEndMs: transferredAtMs,
-    accrualStart: formerOwnedSince,
-    writtenAt: options.writtenAt,
-    requireCurrentOwner: false,
-  })
+  const finalizedAt = await readSegmentRefreshedAt(c, pg, options.appId, options.ownerOrg, previous.cycle_start, options.accrualStart)
+  if (finalizedAt && parseTimestampMs(finalizedAt) >= previousEndMs)
+    return
   await replaceCycleStorageHourly(c, pg, events, {
     appId: options.appId,
-    ownerOrg: transferredFrom,
-    cycleStart: formerCycle.cycle_start,
-    cycleEnd: formerCycle.cycle_end,
-    currentHour: transferredAt,
-    accrualStart: formerOwnedSince,
+    ownerOrg: options.ownerOrg,
+    cycleStart: previous.cycle_start,
+    cycleEnd: previous.cycle_end,
+    // Never past the calculation's own end (a backfill with an earlier currentHour).
+    currentHour: new Date(Math.min(previousEndMs, options.calculationEndMs)).toISOString(),
+    accrualStart: options.accrualStart,
     writtenAt: options.writtenAt,
-    requireCurrentOwner: false,
+    requireCurrentOwner: options.requireCurrentOwner,
+    appUuid: options.appUuid,
   })
+}
+
+/**
+ * After a transfer, the former owner's refreshes stop: records its hours from its last refresh up
+ * to the transfer, in its billing cycle that contains it (and the previous one after a rollover),
+ * once: until a refresh of that segment started after the transfer. Runs for every former owner in
+ * the transfer history (A to B to C finalizes A and B), from live refreshes and from the deletion
+ * finalizer.
+ */
+async function finalizeFormerOwners(
+  c: Context,
+  pg: PgClient,
+  events: VersionMetaStorageRow[],
+  options: { appId: string, formerOwners: FormerOwnerSegment[], calculationEndMs: number, writtenAt: string },
+) {
+  for (const former of options.formerOwners) {
+    const transferredAtMs = parseTimestampMs(former.transferredAt)
+    if (transferredAtMs > options.calculationEndMs || options.calculationEndMs - transferredAtMs > FORMER_OWNER_LOOKBACK_MS)
+      continue
+    const formerCycle = (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_former_owner_cycle', async () => ({
+      data: await readCycleBefore(pg, former.orgId, former.transferredAt),
+      error: null,
+    }))).data
+    if (!formerCycle?.cycle_start || !formerCycle.cycle_end)
+      continue
+    const finalizedAt = await readSegmentRefreshedAt(c, pg, options.appId, former.orgId, formerCycle.cycle_start, former.ownedSince)
+    if (finalizedAt && parseTimestampMs(finalizedAt) >= transferredAtMs)
+      continue
+    // The previous cycle runs first: the transfer cycle's replace advances the watermark checked
+    // above, so finalization only counts as done once both cycles succeeded.
+    await finalizePreviousCycle(c, pg, events, {
+      appId: options.appId,
+      ownerOrg: former.orgId,
+      cycleStart: formerCycle.cycle_start,
+      calculationEndMs: transferredAtMs,
+      accrualStart: former.ownedSince,
+      writtenAt: options.writtenAt,
+      requireCurrentOwner: false,
+    })
+    await replaceCycleStorageHourly(c, pg, events, {
+      appId: options.appId,
+      ownerOrg: former.orgId,
+      cycleStart: formerCycle.cycle_start,
+      cycleEnd: formerCycle.cycle_end,
+      currentHour: former.transferredAt,
+      accrualStart: former.ownedSince,
+      writtenAt: options.writtenAt,
+      requireCurrentOwner: false,
+    })
+  }
 }
 
 async function refreshStorageHourly(
@@ -563,7 +572,7 @@ async function refreshStorageHourly(
   ownerOrg: string,
   cycleInfo: CycleInfo,
   currentHour?: string,
-  ownership: StorageOwnership = { ownedSince: null, transferredAt: null, transferredFrom: null, formerOwnedSince: null },
+  ownership: StorageOwnership = { ownedSince: null, formerOwners: [] },
 ) {
   if (!cycleInfo.subscription_anchor_start || !cycleInfo.subscription_anchor_end)
     throw simpleError('cannot_get_cycle_info', 'Cannot get cycle info', { cycleInfo })
@@ -596,16 +605,19 @@ async function refreshStorageHourly(
     appUuid: ownership.appUuid,
   })
 
-  await finalizeFormerOwner(c, pg, events, { appId, ownerOrg, ownership, calculationEndMs, writtenAt })
+  await finalizeFormerOwners(c, pg, events, { appId, formerOwners: ownership.formerOwners, calculationEndMs, writtenAt })
 
   return calculation
 }
 
-interface DeletedAppRecord {
-  app_id: string
+interface AppOwnershipRecord {
   owner_org: string | null
-  created_at?: string | null
+  created_at?: string | Date | null
   transfer_history?: unknown[] | null
+}
+
+interface DeletedAppRecord extends AppOwnershipRecord {
+  app_id: string
 }
 
 interface TransferEntry {
@@ -614,34 +626,36 @@ interface TransferEntry {
   transferred_to?: string
 }
 
-function latestTransferTo(record: DeletedAppRecord, orgId: string | null | undefined, beforeMs = Number.POSITIVE_INFINITY) {
-  let latest: { at: number, from: string | null } | null = null
-  for (const entry of record.transfer_history ?? []) {
-    const transfer = entry as TransferEntry | null
-    if (!transfer?.transferred_at || transfer.transferred_to !== orgId)
-      continue
-    const at = parseTimestampMs(transfer.transferred_at)
-    if (at < beforeMs && (!latest || at > latest.at))
-      latest = { at, from: transfer.transferred_from ?? null }
-  }
-  return latest
-}
-
-function maxIso(...values: Array<number | null | undefined>): string | null {
-  const times = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-  return times.length > 0 ? new Date(Math.max(...times)).toISOString() : null
-}
-
-/** Who owned the deleted app and since when, from the record's creation and transfer history. */
-export function deletedAppOwnership(record: DeletedAppRecord): StorageOwnership {
+/**
+ * Ownership segments of an app from its creation and transfer history: the current owner's start,
+ * and every former owner's segment (from when it got the app to its transfer away), oldest first.
+ */
+export function appStorageOwnership(record: AppOwnershipRecord): StorageOwnership {
   const createdMs = record.created_at ? parseTimestampMs(record.created_at) : null
-  const lastTransfer = latestTransferTo(record, record.owner_org)
-  const formerTransfer = lastTransfer?.from ? latestTransferTo(record, lastTransfer.from, lastTransfer.at) : null
+  const transfers = (record.transfer_history ?? [])
+    .map(entry => entry as TransferEntry | null)
+    .filter((entry): entry is Required<TransferEntry> => !!entry?.transferred_at && !!entry.transferred_from && !!entry.transferred_to)
+    .map(entry => ({ at: parseTimestampMs(entry.transferred_at), from: entry.transferred_from, to: entry.transferred_to }))
+    .filter(entry => Number.isFinite(entry.at))
+    .sort((a, b) => a.at - b.at)
+
+  // When `orgId` got the app for the segment ending at `untilMs`.
+  const ownedSinceFor = (orgId: string, untilMs: number) => {
+    let since = createdMs
+    for (const transfer of transfers) {
+      if (transfer.to === orgId && transfer.at < untilMs)
+        since = since === null ? transfer.at : Math.max(since, transfer.at)
+    }
+    return since === null ? null : new Date(since).toISOString()
+  }
+
   return {
-    ownedSince: maxIso(createdMs, lastTransfer?.at),
-    transferredAt: lastTransfer ? new Date(lastTransfer.at).toISOString() : null,
-    transferredFrom: lastTransfer?.from ?? null,
-    formerOwnedSince: lastTransfer ? maxIso(createdMs, formerTransfer?.at) : null,
+    ownedSince: record.owner_org ? ownedSinceFor(record.owner_org, Number.POSITIVE_INFINITY) : null,
+    formerOwners: transfers.map(transfer => ({
+      orgId: transfer.from,
+      ownedSince: ownedSinceFor(transfer.from, transfer.at),
+      transferredAt: new Date(transfer.at).toISOString(),
+    })),
   }
 }
 
@@ -685,7 +699,7 @@ export async function finalizeDeletedAppStorageHourly(
   const cycle = await readCycleBefore(pg, record.owner_org, deletedAt)
   if (!cycle?.cycle_start || !cycle.cycle_end)
     return null
-  const ownership = deletedAppOwnership(record)
+  const ownership = appStorageOwnership(record)
   const calculation = await replaceCycleStorageHourly(c, pg, events, {
     appId: record.app_id,
     ownerOrg: record.owner_org,
@@ -697,7 +711,7 @@ export async function finalizeDeletedAppStorageHourly(
     // The app row is gone: these rows are clipped at the deletion.
     requireCurrentOwner: false,
   })
-  // Deleted soon after a rollover: the previous cycle's last hours are only recorded here.
+  // Deleted after a rollover the previous cycle was not finalized for yet.
   await finalizePreviousCycle(c, pg, events, {
     appId: record.app_id,
     ownerOrg: record.owner_org,
@@ -707,8 +721,8 @@ export async function finalizeDeletedAppStorageHourly(
     writtenAt,
     requireCurrentOwner: false,
   })
-  // Deleted soon after a transfer: the former owner's last hours are only recorded here.
-  await finalizeFormerOwner(c, pg, events, { appId: record.app_id, ownerOrg: record.owner_org, ownership, calculationEndMs: deletedAtMs, writtenAt })
+  // Deleted after transfers whose former owners were not finalized yet.
+  await finalizeFormerOwners(c, pg, events, { appId: record.app_id, formerOwners: ownership.formerOwners, calculationEndMs: deletedAtMs, writtenAt })
   return calculation
 }
 
@@ -756,34 +770,8 @@ app.post('/', middlewareAPISecret, async (c) => {
 async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: string, orgId: string) {
   const appResult = await runSupabaseResultWithRetry<AppOwnerOrgRow>(c, 'load_app', async () => {
     const result = await pg.query<AppOwnerOrgRow>(
-      `WITH transfers AS (
-         SELECT (entry ->> 'transferred_at')::timestamptz AS transferred_at,
-           (entry ->> 'transferred_from')::uuid AS transferred_from,
-           (entry ->> 'transferred_to')::uuid AS transferred_to
-         FROM public.apps, pg_catalog.unnest(apps.transfer_history) AS entry
-         WHERE apps.app_id = $1
-       ),
-       last_transfer AS (
-         SELECT transfers.*
-         FROM transfers, public.apps
-         WHERE apps.app_id = $1 AND transfers.transferred_to = apps.owner_org
-         ORDER BY transfers.transferred_at DESC
-         LIMIT 1
-       )
-       SELECT apps.owner_org,
-         apps.id,
-         GREATEST(apps.created_at, last_transfer.transferred_at) AS owned_since,
-         last_transfer.transferred_at,
-         last_transfer.transferred_from,
-         GREATEST(
-           apps.created_at,
-           (SELECT max(previous.transferred_at)
-            FROM transfers AS previous
-            WHERE previous.transferred_to = last_transfer.transferred_from
-              AND previous.transferred_at < last_transfer.transferred_at)
-         ) AS former_owned_since
+      `SELECT apps.owner_org, apps.id, apps.created_at, pg_catalog.to_jsonb(apps.transfer_history) AS transfer_history
        FROM public.apps
-       LEFT JOIN last_transfer ON true
        WHERE apps.app_id = $1
        LIMIT 2`,
       [appId],
@@ -929,10 +917,7 @@ async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: st
   // queue retries it, instead of leaving the cycle under-counted.
   const storageHourly = await refreshStorageHourly(c, pg, appId, orgId, cycleInfo, body.currentHour, {
     appUuid: appResult.data.id,
-    ownedSince: toIsoTimestamp(appResult.data.owned_since),
-    transferredAt: toIsoTimestamp(appResult.data.transferred_at),
-    transferredFrom: appResult.data.transferred_from,
-    formerOwnedSince: toIsoTimestamp(appResult.data.former_owned_since),
+    ...appStorageOwnership(appResult.data),
   })
 
   cloudlog({ requestId: c.get('requestId'), message: 'stats saved', mauLength: mau.length, bandwidthLength: bandwidth.length, storageHourlyLength: storageHourly.rows.length, versionUsageLength: versionUsage.length })

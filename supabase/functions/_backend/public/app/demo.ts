@@ -1076,10 +1076,14 @@ export async function createDemoApp(c: Context<MiddlewareKeyVariables>, body: Cr
       }
       // Only add storage entry if we have some storage
       if (cumulativeStorage > 0) {
-        // Every bundle released so far stays stored for the whole day.
+        // Every bundle released so far stays stored all day; today only for the hours elapsed, like
+        // a real refresh (the statistics divide today's byte-hours by its elapsed hours).
+        const startOfTodayUtc = new Date()
+        startOfTodayUtc.setUTCHours(0, 0, 0, 0)
+        const hoursStored = daysAgo === 0 ? Math.max(0, (Date.now() - startOfTodayUtc.getTime()) / 3_600_000) : 24
         dailyStorageRows.push({
           date,
-          storage_byte_hours: cumulativeStorage * 24,
+          storage_byte_hours: cumulativeStorage * hoursStored,
         })
       }
 
