@@ -33,6 +33,29 @@ async function handleOrgInvitationBentoSync(c: Context<MiddlewareKeyVariables>, 
   return c.json(BRES)
 }
 
+async function handleOrgInvitationEmail(c: Context<MiddlewareKeyVariables>, payload: unknown) {
+  const invitationId = z.uuid().safeParse(payload)
+  if (!invitationId.success)
+    throw simpleError('invalid_payload', 'Invalid organization invitation email payload')
+  try {
+    // A queue retry after a Bento failure skips the already-sent email.
+    // Bento enrollment is at least once: acceptance followed by a lost
+    // response or failed marker commit can start a duplicate reminder flow.
+    const delivery = sendOrgInvitationEmail(c, invitationId.data)
+      .then(() => startOrgInvitationBentoFlow(c, invitationId.data))
+    // Finish recording acceptance even if the queue's HTTP client times out.
+    if (getRuntimeKey() === 'workerd')
+      c.executionCtx.waitUntil(delivery.catch(() => {}))
+    await delivery
+  }
+  catch (error) {
+    quickError(500, 'cloudflare_org_invitation_email_failed', 'Cloudflare invitation email delivery failed', {
+      invitationId: invitationId.data,
+    }, error)
+  }
+  return c.json(BRES)
+}
+
 app.post('/', middlewareAPISecret, async (c) => {
   const body = await parseBody<GoTrueSendEmailEvent & { invoice_delivery_id?: unknown, org_invitation_id?: unknown, org_invitation_bento_sync?: unknown }>(c)
   if (body && typeof body === 'object' && Object.hasOwn(body, 'org_invitation_bento_sync'))
@@ -53,28 +76,8 @@ app.post('/', middlewareAPISecret, async (c) => {
   if (!emailBinding)
     quickError(500, 'cloudflare_email_unavailable', 'Cloudflare Email Sending is unavailable')
 
-  if (body && typeof body === 'object' && Object.hasOwn(body, 'org_invitation_id')) {
-    const invitationId = z.uuid().safeParse(body.org_invitation_id)
-    if (!invitationId.success)
-      throw simpleError('invalid_payload', 'Invalid organization invitation email payload')
-    try {
-      // A queue retry after a Bento failure skips the already-sent email.
-      // Bento enrollment is at least once: acceptance followed by a lost
-      // response or failed marker commit can start a duplicate reminder flow.
-      const delivery = sendOrgInvitationEmail(c, invitationId.data)
-        .then(() => startOrgInvitationBentoFlow(c, invitationId.data))
-      // Finish recording acceptance even if the queue's HTTP client times out.
-      if (getRuntimeKey() === 'workerd')
-        c.executionCtx.waitUntil(delivery.catch(() => {}))
-      await delivery
-    }
-    catch (error) {
-      quickError(500, 'cloudflare_org_invitation_email_failed', 'Cloudflare invitation email delivery failed', {
-        invitationId: invitationId.data,
-      }, error)
-    }
-    return c.json(BRES)
-  }
+  if (body && typeof body === 'object' && Object.hasOwn(body, 'org_invitation_id'))
+    return handleOrgInvitationEmail(c, body.org_invitation_id)
 
   const deliveries = authEmailDeliveriesFromGoTrueEvent(body)
   if (deliveries.length === 0)

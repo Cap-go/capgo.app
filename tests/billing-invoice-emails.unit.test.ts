@@ -49,7 +49,7 @@ it('defaults on, shows the fallback and saves five unverified recipients', async
   await fill(recipients.join('\n'))
   await save()
   expect(mocks.save).toHaveBeenCalledWith('org_example', { enabled: true, recipients })
-  expect(document.querySelector('[role=status]')!.textContent).toContain('saved')
+  expect(document.querySelector('[data-test=invoice-emails-saved]')!.textContent).toContain('saved')
 })
 it('saves an opt out', async () => {
   await mount()
@@ -80,5 +80,5 @@ it('keeps failures visible and permits retry', async () => {
   await save()
   expect(document.querySelector('[role=alert]')!.textContent).toContain('Could not save')
   await save()
-  expect(document.querySelector('[role=status]')!.textContent).toContain('saved')
+  expect(document.querySelector('[data-test=invoice-emails-saved]')!.textContent).toContain('saved')
 })

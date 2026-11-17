@@ -107,9 +107,9 @@ async function save() {
       <p v-if="error" role="alert" class="text-sm text-red-600 dark:text-red-300">
         {{ error }}
       </p>
-      <p v-if="saved" role="status" class="text-sm text-green-700 dark:text-green-300">
+      <output v-if="saved" data-test="invoice-emails-saved" class="block text-sm text-green-700 dark:text-green-300">
         {{ t('invoice-emails-saved') }}
-      </p>
+      </output>
       <button type="submit" class="d-btn d-btn-sm d-btn-primary" :disabled="saving">
         <span v-if="saving" class="d-loading d-loading-spinner d-loading-xs" />
         {{ t('invoice-emails-save') }}

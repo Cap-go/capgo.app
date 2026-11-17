@@ -1,4 +1,4 @@
--- pgTAP assertions intentionally use function-result SELECTs.
+-- pgTAP assertions intentionally use SQL statements returning function results.
 -- noqa: disable=LT05,LT09,AM04
 BEGIN;
 SELECT plan(12);

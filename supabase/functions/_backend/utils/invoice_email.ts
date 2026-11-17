@@ -67,7 +67,7 @@ export async function queueInvoiceEmail(c: Context, orgId: string, billingAccoun
         ON CONFLICT (billing_account, invoice_id) DO NOTHING RETURNING id, recipients
       `, [orgId, billingAccount, customerId, invoice.id, invoice.customer_email])
       const delivery = result.rows[0]
-      if (!delivery || !delivery.recipients.length)
+      if (!delivery?.recipients.length)
         return
       if (delivery.recipients.some(email => !email))
         throw new Error('Paid invoice has no email recipient')
