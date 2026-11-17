@@ -1,11 +1,13 @@
 import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
+import { Client } from 'pg'
 import { createClient } from './sql-data-client'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   executeSQL,
   getSupabaseClient,
   ORG_ID,
+  POSTGRES_URL,
   resetAndSeedAppData,
   resetAppData,
   SUPABASE_ANON_KEY,
@@ -131,12 +133,30 @@ describe('app transfer security', () => {
   })
 
   it('still allows the approved transfer_app RPC to move ownership consistently', async () => {
-    const transferResult = await authClient.rpc('transfer_app', {
-      p_app_id: appId,
-      p_new_org_id: destinationOrgId,
-    })
+    // A running storage refresh of the former owner holds a share lock on the app row
+    // (replace_app_storage_hourly). The transfer must wait for it and record its time after,
+    // so the former owner's billed hours never extend past transferred_at.
+    const refresh = new Client({ connectionString: POSTGRES_URL })
+    await refresh.connect()
+    let refreshCommittedAt = 0
+    try {
+      await refresh.query('BEGIN')
+      await refresh.query('SELECT 1 FROM public.apps WHERE app_id = $1 FOR SHARE', [appId])
+      const transferPromise = authClient.rpc('transfer_app', {
+        p_app_id: appId,
+        p_new_org_id: destinationOrgId,
+      })
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      const [{ committed_at }] = (await refresh.query<{ committed_at: string }>('SELECT pg_catalog.clock_timestamp()::text AS committed_at')).rows
+      await refresh.query('COMMIT')
+      refreshCommittedAt = Date.parse(committed_at)
 
-    expect(transferResult.error).toBeNull()
+      const transferResult = await transferPromise
+      expect(transferResult.error).toBeNull()
+    }
+    finally {
+      await refresh.end()
+    }
 
     const capgo = getSupabaseClient()
     const { data: appRow, error: appError } = await capgo
@@ -158,6 +178,8 @@ describe('app transfer security', () => {
 
     expect(appRow.owner_org).toBe(destinationOrgId)
     expect(appRow.transfer_history ?? []).toHaveLength(1)
+    const transferredAt = Date.parse(String((appRow.transfer_history![0] as { transferred_at: string }).transferred_at))
+    expect(transferredAt).toBeGreaterThanOrEqual(refreshCommittedAt)
     expect(versionRows.length).toBeGreaterThan(0)
     expect(versionRows.every(version => version.owner_org === destinationOrgId)).toBe(true)
   })
