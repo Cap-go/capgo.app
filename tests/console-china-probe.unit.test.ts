@@ -1,4 +1,4 @@
-// China console probe and banner behavior (unit).
+// China console probe and banner behavior.
 import { describe, expect, it, vi } from 'vitest'
 import {
   isChinaCapgoConsoleHostname,
