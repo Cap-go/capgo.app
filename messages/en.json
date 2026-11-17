@@ -3880,8 +3880,6 @@
   "rollout-percentage-unchanged": "Rollout percentage is already {percent}",
   "confirm-rollout-percentage-title": "Apply rollout percentage?",
   "confirm-rollout-percentage-description": "Change from {current} to {next}. Capgo adjusts the sticky cohort using increase or decrease rules.",
-  "confirm-enable-rollout-title": "Enable progressive rollout?",
-  "confirm-enable-rollout-description": "Eligible devices may receive {target} on their next update check. Stable fallback {fallback} remains for devices outside the {percent} cohort.",
   "confirm-pause-rollout-title": "Pause rollout?",
   "confirm-pause-rollout-description": "No new devices enter the cohort. Devices already on {target} keep it until you resume or roll back.",
   "confirm-resume-rollout-title": "Resume rollout?",

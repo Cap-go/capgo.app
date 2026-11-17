@@ -483,7 +483,7 @@ const showSearchAndActions = computed(() => {
 })
 
 /** Load native_packages for a picker row only when the user links that bundle. */
-async function loadBundleNativePackagesForLink(bundle: BundlePickerRow) {
+async function loadBundleNativePackagesForLink(bundle: Pick<BundlePickerRow, 'app_id' | 'id'>) {
   // Picker rows stay light (no native_packages). Load them only when linking so
   // compatibility still sees real deps instead of an empty array.
   const { data, error } = await capgo
@@ -946,6 +946,21 @@ async function enableRollout() {
   await getRolloutConfirmFlows().enableRollout()
 }
 
+/**
+ * Starting a configured rollout shows the same impact confirm as picking a
+ * rollout target: who gets it first and the native-package warning.
+ */
+async function confirmRolloutStart() {
+  if (!channel.value?.rollout_version)
+    return false
+  const confirmedChannelId = channel.value.id
+  const target = await loadBundleNativePackagesForLink({ app_id: channel.value.app_id, id: channel.value.rollout_version })
+  if (!target)
+    return false
+  const result = await confirmVersionLink(target, true, confirmedChannelId)
+  return !!result?.confirmed && stillOnChannel(confirmedChannelId)
+}
+
 function syncRolloutSettingsDraft() {
   rolloutPercentageDraft.value = String((channel.value?.rollout_percentage_bps ?? 0) / 100)
   rolloutCacheTtlDraft.value = String(channel.value?.rollout_cache_ttl_seconds ?? 2592000)
@@ -1201,6 +1216,7 @@ rolloutConfirmFlows = createChannelRolloutConfirmFlows({
   saveChannelChanges,
   askUpdateNotificationAfterBundleChange,
   openSelectRolloutVersion,
+  confirmRolloutStart,
 })
 
 // One-line answer to "who gets what from this channel", shown above the details.

@@ -31,6 +31,11 @@ export interface ChannelRolloutConfirmFlowsDeps {
   saveChannelChanges: (changes: Record<string, unknown>) => Promise<boolean>
   askUpdateNotificationAfterBundleChange: () => Promise<void>
   openSelectRolloutVersion: () => Promise<void>
+  /**
+   * Starting the configured rollout: the shared impact confirm (who gets the
+   * rollout target first, native-package warning). Resolves true when confirmed.
+   */
+  confirmRolloutStart: () => Promise<boolean>
 }
 
 function formatRolloutPercentageLabel(percentage: number) {
@@ -191,18 +196,8 @@ export function createChannelRolloutConfirmFlows(deps: ChannelRolloutConfirmFlow
       await deps.openSelectRolloutVersion()
       return
     }
-    await confirm({
-      id: 'confirm-enable-rollout',
-      title: deps.t('confirm-enable-rollout-title'),
-      description: deps.t('confirm-enable-rollout-description', {
-        target: deps.rolloutTargetName(),
-        fallback: deps.stableBundleName(),
-        percent: deps.rolloutPercentageText(),
-      }),
-      onConfirm: async () => {
-        await deps.saveChannelChange('rollout_enabled', true)
-      },
-    })
+    if (await deps.confirmRolloutStart())
+      await deps.saveChannelChange('rollout_enabled', true)
   }
 
   async function rollbackRollout() {

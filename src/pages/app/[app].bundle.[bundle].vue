@@ -26,6 +26,7 @@ import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { invalidateChannelImpact } from '~/services/channelImpact'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
+import { readChannelRollbackContext } from '~/services/channelRollback'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { useConsole } from '~/services/console'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
@@ -308,9 +309,14 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
 
   try {
     const bundle = version.value
+    // Read the channel fresh: another session may have changed its bundle or
+    // started a rollout since the channel list loaded.
+    const names = await readChannelBundleNames(chan, bundle.id)
+    if (!names)
+      return
     let compatibility: ChannelChangeCompatibility | null
     try {
-      compatibility = await bundleChannelCompatibility(bundle.app_id, chan.name, bundle.id, (bundle.native_packages as any) ?? [], chan.version)
+      compatibility = await bundleChannelCompatibility(bundle.app_id, chan.name, bundle.id, (bundle.native_packages as any) ?? [], names.versionId)
     }
     catch (error) {
       // Never skip the native package warning because the check itself failed.
@@ -318,9 +324,6 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
       toast.error(t('channel-impact-compat-check-failed'))
       return
     }
-    const names = await readChannelBundleNames(chan, bundle.id)
-    if (!names)
-      return
     const result = await confirmChannelChange({
       appId: bundle.app_id,
       channelId: chan.id,
@@ -348,38 +351,23 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
   }
 }
 
-/** Name of a bundle linked to a channel, or null for the store version. Throws when it cannot be read. */
-async function currentBundleNameOf(versionId: number) {
-  const { data, error } = await capgo
-    .from('app_versions')
-    .select('name')
-    .eq('id', versionId)
-    .maybeSingle()
-  if (error)
-    throw error
-  const name = data?.name ?? null
-  return name && !['builtin', 'unknown'].includes(name) ? name : null
-}
-
 /**
  * What the impact confirm says the channel serves now, and which rollout the
- * change stops. Null (after an error toast) when it cannot be read: the confirm
- * must never describe a channel it could not read as serving the store version.
+ * change stops, read fresh from the channel. Null (after an error toast) when it
+ * cannot be read: the confirm must never describe a channel it could not read.
  */
 async function readChannelBundleNames(chan: Database['public']['Tables']['channels']['Row'], nextVersionId: number | null) {
-  try {
-    const [currentBundleName, rolloutTargetName] = await Promise.all([
-      chan.version ? currentBundleNameOf(chan.version) : null,
-      // A new stable bundle resets any configured rollout (channel trigger); the
-      // same bundle again does not change the version, so the rollout stays.
-      chan.rollout_version && chan.version !== nextVersionId ? currentBundleNameOf(chan.rollout_version) : null,
-    ])
-    return { currentBundleName, rolloutTargetName }
-  }
-  catch (error) {
-    console.error('Cannot read the channel bundles', error)
+  const context = await readChannelRollbackContext(chan.id)
+  if (!context) {
     toast.error(t('channel-impact-bundle-read-failed'))
     return null
+  }
+  return {
+    versionId: context.versionId,
+    currentBundleName: context.versionName,
+    // A new stable bundle resets any configured rollout (channel trigger); the
+    // same bundle again does not change the version, so the rollout stays.
+    rolloutTargetName: context.versionId === nextVersionId ? null : context.rolloutTargetName,
   }
 }
 

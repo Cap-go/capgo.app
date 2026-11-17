@@ -84,6 +84,7 @@ function createTestFlows(options: {
   saveChannelChange?: ReturnType<typeof vi.fn>
   saveChannelChanges?: ReturnType<typeof vi.fn>
   askUpdateNotificationAfterBundleChange?: ReturnType<typeof vi.fn>
+  confirmRolloutStart?: ReturnType<typeof vi.fn>
   canUpdate?: boolean
 }) {
   const dialogStore = useDialogV2Store()
@@ -91,6 +92,7 @@ function createTestFlows(options: {
   const saveChannelChanges = options.saveChannelChanges ?? vi.fn(async () => true)
   const askUpdateNotificationAfterBundleChange = options.askUpdateNotificationAfterBundleChange ?? vi.fn(async () => {})
   const openSelectRolloutVersion = vi.fn(async () => {})
+  const confirmRolloutStart = options.confirmRolloutStart ?? vi.fn(async () => true)
   const closeUpdatePackageDropdown = vi.fn()
   const toast = { error: vi.fn(), info: vi.fn() }
 
@@ -108,10 +110,12 @@ function createTestFlows(options: {
     saveChannelChanges: saveChannelChanges as ChannelRolloutConfirmFlowsDeps['saveChannelChanges'],
     askUpdateNotificationAfterBundleChange: askUpdateNotificationAfterBundleChange as ChannelRolloutConfirmFlowsDeps['askUpdateNotificationAfterBundleChange'],
     openSelectRolloutVersion,
+    confirmRolloutStart: confirmRolloutStart as ChannelRolloutConfirmFlowsDeps['confirmRolloutStart'],
   })
 
   return {
     flows,
+    confirmRolloutStart,
     saveChannelChange,
     saveChannelChanges,
     askUpdateNotificationAfterBundleChange,
@@ -321,6 +325,25 @@ describe('channel information rollout and update package UX', () => {
     expect(container.textContent).not.toContain('Update rollout settings?')
   })
 
+  it('enableRollout uses the shared impact confirm and saves only when confirmed', async () => {
+    const { container, t } = mountDialogShell()
+    const channel: TestChannel = { rollout_version: 42, rollout_percentage_bps: 500, rollout_paused_at: null }
+    const confirmed = createTestFlows({ container, t, channel, confirmRolloutStart: vi.fn(async () => true) })
+    await confirmed.flows.enableRollout()
+    expect(confirmed.confirmRolloutStart).toHaveBeenCalledTimes(1)
+    expect(confirmed.saveChannelChange).toHaveBeenCalledWith('rollout_enabled', true)
+
+    const canceled = createTestFlows({ container, t, channel, confirmRolloutStart: vi.fn(async () => false) })
+    await canceled.flows.enableRollout()
+    expect(canceled.saveChannelChange).not.toHaveBeenCalled()
+
+    // No target yet: pick one first, nothing to confirm.
+    const noTarget = createTestFlows({ container, t, channel: { rollout_percentage_bps: 500 } })
+    await noTarget.flows.enableRollout()
+    expect(noTarget.openSelectRolloutVersion).toHaveBeenCalledTimes(1)
+    expect(noTarget.confirmRolloutStart).not.toHaveBeenCalled()
+  })
+
   it('rollout control confirms match expected dialog ids and saves', async () => {
     const { container, t } = mountDialogShell()
     const channel: TestChannel = {
@@ -337,12 +360,6 @@ describe('channel information rollout and update package UX', () => {
     })
 
     const cases = [
-      {
-        run: () => flows.enableRollout(),
-        title: 'Enable progressive rollout?',
-        confirm: 'Confirm',
-        assert: () => expect(saveChannelChange).toHaveBeenCalledWith('rollout_enabled', true),
-      },
       {
         run: () => flows.rollbackRollout(),
         title: 'Revert rollout to Stable bundle?',
