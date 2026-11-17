@@ -31,7 +31,7 @@ interface PopulationRowCF {
   is_emulator: number | string
   device_count: number | string
   sample_device_id: string
-  latest_seen: string
+  latest_seen: Date | string
 }
 
 /** Cutoff rounded down to the minute so repeated reads share the same SQL text. */
@@ -60,11 +60,16 @@ function flagFromCF(value: number | string | null | undefined): boolean | null {
   return null
 }
 
-/** Analytics Engine returns UTC "YYYY-MM-DD HH:MM:SS" timestamps. */
-function isoFromCF(value: string | null | undefined): string | null {
+/**
+ * runQueryToCFA converts DateTime columns to Date; raw API rows carry UTC
+ * "YYYY-MM-DD HH:MM:SS" strings. Accept both.
+ */
+export function isoFromCF(value: Date | string | null | undefined): string | null {
   if (!value)
     return null
-  const date = new Date(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
+  const date = value instanceof Date
+    ? value
+    : new Date(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
 

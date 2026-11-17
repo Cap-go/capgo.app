@@ -1,6 +1,7 @@
 import type { SemVer } from '@std/semver'
 import { greaterOrEqual, greaterThan, lessThan, tryParse } from '@std/semver'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
+import { BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, isDeprecatedPluginVersion } from './utils.ts'
 
 /**
  * Pure impact preview for a channel change ("who gets what if I set this?").
@@ -14,6 +15,7 @@ import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 
 export type ChannelImpactPlatform = 'ios' | 'android' | 'electron' | 'unknown'
 export type ChannelImpactStrategy = 'major' | 'minor' | 'patch' | 'version_number' | 'none'
+export type ChannelImpactUpdatePackage = 'all' | 'zip' | 'delta' | 'zip_from_builtin' | 'delta_from_builtin'
 
 export const CHANNEL_IMPACT_WINDOW_DAYS = 30
 /** First plugin version that understands the revert-to-builtin response. */
@@ -53,10 +55,12 @@ export interface ChannelImpactChannelConfig {
   allow_emulator: boolean
   /** Private channel without self-assignment: only devices assigned through channel_devices are served. */
   assigned_devices_only: boolean
+  /** Download format setting of the channel (zip, delta manifest or both). */
+  update_package?: ChannelImpactUpdatePackage | null
 }
 
 export type ChannelImpactTarget
-  = | { kind: 'bundle', name: string, min_update_version: string | null, key_id?: string | null }
+  = | { kind: 'bundle', name: string, min_update_version: string | null, key_id?: string | null, has_zip?: boolean }
     | { kind: 'builtin' }
 
 export const CHANNEL_IMPACT_OUTCOMES = [
@@ -75,6 +79,7 @@ export const CHANNEL_IMPACT_OUTCOMES = [
   'blocked_build_type',
   'plugin_too_old',
   'blocked_key_mismatch',
+  'blocked_no_bundle',
   'unknown_native',
 ] as const
 export type ChannelImpactOutcome = typeof CHANNEL_IMPACT_OUTCOMES[number]
@@ -100,6 +105,8 @@ export interface ChannelImpactNativeVersion {
   receive: number
   /** Most common outcome for this native build. */
   outcome: ChannelImpactOutcome
+  /** Devices on this native build do not all share `outcome`. */
+  mixed: boolean
 }
 
 export interface ChannelImpactSample {
@@ -136,6 +143,32 @@ function parseVersion(value: string | null | undefined): SemVer | null {
   return tryParse(value) ?? null
 }
 
+/** Mirrors resolveChannelUpdatePackage in /updates. */
+function resolveUpdatePackage(mode: ChannelImpactUpdatePackage | null | undefined, onBuiltin: boolean): 'all' | 'zip' | 'delta' {
+  if (mode === 'zip' || mode === 'delta')
+    return mode
+  if (onBuiltin && mode === 'zip_from_builtin')
+    return 'zip'
+  if (onBuiltin && mode === 'delta_from_builtin')
+    return 'delta'
+  return 'all'
+}
+
+/**
+ * A bundle without a zip (delta-only upload) can only be sent as a delta
+ * manifest: /updates answers no_bundle when the channel forces zips or the
+ * updater is too old to read manifests.
+ */
+function canDeliverWithoutZip(device: Pick<ChannelImpactDeviceGroup, 'plugin_version' | 'version_name' | 'version_build'>, channel: ChannelImpactChannelConfig) {
+  const plugin = parseVersion(device.plugin_version)
+  if (!plugin)
+    return true
+  const onBuiltin = device.version_name === 'builtin' || device.version_name === device.version_build
+  if (resolveUpdatePackage(channel.update_package, onBuiltin) === 'zip')
+    return false
+  return !isDeprecatedPluginVersion(plugin, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7)
+}
+
 /** Mirrors the strategy, guard, platform and build-type gates of /updates for one device setup. */
 export function evaluateDeviceOutcome(
   device: Pick<ChannelImpactDeviceGroup, 'platform' | 'version_build' | 'version_name' | 'plugin_version' | 'is_prod' | 'is_emulator' | 'forced' | 'key_id'>,
@@ -148,6 +181,9 @@ export function evaluateDeviceOutcome(
     return 'unknown_native'
 
   const targetName = target.kind === 'builtin' ? 'builtin' : target.name
+  if (target.kind === 'bundle' && target.has_zip === false && !canDeliverWithoutZip(device, channel))
+    return 'blocked_no_bundle'
+
   // /updates refuses an encrypted bundle whose key differs from the device's key
   // (current key id format only) before it even checks whether the device runs it.
   if (target.kind === 'bundle' && target.key_id && device.key_id && device.key_id !== target.key_id) {
@@ -333,6 +369,7 @@ export function summarizeChannelImpact(
       device_count: native.device_count,
       receive: native.receive,
       outcome: [...native.byOutcome.entries()].sort((a, b) => b[1] - a[1])[0][0],
+      mixed: native.byOutcome.size > 1,
     }))
 
   return {

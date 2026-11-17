@@ -19,6 +19,7 @@ export type ChannelImpactOutcome
     | 'blocked_build_type'
     | 'plugin_too_old'
     | 'blocked_key_mismatch'
+    | 'blocked_no_bundle'
     | 'unknown_native'
 
 export type ChannelImpactTargetRequest
@@ -50,6 +51,7 @@ export interface ChannelImpactNativeVersion {
   device_count: number
   receive: number
   outcome: ChannelImpactOutcome
+  mixed: boolean
 }
 
 export interface ChannelImpactResult {
@@ -99,8 +101,9 @@ export const STRATEGY_BLOCKED_OUTCOMES: ReadonlySet<ChannelImpactOutcome> = new 
 const CLIENT_CACHE_MS = 15_000
 const cache = new Map<string, { at: number, promise: Promise<ChannelImpactResponse> }>()
 
-function cacheKey(request: ChannelImpactRequest) {
-  return JSON.stringify([request.appId, request.channelId, request.targets, request.mode ?? 'stable', request.rolloutPercentageBps ?? null])
+// The signed-in user is part of the key: a preview is never reused for another account.
+function cacheKey(userId: string, request: ChannelImpactRequest) {
+  return JSON.stringify([userId, request.appId, request.channelId, request.targets, request.mode ?? 'stable', request.rolloutPercentageBps ?? null])
 }
 
 export class ChannelImpactError extends Error {
@@ -110,11 +113,7 @@ export class ChannelImpactError extends Error {
   }
 }
 
-async function requestChannelImpact(request: ChannelImpactRequest): Promise<ChannelImpactResponse> {
-  const { data } = await useConsole().auth.getSession()
-  const token = data.session?.access_token
-  if (!token)
-    throw new ChannelImpactError(401)
+async function requestChannelImpact(token: string, request: ChannelImpactRequest): Promise<ChannelImpactResponse> {
   const response = await fetch(`${defaultApiHost}/private/channel_impact`, {
     method: 'POST',
     headers: {
@@ -134,13 +133,17 @@ async function requestChannelImpact(request: ChannelImpactRequest): Promise<Chan
   return await response.json() as ChannelImpactResponse
 }
 
-export function fetchChannelImpact(request: ChannelImpactRequest): Promise<ChannelImpactResponse> {
-  const key = cacheKey(request)
+export async function fetchChannelImpact(request: ChannelImpactRequest): Promise<ChannelImpactResponse> {
+  const { data } = await useConsole().auth.getSession()
+  const session = data.session
+  if (!session?.access_token || !session.user?.id)
+    throw new ChannelImpactError(401)
+  const key = cacheKey(session.user.id, request)
   const now = Date.now()
   const hit = cache.get(key)
   if (hit && now - hit.at < CLIENT_CACHE_MS)
     return hit.promise
-  const promise = requestChannelImpact(request)
+  const promise = requestChannelImpact(session.access_token, request)
   cache.set(key, { at: now, promise })
   // A failed request must not be served from the cache.
   promise.catch(() => {
@@ -157,7 +160,7 @@ export function invalidateChannelImpact(channelId?: number) {
     return
   }
   for (const key of cache.keys()) {
-    const [, cachedChannelId] = JSON.parse(key) as [string, number]
+    const [, , cachedChannelId] = JSON.parse(key) as [string, string, number]
     if (cachedChannelId === channelId)
       cache.delete(key)
   }

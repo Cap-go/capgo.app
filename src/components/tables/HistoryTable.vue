@@ -481,7 +481,11 @@ async function handleRollback(item: DeployHistory) {
   if (!props.channelId)
     return
 
+  // The table can switch channel while a dialog is open: everything below
+  // stays bound to the channel the user confirmed.
+  const appId = props.appId
   const channelId = props.channelId
+  const stillSameChannel = () => props.channelId === channelId && props.appId === appId
 
   if (!canRollbackBundle.value) {
     toast.error(t('no-permission'))
@@ -495,7 +499,7 @@ async function handleRollback(item: DeployHistory) {
 
   // Same impact confirm as setting a bundle: who gets it and why the others won't.
   const result = await confirmChannelChange({
-    appId: props.appId,
+    appId,
     channelId,
     channelName: channelName.value || item.channel?.name || '',
     action: 'set',
@@ -505,7 +509,7 @@ async function handleRollback(item: DeployHistory) {
     title: t('rollback-to-version'),
     confirmText: t('rollback'),
   })
-  if (!result.confirmed)
+  if (!result.confirmed || !stillSameChannel())
     return
   try {
     const { error } = await capgo
@@ -521,6 +525,8 @@ async function handleRollback(item: DeployHistory) {
 
     invalidateChannelImpact(channelId)
     toast.success(t('rollback-success'))
+    if (!stillSameChannel())
+      return
     currentVersionId.value = item.version_id
     currentVersionName.value = item.version.name
     rolloutTargetName.value = null

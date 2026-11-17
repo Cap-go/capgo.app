@@ -45,6 +45,7 @@ const OUTCOME_ORDER: ChannelImpactOutcome[] = [
   'blocked_build_type',
   'plugin_too_old',
   'blocked_key_mismatch',
+  'blocked_no_bundle',
   'unknown_native',
 ]
 
@@ -355,6 +356,9 @@ const showImpact = computed(() => !isRevert.value || !!state.choice)
             <p v-if="impact.outcomes.blocked_private_channel" class="text-sm text-slate-600 dark:text-slate-300">
               {{ t('channel-impact-why-private-channel', { count: fmt(impact.outcomes.blocked_private_channel) }) }}
             </p>
+            <p v-if="impact.outcomes.blocked_no_bundle" class="text-sm text-amber-800 dark:text-amber-200">
+              {{ t('channel-impact-why-no-bundle', { count: fmt(impact.outcomes.blocked_no_bundle), bundle: targetName }) }}
+            </p>
             <p v-if="impact.outcomes.blocked_key_mismatch" class="text-sm text-amber-800 dark:text-amber-200">
               {{ t('channel-impact-why-key-mismatch', { count: fmt(impact.outcomes.blocked_key_mismatch), bundle: targetName }) }}
             </p>
@@ -394,7 +398,15 @@ const showImpact = computed(() => !isRevert.value || !!state.choice)
                       {{ fmt(native.device_count) }}
                     </td>
                     <td class="px-3 py-1.5">
-                      <span class="inline-flex rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset" :class="toneChip[outcomeTone(native.outcome)]">
+                      <!-- A row can mix outcomes: never present the most common one as the whole row's. -->
+                      <span
+                        v-if="native.mixed"
+                        class="inline-flex rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset"
+                        :class="toneChip[native.receive ? 'gets' : 'kept']"
+                      >
+                        {{ t('channel-impact-native-mixed', { count: fmt(native.receive), total: fmt(native.device_count) }) }}
+                      </span>
+                      <span v-else class="inline-flex rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset" :class="toneChip[outcomeTone(native.outcome)]">
                         {{ outcomeLabel(native.outcome) }}
                       </span>
                     </td>

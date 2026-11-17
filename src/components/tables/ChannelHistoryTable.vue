@@ -412,11 +412,13 @@ async function fetchHistory(options: { refreshCurrentVersion?: boolean } = {}) {
 async function handleRollback(item: HistoryEntry) {
   if (!item.bundle?.id || !props.channelId)
     return
+  // The table can switch channel while a dialog is open: everything below
+  // stays bound to the channel the user confirmed.
+  const appId = props.appId
+  const channelId = props.channelId
+  const stillSameChannel = () => props.channelId === channelId && props.appId === appId
 
-  const canRollback = await checkPermissions('channel.rollback_bundle', {
-    appId: props.appId,
-    channelId: props.channelId,
-  })
+  const canRollback = await checkPermissions('channel.rollback_bundle', { appId, channelId })
   if (!canRollback) {
     toast.error(t('no-permission'))
     return
@@ -430,8 +432,8 @@ async function handleRollback(item: HistoryEntry) {
   const bundle = item.bundle
   // Same impact confirm as setting a bundle: who gets it and why the others won't.
   const result = await confirmChannelChange({
-    appId: props.appId,
-    channelId: props.channelId,
+    appId,
+    channelId,
     channelName: channelName.value,
     action: 'set',
     bundle: { id: bundle.id, name: bundle.name },
@@ -440,13 +442,13 @@ async function handleRollback(item: HistoryEntry) {
     title: t('rollback-to-version'),
     confirmText: t('rollback'),
   })
-  if (!result.confirmed)
+  if (!result.confirmed || !stillSameChannel())
     return
   try {
     const { error } = await capgo
       .from('channels')
       .update({ version: bundle.id })
-      .eq('id', props.channelId)
+      .eq('id', channelId)
 
     if (error) {
       console.error('Error rolling back version:', error)
@@ -454,8 +456,10 @@ async function handleRollback(item: HistoryEntry) {
       return
     }
 
-    invalidateChannelImpact(props.channelId)
+    invalidateChannelImpact(channelId)
     toast.success(t('rollback-success'))
+    if (!stillSameChannel())
+      return
     currentVersionId.value = bundle.id
     currentVersionName.value = bundle.name
     rolloutTargetName.value = null

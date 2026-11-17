@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { buildChannelImpactResponse } from '../supabase/functions/_backend/private/channel_impact.ts'
 import { lintAnalyticsEngineSql } from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
 import { computeRequirement, estimateRolloutReceive, evaluateDeviceOutcome, summarizeChannelImpact } from '../supabase/functions/_backend/utils/channel_impact.ts'
-import { buildChannelPopulationCFQuery, buildChannelPopulationCountCFQuery, channelImpactWindowStart, toPopulationGroupsCF } from '../supabase/functions/_backend/utils/channel_impact_population.ts'
+import { buildChannelPopulationCFQuery, buildChannelPopulationCountCFQuery, channelImpactWindowStart, isoFromCF, toPopulationGroupsCF } from '../supabase/functions/_backend/utils/channel_impact_population.ts'
 
 const openChannel: ChannelImpactChannelConfig = {
   disable_auto_update: 'none',
@@ -90,6 +90,19 @@ describe('channel impact outcomes', () => {
     expect(evaluateDeviceOutcome(group({ plugin_version: '8.41.0', key_id: 'key-device' }), openChannel, bundle('1.4.3'))).toBe('receive')
   })
 
+  it.concurrent('only counts delta-only bundles for updaters and channels that can take a manifest', () => {
+    const deltaOnly = { kind: 'bundle' as const, name: '1.4.3', min_update_version: null, has_zip: false }
+    expect(evaluateDeviceOutcome(group({ plugin_version: '7.20.0' }), openChannel, deltaOnly)).toBe('receive')
+    expect(evaluateDeviceOutcome(group({ plugin_version: '6.24.0' }), openChannel, deltaOnly)).toBe('blocked_no_bundle')
+    expect(evaluateDeviceOutcome(group({ plugin_version: '7.0.34' }), openChannel, deltaOnly)).toBe('blocked_no_bundle')
+    expect(evaluateDeviceOutcome(group({ plugin_version: '7.20.0' }), { ...openChannel, update_package: 'zip' }, deltaOnly)).toBe('blocked_no_bundle')
+    // zip_from_builtin only forces zips for devices still on the store bundle.
+    expect(evaluateDeviceOutcome(group({ plugin_version: '7.20.0', version_name: '1.4.0', version_build: '1.4.0' }), { ...openChannel, update_package: 'zip_from_builtin' }, deltaOnly)).toBe('blocked_no_bundle')
+    expect(evaluateDeviceOutcome(group({ plugin_version: '7.20.0', version_name: '1.4.2', version_build: '1.4.0' }), { ...openChannel, update_package: 'zip_from_builtin' }, deltaOnly)).toBe('receive')
+    // Bundles with a zip are never affected.
+    expect(evaluateDeviceOutcome(group({ plugin_version: '6.24.0' }), openChannel, { ...deltaOnly, has_zip: true })).toBe('receive')
+  })
+
   it.concurrent('reverts to the store bundle only where the plugin supports it', () => {
     const builtin = { kind: 'builtin' as const }
     expect(evaluateDeviceOutcome(group({ version_build: '1.4.0', version_name: '1.4.2' }), openChannel, builtin)).toBe('revert_to_builtin')
@@ -117,7 +130,14 @@ describe('channel impact summary', () => {
     expect(summary.receive).toBe(30)
     expect(summary.outcomes.unknown_native).toBe(10)
     expect(summary.requirement).toEqual({ strategy: 'major', native: '2.0.0' })
-    expect(summary.native_versions[0]).toMatchObject({ platform: 'ios', version_build: '1.9.0', device_count: 700, outcome: 'blocked_major', receive: 0 })
+    expect(summary.native_versions[0]).toMatchObject({ platform: 'ios', version_build: '1.9.0', device_count: 700, outcome: 'blocked_major', receive: 0, mixed: false })
+    // Store build 2.0.0 holds 60 devices already on it and nothing else; 2.0.1 receives.
+    expect(summary.native_versions.find(native => native.version_build === '2.0.0')).toMatchObject({ mixed: false, outcome: 'already_on_target' })
+    const mixed = summarizeChannelImpact([
+      group({ version_build: '1.9.0', version_name: '1.9.4', device_count: 60 }),
+      group({ version_build: '1.9.0', version_name: '2.0.0', device_count: 40 }),
+    ], openChannel, bundle('2.0.0'))
+    expect(mixed.native_versions[0]).toMatchObject({ device_count: 100, receive: 60, outcome: 'receive', mixed: true })
   })
 
   it.concurrent('picks real example devices covering each distinct outcome first', () => {
@@ -143,6 +163,7 @@ describe('channel impact summary', () => {
       name: 'production',
       public: true,
       allow_device_self_set: false,
+      update_package: 'all' as const,
       paused_at: null,
       disable_auto_update: 'none' as const,
       disable_auto_update_under_native: true,
@@ -201,6 +222,14 @@ describe('channel population query', () => {
   it.concurrent('escapes app and channel names', () => {
     const query = buildChannelPopulationCFQuery('com.example.app', 'it\'s', undefined, windowStart)
     expect(query).toContain('default_channel = \'it\'\'s\'')
+  })
+
+  it.concurrent('accepts the Date objects runQueryToCFA returns for DateTime columns', () => {
+    expect(isoFromCF(new Date('2026-11-17T09:30:00.000Z'))).toBe('2026-11-17T09:30:00.000Z')
+    expect(isoFromCF('2026-11-17 09:30:00')).toBe('2026-11-17T09:30:00.000Z')
+    expect(isoFromCF(new Date('invalid'))).toBeNull()
+    const [row] = toPopulationGroupsCF([{ platform: 0, version_build: '1.0.0', version_name: '1.0.0', plugin_version: '7.0.0', is_prod: 1, is_emulator: 0, device_count: 3, sample_device_id: 'x', latest_seen: new Date('2026-11-17T09:30:00.000Z') }])
+    expect(row.last_seen).toBe('2026-11-17T09:30:00.000Z')
   })
 
   it.concurrent('maps Analytics Engine rows to device setups', () => {

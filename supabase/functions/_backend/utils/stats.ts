@@ -276,7 +276,11 @@ export async function readChannelDevicePopulation(c: Context, app_id: string, ch
     readChannelDeviceOverrideIdsSB(c, app_id, channel),
     readChannelDefaultPlatformsSB(c, app_id, channel),
   ])
-  const overrides: ChannelDeviceOverrideIds = { into: deviceOverrides?.into ?? [], elsewhere: deviceOverrides?.elsewhere ?? [], defaultForPlatforms }
+  // A failed override lookup must not read as "no overrides": forced devices
+  // would be missed and the wrong population cached.
+  if (!deviceOverrides)
+    throw new Error('channel_devices overrides unavailable')
+  const overrides: ChannelDeviceOverrideIds = { into: deviceOverrides.into, elsewhere: deviceOverrides.elsewhere, defaultForPlatforms }
   if (!shouldUseAnalyticsEngine(c))
     return readChannelDevicePopulationSB(c, app_id, channel.name, overrides)
   return readChannelDevicePopulationCF(c, app_id, channel.name, overrides)

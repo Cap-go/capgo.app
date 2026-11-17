@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import type { ChannelImpactChannelConfig, ChannelImpactStrategy, ChannelImpactSummary, ChannelImpactTarget } from '../utils/channel_impact.ts'
+import type { ChannelImpactChannelConfig, ChannelImpactStrategy, ChannelImpactSummary, ChannelImpactTarget, ChannelImpactUpdatePackage } from '../utils/channel_impact.ts'
 import type { ChannelDevicePopulation } from '../utils/channel_impact_population.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { HTTPException } from 'hono/http-exception'
@@ -48,6 +48,7 @@ interface BundleRef {
   name: string
   min_update_version?: string | null
   key_id?: string | null
+  has_zip?: boolean
 }
 
 interface ChannelRow {
@@ -65,6 +66,7 @@ interface ChannelRow {
   allow_dev: boolean
   allow_device: boolean
   allow_emulator: boolean
+  update_package: ChannelImpactUpdatePackage | null
   rollout_enabled: boolean | null
   rollout_percentage_bps: number | null
   rollout_paused_at: string | null
@@ -123,11 +125,11 @@ async function readChannelRow(c: Context<MiddlewareKeyVariables>, body: ChannelI
     `SELECT ch.id, ch.name, ch.public, ch.allow_device_self_set, ch.paused_at,
       ch.disable_auto_update, ch.disable_auto_update_under_native,
       ch.ios, ch.android, ch.electron,
-      ch.allow_prod, ch.allow_dev, ch.allow_device, ch.allow_emulator,
+      ch.allow_prod, ch.allow_dev, ch.allow_device, ch.allow_emulator, ch.update_package,
       ch.rollout_enabled, ch.rollout_percentage_bps, ch.rollout_paused_at,
       (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name) FROM public.app_versions av WHERE av.id = ch.version) AS current_bundle,
       (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name) FROM public.app_versions av WHERE av.id = ch.rollout_version) AS rollout_bundle,
-      (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name, 'min_update_version', av.min_update_version, 'key_id', av.key_id)
+      (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name, 'min_update_version', av.min_update_version, 'key_id', av.key_id, 'has_zip', av.r2_path IS NOT NULL OR av.external_url IS NOT NULL)
         FROM public.deploy_history dh
         JOIN public.app_versions av ON av.id = dh.version_id
         WHERE dh.channel_id = ch.id
@@ -137,7 +139,7 @@ async function readChannelRow(c: Context<MiddlewareKeyVariables>, body: ChannelI
           AND av.name NOT IN ('builtin', 'unknown')
         ORDER BY dh.deployed_at DESC NULLS LAST, dh.id DESC
         LIMIT 1) AS previous_bundle,
-      (SELECT pg_catalog.json_agg(pg_catalog.json_build_object('id', av.id, 'name', av.name, 'min_update_version', av.min_update_version, 'key_id', av.key_id, 'deleted', av.deleted))
+      (SELECT pg_catalog.json_agg(pg_catalog.json_build_object('id', av.id, 'name', av.name, 'min_update_version', av.min_update_version, 'key_id', av.key_id, 'has_zip', av.r2_path IS NOT NULL OR av.external_url IS NOT NULL, 'deleted', av.deleted))
         FROM public.app_versions av
         WHERE av.app_id = ch.app_id AND av.id = ANY($3::bigint[])) AS bundles
     FROM public.channels ch
@@ -169,14 +171,14 @@ function resolveTarget(row: ChannelRow, requested: RequestedTarget): ChannelImpa
     const previous = row.previous_bundle
     if (!previous)
       throw simpleError('no_previous_bundle', 'This channel has no previous bundle to roll back to')
-    return { kind: 'bundle', id: Number(previous.id), name: previous.name, min_update_version: previous.min_update_version ?? null, key_id: previous.key_id ?? null }
+    return { kind: 'bundle', id: Number(previous.id), name: previous.name, min_update_version: previous.min_update_version ?? null, key_id: previous.key_id ?? null, has_zip: previous.has_zip !== false }
   }
   const bundle = (row.bundles ?? []).find(item => Number(item.id) === requested.version_id)
   if (!bundle || bundle.deleted)
     throw simpleError('cannot_find_version', 'Cannot find version', { version_id: requested.version_id })
   if (INTERNAL_VERSION_NAMES.has(bundle.name))
     return { kind: 'builtin', id: null }
-  return { kind: 'bundle', id: Number(bundle.id), name: bundle.name, min_update_version: bundle.min_update_version ?? null, key_id: bundle.key_id ?? null }
+  return { kind: 'bundle', id: Number(bundle.id), name: bundle.name, min_update_version: bundle.min_update_version ?? null, key_id: bundle.key_id ?? null, has_zip: bundle.has_zip !== false }
 }
 
 function channelConfig(row: ChannelRow): ChannelImpactChannelConfig {
@@ -191,6 +193,7 @@ function channelConfig(row: ChannelRow): ChannelImpactChannelConfig {
     allow_device: !!row.allow_device,
     allow_emulator: !!row.allow_emulator,
     assigned_devices_only: !row.public && !row.allow_device_self_set,
+    update_package: row.update_package,
   }
 }
 

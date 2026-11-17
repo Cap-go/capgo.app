@@ -177,6 +177,10 @@ function confirmLabel(options: ChannelChangeOptions, choice: RevertChoice | null
  */
 export async function confirmChannelChange(options: ChannelChangeOptions): Promise<ChannelChangeResult> {
   const dialogStore = useDialogV2Store()
+  // One confirm at a time: a second call would replace the visible dialog and
+  // both callers would then apply what only one of them showed.
+  if (state.options)
+    return { confirmed: false, next: null }
   state.options = options
   state.choice = null
   void loadImpact(options)

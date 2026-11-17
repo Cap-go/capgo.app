@@ -4725,7 +4725,7 @@
   "channel-impact-why-plugin-too-old": "{count} devices use an updater plugin older than 6.2.0, which cannot go back to the store version. They keep their current bundle.",
   "channel-impact-compat-title": "Native packages changed",
   "channel-impact-compat-packages": "{bundle} needs native packages that the bundle on this channel doesn't ship: {packages}.",
-  "channel-impact-compat-guarded": "That is expected after a native release: the update strategy keeps it away from older store builds, so only devices on {builds}, which ship the new native code, receive it.",
+  "channel-impact-compat-guarded": "Because of the update strategy, only devices on {builds} can receive it. Make sure those store builds ship these native packages: the strategy only checks version numbers, not native code.",
   "channel-impact-compat-unguarded": "Nothing on this channel keeps it away from older store builds: devices without the new native code can receive it and crash. Set an update strategy, or only accept if your app handles missing native plugins at runtime.",
   "channel-impact-by-store-build": "By store build",
   "channel-impact-store-build": "Store build",
@@ -4753,5 +4753,8 @@
   "channel-impact-why-private-channel": "{count} devices ask for this channel, but it is private and does not allow self-assignment, so only devices assigned to it from the console or the API get updates.",
   "channel-impact-outcome-blocked-key-mismatch": "Keeps its bundle: different encryption key",
   "channel-impact-why-key-mismatch": "{count} devices use another encryption key than the one {bundle} was encrypted with, so they cannot install it and keep their current bundle.",
-  "channel-impact-compat-check-failed": "Couldn't check this bundle's native packages against the channel, so nothing was changed. Try again."
+  "channel-impact-compat-check-failed": "Couldn't check this bundle's native packages against the channel, so nothing was changed. Try again.",
+  "channel-impact-native-mixed": "{count} of {total} switch",
+  "channel-impact-outcome-blocked-no-bundle": "Keeps its bundle: cannot download it",
+  "channel-impact-why-no-bundle": "{bundle} has no zip, only a delta manifest. {count} devices use an updater too old for manifests or are on a channel set to zip downloads, so they cannot download it."
 }

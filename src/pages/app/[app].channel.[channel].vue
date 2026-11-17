@@ -4,7 +4,7 @@ import type { BundlePickerRow } from '~/services/bundleColumns'
 import type { Database } from '~/types/database.types'
 import { greaterOrEqual, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -269,10 +269,18 @@ function openBundle() {
   router.push(`/app/${route.params.app}/bundle/${channel.value.version.id}`)
 }
 
+// Each channel read gets a generation: only the newest read of a page that is
+// still mounted applies (a background refresh must not overwrite a newer forced
+// read, nor another channel's page after navigation).
+let channelReadGeneration = 0
+onBeforeUnmount(() => {
+  channelReadGeneration++
+})
+
 async function getChannel(force = false) {
   if (!id.value)
     return
-  const requestedId = id.value
+  const generation = ++channelReadGeneration
 
   // Check if we already have this channel in the store
   if (!force && appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
@@ -346,8 +354,8 @@ async function getChannel(force = false) {
       console.error('no channel', error)
       return
     }
-    // A newer navigation (another channel) won while this read was in flight.
-    if (id.value !== requestedId)
+    // A newer read (or leaving the page) superseded this one.
+    if (generation !== channelReadGeneration)
       return
 
     channel.value = withBuiltinChannelVersion(data as any) as unknown as Database['public']['Tables']['channels']['Row'] & Channel
