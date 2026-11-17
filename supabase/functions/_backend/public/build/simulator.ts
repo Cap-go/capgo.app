@@ -131,7 +131,10 @@ export async function readCappedBytes(stream: ReadableStream<Uint8Array>, maxByt
 }
 
 const DEFAULT_SIMULATOR_ORIGIN = 'https://ios-emulator.capgo.app'
-const SIMULATOR_HOST_TIMEOUT_MS = 30_000
+export const SIMULATOR_HOST_TIMEOUT_MS = 30_000
+export const SIMULATOR_ORG_HOST_SYNC_BUDGET_MS = 5_000
+export const SIMULATOR_ORG_HOST_SYNC_TIMEOUT_MS = 2_500
+export const SIMULATOR_ORG_HOST_SYNC_CONCURRENCY = 4
 const SIMULATOR_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const SAVED_IPA_MAX_BYTES = 512 * 1024 * 1024
 const SAVED_IPA_TRANSFER_MS = 60_000
@@ -538,14 +541,16 @@ export function canFinishSimulatorStop(input: { remoteStatus: number | null, bil
   return true
 }
 
-async function fetchRemoteEmulatorSession(c: Context, emulatorId: string): Promise<EmulatorSessionData | null> {
+export type SimulatorHostSyncOptions = { hostTimeoutMs?: number }
+
+async function fetchRemoteEmulatorSession(c: Context, emulatorId: string, hostTimeoutMs = SIMULATOR_HOST_TIMEOUT_MS): Promise<EmulatorSessionData | null> {
   try {
     const { accessKey, origin } = simulatorConfig(c)
-    const found = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${emulatorId}`, 'GET')
+    const found = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${emulatorId}`, 'GET', undefined, hostTimeoutMs)
     return found.data ?? null
   }
   catch (error) {
-    // GET /v2/device-run-sessions/:id returns 404 when the session is gone (ios_linux_emulator cloud/worker.ts ~136-138); it does not return 409.
+    // GET /v2/device-run-sessions/:id returns 404 when the session is gone (ios_linux_emulator cloud/worker.ts lines 136-138); it does not return 409.
     if (error instanceof SimulatorHostError && error.status === 404) {
       return {
         id: emulatorId,
@@ -562,10 +567,11 @@ export async function syncSimulatorSessionFromHost(
   c: Context,
   row: SimulatorRow,
   context: { orgId: string, userId: string },
+  options?: SimulatorHostSyncOptions,
 ): Promise<'synced' | 'finalized' | 'skipped'> {
   if (row.status !== 'in-progress' || !row.emulator_id)
     return 'skipped'
-  const host = await fetchRemoteEmulatorSession(c, row.emulator_id)
+  const host = await fetchRemoteEmulatorSession(c, row.emulator_id, options?.hostTimeoutMs)
   if (!host)
     return 'skipped'
   const working: SimulatorRow = { ...row }
@@ -632,7 +638,9 @@ export async function syncInProgressSimulatorSessionsFromHost(
   return synced
 }
 
-export async function syncInProgressSimulatorSessionsForOrgFromHost(c: Context, orgId: string): Promise<number> {
+export type OrgHostSyncFromHostResult = { synced: number, hostUnreachableSessionIds: string[] }
+
+export async function syncInProgressSimulatorSessionsForOrgFromHost(c: Context, orgId: string): Promise<OrgHostSyncFromHostResult> {
   const rows = await queryRead<SimulatorRow & { owner_org: string }>(c, `
     SELECT id, owner_org, app_id, platform, status, url, emulator_id, started_at, last_activity_at,
            device_stopped_at, requested_by, max_duration_minutes
@@ -642,25 +650,51 @@ export async function syncInProgressSimulatorSessionsForOrgFromHost(c: Context, 
       AND emulator_id IS NOT NULL
       AND device_stopped_at IS NULL
   `, [orgId])
+  const deadline = Date.now() + SIMULATOR_ORG_HOST_SYNC_BUDGET_MS
+  const hostUnreachableSessionIds: string[] = []
   let synced = 0
-  for (const row of rows) {
-    try {
-      await syncSimulatorSessionFromHost(c, row, { orgId: row.owner_org, userId: row.requested_by })
-      synced++
-    }
-    catch (error) {
-      cloudlogErr({
-        requestId: c.get('requestId'),
-        message: 'Simulator host sync failed for one session',
-        sessionId: row.id,
-        error,
-      })
+  const syncOptions: SimulatorHostSyncOptions = { hostTimeoutMs: SIMULATOR_ORG_HOST_SYNC_TIMEOUT_MS }
+  for (let offset = 0; offset < rows.length; offset += SIMULATOR_ORG_HOST_SYNC_CONCURRENCY) {
+    if (Date.now() >= deadline)
+      break
+    const chunk = rows.slice(offset, offset + SIMULATOR_ORG_HOST_SYNC_CONCURRENCY)
+    const outcomes = await Promise.all(chunk.map(async (row) => {
+      try {
+        const result = await syncSimulatorSessionFromHost(c, row, { orgId: row.owner_org, userId: row.requested_by }, syncOptions)
+        return { row, result, error: null as Error | null }
+      }
+      catch (error) {
+        return { row, result: null as 'synced' | 'finalized' | 'skipped' | null, error: error as Error }
+      }
+    }))
+    for (const outcome of outcomes) {
+      if (outcome.error) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'Simulator host sync failed for one session',
+          sessionId: outcome.row.id,
+          error: outcome.error,
+        })
+        hostUnreachableSessionIds.push(outcome.row.id)
+        continue
+      }
+      if (outcome.result === 'skipped')
+        hostUnreachableSessionIds.push(outcome.row.id)
+      else if (outcome.result)
+        synced++
     }
   }
-  return synced
+  return { synced, hostUnreachableSessionIds }
 }
 
-async function postEmulator(origin: string, accessKey: string, path: string, method: string, body?: unknown): Promise<{ status: number, data?: EmulatorSessionData }> {
+async function postEmulator(
+  origin: string,
+  accessKey: string,
+  path: string,
+  method: string,
+  body?: unknown,
+  timeoutMs = SIMULATOR_HOST_TIMEOUT_MS,
+): Promise<{ status: number, data?: EmulatorSessionData }> {
   const response = await fetch(`${origin}${path}`, {
     method,
     headers: {
@@ -668,7 +702,7 @@ async function postEmulator(origin: string, accessKey: string, path: string, met
       'Content-Type': 'application/json',
     },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(SIMULATOR_HOST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   })
   const payload = await response.json().catch(() => undefined) as { data?: EmulatorSessionData, error?: string } | undefined
   if (!response.ok)

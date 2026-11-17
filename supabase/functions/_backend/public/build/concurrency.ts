@@ -204,7 +204,10 @@ const SIMULATOR_SESSIONS_DUE_FOR_EXPIRY_SQL = `
     AND device_stopped_at IS NULL
     AND (
       COALESCE(started_at, created_at) <= now() - make_interval(mins => max_duration_minutes)
-      OR COALESCE(last_activity_at, started_at, created_at) <= now() - make_interval(mins => ${SIMULATOR_IDLE_TIMEOUT_MINUTES})
+      OR (
+        COALESCE(last_activity_at, started_at, created_at) <= now() - make_interval(mins => ${SIMULATOR_IDLE_TIMEOUT_MINUTES})
+        AND NOT (id = ANY(COALESCE($2::uuid[], ARRAY[]::uuid[])))
+      )
     )
   FOR UPDATE
 `
@@ -243,7 +246,7 @@ export async function sweepDueSimulatorSessions(c: Context): Promise<{ orgs: num
 
 export async function expireSimulatorSessions(c: Context, orgId: string): Promise<void> {
   const { syncInProgressSimulatorSessionsForOrgFromHost, stopDevicesForDueSimulatorExpiry } = await import('./simulator.ts')
-  await syncInProgressSimulatorSessionsForOrgFromHost(c, orgId)
+  const { hostUnreachableSessionIds } = await syncInProgressSimulatorSessionsForOrgFromHost(c, orgId)
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   let client: PgClient | null = null
   let dueForDeviceStop: Array<{ id: string, emulator_id: string | null, device_stopped_at: string | null }> = []
@@ -253,7 +256,7 @@ export async function expireSimulatorSessions(c: Context, orgId: string): Promis
     await beginWriteTransaction(client)
     const dueResult = await client.query<{ id: string, emulator_id: string | null, device_stopped_at: string | null }>(
       SIMULATOR_SESSIONS_DUE_FOR_EXPIRY_SQL,
-      [orgId],
+      [orgId, hostUnreachableSessionIds],
     )
     dueForDeviceStop = dueResult.rows
     await client.query('SELECT public.expire_simulator_sessions($1::uuid)', [orgId])
