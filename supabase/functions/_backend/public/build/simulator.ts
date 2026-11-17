@@ -46,6 +46,11 @@ export function simulatorDeviceUrl(sessionUrl: string, path: string): string {
   return new URL(path.replace(/^\//, ''), base).href
 }
 
+export async function wakeSimulatorAndRecordActivity(c: Context, sessionId: string, sessionUrl: string, accessKey: string) {
+  await wakeSimulatorDevice(sessionUrl, accessKey)
+  await touchSimulatorActivity(c, sessionId)
+}
+
 async function wakeSimulatorDevice(sessionUrl: string, accessKey: string) {
   try {
     const response = await fetch(simulatorDeviceUrl(sessionUrl, 'api/status'), {
@@ -296,7 +301,9 @@ export async function stopOrphanedSimulatorDevices(c: Context, limit = 50): Prom
     if (!row.emulator_id || row.device_stopped_at)
       continue
     try {
-      await bestEffortStopSimulatorDevice(c, row)
+      const stoppedAt = await bestEffortStopSimulatorDevice(c, row)
+      if (!stoppedAt)
+        await queryWrite(c, `UPDATE public.simulator_sessions SET updated_at = now() WHERE id = $1::uuid`, [row.id])
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to stop orphaned simulator device', sessionId: row.id, error })
@@ -586,7 +593,13 @@ export async function syncSimulatorSessionFromHost(
   return 'synced'
 }
 
-export async function syncInProgressSimulatorSessionsFromHost(c: Context, limit = 300): Promise<number> {
+export const SIMULATOR_HOST_SYNC_BATCH_LIMIT = 300
+export const SIMULATOR_HOST_SYNC_BUDGET_MS = 30_000
+
+export async function syncInProgressSimulatorSessionsFromHost(
+  c: Context,
+  limit = SIMULATOR_HOST_SYNC_BATCH_LIMIT,
+): Promise<number> {
   const rows = await queryRead<SimulatorRow & { owner_org: string }>(c, `
     SELECT id, owner_org, app_id, platform, status, url, emulator_id, started_at, last_activity_at,
            device_stopped_at, requested_by, max_duration_minutes
@@ -597,9 +610,25 @@ export async function syncInProgressSimulatorSessionsFromHost(c: Context, limit 
     ORDER BY updated_at ASC
     LIMIT $1
   `, [limit])
-  for (const row of rows)
-    await syncSimulatorSessionFromHost(c, row, { orgId: row.owner_org, userId: row.requested_by })
-  return rows.length
+  const deadline = Date.now() + SIMULATOR_HOST_SYNC_BUDGET_MS
+  let synced = 0
+  for (const row of rows) {
+    if (Date.now() >= deadline)
+      break
+    try {
+      await syncSimulatorSessionFromHost(c, row, { orgId: row.owner_org, userId: row.requested_by })
+      synced++
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Simulator host sync failed for one session',
+        sessionId: row.id,
+        error,
+      })
+    }
+  }
+  return synced
 }
 
 async function postEmulator(origin: string, accessKey: string, path: string, method: string, body?: unknown): Promise<{ status: number, data?: EmulatorSessionData }> {
@@ -618,7 +647,7 @@ async function postEmulator(origin: string, accessKey: string, path: string, met
   return { status: response.status, data: payload?.data }
 }
 
-async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string, sessionUrl: string, accessKey: string, sessionId: string) {
+export async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string, sessionUrl: string, accessKey: string, sessionId: string) {
   const saved = (await savedOutputsForJobs(c, principal, appId, ownerOrg, [jobId]))[jobId]
   if (saved?.kind !== 'ios_ipa')
     throw new Error('This build has no saved iOS app.')
@@ -731,10 +760,7 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
     const device = openedSimulator(created.data)
     await markSession(c, slot.id, 'in-progress', { url: device.url, emulatorId: device.id })
     if (platform === 'ios')
-      await backgroundTask(c, (async () => {
-        await wakeSimulatorDevice(device.url, accessKey)
-        await touchSimulatorActivity(c, slot.id)
-      })())
+      await backgroundTask(c, wakeSimulatorAndRecordActivity(c, slot.id, device.url, accessKey))
     const installError = await savedBuildInstallError({ c, principal, appId, ownerOrg: orgId, jobId: body.build_job_id, platform, sessionUrl: device.url, accessKey, sessionId: slot.id })
     return c.json({
       data: {
