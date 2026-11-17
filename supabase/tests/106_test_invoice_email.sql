@@ -1,7 +1,7 @@
 -- pgTAP assertions intentionally use SQL statements returning function results.
 -- noqa: disable=LT05,LT09,AM04
 BEGIN;
-SELECT plan(12);
+SELECT plan(14);
 SELECT
     has_table('public', 'invoice_email_preferences', 'invoice preferences exist');
 SELECT
@@ -16,6 +16,28 @@ SELECT
         SELECT relrowsecurity FROM pg_class
         WHERE oid = 'public.invoice_email_deliveries'::regclass
     ), 'delivery outbox has RLS');
+SELECT
+    ok((
+        SELECT
+            NOT polpermissive AND polcmd = '*' AND polroles = ARRAY[0::oid]
+            AND pg_get_expr(polqual, polrelid) = 'false'
+            AND pg_get_expr(polwithcheck, polrelid) = 'false'
+        FROM pg_policy
+        WHERE
+            polrelid = 'public.invoice_email_preferences'::regclass
+            AND polname = 'deny_all_direct_access'
+    ), 'preferences explicitly deny direct access');
+SELECT
+    ok((
+        SELECT
+            NOT polpermissive AND polcmd = '*' AND polroles = ARRAY[0::oid]
+            AND pg_get_expr(polqual, polrelid) = 'false'
+            AND pg_get_expr(polwithcheck, polrelid) = 'false'
+        FROM pg_policy
+        WHERE
+            polrelid = 'public.invoice_email_deliveries'::regclass
+            AND polname = 'deny_all_direct_access'
+    ), 'delivery outbox explicitly denies direct access');
 SELECT
     is(has_table_privilege('authenticated', 'public.invoice_email_preferences', 'INSERT,UPDATE'), false, 'settings require the authorized billing API');
 SELECT

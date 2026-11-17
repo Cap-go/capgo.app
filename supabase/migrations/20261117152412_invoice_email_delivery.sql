@@ -29,6 +29,12 @@ ON public.invoice_email_deliveries (org_id);
 
 ALTER TABLE public.invoice_email_preferences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.invoice_email_deliveries ENABLE ROW LEVEL SECURITY;
+CREATE POLICY deny_all_direct_access
+ON public.invoice_email_preferences AS RESTRICTIVE
+FOR ALL TO public USING (false) WITH CHECK (false);
+CREATE POLICY deny_all_direct_access
+ON public.invoice_email_deliveries AS RESTRICTIVE
+FOR ALL TO public USING (false) WITH CHECK (false);
 REVOKE ALL ON public.invoice_email_preferences,
 public.invoice_email_deliveries FROM public,
 anon,
