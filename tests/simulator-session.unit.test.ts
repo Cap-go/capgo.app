@@ -21,6 +21,7 @@ describe('simulator sessions', () => {
       name: 'Checkout',
       type: 'agent-device',
       maxDurationMinutes: SIMULATOR_MAX_DURATION_MINUTES,
+      idleTimeoutMinutes: SIMULATOR_IDLE_TIMEOUT_MINUTES,
     })
   })
 

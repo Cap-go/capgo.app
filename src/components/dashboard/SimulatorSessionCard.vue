@@ -67,21 +67,50 @@ async function refreshSessions() {
   }))
 }
 
+async function heartbeatSessions() {
+  const appId = props.appId
+  const known = [...runningSimulators(appId)]
+  await Promise.all(known.map(async (session) => {
+    const response = await fetch(`${defaultApiHost}/private/simulator/${session.id}/activity`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${await sessionToken()}`,
+      },
+      body: JSON.stringify({ app_id: appId }),
+    })
+    if (response.status === 400) {
+      const payload = await response.json().catch(() => undefined) as { error?: string } | undefined
+      if (payload?.error === 'invalid_request')
+        forgetSimulator(appId, session.id)
+    }
+  }))
+}
+
 const CONSOLE_SIMULATOR_HEARTBEAT_MS = 60_000
+const CONSOLE_SIMULATOR_STATUS_POLL_MS = 120_000
 
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined
+let statusTimer: ReturnType<typeof setInterval> | undefined
 
 onMounted(() => {
   void refreshSessions()
+  void heartbeatSessions()
   heartbeatTimer = setInterval(() => {
     if (sessions.value.length > 0)
-      void refreshSessions()
+      void heartbeatSessions()
   }, CONSOLE_SIMULATOR_HEARTBEAT_MS)
+  statusTimer = setInterval(() => {
+    if (sessions.value.length > 0)
+      void refreshSessions()
+  }, CONSOLE_SIMULATOR_STATUS_POLL_MS)
 })
 
 onUnmounted(() => {
   if (heartbeatTimer)
     clearInterval(heartbeatTimer)
+  if (statusTimer)
+    clearInterval(statusTimer)
 })
 
 async function stop(id: string) {

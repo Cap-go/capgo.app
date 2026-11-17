@@ -33,6 +33,8 @@ describe('simulator card refresh', () => {
     rememberSimulator(appId, { id: stopped, url: 'https://ios-emulator.capgo.app/s/stopped/' })
     rememberSimulator(appId, { id: offline, url: 'https://ios-emulator.capgo.app/s/offline/' })
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/activity'))
+        return new Response(JSON.stringify({ status: 'ok' }), { status: 200 })
       if (url.includes(gone))
         return new Response(JSON.stringify({ error: 'not_found' }), { status: 400 })
       if (url.includes(missing))

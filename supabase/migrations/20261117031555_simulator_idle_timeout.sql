@@ -38,7 +38,7 @@ BEGIN
       AND status IN ('new', 'queued', 'starting', 'in-progress')
       AND (
         COALESCE(started_at, created_at) <= now() - make_interval(mins => max_duration_minutes)
-        OR COALESCE(last_activity_at, started_at, created_at) <= now() - interval '5 minutes'
+        OR COALESCE(last_activity_at, started_at, created_at) <= now() - make_interval(mins => 5)
       )
     FOR UPDATE
   LOOP
@@ -51,7 +51,7 @@ BEGIN
     effective_stop := LEAST(
       COALESCE(session_row.device_stopped_at, now()),
       opened_at + make_interval(mins => session_row.max_duration_minutes),
-      activity_at + interval '5 minutes'
+      activity_at + make_interval(mins => 5)
     );
     elapsed := LEAST(
       session_row.max_duration_minutes * 60,
@@ -125,7 +125,7 @@ BEGIN
     effective_stop := LEAST(
       COALESCE(session_row.device_stopped_at, now()),
       opened_at + make_interval(mins => session_row.max_duration_minutes),
-      activity_at + interval '5 minutes'
+      activity_at + make_interval(mins => 5)
     );
     elapsed := LEAST(
       session_row.max_duration_minutes * 60,

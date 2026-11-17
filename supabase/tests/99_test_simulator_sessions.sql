@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(21);
+SELECT plan(24);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -164,14 +164,31 @@ SELECT is(
   'four minutes idle is still inside the five minute window'
 );
 
-UPDATE public.simulator_sessions
-SET last_activity_at = now()
-WHERE id = '99000000-0000-4000-8000-000000000006';
+SELECT is(
+  (
+    SELECT count(*)::integer
+    FROM (
+      UPDATE public.simulator_sessions
+      SET last_activity_at = now(),
+          updated_at = now()
+      WHERE id = '99000000-0000-4000-8000-000000000006'
+        AND status = 'in-progress'
+        AND started_at IS NOT NULL
+        AND started_at > now() - make_interval(mins => max_duration_minutes)
+        AND COALESCE(last_activity_at, started_at) > now() - make_interval(mins => 5)
+      RETURNING id
+    ) bumped
+  ),
+  1,
+  'activity bump updates last_activity_at while inside the idle window'
+);
 
 SELECT is(
-  (SELECT COALESCE(last_activity_at, started_at) > now() - interval '5 minutes'
-   FROM public.simulator_sessions
-   WHERE id = '99000000-0000-4000-8000-000000000006'),
+  (
+    SELECT COALESCE(last_activity_at, started_at) > now() - make_interval(mins => 5)
+    FROM public.simulator_sessions
+    WHERE id = '99000000-0000-4000-8000-000000000006'
+  ),
   true,
   'bumping activity moves the row back inside the idle window'
 );
@@ -179,6 +196,25 @@ SELECT is(
 UPDATE public.simulator_sessions
 SET last_activity_at = now() - interval '6 minutes'
 WHERE id = '99000000-0000-4000-8000-000000000006';
+
+SELECT is(
+  (
+    SELECT count(*)::integer
+    FROM (
+      UPDATE public.simulator_sessions
+      SET last_activity_at = now(),
+          updated_at = now()
+      WHERE id = '99000000-0000-4000-8000-000000000006'
+        AND status = 'in-progress'
+        AND started_at IS NOT NULL
+        AND started_at > now() - make_interval(mins => max_duration_minutes)
+        AND COALESCE(last_activity_at, started_at) > now() - make_interval(mins => 5)
+      RETURNING id
+    ) bumped
+  ),
+  0,
+  'activity bump is refused once the idle window has elapsed'
+);
 
 SELECT is(
   public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
@@ -288,6 +324,17 @@ SELECT ok(
       AND indexname = 'simulator_sessions_app_active_idx'
   ),
   'active simulator sessions are indexed by app'
+);
+
+SELECT ok(
+  EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+      AND tablename = 'simulator_sessions'
+      AND indexname = 'simulator_sessions_idle_sweep_idx'
+  ),
+  'active simulator sessions are indexed for idle sweeps'
 );
 
 CREATE FUNCTION pg_temp.simulator_settlement_plan_uses_app_index()
