@@ -96,9 +96,10 @@ CREATE TEMP TABLE fanout_app_updates (app_id text NOT NULL);
 
 CREATE FUNCTION tests.fanout_record_app_update() RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = ''
 AS $$
 BEGIN
-  INSERT INTO fanout_app_updates (app_id) VALUES (NEW.app_id);
+  INSERT INTO pg_temp.fanout_app_updates (app_id) VALUES (NEW.app_id);
   RETURN NULL;
 END;
 $$;
