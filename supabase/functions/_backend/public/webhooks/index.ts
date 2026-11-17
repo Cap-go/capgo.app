@@ -6,7 +6,7 @@ import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { apikeyPrincipal } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { apikeyHasOrgRight, apikeyHasOrgRightWithPolicy } from '../../utils/supabase.ts'
+import { apikeyHasOrgRight, checkApikeyMeetsOrgPolicy } from '../../utils/supabase.ts'
 import { deleteWebhook } from './delete.ts'
 import { getDeliveries, retryDelivery } from './deliveries.ts'
 import { get } from './get.ts'
@@ -69,7 +69,9 @@ async function assertWebhookOrgPolicy(
   orgId: string,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<void> {
-  const orgCheck = await apikeyHasOrgRightWithPolicy(c, apikey, orgId, apikeyPrincipal(c, c.get('capgkey') as string))
+  // Org read access was already asserted by assertOrgWebhookScope for every key of the
+  // chain (assertWebhookApiKeyChain runs all scope checks first), so only the policy is left.
+  const orgCheck = await checkApikeyMeetsOrgPolicy(c, apikey, orgId, apikeyPrincipal(c, c.get('capgkey') as string))
   if (orgCheck.valid) {
     return
   }
