@@ -76,7 +76,8 @@ describe('credit auto top-up invoice', () => {
     const state: { status: string } = { status: 'draft' }
     const payments = { data: mode === 'covered' ? [] : [{ payment: { type: 'payment_intent', payment_intent: 'pi_1' } }] }
     const stripe = {
-      customers: { retrieve: vi.fn(async () => ({ currency: 'eur' })) },
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [] }) },
+    customers: { retrieve: vi.fn(async () => ({ currency: 'eur' })) },
       prices: { retrieve: vi.fn(async () => ({ active: true, type: 'one_time', billing_scheme: 'per_unit', currency: 'usd', unit_amount: 100, currency_options: { eur: { unit_amount: 92 } } })) },
       invoices: {
         create: vi.fn(async () => ({ id: 'in_1', status: 'draft' })),

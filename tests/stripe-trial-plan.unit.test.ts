@@ -362,6 +362,7 @@ describe('schedulable trial plans', () => {
     }
     const tierFor = (country: string, currency: string | null) => {
       const stripe = {
+        subscriptions: { list: async () => ({ data: [] }) },
         customers: { retrieve: vi.fn(async () => ({ id: 'cus_1', currency, address: null, invoice_settings: { default_payment_method: null } })) },
         prices: { retrieve: vi.fn(async (id: string) => ({ id, currency_options: { usd: {}, eur: {}, inr: {} } })) },
       } as unknown as Stripe

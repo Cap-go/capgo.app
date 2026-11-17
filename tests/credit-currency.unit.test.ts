@@ -37,7 +37,7 @@ it.concurrent('converts a USD-only US credit price using the standard US plan ca
   const retrieve = vi.fn(async (id: string) => id === 'price_credit'
     ? { ...price, product: 'prod_credit_us', currency_options: {} }
     : { active: true, currency: 'usd', unit_amount: 1400, currency_options: { eur: { unit_amount: 1288 } } })
-  const stripe = { customers: { retrieve: async () => customer('eur') }, prices: { retrieve } } as unknown as Stripe
+  const stripe = { subscriptions: { list: async () => ({ data: [] }) }, customers: { retrieve: async () => customer('eur') }, prices: { retrieve } } as unknown as Stripe
   const quote = await getCreditQuote(stripe, 'cus_example', 'price_credit', {} as any)
   expect(quote).toMatchObject({ currency: 'eur', unitAmount: 92, unitPrice: 0.92, priceData: { product: 'prod_credit_us', currency: 'eur', unit_amount_decimal: '92' } })
   expect(retrieve).toHaveBeenCalledWith('price_full_us', { expand: ['currency_options'] })

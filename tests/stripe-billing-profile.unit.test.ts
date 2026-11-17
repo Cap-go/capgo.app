@@ -8,7 +8,7 @@ const details = {
 }
 function context() {
   const customers = { retrieve: vi.fn(), update: vi.fn(), listTaxIds: vi.fn(), createTaxId: vi.fn(), deleteTaxId: vi.fn() }
-  const ctx = { customerId: 'cus_example', billingAccount: 'us', stripe: { customers }, publishableKey: '' } as unknown as InAppBillingContext
+  const ctx = { customerId: 'cus_example', billingAccount: 'us', stripe: { subscriptions: { list: async () => ({ data: [] }) }, customers }, publishableKey: '' } as unknown as InAppBillingContext
   return { ctx, customers }
 }
 

@@ -17,7 +17,7 @@ const customer = { id: 'cus_example', currency: 'eur', metadata: {} as Record<st
 const stripe = {
   customers: { retrieve: vi.fn(), update: vi.fn() },
   prices: { retrieve: vi.fn() },
-  subscriptions: { list: vi.fn(), update: vi.fn() },
+  subscriptions: { list: vi.fn(), update: vi.fn(), retrieve: vi.fn() },
   subscriptionSchedules: { list: vi.fn() },
   checkout: { sessions: { list: vi.fn(), expire: vi.fn() } },
 }
@@ -30,6 +30,7 @@ beforeEach(() => {
   stripe.customers.retrieve.mockResolvedValue(customer)
   stripe.customers.update.mockImplementation(async (_id, data) => { customer.metadata = data.metadata; return customer })
   stripe.prices.retrieve.mockResolvedValue({ active: true, currency: 'usd', currency_options: { eur: {} } })
+  stripe.subscriptions.retrieve.mockResolvedValue(sub)
   stripe.subscriptions.list.mockResolvedValue({ data: [], has_more: false })
   stripe.subscriptionSchedules.list.mockResolvedValue({ data: [], has_more: false })
   stripe.checkout.sessions.list.mockResolvedValue({ data: [], has_more: false })
@@ -40,10 +41,10 @@ describe('self-service billing currency', () => {
   it('saves an unsubscribed customer preference in Stripe and synchronizes the database without creating a charge', async () => {
     const result = await changeBillingCurrency({} as any, ctx, 'usd', null)
     expect(result.currency).toBe('usd')
-    expect(stripe.customers.update).toHaveBeenCalledWith('cus_example', { metadata: { capgo_billing_currency: 'usd' } })
+    expect(stripe.customers.update).toHaveBeenCalledWith('cus_example', { metadata: { capgo_billing_currency: 'usd' } }, expect.anything())
     expect(mocks.sync).toHaveBeenCalled()
     expect(stripe.subscriptions.update).not.toHaveBeenCalled()
-    expect(stripe.prices.retrieve).toHaveBeenCalledWith('price_us_m', expect.anything())
+    expect(stripe.prices.retrieve).toHaveBeenCalledWith('price_us_m', expect.anything(), expect.anything())
   })
   it('requires confirmation for the exact live subscription before any mutation', async () => {
     stripe.subscriptions.list.mockResolvedValue({ data: [sub] })
@@ -76,7 +77,7 @@ describe('self-service billing currency', () => {
   it('expires stale checkouts before saving the new currency', async () => {
     stripe.checkout.sessions.list.mockResolvedValue({ data: [{ id: 'cs_example' }] })
     await changeBillingCurrency({} as any, ctx, 'usd', null)
-    expect(stripe.checkout.sessions.expire).toHaveBeenCalledWith('cs_example')
+    expect(stripe.checkout.sessions.expire).toHaveBeenCalledWith('cs_example', {}, expect.anything())
     expect(stripe.checkout.sessions.expire.mock.invocationCallOrder[0]).toBeLessThan(stripe.customers.update.mock.invocationCallOrder[0])
   })
   it('fails closed when subscription state is unavailable', async () => {
@@ -117,4 +118,33 @@ it.each([
   mocks.eligibility.mockResolvedValue({ trial, plan_name: plan })
   stripe.subscriptions.list.mockResolvedValue({ data: live ? [sub] : [] })
   expect((await getBillingCurrencyState({} as any, ctx)).regionalDiscountEligible).toBe(expected)
+})
+
+it('checks later pages and prefers the live currency even without saved metadata', async () => {
+  stripe.subscriptions.list.mockResolvedValueOnce({ data: [{ id: 'sub_historical', status: 'canceled' }], has_more: true }).mockResolvedValueOnce({ data: [{ ...sub, currency: 'usd' }], has_more: false })
+  expect(await effectiveBillingCurrency(stripe as any, customer as any)).toBe('usd')
+  expect(stripe.subscriptions.list).toHaveBeenLastCalledWith(expect.objectContaining({ starting_after: 'sub_historical' }))
+})
+it('rejects the current currency while a transition is pending, before expiring checkouts', async () => {
+  stripe.subscriptions.list.mockResolvedValue({ data: [{ ...sub, metadata: { capgo_currency_transition: 'usd' } }] })
+  await expect(changeBillingCurrency({} as any, ctx, 'eur', sub.id)).rejects.toThrow('Keep my plan')
+  expect(stripe.checkout.sessions.list).not.toHaveBeenCalled()
+  expect(stripe.customers.update).not.toHaveBeenCalled()
+})
+
+it('ignores plans missing account prices and inactive prices in the currency catalog', async () => {
+  mocks.plans.mockResolvedValue([
+    { price_m_id_us: null, price_y_id_us: null },
+    { price_m_id_us: 'price_us_m', price_y_id_us: 'price_us_y' },
+    { price_m_id_us: 'price_archived', price_y_id_us: 'price_archived' },
+  ])
+  stripe.prices.retrieve.mockImplementation(async id => ({ active: id !== 'price_archived', currency: 'usd', currency_options: { eur: {} } }))
+  expect((await getBillingCurrencyState({} as any, ctx)).currencies).toEqual(['eur', 'usd'])
+  expect(stripe.prices.retrieve.mock.calls.every(([id]) => !!id)).toBe(true)
+})
+
+it('rechecks live subscriptions after closing a concurrent checkout', async () => {
+  stripe.subscriptions.list.mockResolvedValueOnce({ data: [], has_more: false }).mockResolvedValueOnce({ data: [sub], has_more: false })
+  await expect(changeBillingCurrency({} as any, ctx, 'usd', null)).rejects.toThrow('checkout completed')
+  expect(stripe.customers.update).not.toHaveBeenCalled()
 })

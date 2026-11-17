@@ -15,7 +15,7 @@ export async function syncBillingProfile(c: Context, ctx: Pick<InAppBillingConte
     const result = await client.query(`UPDATE public.stripe_info
       SET customer_country = $2, billing_address = $3::jsonb, billing_currency = $4
       WHERE customer_id = $1 AND billing_account = $5 RETURNING customer_id`,
-    [ctx.customerId, customer.address?.country ?? null, JSON.stringify(customer.address ?? null), customer.metadata?.[BILLING_CURRENCY_KEY] || await effectiveBillingCurrency(ctx.stripe, customer), ctx.billingAccount])
+    [ctx.customerId, customer.address?.country ?? null, JSON.stringify(customer.address ?? null), (/^[a-z]{3}$/.test(customer.metadata?.[BILLING_CURRENCY_KEY] ?? '') ? customer.metadata[BILLING_CURRENCY_KEY] : await effectiveBillingCurrency(ctx.stripe, customer)), ctx.billingAccount])
     if (result.rowCount !== 1)
       throw simpleError('billing_profile_sync_failed', 'Could not synchronize billing details. Please retry.')
   })

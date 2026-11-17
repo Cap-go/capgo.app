@@ -37,6 +37,8 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
 // stripe.ts / stripe_billing.ts now query Postgres directly; replay those reads on the
 // supabase-js style mockedSupabaseAdmin so each case keeps its fixture.
 async function replayOnSupabaseAdmin(text: string, values: unknown[] = []) {
+  if (text.includes('pg_advisory') || text === 'SELECT 1')
+    return []
   const admin = mockedSupabaseAdmin()
   const unwrap = ({ data, error }: { data: unknown, error: unknown }) => {
     if (error)
@@ -224,6 +226,7 @@ describe('stripe redirect URL allowlist', () => {
         retrieve: mocks.retrievePrice,
       },
       customers: mocks.customers,
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
       checkout: {
         sessions: {
           create: createSession,
@@ -269,7 +272,7 @@ describe('stripe redirect URL allowlist', () => {
         datafast_session_id: 'session_123',
         affonso_referral: 'affonso_ref_123',
       },
-    }))
+    }), expect.anything())
   })
 
   it('creates an embedded checkout session when a publishable key is configured', async () => {
@@ -280,7 +283,8 @@ describe('stripe redirect URL allowlist', () => {
       return {
         prices: { list: vi.fn().mockResolvedValue({ data: createPriceList() }), retrieve: mocks.retrievePrice },
         customers: mocks.customers,
-        checkout: { sessions: { create: createSession } },
+        subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
+      checkout: { sessions: { create: createSession } },
       }
     } as any)
 
@@ -306,7 +310,8 @@ describe('stripe redirect URL allowlist', () => {
       return {
         prices: { list: vi.fn().mockResolvedValue({ data: createPriceList() }), retrieve: mocks.retrievePrice },
         customers: mocks.customers,
-        checkout: { sessions: { create: createSession } },
+        subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
+      checkout: { sessions: { create: createSession } },
       }
     } as any)
 
@@ -337,7 +342,8 @@ describe('stripe redirect URL allowlist', () => {
       return {
         prices: { list: vi.fn().mockResolvedValue({ data: createPriceList() }), retrieve: mocks.retrievePrice },
         customers: mocks.customers,
-        checkout: { sessions: { create: createSession } },
+        subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
+      checkout: { sessions: { create: createSession } },
       }
     } as any)
 
@@ -352,7 +358,8 @@ describe('stripe redirect URL allowlist', () => {
     const createSession = vi.fn().mockRejectedValue(new Error("The Checkout Session's total amount due must be no more than $999,999.99."))
     const mocks = subscriptionCheckoutMocks(locked, { usd: { unit_amount: 1400 }, ars: { unit_amount: 2000000 } })
     vi.mocked(Stripe).mockImplementation(function () {
-      return { prices: { list: vi.fn().mockResolvedValue({ data: createPriceList('year') }), retrieve: mocks.retrievePrice }, customers: mocks.customers, checkout: { sessions: { create: createSession } } }
+      return { prices: { list: vi.fn().mockResolvedValue({ data: createPriceList('year') }), retrieve: mocks.retrievePrice }, customers: mocks.customers, subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
+      checkout: { sessions: { create: createSession } } }
     } as any)
     const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
     await expect(createCheckout(createContext(), 'cus_123', 'year', 'prod_test', '/app/success', '/app/cancel', { currency: 'ars' })).rejects.toMatchObject({ cause: { error: 'checkout_amount_limit', moreInfo: { currency: 'ars', canSwitchToUsd: locked === null } } })
@@ -366,7 +373,8 @@ describe('stripe redirect URL allowlist', () => {
       return {
         prices: { list: vi.fn().mockResolvedValue({ data: createPriceList('month', 'one_time') }), retrieve: vi.fn().mockResolvedValue({ active: true, type: 'one_time', billing_scheme: 'per_unit', currency: 'usd', unit_amount: 100 }) },
         customers: { retrieve: vi.fn().mockResolvedValue({ currency: 'usd' }) },
-        checkout: { sessions: { create: createSession } },
+        subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
+      checkout: { sessions: { create: createSession } },
       }
     } as any)
 
@@ -386,6 +394,7 @@ describe('stripe redirect URL allowlist', () => {
         retrieve: mocks.retrievePrice,
       },
       customers: mocks.customers,
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
       checkout: {
         sessions: {
           create: createSession,
@@ -420,6 +429,7 @@ describe('stripe redirect URL allowlist', () => {
         list: vi.fn().mockResolvedValue({ data: createPriceList('one_time', 'one_time') }),
         retrieve: vi.fn().mockResolvedValue({ active: true, type: 'one_time', billing_scheme: 'per_unit', currency: 'usd', unit_amount: 100 }),
       },
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
       checkout: {
         sessions: {
           create: createSession,
@@ -454,7 +464,8 @@ describe('stripe redirect URL allowlist', () => {
     mockedEnv.STRIPE_API_BASE_URL = baseUrl
     mockedEnv.STRIPE_SECRET_KEY = secretKey
     vi.mocked(Stripe).mockImplementation(function () {
-      return { checkout: { sessions: {} } }
+      return { subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
+      checkout: { sessions: {} } }
     } as any)
 
     const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
@@ -481,6 +492,7 @@ describe('stripe redirect URL allowlist', () => {
 
     const listLineItems = vi.fn().mockRejectedValue(new Error('line_items endpoint unavailable'))
     const stripeClient = {
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
       checkout: {
         sessions: {
           listLineItems,
@@ -532,6 +544,7 @@ describe('stripe redirect URL allowlist', () => {
         list: vi.fn().mockResolvedValue({ data: createPriceList('one_time', 'one_time') }),
         retrieve: vi.fn().mockResolvedValue({ active: true, type: 'one_time', billing_scheme: 'per_unit', currency: 'usd', unit_amount: 100 }),
       },
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
       checkout: {
         sessions: {
           create: createSession,
@@ -575,7 +588,7 @@ describe('stripe redirect URL allowlist', () => {
         intendedQuantity: '5',
         orgId: 'org_123',
       }),
-    }))
+    }), expect.anything())
   })
 
   it('falls back to stored plan price ids when the Stripe emulator omits recurring metadata', async () => {
@@ -635,6 +648,7 @@ describe('stripe redirect URL allowlist', () => {
           ],
         }),
       },
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
       checkout: {
         sessions: {
           create: createSession,
@@ -664,7 +678,7 @@ describe('stripe redirect URL allowlist', () => {
           quantity: 1,
         }),
       ],
-    }))
+    }), expect.anything())
   })
 
   it.each([
@@ -704,7 +718,8 @@ describe('stripe redirect URL allowlist', () => {
     // Regional prices carry their tier in Stripe metadata.
     mocks.retrievePrice.mockImplementation(async (id: string) => ({ id, currency: 'usd', unit_amount: 1400, currency_options: { usd: { unit_amount: 1400 }, eur: { unit_amount: 1300 }, ...(id.endsWith('_p70') ? {} : { gbp: { unit_amount: 1100 } }) }, metadata: id.endsWith('_p70') ? { capgo_tier: 'p70' } : {} }))
     vi.mocked(Stripe).mockImplementation(function () {
-      return { customers: mocks.customers, prices: { retrieve: mocks.retrievePrice, list: vi.fn() }, checkout: { sessions: { create: createSession } } }
+      return { customers: mocks.customers, prices: { retrieve: mocks.retrievePrice, list: vi.fn() }, subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
+      checkout: { sessions: { create: createSession } } }
     } as any)
 
     const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
@@ -715,7 +730,7 @@ describe('stripe redirect URL allowlist', () => {
       line_items: [expect.objectContaining({ price: expectedPrice, quantity: 1 })],
       // A regional discount needs a billing address, checked by the webhook with the card.
       billing_address_collection: expectedPrice === 'price_monthly_p70' ? 'required' : 'auto',
-    }))
+    }), expect.anything())
   })
 
   it('updates Stripe customer email without overwriting the organization name', async () => {

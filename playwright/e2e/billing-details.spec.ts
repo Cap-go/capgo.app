@@ -303,3 +303,24 @@ for (const scenario of ['trial', 'Solo']) {
       await page.screenshot({ animations: 'disabled', path: 'docs/pr-screenshots/billing-currency/currency-trial-discount.png' })
   })
 }
+
+
+test('can disable automatic top-up even when the credit quote is unavailable', async ({ page }) => {
+  await openBilling(page)
+  await page.route('**/private/credits/quote', route => route.fulfill(json({ error: 'credit_currency_unavailable' }, 400)))
+  let saved: unknown
+  await page.route('**/private/credits/auto-top-up*', route => {
+    if (route.request().method() === 'GET')
+      return route.fulfill(json({ enabled: true, threshold: 10, monthlyLimit: 100, monthlyTotal: 0, hasPaymentMethod: true }))
+    saved = route.request().postDataJSON()
+    return route.fulfill(json({ enabled: false, threshold: 10, monthlyLimit: 100, monthlyTotal: 0, hasPaymentMethod: true }))
+  })
+  await page.goto('/settings/organization/credits')
+  const toggle = page.locator('input.d-toggle')
+  await expect(toggle).toBeChecked()
+  await expect(toggle).toBeEnabled()
+  await toggle.uncheck()
+  await expect(toggle).not.toBeChecked()
+  await expect.poll(() => saved).toMatchObject({ enabled: false, threshold: 10, monthlyLimit: 100 })
+  await expect(page.locator('[data-test="credits-top-up-submit"]')).toBeDisabled()
+})

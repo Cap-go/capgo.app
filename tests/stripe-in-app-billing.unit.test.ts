@@ -1,3 +1,4 @@
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({ servicePrincipal: {}, withRlsContext: (_c: unknown, _p: unknown, run: (client: unknown) => unknown) => run({ query: async () => ({ rows: [] }) }) }))
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -119,8 +120,9 @@ describe('resumeSubscription', () => {
     mockActiveSubscription('sub_123')
     stripe.subscriptions.retrieve.mockResolvedValue({ status: 'active', cancel_at_period_end: false, cancel_at: null, items: { data: [] } })
 
+    stripe.subscriptions.update.mockResolvedValue({ currency: 'usd' })
     await resumeSubscription(createContext(), createBillingContext(stripe))
-    expect(stripe.customers.update).toHaveBeenCalledWith('cus_123', { metadata: { capgo_billing_currency: '' } })
+    expect(stripe.customers.update).toHaveBeenCalledWith('cus_123', { metadata: { capgo_billing_currency: 'usd' } }, expect.anything())
     expect(mocks.syncBillingProfile).toHaveBeenCalled()
 
     expect(stripe.subscriptions.update).toHaveBeenCalledWith('sub_123', {
@@ -128,7 +130,7 @@ describe('resumeSubscription', () => {
       cancel_at_period_end: false,
       metadata: { capgo_currency_transition: '', capgo_currency_transition_end: '' },
       cancellation_details: { feedback: '', comment: '' },
-    })
+    }, expect.anything())
   })
 })
 

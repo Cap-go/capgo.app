@@ -1,3 +1,4 @@
+import { withBillingProfileLock } from './billing_profile_lock.ts'
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { InAppBillingContext } from './stripe_in_app.ts'
@@ -549,7 +550,11 @@ export async function scheduleTrialPlan(
 
   // Same lock as Start now: a schedule created next to a started-now subscription would
   // charge the org a second time when the trial ends.
-  const notifiedNewSchedule = await withTrialPlanLock(c, ctx.customerId, async () => {
+  const notifiedNewSchedule = await withTrialPlanLock(c, ctx.customerId, async () => withBillingProfileLock(c, ctx.billingAccount, ctx.customerId, async (assertHeld) => {
+    const currency = (await getCustomerBilling(ctx.stripe, ctx.customerId)).currency ?? 'usd'
+    if (currency !== state.currency)
+      throw simpleError('billing_currency_quote_changed', 'Your billing currency changed. Review the plan and try again.')
+    await assertHeld()
     if (await findLiveSubscription(ctx.stripe, ctx.customerId))
       throw simpleError('trial_plan_already_subscribed', 'This organization already has a subscription')
     const existing = await findPendingTrialPlanSchedule(ctx.stripe, ctx.customerId)
@@ -591,7 +596,7 @@ export async function scheduleTrialPlan(
     // submits instead, on every call so a retry repairs a cleanup that failed earlier.
     await cancelDuplicateTrialPlanSchedules(c, ctx.stripe, ctx.customerId)
     return createsSchedule
-  })
+  }))
 
   const summary = await getTrialPlanSummary(c, ctx)
   if (!summary)
@@ -770,7 +775,11 @@ export async function startTrialPlanNow(
   if (!paymentMethodId)
     throw simpleError('missing_payment_method', 'Add a card before starting the plan')
 
-  const { subscription, reused } = await withTrialPlanLock(c, ctx.customerId, async () => {
+  const { subscription, reused } = await withTrialPlanLock(c, ctx.customerId, async () => withBillingProfileLock(c, ctx.billingAccount, ctx.customerId, async (assertHeld) => {
+    const currency = (await getCustomerBilling(ctx.stripe, ctx.customerId)).currency ?? 'usd'
+    if (currency !== state.currency)
+      throw simpleError('billing_currency_quote_changed', 'Your billing currency changed. Review the plan and try again.')
+    await assertHeld()
     const created = await createStartNowSubscription(ctx.stripe, {
       customerId: ctx.customerId,
       orgId,
@@ -790,7 +799,7 @@ export async function startTrialPlanNow(
       cloudlogErr({ requestId: c.get('requestId'), message: 'trial plan start now schedule cleanup failed', orgId, subscriptionId: created.subscription.id, error })
     }
     return created
-  })
+  }))
   cloudlog({ requestId: c.get('requestId'), message: reused ? 'trial plan already started now' : 'trial plan started now', orgId, subscriptionId: subscription.id, productId: state.productId })
   // A reused subscription may be on another plan than this request picked: report what Stripe
   // bills and put the org's selected product back to it.

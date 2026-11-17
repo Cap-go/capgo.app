@@ -126,7 +126,9 @@ let confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
 const autoTopUpMonthlyLimitInput = ref<string | number>('0')
 const autoTopUpMonthlyTotal = ref<number | null>(null)
 const confirmedAutoTopUpMonthlyLimit = ref(0)
-const isAutoTopUpControlsDisabled = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value || !creditQuote.value)
+const isAutoTopUpBusy = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value)
+const isAutoTopUpControlsDisabled = computed(() => isAutoTopUpBusy.value || !creditQuote.value)
+const isAutoTopUpToggleDisabled = computed(() => isAutoTopUpBusy.value || (!creditQuote.value && !autoTopUpEnabled.value))
 const autoTopUpThreshold = computed(() => {
   const parsed = Number.parseInt(String(autoTopUpThresholdInput.value), 10)
   if (Number.isNaN(parsed))
@@ -1072,7 +1074,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
               type="checkbox"
               class="d-toggle"
               :checked="autoTopUpEnabled"
-              :disabled="isAutoTopUpControlsDisabled"
+              :disabled="isAutoTopUpToggleDisabled"
               :aria-label="t('credits-auto-top-up-label')"
               @change="onAutoTopUpToggle"
             >
