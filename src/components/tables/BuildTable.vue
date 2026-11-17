@@ -3,19 +3,27 @@ import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
-import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconEye from '~icons/heroicons/eye'
+import IconDownload from '~icons/lucide/download'
+import IconRocket from '~icons/lucide/rocket'
+import IconSmartphone from '~icons/lucide/smartphone'
+import IconX from '~icons/lucide/x'
 import BuilderIntroduction from '~/components/dashboard/BuilderIntroduction.vue'
+import BuildLiveProgress from '~/components/dashboard/BuildLiveProgress.vue'
 import { hasSupportedBuilderTodoList } from '~/services/builderOnboardingChecklist'
+import { dismissBuildNextSteps, isBuildActive, isBuildNextStepsDismissed, latestSucceededBuild, savedBuildState } from '~/services/buildNextSteps'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { rememberSimulator, simulatorEpoch } from '~/services/simulatorSessions'
+import { rememberSimulator, simulatorConfigured, simulatorEpoch } from '~/services/simulatorSessions'
+import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
+import { getAppGettingStartedPath } from '~/utils/onboardingRedirect'
 
 const props = defineProps<{
   appId: string
@@ -43,6 +51,15 @@ const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const elements = ref<Element[]>([])
 const buildDurations = ref<Record<string, number>>({})
 const savedOutputs = ref<Record<string, { url: string, kind: string, expires_at: string }>>({})
+// Until the lookup answers, a succeeded build without output is unknown, not "not saved".
+const savedOutputsReady = ref(false)
+let savedOutputsKey = ''
+// The build whose details replace the table (live progress, result, download, error).
+const openedBuild = shallowRef<Element | null>(null)
+const nextStepsDismissed = ref(isBuildNextStepsDismissed(props.appId))
+// While a build can still change on its own, the table refreshes itself.
+const REFRESH_MS = 10_000
+let refreshTimer: ReturnType<typeof setInterval> | undefined
 const savedBuildNow = ref(Date.now())
 let savedBuildClock: ReturnType<typeof setInterval> | undefined
 const openingJobs = ref<string[]>([])
@@ -136,7 +153,7 @@ function isCurrentLoad(sequence: number, appId: string) {
   return sequence === reloadSequence && appId === props.appId
 }
 
-async function getData() {
+async function getData(silent = false) {
   // Don't load if organization isn't ready yet
   if (!organizationStore.currentOrganization) {
     return
@@ -147,7 +164,8 @@ async function getData() {
   const request = ++dataSequence
   const isCurrent = () => request === dataSequence && isCurrentLoad(sequence, appId)
 
-  isLoading.value = true
+  if (!silent)
+    isLoading.value = true
   try {
     let query = capgo
       .from('build_requests')
@@ -180,7 +198,7 @@ async function getData() {
     elements.value = builds
     total.value = count || 0
     if (isCurrent())
-      await loadSavedOutputs(builds, isCurrent)
+      await loadSavedOutputs(builds, isCurrent, silent)
   }
   catch (error) {
     if (!isCurrent())
@@ -234,6 +252,11 @@ async function reload() {
   elements.value = []
   total.value = 0
   buildDurations.value = {}
+  savedOutputs.value = {}
+  savedOutputsReady.value = false
+  savedOutputsKey = ''
+  openedBuild.value = null
+  nextStepsDismissed.value = isBuildNextStepsDismissed(props.appId)
   platformBuildCounts.value = { ios: 0, android: 0 }
   canEnableBuilder.value = false
   builderAccessReady.value = false
@@ -327,10 +350,16 @@ function getStatusColor(status: string): string {
   }
 }
 
-async function loadSavedOutputs(builds: Element[], current: () => boolean) {
+async function loadSavedOutputs(builds: Element[], current: () => boolean, silent = false) {
   const jobIds = builds.filter(build => build.status === 'succeeded' && build.builder_job_id).map(build => build.builder_job_id as string)
+  const key = jobIds.join(',')
+  // Auto-refresh only asks the builder again when a build newly succeeded.
+  if (silent && key === savedOutputsKey)
+    return
   if (jobIds.length === 0) {
     savedOutputs.value = {}
+    savedOutputsReady.value = true
+    savedOutputsKey = key
     return
   }
   try {
@@ -344,19 +373,16 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean) {
     if (!response.ok)
       return
     const body = await response.json() as { outputs?: Record<string, { url: string, kind: string, expires_at: string }> }
-    if (current())
+    if (current()) {
       savedOutputs.value = body.outputs ?? {}
+      savedOutputsReady.value = true
+      savedOutputsKey = key
+    }
   }
   catch {
     if (current())
       savedOutputs.value = {}
   }
-}
-
-function savedBuildIsCurrent(output: { expires_at?: string } | undefined) {
-  if (!output?.expires_at)
-    return false
-  return Date.parse(output.expires_at) > savedBuildNow.value
 }
 
 async function openSavedBuild(jobId: string) {
@@ -404,33 +430,130 @@ async function openSavedBuild(jobId: string) {
   }
 }
 
+function savedOutputFor(elem: Element) {
+  return elem.builder_job_id ? savedOutputs.value[elem.builder_job_id] : undefined
+}
+
+// A simulator button only where it can work: an iOS .ipa, on a server with a simulator host.
+function canOpenInSimulator(elem: Element) {
+  return savedOutputFor(elem)?.kind === 'ios_ipa' && simulatorConfigured.value !== false
+}
+
 function savedBuildCell(elem: Element) {
-  const output = elem.builder_job_id ? savedOutputs.value[elem.builder_job_id] : undefined
-  if (!savedBuildIsCurrent(output))
+  const output = savedOutputFor(elem)
+  const state = savedOutputsReady.value || output ? savedBuildState(elem, output, savedBuildNow.value) : 'none'
+  if (state === 'expired' || state === 'not-saved') {
+    return h('span', {
+      'class': 'text-xs text-slate-500 dark:text-slate-400',
+      'title': t(state === 'expired' ? 'saved-build-expired-hint' : 'saved-build-not-saved-hint'),
+      'data-test': `saved-build-${state}`,
+    }, t(state === 'expired' ? 'saved-build-expired-short' : 'saved-build-not-saved'))
+  }
+  if (state !== 'available')
     return h('span', { class: 'text-gray-400 dark:text-gray-600' }, '-')
   const jobId = elem.builder_job_id as string
   const opening = openingJobs.value.includes(jobId)
   const children = [
     h('a', {
-      href: output?.url,
-      target: '_blank',
-      rel: 'noopener',
-      class: 'text-sm font-semibold text-blue-600 dark:text-blue-400',
-    }, t('download-saved-build')),
-  ]
-  if (output?.kind === 'ios_ipa') {
-    children.push(h('button', {
-      type: 'button',
-      class: 'px-2 py-1 text-xs font-semibold rounded-md d-btn d-btn-xs shrink-0',
-      disabled: opening,
-      onClick: (event: Event) => {
+      'href': output?.url,
+      'target': '_blank',
+      'rel': 'noopener',
+      'class': 'd-btn d-btn-xs d-btn-primary gap-1 text-white',
+      'data-test': 'saved-build-download',
+      'onClick': (event: Event) => {
         event.stopPropagation()
+        track('Build Next Step Clicked', { action: 'download', source: 'table' })
+      },
+    }, [h(IconDownload, { class: 'h-3.5 w-3.5' }), t('download-saved-build')]),
+  ]
+  if (canOpenInSimulator(elem)) {
+    children.push(h('button', {
+      'type': 'button',
+      'class': 'd-btn d-btn-xs d-btn-outline shrink-0',
+      'disabled': opening,
+      'data-test': 'saved-build-simulator',
+      'onClick': (event: Event) => {
+        event.stopPropagation()
+        track('Build Next Step Clicked', { action: 'simulator', source: 'table' })
         void openSavedBuild(jobId)
       },
     }, opening ? t('simulator-starting') : t('open-in-simulator')))
   }
   return h('div', { class: 'flex items-center gap-2' }, children)
 }
+
+function track(event: string, tags: Record<string, string>) {
+  const orgId = organizationStore.currentOrganization?.gid
+  if (!orgId)
+    return
+  void sendEvent({
+    channel: 'builder',
+    event,
+    org_id: orgId,
+    tracking_version: 2,
+    nonPersonTags: { app_id: props.appId, ...tags },
+  })
+}
+
+function openBuild(elem: Element) {
+  openedBuild.value = elem
+  track('Build Row Opened', { status: elem.status, platform: elem.platform })
+}
+
+function closeBuild() {
+  openedBuild.value = null
+  void getData(true)
+}
+
+function retryBuild() {
+  openedBuild.value = null
+  addOne()
+}
+
+// Shown once the app has a succeeded build, until dismissed on this browser.
+const nextStepsBuild = computed<Element | undefined>(() => nextStepsDismissed.value || currentPage.value !== 1 || search.value ? undefined : latestSucceededBuild(elements.value) as Element | undefined)
+const nextStepsOutput = computed(() => nextStepsBuild.value ? savedOutputFor(nextStepsBuild.value) : undefined)
+
+function nextStepInstall() {
+  track('Build Next Step Clicked', { action: 'install' })
+  if (nextStepsBuild.value)
+    openBuild(nextStepsBuild.value)
+}
+
+function nextStepSimulator() {
+  const jobId = nextStepsBuild.value?.builder_job_id
+  track('Build Next Step Clicked', { action: 'simulator' })
+  if (jobId)
+    void openSavedBuild(jobId)
+}
+
+function nextStepLiveUpdates() {
+  track('Build Next Step Clicked', { action: 'live_updates' })
+  router.push({ path: getAppGettingStartedPath(props.appId), query: { showChecklist: '1' } })
+}
+
+function dismissNextSteps() {
+  track('Build Next Step Clicked', { action: 'dismiss' })
+  dismissBuildNextSteps(props.appId)
+  nextStepsDismissed.value = true
+}
+
+const hasActiveBuild = computed(() => elements.value.some(build => isBuildActive(build.status)))
+
+function stopAutoRefresh() {
+  clearInterval(refreshTimer)
+  refreshTimer = undefined
+}
+
+watch(hasActiveBuild, (active) => {
+  stopAutoRefresh()
+  if (!active)
+    return
+  refreshTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && !isLoading.value)
+      void getData(true)
+  }, REFRESH_MS)
+})
 
 function formatDuration(seconds: number | null | undefined): string {
   const safeSeconds = Math.max(0, Math.floor(seconds ?? 0))
@@ -451,6 +574,7 @@ columns.value = [
   {
     label: t('created-at'),
     key: 'created_at',
+    onClick: openBuild,
     mobile: true,
     class: 'truncate max-w-32',
     sortable: 'desc',
@@ -459,6 +583,7 @@ columns.value = [
   {
     label: t('build-mode'),
     key: 'build_mode',
+    onClick: openBuild,
     mobile: true,
     class: 'truncate max-w-32',
     displayFunction: (elem: Element) => {
@@ -470,6 +595,7 @@ columns.value = [
   {
     label: t('build-duration'),
     key: 'build_duration',
+    onClick: openBuild,
     class: 'truncate max-w-24',
     displayFunction: (elem: Element) => {
       const jobId = elem.builder_job_id
@@ -480,13 +606,15 @@ columns.value = [
   {
     label: t('status'),
     key: 'status',
+    onClick: openBuild,
     mobile: true,
     class: 'truncate max-w-24',
-    displayFunction: (elem: Element) => elem.status,
+    renderFunction: (elem: Element) => h('span', { 'title': t('build-row-open'), 'data-test': 'build-row-status' }, elem.status),
   },
   {
     label: t('error'),
     key: 'last_error',
+    onClick: openBuild,
     mobile: true,
     class: 'max-w-48',
     displayFunction: (elem: Element) => {
@@ -505,6 +633,7 @@ columns.value = [
   {
     label: t('updated-at'),
     key: 'updated_at',
+    onClick: openBuild,
     class: 'truncate max-w-32',
     displayFunction: (elem: Element) => formatDate(elem.updated_at ?? ''),
   },
@@ -529,9 +658,10 @@ onMounted(async () => {
 onUnmounted(() => {
   if (savedBuildClock)
     clearInterval(savedBuildClock)
+  stopAutoRefresh()
 })
 
-watch(showSetupFlow, (newValue) => {
+watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
   emit('update:showingSteps', newValue)
 }, { immediate: true })
 </script>
@@ -562,66 +692,154 @@ watch(showSetupFlow, (newValue) => {
       @done="onboardingDone"
       @close-step="closeSteps()"
     />
-    <div v-else class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
-      <DataTable
-        v-model:filters="filters"
-        v-model:search="search"
-        v-model:current-page="currentPage"
-        :columns="columns"
-        :element-list="elements"
-        :is-loading="isTableLoading"
-        :search-function="(e: Element, s: string) => e.platform.toLowerCase().includes(s.toLowerCase()) || e.status.toLowerCase().includes(s.toLowerCase())"
-        :search-placeholder="t('search-builds')"
-        :show-add="!isMobile"
-        :total="total"
-        :offset="offset"
-        @add="addOne()"
-        @reset="reload()"
-        @reload="getData()"
+    <div v-else-if="openedBuild" data-test="build-detail">
+      <BuildLiveProgress
+        :key="openedBuild.id"
+        :app-id="props.appId"
+        :build-id="openedBuild.id"
+        :platform="openedBuild.platform === 'ios' ? 'ios' : 'android'"
+        closable
+        @close="closeBuild"
+        @done="closeBuild"
+        @retry="retryBuild"
       >
-        <template #status="{ element }">
-          <span
-            class="font-semibold"
-            :class="getStatusColor(element.status)"
+        <template #success-actions>
+          <button
+            v-if="canOpenInSimulator(openedBuild)"
+            type="button"
+            class="d-btn d-btn-outline gap-2"
+            :disabled="openingJobs.includes(openedBuild.builder_job_id ?? '')"
+            data-test="build-detail-simulator"
+            @click="track('Build Next Step Clicked', { action: 'simulator', source: 'detail' }); openSavedBuild(openedBuild.builder_job_id ?? '')"
           >
-            {{ element.status }}
-          </span>
+            <IconSmartphone class="h-4 w-4" />
+            {{ openingJobs.includes(openedBuild.builder_job_id ?? '') ? t('simulator-starting') : t('open-in-simulator') }}
+          </button>
+          <p v-else-if="savedOutputFor(openedBuild)?.kind === 'ios_ipa'" class="self-center text-sm text-slate-500 dark:text-slate-400" data-test="build-detail-simulator-unavailable">
+            {{ t('simulator-not-configured-hint') }}
+          </p>
         </template>
-        <template #last_error="{ element }">
-          <div v-if="element.last_error" class="flex items-center gap-2">
-            <span class="max-w-xs text-red-600 truncate dark:text-red-400">
-              {{ element.last_error.length > 50 ? `${element.last_error.substring(0, 50)}...` : element.last_error }}
-            </span>
-            <button
-              type="button"
-              class="p-1 text-gray-500 rounded-md cursor-pointer shrink-0 dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-              :aria-label="t('build-error-details')"
-              @click.stop="showErrorDetails(element.last_error)"
-            >
-              <IconEye class="w-4 h-4" />
-            </button>
-            <button
-              v-if="isPlanUpgradeError(element.last_error)"
-              type="button"
-              class="px-2 py-1 text-xs font-semibold text-white rounded-md d-btn d-btn-xs d-btn-primary shrink-0"
-              @click.stop="router.push('/settings/organization/plans')"
-            >
-              {{ t('plan-upgrade-v2') }}
-            </button>
-          </div>
-          <span v-else class="text-gray-400 dark:text-gray-600">-</span>
-        </template>
-        <template #empty>
-          <div class="flex flex-col items-center justify-center p-8">
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('no-builds-yet') }}
-            </h3>
-            <p class="max-w-md text-center text-gray-600 dark:text-gray-400">
-              {{ t('no-builds-description') }}
+      </BuildLiveProgress>
+    </div>
+    <div v-else class="flex flex-col gap-6">
+      <section
+        v-if="nextStepsBuild"
+        class="relative p-5 bg-white border shadow-sm rounded-xl border-emerald-300 dark:bg-slate-800/60 dark:border-emerald-500/40"
+        data-test="build-next-steps"
+      >
+        <button
+          type="button"
+          class="absolute d-btn d-btn-ghost d-btn-sm d-btn-square top-3 right-3"
+          :aria-label="t('build-next-steps-dismiss')"
+          data-test="build-next-steps-dismiss"
+          @click="dismissNextSteps"
+        >
+          <IconX class="w-4 h-4" />
+        </button>
+        <h3 class="text-lg font-semibold text-slate-950 dark:text-white">
+          {{ t('build-next-steps-title') }}
+        </h3>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+          {{ t('build-next-steps-subtitle', { platform: nextStepsBuild.platform === 'ios' ? t('build-platform-ios') : t('build-platform-android') }) }}
+        </p>
+        <div class="grid gap-4 mt-4 md:grid-cols-3">
+          <div class="flex flex-col items-start gap-2 p-4 border rounded-lg border-slate-200 dark:border-white/10">
+            <p class="text-sm text-slate-600 dark:text-slate-300">
+              {{ t('build-next-steps-install-hint') }}
             </p>
+            <button type="button" class="mt-auto text-white d-btn d-btn-sm d-btn-primary gap-2" data-test="build-next-steps-install" @click="nextStepInstall">
+              <IconDownload class="w-4 h-4" />
+              {{ t('build-next-steps-install') }}
+            </button>
           </div>
-        </template>
-      </DataTable>
+          <div v-if="nextStepsOutput?.kind === 'ios_ipa'" class="flex flex-col items-start gap-2 p-4 border rounded-lg border-slate-200 dark:border-white/10">
+            <p class="text-sm text-slate-600 dark:text-slate-300">
+              {{ simulatorConfigured === false ? t('simulator-not-configured-hint') : t('build-next-steps-simulator-hint') }}
+            </p>
+            <button
+              v-if="simulatorConfigured !== false"
+              type="button"
+              class="mt-auto d-btn d-btn-sm d-btn-outline gap-2"
+              :disabled="openingJobs.includes(nextStepsBuild.builder_job_id ?? '')"
+              data-test="build-next-steps-simulator"
+              @click="nextStepSimulator"
+            >
+              <IconSmartphone class="w-4 h-4" />
+              {{ openingJobs.includes(nextStepsBuild.builder_job_id ?? '') ? t('simulator-starting') : t('build-next-steps-simulator') }}
+            </button>
+          </div>
+          <div class="flex flex-col items-start gap-2 p-4 border rounded-lg border-slate-200 dark:border-white/10">
+            <p class="text-sm text-slate-600 dark:text-slate-300">
+              {{ t('build-next-steps-live-updates-hint') }}
+            </p>
+            <button type="button" class="mt-auto d-btn d-btn-sm d-btn-outline gap-2" data-test="build-next-steps-live-updates" @click="nextStepLiveUpdates">
+              <IconRocket class="w-4 h-4" />
+              {{ t('build-next-steps-live-updates') }}
+            </button>
+          </div>
+        </div>
+      </section>
+      <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10" data-test="build-table">
+        <DataTable
+          v-model:filters="filters"
+          v-model:search="search"
+          v-model:current-page="currentPage"
+          :columns="columns"
+          :element-list="elements"
+          :is-loading="isTableLoading"
+          :search-function="(e: Element, s: string) => e.platform.toLowerCase().includes(s.toLowerCase()) || e.status.toLowerCase().includes(s.toLowerCase())"
+          :search-placeholder="t('search-builds')"
+          :show-add="!isMobile"
+          :total="total"
+          :offset="offset"
+          @add="addOne()"
+          @reset="reload()"
+          @reload="getData()"
+        >
+          <template #status="{ element }">
+            <span
+              class="font-semibold"
+              :class="getStatusColor(element.status)"
+            >
+              {{ element.status }}
+            </span>
+          </template>
+          <template #last_error="{ element }">
+            <div v-if="element.last_error" class="flex items-center gap-2">
+              <span class="max-w-xs text-red-600 truncate dark:text-red-400">
+                {{ element.last_error.length > 50 ? `${element.last_error.substring(0, 50)}...` : element.last_error }}
+              </span>
+              <button
+                type="button"
+                class="p-1 text-gray-500 rounded-md cursor-pointer shrink-0 dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                :aria-label="t('build-error-details')"
+                @click.stop="showErrorDetails(element.last_error)"
+              >
+                <IconEye class="w-4 h-4" />
+              </button>
+              <button
+                v-if="isPlanUpgradeError(element.last_error)"
+                type="button"
+                class="px-2 py-1 text-xs font-semibold text-white rounded-md d-btn d-btn-xs d-btn-primary shrink-0"
+                @click.stop="router.push('/settings/organization/plans')"
+              >
+                {{ t('plan-upgrade-v2') }}
+              </button>
+            </div>
+            <span v-else class="text-gray-400 dark:text-gray-600">-</span>
+          </template>
+          <template #empty>
+            <div class="flex flex-col items-center justify-center p-8">
+              <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t('no-builds-yet') }}
+              </h3>
+              <p class="max-w-md text-center text-gray-600 dark:text-gray-400">
+                {{ t('no-builds-description') }}
+              </p>
+            </div>
+          </template>
+        </DataTable>
+      </div>
     </div>
   </div>
 </template>

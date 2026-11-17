@@ -364,6 +364,7 @@ onUnmounted(stop)
             <button v-if="!embedded" type="button" class="d-btn" :class="downloadUrl ? 'd-btn-outline' : 'd-btn-primary'" @click="emit('done')">
               {{ t('build-live-view-builds') }}
             </button>
+            <slot name="success-actions" />
           </div>
         </div>
         <figure v-if="qrCode" class="shrink-0 text-center">

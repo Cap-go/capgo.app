@@ -1,9 +1,13 @@
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 
 export interface RunningSimulator {
   id: string
   url: string
 }
+
+// False once the API says this server has no simulator host: start buttons would only fail.
+// Null until known (older API): the buttons stay.
+export const simulatorConfigured = ref<boolean | null>(null)
 
 const sessionsByApp = reactive<Record<string, RunningSimulator[]>>({})
 let sessionEpoch = 0
