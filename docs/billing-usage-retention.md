@@ -35,10 +35,19 @@ billable bytes = sum(storage_byte_hours in the cycle) / hours in the cycle
 
 So a plan with `storage` = 2 GB includes 2 GB x hours-in-cycle GB-hours.
 Deleting bundles stops new hours from accruing but never removes hours already
-used in the cycle, and the billed value only grows during a cycle. Unlike the
-other daily tables, rows are attributed by `daily_storage_hourly.owner_org`
-(the org that owned the app when the hours were used), which is kept for
-deleted apps until `delete_old_deleted_apps` purges them.
+used in the cycle, and the billed value only grows during a cycle.
+
+Rows are keyed by `(app_id, owner_org, cycle_start, date)` and a refresh only
+replaces its own org's rows of its own cycle:
+
+- **Org:** unlike the other daily tables, storage is attributed by
+  `owner_org`, the org that owned the app when the hours were used. When a
+  deleted app ID is recreated (or an app is transferred), the former org keeps
+  its rows and its bill, and the new owner gets its own rows. Rows of deleted
+  apps are kept until `delete_old_deleted_apps` purges them.
+- **Cycle:** with a non-midnight anchor, the UTC day of the cycle boundary has
+  one row per cycle. Billing counts a row when its `cycle_start` is inside the
+  billed period, so each cycle bills only its own part of that day.
 
 ## Recreating a deleted app ID within 35 days
 

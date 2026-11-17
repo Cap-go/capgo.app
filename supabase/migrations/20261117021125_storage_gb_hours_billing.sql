@@ -23,6 +23,25 @@
 ALTER TABLE public.daily_storage_hourly
 DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
 
+-- Rows are keyed by the org and the billing cycle they belong to:
+-- * owner_org: a deleted app ID recreated by another org within 35 days (or a
+--   transferred app) must not rewrite the hours the former org already used.
+-- * cycle_start: with a non-midnight anchor, the UTC day of the cycle boundary
+--   holds hours of two cycles. Each cycle keeps its own row, so refreshing the
+--   new cycle never overwrites the completed cycle's part.
+-- Existing rows only ever held the current cycle of their org at write time,
+-- so cycle_start = date keeps them in the right cycle for the billing filter
+-- (cycle_start within [start_date, end_date)).
+ALTER TABLE public.daily_storage_hourly ADD COLUMN IF NOT EXISTS cycle_start date;
+UPDATE public.daily_storage_hourly SET cycle_start = date WHERE cycle_start IS NULL;
+ALTER TABLE public.daily_storage_hourly ALTER COLUMN cycle_start SET NOT NULL;
+ALTER TABLE public.daily_storage_hourly DROP CONSTRAINT IF EXISTS daily_storage_hourly_pkey;
+ALTER TABLE public.daily_storage_hourly
+ADD CONSTRAINT daily_storage_hourly_pkey PRIMARY KEY (app_id, owner_org, cycle_start, date);
+
+COMMENT ON COLUMN public.daily_storage_hourly.cycle_start IS
+'UTC date of the start of the billing cycle these hours belong to.';
+
 COMMENT ON TABLE public.daily_storage_hourly IS
 'Storage usage in byte-hours per app and UTC day (GB-hours x 2^30), written by '
 'cron_stat_app from version_meta. Only source of storage billing: see '
@@ -32,16 +51,15 @@ COMMENT ON TABLE public.daily_storage_hourly IS
 -- ---------------------------------------------------------------------------
 -- 2. Billable storage of an org for a period
 -- ---------------------------------------------------------------------------
--- Callers pass the period as dates, like every other get_total_metrics metric
--- (rows are read with an inclusive BETWEEN). The hours divide the byte-hours:
--- by default (end_date - start_date) x 24, which is exact for the billing cycle
--- get_total_metrics(org) passes (cycle_start::date, cycle_end::date): both
--- anchors share the time of day. Callers that pass an inclusive end date
--- (cron_email: end - 1 day) give the exact cycle hours in p_hours. Rows are
--- filtered on owner_org: cron_stat_app writes the org that owned the app when
--- the hours were used, and keeps it for deleted apps.
+-- Callers pass the period as dates, like every other get_total_metrics metric.
+-- A row counts when its day is in [start_date, end_date] and its cycle started
+-- in [start_date, end_date): get_total_metrics(org) passes
+-- (cycle_start::date, cycle_end::date), which keeps the current cycle's part of
+-- the boundary days and skips the previous and next cycles' parts. The hours
+-- are (end_date - start_date) x 24 (at least 24), the exact cycle length since
+-- both anchors share the time of day.
 CREATE OR REPLACE FUNCTION public.get_org_storage_billable_bytes(
-    p_org_id uuid, p_start_date date, p_end_date date, p_hours double precision DEFAULT NULL
+    p_org_id uuid, p_start_date date, p_end_date date
 )
 RETURNS bigint
 LANGUAGE sql
@@ -52,25 +70,28 @@ AS $$
   SELECT COALESCE(
     pg_catalog.ceil(
       SUM(dsh.storage_byte_hours)
-      / GREATEST(COALESCE(p_hours, (p_end_date - p_start_date) * 24), 24)::double precision
+      / (GREATEST(p_end_date - p_start_date, 1) * 24)::double precision
     ),
     0
   )::bigint
   FROM public.daily_storage_hourly dsh
   WHERE dsh.owner_org = p_org_id
     AND dsh.date BETWEEN p_start_date AND p_end_date
+    AND dsh.cycle_start >= p_start_date
+    AND dsh.cycle_start < GREATEST(p_end_date, p_start_date + 1)
 $$;
 
-ALTER FUNCTION public.get_org_storage_billable_bytes(uuid, date, date, double precision) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date, double precision) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date, double precision) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date, double precision) TO service_role;
+ALTER FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) TO service_role;
 
-COMMENT ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date, double precision) IS
-'Average bytes stored by the org over the period: byte-hours in '
-'daily_storage_hourly between start_date and end_date divided by the hours of '
-'the period (p_hours, else (end_date - start_date) x 24, at least 24). This is '
-'the storage value compared with plans.storage and priced by the credit tiers.';
+COMMENT ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) IS
+'Average bytes stored by the org over the billing period starting on '
+'start_date: byte-hours of its cycles started in [start_date, end_date), on '
+'days in [start_date, end_date], divided by (end_date - start_date) x 24. '
+'This is the storage value compared with plans.storage and priced by the '
+'credit tiers.';
 
 -- ---------------------------------------------------------------------------
 -- 3. Org billing metrics read storage from byte-hours
@@ -327,11 +348,13 @@ BEGIN
           AND dm.date BETWEEN p_start_date AND p_end_date
     ),
     storage AS (
-        SELECT dsh.app_id, dsh.date, pg_catalog.round(dsh.storage_byte_hours)::bigint AS storage
+        -- A cycle boundary day has one row per cycle: the day is their sum.
+        SELECT dsh.app_id, dsh.date, pg_catalog.round(SUM(dsh.storage_byte_hours))::bigint AS storage
         FROM public.daily_storage_hourly dsh
         WHERE dsh.owner_org = p_org_id
           AND dsh.app_id IN (SELECT all_apps.app_id FROM all_apps)
           AND dsh.date BETWEEN p_start_date AND p_end_date
+        GROUP BY dsh.app_id, dsh.date
     ),
     bandwidth AS (
         SELECT db.app_id, db.date, db.bandwidth

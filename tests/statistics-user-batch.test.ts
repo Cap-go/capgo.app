@@ -123,8 +123,8 @@ describe('[GET] /statistics/user batches per-app reads', () => {
         [app.appId, base, DAYS - 2],
       )
       await executeSQL(
-        `INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours)
-         SELECT $1, $2::uuid, (CURRENT_DATE - day)::date, ($3 + day) * 24 FROM generate_series(1, $4) AS day`,
+        `INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+         SELECT $1, $2::uuid, (CURRENT_DATE - day)::date, (CURRENT_DATE - day)::date, ($3 + day) * 24 FROM generate_series(1, $4) AS day`,
         [app.appId, app.orgId, base, DAYS - 2],
       )
       const [version] = await executeSQL<{ id: number }>(

@@ -1255,6 +1255,7 @@ export type Database = {
         Row: {
           app_id: string
           created_at: string
+          cycle_start: string
           date: string
           owner_org: string
           storage_byte_hours: number
@@ -1263,6 +1264,7 @@ export type Database = {
         Insert: {
           app_id: string
           created_at?: string
+          cycle_start: string
           date: string
           owner_org: string
           storage_byte_hours?: number
@@ -1271,6 +1273,7 @@ export type Database = {
         Update: {
           app_id?: string
           created_at?: string
+          cycle_start?: string
           date?: string
           owner_org?: string
           storage_byte_hours?: number
@@ -4387,12 +4390,7 @@ export type Database = {
         Returns: string
       }
       get_org_storage_billable_bytes: {
-        Args: {
-          p_end_date: string
-          p_hours?: number
-          p_org_id: string
-          p_start_date: string
-        }
+        Args: { p_end_date: string; p_org_id: string; p_start_date: string }
         Returns: number
       }
       get_org_user_access_rbac: {

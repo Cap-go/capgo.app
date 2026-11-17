@@ -57,6 +57,8 @@ interface StorageVersionLifetime {
 interface StorageHourlyRow {
   app_id: string
   owner_org: string
+  /** UTC date of the start of the billing cycle these hours belong to. */
+  cycle_start: string
   date: string
   storage_byte_hours: number
   updated_at: string
@@ -191,6 +193,7 @@ function buildStorageHourlyRows(dailyBuckets: Map<number, number>, options: Stor
     .map(([dateMs, storageByteHours]) => ({
       app_id: options.appId,
       owner_org: options.ownerOrg,
+      cycle_start: formatUtcDay(floorToDay(parseTimestampMs(options.cycleStart))),
       date: formatUtcDay(dateMs),
       storage_byte_hours: storageByteHours,
       updated_at: now,
@@ -350,28 +353,35 @@ async function refreshStorageHourly(
 
   const deleteRange = getStorageDailyDeleteRange(cycleInfo.subscription_anchor_start, cycleInfo.subscription_anchor_end)
   // One statement, so billing reads never see the cycle between the delete and the upsert.
+  // Only this org's rows of this cycle are replaced: hours of a former owner of the app ID and
+  // the previous cycle's part of the boundary day stay untouched. Rows with a later cycle_start
+  // inside the cycle are legacy rows (cycle_start = date) of this cycle and are replaced too.
   await runSupabaseResultWithRetry(c, 'replace_daily_storage_hourly', async () => {
     await pg.query(
       `WITH new_rows AS (
-         SELECT r.app_id, r.owner_org, r.date, r.storage_byte_hours, r.updated_at
-         FROM pg_catalog.jsonb_to_recordset($4::jsonb)
-           AS r(app_id varchar, owner_org uuid, date date, storage_byte_hours double precision, updated_at timestamptz)
+         SELECT r.app_id, r.owner_org, r.cycle_start, r.date, r.storage_byte_hours, r.updated_at
+         FROM pg_catalog.jsonb_to_recordset($5::jsonb)
+           AS r(app_id varchar, owner_org uuid, cycle_start date, date date, storage_byte_hours double precision, updated_at timestamptz)
        ),
        removed AS (
          DELETE FROM public.daily_storage_hourly dsh
          WHERE dsh.app_id = $1
-           AND dsh.date >= $2::date
-           AND dsh.date < $3::date
-           AND NOT EXISTS (SELECT 1 FROM new_rows WHERE new_rows.date = dsh.date)
+           AND dsh.owner_org = $2::uuid
+           AND dsh.cycle_start >= $3::date
+           AND dsh.date >= $3::date
+           AND dsh.date < $4::date
+           AND NOT EXISTS (
+             SELECT 1 FROM new_rows
+             WHERE new_rows.cycle_start = dsh.cycle_start AND new_rows.date = dsh.date
+           )
        )
-       INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours, updated_at)
-       SELECT new_rows.app_id, new_rows.owner_org, new_rows.date, new_rows.storage_byte_hours, new_rows.updated_at
+       INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours, updated_at)
+       SELECT new_rows.app_id, new_rows.owner_org, new_rows.cycle_start, new_rows.date, new_rows.storage_byte_hours, new_rows.updated_at
        FROM new_rows
-       ON CONFLICT (app_id, date) DO UPDATE SET
-         owner_org = EXCLUDED.owner_org,
+       ON CONFLICT (app_id, owner_org, cycle_start, date) DO UPDATE SET
          storage_byte_hours = EXCLUDED.storage_byte_hours,
          updated_at = EXCLUDED.updated_at`,
-      [appId, deleteRange.startDay, deleteRange.endExclusiveDay, JSON.stringify(calculation.rows)],
+      [appId, ownerOrg, deleteRange.startDay, deleteRange.endExclusiveDay, JSON.stringify(calculation.rows)],
     )
     return { data: null, error: null }
   })

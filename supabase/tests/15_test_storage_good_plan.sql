@@ -33,8 +33,8 @@ BEGIN
     FROM public.get_org_billing_cycle(v_org_id) AS cycle;
 
     -- Half the plan storage, stored for the whole cycle.
-    INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours)
-    VALUES ('com.demo.app', v_org_id, v_cycle_start, FLOOR(plan.storage / 2) * v_cycle_hours);
+    INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+    VALUES ('com.demo.app', v_org_id, v_cycle_start, v_cycle_start, FLOOR(plan.storage / 2) * v_cycle_hours);
 
     SELECT * from get_plan_usage_percent_detailed(v_org_id) limit 1 into usage;
     RETURN NEXT IS(usage.storage_percent, (SELECT CAST ('50' AS DOUBLE PRECISION)), format('Storage usage = 50%% for "%s" plan', plan.name));

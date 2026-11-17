@@ -844,7 +844,7 @@ BEGIN
 
     INSERT INTO public.daily_mau (app_id, date, mau) VALUES ('com.demo.app', curr_date, random_mau);
     INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES ('com.demo.app', curr_date, random_bandwidth);
-    INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours) VALUES ('com.demo.app', demo_org_id, curr_date, random_storage);
+    INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours) VALUES ('com.demo.app', demo_org_id, curr_date, curr_date, random_storage);
 
     curr_date := curr_date + INTERVAL '1 day';
   END LOOP;
@@ -1217,7 +1217,7 @@ BEGIN
     random_mau := FLOOR(RANDOM() * 1000) + 1; random_bandwidth := FLOOR(RANDOM() * 1000000000) + 1; random_storage := FLOOR(RANDOM() * 1000000000) + 1;
     INSERT INTO public.daily_mau (app_id, date, mau) VALUES (p_app_id, curr_date, random_mau);
     INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES (p_app_id, curr_date, random_bandwidth);
-    INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours) VALUES (p_app_id, org_id, curr_date, random_storage);
+    INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours) VALUES (p_app_id, org_id, curr_date, curr_date, random_storage);
     INSERT INTO public.daily_build_time (app_id, date, build_time_unit, build_count)
     VALUES (p_app_id, curr_date, FLOOR(RANDOM() * 7200) + 300, FLOOR(RANDOM() * 10) + 1);
     INSERT INTO public.daily_version (date, app_id, version_id, version_name, get, fail, install, uninstall)
@@ -1974,8 +1974,8 @@ BEGIN
   ) inst ON inst.app_id = days.app_id AND inst.date = days.date;
 
   -- Storage: byte-hours of the bundles kept in R2 on each day (stored all day).
-  INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours)
-  SELECT a.app_id, apps.owner_org, day.d::date,
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+  SELECT a.app_id, apps.owner_org, day.d::date, day.d::date,
     24 * COALESCE((
       SELECT SUM(avm.size) FROM public.app_versions av
       JOIN public.app_versions_meta avm ON avm.id = av.id

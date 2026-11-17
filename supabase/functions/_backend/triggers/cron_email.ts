@@ -456,15 +456,14 @@ async function sendBillingPeriodStats(c: Context, pg: PgClient, orgId: string, c
   let metrics: { mau: number, bandwidth: number, storage: number, build_time_unit: number } | null = null
   let metricsError: unknown = null
   try {
-    // Storage is the GB-hour average over the cycle: the end date passed here is inclusive,
-    // so give the exact cycle hours instead of the (end - start) days the default uses.
-    const cycleHours = (new Date(cycleEndTs).getTime() - new Date(cycleStartTs).getTime()) / 3_600_000
+    // Storage is the GB-hour average over the cycle. Its helper takes the exclusive end date
+    // (cycle length and the boundary day's hours of this cycle), unlike the other metrics.
     const rows = await queryJson<{ mau: number, bandwidth: number, storage: number, build_time_unit: number }>(
       pg,
       `SELECT metrics.mau, metrics.bandwidth, metrics.build_time_unit,
-         public.get_org_storage_billable_bytes(p_org_id => $1, p_start_date => $2::date, p_end_date => $3::date, p_hours => $4::double precision) AS storage
+         public.get_org_storage_billable_bytes(p_org_id => $1, p_start_date => $2::date, p_end_date => $4::date) AS storage
        FROM public.get_total_metrics(org_id => $1, start_date => $2::date, end_date => $3::date) AS metrics`,
-      [orgId, periodStart, metricsEndInclusive, Number.isFinite(cycleHours) && cycleHours > 0 ? cycleHours : null],
+      [orgId, periodStart, metricsEndInclusive, periodEndExclusive],
     )
     if (rows.length === 1)
       metrics = rows[0]

@@ -53,4 +53,23 @@ describe('calculateStorageHourlyRows', () => {
       { date: '2026-01-02', storage_byte_hours: 125 },
     ])
   })
+
+  it('tags every row with the UTC day its billing cycle started', () => {
+    const rows = calculateStorageHourlyRows([
+      { version_id: 1, size: 100, timestamp: '2026-01-10T00:00:00.000Z' },
+    ], {
+      appId: APP_ID,
+      ownerOrg: OWNER_ORG,
+      cycleStart: '2026-01-15T12:00:00.000Z',
+      cycleEnd: '2026-02-15T12:00:00.000Z',
+      currentHour: '2026-01-16T12:00:00.000Z',
+    }).rows
+
+    // The boundary day only holds this cycle's afternoon; the previous cycle keeps its morning row.
+    expect(rows.map(row => [row.cycle_start, row.date, row.storage_byte_hours])).toEqual([
+      ['2026-01-15', '2026-01-15', 1200],
+      ['2026-01-15', '2026-01-16', 1200],
+    ])
+    expect(rows.every(row => row.owner_org === OWNER_ORG)).toBe(true)
+  })
 })

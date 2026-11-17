@@ -28,7 +28,7 @@ BEGIN
 
   INSERT INTO public.daily_mau (app_id, date, mau) VALUES (test_app, test_start, 5);
   INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES (test_app, test_start, 0);
-  INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours) VALUES (test_app, test_org, test_start, 0);
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours) VALUES (test_app, test_org, test_start, test_start, 0);
 
   SELECT COALESCE(SUM(mau), 0)
   INTO initial_mau

@@ -639,10 +639,10 @@ async function seedOnboardingDemoDataInTransaction(
     )
 
     await pgClient.query(
-      `INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours)
-      SELECT $2::text, $3::uuid, date, storage_byte_hours
+      `INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+      SELECT $2::text, $3::uuid, date, date, storage_byte_hours
       FROM jsonb_to_recordset($1::jsonb) AS daily_data(date date, storage_byte_hours double precision)
-      ON CONFLICT (app_id, date) DO NOTHING`,
+      ON CONFLICT DO NOTHING`,
       [JSON.stringify(options.dailyStorageRows), options.appId, options.ownerOrg],
     )
 

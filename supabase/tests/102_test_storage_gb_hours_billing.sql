@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(15);
+SELECT plan(16);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -27,22 +27,30 @@ UNION ALL
 SELECT deleted_app, '', 'GB hours deleted', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid
 FROM gbh_ctx;
 
--- 10 day period = 240 hours.
+-- 10 day period = 240 hours. Whole-day rows use cycle_start = date.
 -- live app: 1 GiB stored for 240 hours in total, spread over two days.
 -- deleted app: 0.5 GiB for 240 hours.
--- Out of range and other-org rows must be ignored.
-INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours)
-SELECT live_app, org_id, start_date, 1073741824::double precision * 100 FROM gbh_ctx
+-- Ignored by the billing period: days out of range, the previous cycle's part
+-- of the first day, the next cycle's part of the end day, and other orgs (one
+-- of them on the same app ID and day, as when a deleted app ID is recreated).
+INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+SELECT live_app, org_id, start_date, start_date, 1073741824::double precision * 100 FROM gbh_ctx
 UNION ALL
-SELECT live_app, org_id, start_date + 5, 1073741824::double precision * 140 FROM gbh_ctx
+SELECT live_app, org_id, start_date + 5, start_date + 5, 1073741824::double precision * 140 FROM gbh_ctx
 UNION ALL
-SELECT deleted_app, org_id, start_date + 2, 536870912::double precision * 240 FROM gbh_ctx
+SELECT deleted_app, org_id, start_date + 2, start_date + 2, 536870912::double precision * 240 FROM gbh_ctx
 UNION ALL
-SELECT live_app, org_id, start_date - 1, 1073741824::double precision * 999 FROM gbh_ctx
+SELECT live_app, org_id, start_date - 1, start_date - 1, 1073741824::double precision * 999 FROM gbh_ctx
 UNION ALL
-SELECT live_app, org_id, end_date + 1, 1073741824::double precision * 999 FROM gbh_ctx
+SELECT live_app, org_id, end_date + 1, end_date + 1, 1073741824::double precision * 999 FROM gbh_ctx
 UNION ALL
-SELECT 'com.test.gbhours.other', other_org_id, start_date + 1, 1073741824::double precision * 999 FROM gbh_ctx;
+SELECT live_app, org_id, start_date - 30, start_date, 1073741824::double precision * 999 FROM gbh_ctx
+UNION ALL
+SELECT live_app, org_id, end_date, end_date, 1073741824::double precision * 999 FROM gbh_ctx
+UNION ALL
+SELECT live_app, other_org_id, start_date, start_date, 1073741824::double precision * 999 FROM gbh_ctx
+UNION ALL
+SELECT 'com.test.gbhours.other', other_org_id, start_date + 1, start_date + 1, 1073741824::double precision * 999 FROM gbh_ctx;
 
 SELECT
     is(
@@ -60,9 +68,16 @@ SELECT
 
 SELECT
     is(
-        (SELECT public.get_org_storage_billable_bytes(org_id, start_date, end_date - 1, 240) FROM gbh_ctx),
-        1610612736::bigint,
-        'an inclusive end date with the exact period hours gives the same average'
+        (SELECT public.get_org_storage_billable_bytes(org_id, start_date - 30, start_date) FROM gbh_ctx),
+        pg_catalog.ceil(1073741824::numeric * 999 * 2 / (30 * 24))::bigint,
+        'the previous cycle keeps its part of the boundary day'
+    );
+
+SELECT
+    is(
+        (SELECT public.get_org_storage_billable_bytes(other_org_id, start_date, end_date) FROM gbh_ctx),
+        pg_catalog.ceil(1073741824::numeric * 999 * 2 / 240)::bigint,
+        'another org using the same app ID is billed its own rows'
     );
 
 SELECT
@@ -135,8 +150,8 @@ SELECT
                 (SELECT (public.seed_get_app_metrics_caches(org_id, start_date, end_date)).response FROM gbh_ctx)
             ) AS m (app_id character varying, date date, storage bigint)
         ),
-        (1073741824::bigint * 240 + 536870912::bigint * 240),
-        'per-app daily metrics keep deleted apps and skip other orgs and out of range days'
+        (1073741824::bigint * 240 + 536870912::bigint * 240 + 1073741824::bigint * 999 * 2),
+        'per-app daily metrics keep deleted apps, add both cycles of boundary days, skip other orgs and out of range days'
     );
 
 -- delete_old_deleted_apps purges the hours with the deleted_apps row.
@@ -154,8 +169,8 @@ SELECT
 
 SELECT
     is(
-        (SELECT count(*)::integer FROM public.daily_storage_hourly WHERE app_id = (SELECT live_app FROM gbh_ctx)),
-        4,
+        (SELECT count(*)::integer FROM public.daily_storage_hourly WHERE app_id = (SELECT live_app FROM gbh_ctx) AND owner_org = (SELECT org_id FROM gbh_ctx)),
+        6,
         'delete_old_deleted_apps keeps the byte-hours of live apps'
     );
 
@@ -170,8 +185,8 @@ SELECT
 
 SELECT
     ok(
-        NOT has_function_privilege('authenticated', 'public.get_org_storage_billable_bytes(uuid, date, date, double precision)', 'EXECUTE')
-        AND NOT has_function_privilege('anon', 'public.get_org_storage_billable_bytes(uuid, date, date, double precision)', 'EXECUTE'),
+        NOT has_function_privilege('authenticated', 'public.get_org_storage_billable_bytes(uuid, date, date)', 'EXECUTE')
+        AND NOT has_function_privilege('anon', 'public.get_org_storage_billable_bytes(uuid, date, date)', 'EXECUTE'),
         'get_org_storage_billable_bytes is not callable by clients'
     );
 
