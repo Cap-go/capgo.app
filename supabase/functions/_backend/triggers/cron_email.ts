@@ -270,7 +270,7 @@ async function sendOrgReports(c: Context, eventName: string, preferenceKey: 'wee
   const deliveries = new Map<string, Awaited<ReturnType<typeof prepareEmailToOrgMembers>>>()
   for (const { orgId } of reports) {
     if (!deliveries.has(orgId))
-      deliveries.set(orgId, await prepareEmailToOrgMembers(c, eventName, preferenceKey, orgId))
+      deliveries.set(orgId, await prepareEmailToOrgMembers(c, eventName, preferenceKey, orgId, undefined, { requireCompleteRecipients: true }))
   }
   for (const { orgId, metadata } of reports)
     deliveries.get(orgId)?.send(metadata)

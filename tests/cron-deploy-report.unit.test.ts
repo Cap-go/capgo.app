@@ -222,8 +222,8 @@ describe('org-batched weekly/monthly reports', () => {
       expect(mocks.queryJson).toHaveBeenCalledOnce()
       expect(mocks.queryJson).toHaveBeenCalledWith(expect.anything(), WEEKLY_REPORT_BATCH_SQL, [['app.a1', 'app.a2', 'app.a3', 'app.b1', 'app.deleted'], '2025-12-27', '2026-01-03'])
       expect(mocks.prepare).toHaveBeenCalledTimes(2)
-      expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'user:weekly_stats', 'weekly_stats', orgA)
-      expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'user:weekly_stats', 'weekly_stats', orgB)
+      expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'user:weekly_stats', 'weekly_stats', orgA, undefined, { requireCompleteRecipients: true })
+      expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'user:weekly_stats', 'weekly_stats', orgB, undefined, { requireCompleteRecipients: true })
       expect(mocks.send.mock.calls.map(call => call[0].app_id)).toEqual(['app.a1', 'app.a2', 'app.b1'])
       expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({
         app_id: 'app.a1', window_start: '2025-12-27', window_end: '2026-01-03', weekly_install: '20', weekly_fail: '0', weekly_update_checks: '5',
@@ -268,7 +268,7 @@ describe('org-batched weekly/monthly reports', () => {
       expect((await batch('monthly_create_stats', ['app.a1', 'app.a2', 'app.a3'])).status).toBe(200)
       expect(mocks.queryJson).toHaveBeenCalledWith(expect.anything(), MONTHLY_REPORT_BATCH_SQL, [['app.a1', 'app.a2', 'app.a3'], '2026-02-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z'])
       expect(mocks.prepare).toHaveBeenCalledOnce()
-      expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'org:monthly_create_stats', 'monthly_stats', orgA)
+      expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'org:monthly_create_stats', 'monthly_stats', orgA, undefined, { requireCompleteRecipients: true })
       expect(mocks.send.mock.calls.map(call => call[0])).toEqual([
         { app_id: 'app.a1', month_name: 'February', monthly_bundles_created: '2', monthly_publishes: '0' },
         { app_id: 'app.a2', month_name: 'February', monthly_bundles_created: '0', monthly_publishes: '4' },
