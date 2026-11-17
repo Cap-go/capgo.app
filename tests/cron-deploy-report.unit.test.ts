@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from '../supabase/functions/_backend/triggers/cron_email.ts'
-import { WEEKLY_REPORT_SQL } from '../supabase/functions/_backend/utils/cron_email_stats.ts'
+import { MONTHLY_REPORT_BATCH_SQL, WEEKLY_REPORT_BATCH_SQL, WEEKLY_REPORT_SQL } from '../supabase/functions/_backend/utils/cron_email_stats.ts'
 import { DEPLOY_REPORT_CONSUME_SQL, DEPLOY_REPORT_RELEASE_SQL, DEPLOY_REPORT_SELECT_SQL } from '../supabase/functions/_backend/utils/deploy_report.ts'
 
 const mocks = vi.hoisted(() => ({
@@ -200,5 +200,93 @@ describe('weekly report delivery', () => {
     mocks.queryJson.mockResolvedValue([{ all_updates: 0, failed_updates: 0, update_checks: 1500000 }])
     expect((await run({ type: 'weekly_install_stats' })).status).toBe(200)
     expect(mocks.sendWeekly).not.toHaveBeenCalled()
+  })
+})
+
+describe('org-batched weekly/monthly reports', () => {
+  const orgA = '00000000-0000-4000-8000-00000000000a'
+  const orgB = '00000000-0000-4000-8000-00000000000b'
+  const batch = (type: string, appIds: unknown) => run({ type, appIds, orgId: orgA, appId: undefined })
+
+  it('resolves recipients once per org and emails only apps with installs or failures', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-03T12:30:00Z'))
+    try {
+      mocks.queryJson.mockResolvedValue([
+        { app_id: 'app.a1', owner_org: orgA, all_updates: '20', failed_updates: '0', update_checks: '5' },
+        { app_id: 'app.a2', owner_org: orgA, all_updates: '0', failed_updates: '3', update_checks: '5' },
+        { app_id: 'app.a3', owner_org: orgA, all_updates: '0', failed_updates: '0', update_checks: '900' },
+        { app_id: 'app.b1', owner_org: orgB, all_updates: '1', failed_updates: '0', update_checks: '1' },
+      ])
+      expect((await batch('weekly_install_stats', ['app.a1', 'app.a2', 'app.a3', 'app.b1', 'app.deleted'])).status).toBe(200)
+      expect(mocks.queryJson).toHaveBeenCalledOnce()
+      expect(mocks.queryJson).toHaveBeenCalledWith(expect.anything(), WEEKLY_REPORT_BATCH_SQL, [['app.a1', 'app.a2', 'app.a3', 'app.b1', 'app.deleted'], '2025-12-27', '2026-01-03'])
+      expect(mocks.prepare).toHaveBeenCalledTimes(2)
+      expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'user:weekly_stats', 'weekly_stats', orgA)
+      expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'user:weekly_stats', 'weekly_stats', orgB)
+      expect(mocks.send.mock.calls.map(call => call[0].app_id)).toEqual(['app.a1', 'app.a2', 'app.b1'])
+      expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({
+        app_id: 'app.a1', window_start: '2025-12-27', window_end: '2026-01-03', weekly_install: '20', weekly_fail: '0', weekly_update_checks: '5',
+      }))
+      expect(mocks.sendWeekly).not.toHaveBeenCalled()
+      expect(mocks.close).toHaveBeenCalledOnce()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends nothing when any app has malformed analytics, so a retry cannot duplicate emails', async () => {
+    mocks.queryJson.mockResolvedValue([
+      { app_id: 'app.a1', owner_org: orgA, all_updates: '20', failed_updates: '0', update_checks: '5' },
+      { app_id: 'app.a2', owner_org: orgA, all_updates: null, failed_updates: '1', update_checks: '5' },
+    ])
+    expect((await batch('weekly_install_stats', ['app.a1', 'app.a2'])).status).toBe(500)
+    expect(mocks.prepare).not.toHaveBeenCalled()
+    expect(mocks.send).not.toHaveBeenCalled()
+  })
+
+  it('sends nothing when recipient resolution fails for one org', async () => {
+    mocks.queryJson.mockResolvedValue([
+      { app_id: 'app.a1', owner_org: orgA, all_updates: '20', failed_updates: '0', update_checks: '5' },
+      { app_id: 'app.b1', owner_org: orgB, all_updates: '1', failed_updates: '0', update_checks: '1' },
+    ])
+    mocks.prepare.mockResolvedValueOnce({ send: mocks.send }).mockRejectedValueOnce(new Error('Recipient DB unavailable'))
+    expect((await batch('weekly_install_stats', ['app.a1', 'app.b1'])).status).toBe(500)
+    expect(mocks.send).not.toHaveBeenCalled()
+  })
+
+  it('emails monthly stats for apps with bundles or publishes once per org', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-01T12:00:00Z'))
+    try {
+      mocks.queryJson.mockResolvedValue([
+        { app_id: 'app.a1', owner_org: orgA, bundle_count: 2, publish_count: 0 },
+        { app_id: 'app.a2', owner_org: orgA, bundle_count: 0, publish_count: 4 },
+        { app_id: 'app.a3', owner_org: orgA, bundle_count: 0, publish_count: 0 },
+      ])
+      expect((await batch('monthly_create_stats', ['app.a1', 'app.a2', 'app.a3'])).status).toBe(200)
+      expect(mocks.queryJson).toHaveBeenCalledWith(expect.anything(), MONTHLY_REPORT_BATCH_SQL, [['app.a1', 'app.a2', 'app.a3'], '2026-02-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z'])
+      expect(mocks.prepare).toHaveBeenCalledOnce()
+      expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'org:monthly_create_stats', 'monthly_stats', orgA)
+      expect(mocks.send.mock.calls.map(call => call[0])).toEqual([
+        { app_id: 'app.a1', month_name: 'February', monthly_bundles_created: '2', monthly_publishes: '0' },
+        { app_id: 'app.a2', month_name: 'February', monthly_bundles_created: '0', monthly_publishes: '4' },
+      ])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not resolve recipients when no app has anything to report', async () => {
+    mocks.queryJson.mockResolvedValue([{ app_id: 'app.a3', owner_org: orgA, bundle_count: 0, publish_count: 0 }])
+    expect((await batch('monthly_create_stats', ['app.a3'])).status).toBe(200)
+    expect(mocks.prepare).not.toHaveBeenCalled()
+  })
+
+  it.each([[[]], ['app.a1'], [[1]], [['']]])('rejects malformed appIds %j', async (appIds) => {
+    expect((await batch('weekly_install_stats', appIds)).status).toBe(500)
+    expect(mocks.queryJson).not.toHaveBeenCalled()
   })
 })
