@@ -478,6 +478,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
         builder_todo_list_version: '1',
         paths: ['builder'],
         selected_path: 'builder',
+        // The base only lists steps for a selected platform.
+        selected_builder_platform: started,
         source: 'manual',
         outcome: 'in_progress',
         steps: { builder: Object.fromEntries((['ios', 'android'] as const).map(platform => [platform, Object.fromEntries(BUILDER_STEP_IDS[platform].map(id => [id, { status: platform === started && id === 'start_setup' ? 'done' : 'pending' }]))])) },
