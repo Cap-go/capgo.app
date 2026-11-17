@@ -83,13 +83,20 @@ export async function confirmAndRollbackChannel(options: {
   if (!result.confirmed || !options.stillSameChannel())
     return false
   try {
-    const { error } = await useConsole()
+    const { data: updated, error } = await useConsole()
       .from('channels')
       .update({ version: options.bundle.id })
       .eq('id', options.channelId)
+      .select('id')
     if (error) {
       console.error('Error rolling back version:', error)
       toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
+      return false
+    }
+    // No row back: the channel is gone or no longer visible, nothing changed.
+    if (!updated?.length) {
+      console.error('Rollback updated no channel', options.channelId)
+      toast.error(t('error-rollback'))
       return false
     }
   }

@@ -4954,6 +4954,7 @@
   "channel-impact-rollout-zero-main": "Used in Capgo web console areas: components/channel, composables. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-impact-rollout-zero-detail": "Used in Capgo web console areas: components/channel, composables. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-impact-rollout-none-eligible": "Used in Capgo web console areas: components/channel, composables. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-impact-rollout-none-eligible-partial": "Used in Capgo web console areas: components/channel. Role: UI sentence (only the most common device setups were evaluated). Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-impact-outcome-rollout-eligible": "Used in Capgo web console areas: components/channel, composables. Role: short status label for a device in a list. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-impact-outcome-rollout-eligible-below-native": "Used in Capgo web console areas: components/channel, composables. Role: short status label for a device in a list. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-impact-accept-and-continue": "Used in Capgo web console areas: composables. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

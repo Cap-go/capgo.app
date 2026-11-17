@@ -1247,22 +1247,24 @@ async function onSelectAutoUpdate(value: Database['public']['Enums']['disable_up
       toast.error(t('metadata-min-ver-not-set'))
   }
 
+  // The page can switch channel during the write: the update, the cache
+  // invalidation and the shown value all stay on the channel it started on.
+  const channelId = id.value
   const { error } = await capgo
     .from('channels')
     .update({ disable_auto_update: value })
-    .eq('id', id.value)
+    .eq('id', channelId)
 
   if (error) {
     console.error(error)
   }
   else {
     // Previews computed under the previous strategy no longer apply.
-    invalidateChannelImpact(id.value)
+    invalidateChannelImpact(channelId)
     toast.info(t('cloud-replication-delay'))
+    if (stillOnChannel(channelId) && channel.value?.disable_auto_update)
+      channel.value.disable_auto_update = value
   }
-
-  if (channel.value?.disable_auto_update)
-    channel.value.disable_auto_update = value
 
   closeAutoUpdateDropdown()
 }

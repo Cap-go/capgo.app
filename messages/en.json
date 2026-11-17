@@ -4699,6 +4699,7 @@
   "channel-impact-rollout-zero-main": "Nobody gets {bundle} yet: the rollout is at 0%.",
   "channel-impact-rollout-zero-detail": "{eligible} of {total} active devices can take it once you raise the percentage.",
   "channel-impact-rollout-none-eligible": "None of the {total} active devices can take {bundle} yet.",
+  "channel-impact-rollout-none-eligible-partial": "None of the most common device setups can take {bundle} yet. Rarer setups were not checked.",
   "channel-impact-outcome-rollout-eligible": "Eligible for the rollout",
   "channel-impact-outcome-rollout-eligible-below-native": "Eligible, older than its store build",
   "channel-impact-accept-and-continue": "Accept and continue",

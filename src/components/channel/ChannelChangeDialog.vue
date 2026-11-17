@@ -35,14 +35,17 @@ const counts = computed(() => {
   const result = impact.value
   if (!result)
     return null
-  // More setups than the server evaluates: the evaluated receivers are a lower
-  // bound of the full active population, so say "at least" against the full total.
+  // More setups than the server evaluates: only the most common ones were checked.
   const partial = !!response.value?.truncated
   const total = partial ? Math.max(response.value?.total_devices ?? 0, result.total_devices) : result.total_devices
   // Capped assignment lists, or old updaters whose self-assigned channel cannot
-  // be read: the counts are estimates.
-  const approximate = !partial && (!!response.value?.overrides_truncated || (response.value?.legacy_self_assignment_devices ?? 0) > 0)
-  return { partial, approximate, total, receive: result.receive }
+  // be read: devices may be counted on the wrong channel, so the counts are
+  // estimates in both directions.
+  const approximate = !!response.value?.overrides_truncated || (response.value?.legacy_self_assignment_devices ?? 0) > 0
+  // A partial scan alone undercounts receivers ("at least"); an estimate does
+  // not bound them, so it wins over the lower-bound wording.
+  const lowerBound = partial && !approximate
+  return { partial, approximate, lowerBound, total, receive: result.receive }
 })
 
 /** Set, promote, revert: who switches at their next update check. */
@@ -58,7 +61,7 @@ const headline = computed(() => {
     bundle: targetName.value,
   }
   const kind = result.target.kind === 'builtin' ? 'builtin' : 'gets'
-  return t(`channel-impact-headline-${kind}${c.partial ? '-at-least' : ''}`, values)
+  return t(`channel-impact-headline-${kind}${c.lowerBound ? '-at-least' : ''}`, values)
 })
 
 const rolloutBps = computed(() => options.value?.rolloutPercentageBps ?? 0)
@@ -73,18 +76,19 @@ const rolloutHeadline = computed(() => {
   if (!isRollout.value || !result || !c)
     return null
   let eligible = fmt(c.receive)
-  if (c.partial)
-    eligible = `${eligible}+`
-  else if (c.approximate)
+  if (c.approximate)
     eligible = `~${eligible}`
+  else if (c.lowerBound)
+    eligible = `${eligible}+`
   const values = {
     bundle: targetName.value,
     percent: formatImpactPercent(rolloutBps.value, 10000),
     eligible,
     total: fmt(c.total),
   }
+  // A partial scan only checked the most common setups: rarer ones may take it.
   if (!c.receive)
-    return { main: t('channel-impact-rollout-none-eligible', values), detail: '' }
+    return { main: t(c.partial ? 'channel-impact-rollout-none-eligible-partial' : 'channel-impact-rollout-none-eligible', values), detail: '' }
   if (!rolloutBps.value)
     return { main: t('channel-impact-rollout-zero-main', values), detail: t('channel-impact-rollout-zero-detail', values) }
   const first = result.rollout_receive ?? 0
