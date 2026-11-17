@@ -54,7 +54,8 @@ const savedOutputs = ref<Record<string, { url: string, kind: string, expires_at:
 // Until the lookup answers, a succeeded build without output is unknown, not "not saved".
 const savedOutputsReady = ref(false)
 let savedOutputsKey = ''
-// Failed saved-output lookups in a row: a few retries continue even once no build runs.
+// After a failed saved-output lookup, the refresh keeps going for a few ticks even once no build runs.
+// 0 = nothing to recover; each recovery tick counts, whether the lookup or the builds query fails.
 const OUTPUT_RETRIES = 3
 const outputsFailures = ref(0)
 // The build whose details replace the table (live progress, result, download, error).
@@ -404,7 +405,7 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean, silen
       savedOutputs.value = {}
       savedOutputsReady.value = false
       savedOutputsKey = ''
-      outputsFailures.value++
+      outputsFailures.value = Math.max(outputsFailures.value, 1)
     }
   }
 }
@@ -596,6 +597,9 @@ watch(() => hasActiveBuild.value || (outputsFailures.value > 0 && outputsFailure
     // An open build view polls its own row: the hidden table only keeps up until that build ends.
     if (polling || document.visibilityState !== 'visible' || isLoading.value || (openedRow.value && !isBuildActive(openedRow.value.status)))
       return
+    // Without a running build this tick only recovers saved outputs: it uses one retry.
+    if (!hasActiveBuild.value)
+      outputsFailures.value++
     // One poll at a time: a slower answer must not be superseded by the next tick forever.
     polling = true
     void getData(true).finally(() => {

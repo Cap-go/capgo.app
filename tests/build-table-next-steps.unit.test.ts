@@ -4,7 +4,7 @@ import { createApp, defineComponent, h } from 'vue'
 import BuildTable from '../src/components/tables/BuildTable.vue'
 import { simulatorConfigured } from '../src/services/simulatorSessions'
 
-const mocks = vi.hoisted(() => ({ builds: [] as any[], buildQueries: 0, gate: undefined as Promise<void> | undefined, sendEvent: vi.fn(), push: vi.fn() }))
+const mocks = vi.hoisted(() => ({ builds: [] as any[], buildQueries: 0, failBuilds: false, gate: undefined as Promise<void> | undefined, sendEvent: vi.fn(), push: vi.fn() }))
 vi.mock('../src/services/capgoApi', () => ({ invokeCapgoApi: vi.fn(async () => ({ data: { canEnable: true }, error: null })) }))
 vi.mock('../src/services/tracking', () => ({ sendEvent: mocks.sendEvent }))
 vi.mock('../src/services/date', () => ({ formatDate: () => '' }))
@@ -33,7 +33,7 @@ vi.mock('../src/services/console', () => ({
           if (listing)
             mocks.buildQueries++
           const data = table === 'build_requests' ? mocks.builds : []
-          return (listing && mocks.gate ? mocks.gate : Promise.resolve()).then(() => ({ data, count: mocks.builds.length, error: null })).then(resolve)
+          return (listing && mocks.gate ? mocks.gate : Promise.resolve()).then(() => listing && mocks.failBuilds ? { data: null, count: null, error: { message: 'down' } } : { data, count: mocks.builds.length, error: null }).then(resolve)
         },
         select: (_columns: string, options?: { head?: boolean }) => {
           head = options?.head === true
@@ -78,6 +78,7 @@ beforeEach(() => {
   localStorage.clear()
   mocks.buildQueries = 0
   mocks.gate = undefined
+  mocks.failBuilds = false
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: { job_1: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } } }), { status: 200 })))
 })
 afterEach(() => {
@@ -291,5 +292,26 @@ describe('builds table after a successful build', () => {
     expect(action.textContent).toContain('build-next-steps-view')
     action.click()
     expect(mocks.sendEvent).toHaveBeenCalledWith(expect.objectContaining({ event: 'Build Next Step Clicked', nonPersonTags: expect.objectContaining({ action: 'details' }) }))
+  })
+
+  it('stops recovering saved outputs after a few ticks even when the builds query fails', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    mocks.builds = [running]
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    mocks.builds = [{ ...running, status: 'succeeded' }]
+    vi.advanceTimersByTime(10_000)
+    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    mocks.failBuilds = true
+    for (let tick = 0; tick < 6; tick++) {
+      vi.advanceTimersByTime(10_000)
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    const settled = mocks.buildQueries
+    vi.advanceTimersByTime(60_000)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(mocks.buildQueries).toBe(settled)
   })
 })
