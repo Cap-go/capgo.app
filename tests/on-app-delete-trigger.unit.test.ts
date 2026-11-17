@@ -337,4 +337,55 @@ describe('on_app_delete trigger', () => {
       vi.useRealTimers()
     }
   })
+
+  it.each([
+    ['never finalized', null, true],
+    ['finalized after the transfer', '2026-01-02T00:00:00.000Z', false],
+  ] as const)('finalizes the former owner long after the transfer when %s', async (_label, finalizedAt, expectFormer) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-31T00:00:00.000Z'))
+    try {
+      pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('FROM public.daily_storage_hourly_refreshes'))
+          return { rows: finalizedAt ? [{ written_at: finalizedAt }] : [], rowCount: finalizedAt ? 1 : 0 } as any
+        if (sql.includes('FROM public.version_meta')) {
+          const until = Date.parse(String(params?.[1]))
+          const rows = [{ timestamp: '2026-01-01T00:00:00.000Z', version_id: 1, size: 100 }]
+            .filter(row => Date.parse(row.timestamp) < until)
+          return { rows, rowCount: rows.length } as any
+        }
+        if (sql.includes('billing_cycle_for_anchor'))
+          return { rows: [{ cycle_start: '2026-01-01T00:00:00.000Z', cycle_end: '2026-02-01T00:00:00.000Z' }], rowCount: 1 } as any
+        return { rows: [], rowCount: 0 }
+      })
+
+      const response = await app.request('http://local/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'DELETE',
+          table: 'apps',
+          occurred_at: '2026-01-30T00:00:00.000Z',
+          record: {
+            app_id: 'com.test.delete',
+            owner_org: 'org-new',
+            created_at: '2026-01-01T00:00:00.000Z',
+            transfer_history: [{ transferred_at: '2026-01-01T12:00:00.000Z', transferred_from: 'org-old', transferred_to: 'org-new' }],
+          },
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const former = pgQuery.mock.calls
+        .filter(([sql, params]) => sql.includes('replace_app_storage_hourly') && params?.[1] === 'org-old')
+        .map(([, params]) => JSON.parse(params?.[7] as string))
+      // 29 days after the transfer: still finalized once (12 hours), never again afterwards.
+      expect(former).toEqual(expectFormer ? [[{ cycle_start: '2026-01-01', date: '2026-01-01', storage_byte_hours: 1200 }]] : [])
+    }
+    finally {
+      pgQuery.mockReset()
+      pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+      vi.useRealTimers()
+    }
+  })
 })

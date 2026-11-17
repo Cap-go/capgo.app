@@ -466,6 +466,20 @@ async function finalizePreviousCycle(
   })
 }
 
+/** Start time of the latest refresh applied to an app/org/cycle/segment, if any. */
+async function readStorageRefreshedAt(pg: PgClient, appId: string, ownerOrg: string, cycleStartDay: string, segmentStart: string) {
+  const { rows } = await pg.query<{ written_at: string | Date | null }>(
+    `SELECT written_at
+     FROM public.daily_storage_hourly_refreshes
+     WHERE app_id = $1
+       AND owner_org = $2::uuid
+       AND cycle_start = $3::date
+       AND segment_start = $4::timestamptz`,
+    [appId, ownerOrg, cycleStartDay, segmentStart],
+  )
+  return toIsoTimestamp(rows[0]?.written_at)
+}
+
 /**
  * After a transfer, the former owner's refreshes stop: records its hours from its last refresh up
  * to the transfer, in the former owner's billing cycle that contains it. Runs from the new owner's
@@ -481,13 +495,23 @@ async function finalizeFormerOwner(
   if (!transferredAt || !transferredFrom || transferredFrom === options.ownerOrg)
     return
   const transferredAtMs = parseTimestampMs(transferredAt)
-  if (transferredAtMs > options.calculationEndMs || options.calculationEndMs - transferredAtMs >= STORAGE_FINALIZE_WINDOW_MS)
+  if (transferredAtMs > options.calculationEndMs)
     return
   const formerCycle = (await runSupabaseResultWithRetry<CycleBoundsRow | null>(c, 'read_former_owner_cycle', async () => ({
     data: await readCycleBefore(pg, transferredFrom, transferredAt),
     error: null,
   }))).data
   if (!formerCycle?.cycle_start || !formerCycle.cycle_end)
+    return
+  // No time window: an idle app's first refresh after the transfer can come much later. Finalize
+  // once, until a refresh of the former owner's segment started after the transfer.
+  const formerCycleStartMs = parseTimestampMs(formerCycle.cycle_start)
+  const formerSegmentStart = new Date(formerOwnedSince ? Math.max(formerCycleStartMs, parseTimestampMs(formerOwnedSince)) : formerCycleStartMs).toISOString()
+  const finalizedAt = (await runSupabaseResultWithRetry<string | null>(c, 'read_former_owner_refresh', async () => ({
+    data: await readStorageRefreshedAt(pg, options.appId, transferredFrom, formatUtcDay(floorToDay(formerCycleStartMs)), formerSegmentStart),
+    error: null,
+  }))).data
+  if (finalizedAt && parseTimestampMs(finalizedAt) >= transferredAtMs)
     return
   await replaceCycleStorageHourly(c, pg, events, {
     appId: options.appId,
