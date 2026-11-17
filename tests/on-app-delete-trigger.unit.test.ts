@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const appExists = { value: false }
+const claimOverride: { value: string | null } = { value: null }
 async function defaultPgQuery(sql: string, _params?: unknown[]) {
   // The SQL functions decide on the primary whether the app id exists again in the org.
   if (sql.includes('begin_app_storage_cleanup_pass'))
-    return { rows: [{ claimed: !appExists.value }], rowCount: 1 }
+    return { rows: [{ claim: claimOverride.value ?? (appExists.value ? 'recreated' : 'claimed') }], rowCount: 1 }
   if (sql.includes('finish_app_storage_cleanup_pass')) {
     const done = (_params as unknown[])[3] as boolean
     return { rows: [{ msg_id: done || appExists.value ? null : '42' }], rowCount: 1 }
@@ -107,6 +108,7 @@ describe('on_app_delete trigger', () => {
     vi.clearAllMocks()
     pgQuery.mockImplementation(defaultPgQuery)
     appExists.value = false
+    claimOverride.value = null
     vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
     deleteObjectsWithPrefix.mockResolvedValue({ deleted: 3, failed: 0, done: true })
     removeImageFolder.mockResolvedValue(0)
@@ -200,6 +202,38 @@ describe('on_app_delete trigger', () => {
     expect(finishCalls()).toHaveLength(0)
   })
 
+  it('keeps the recreated app rows when pass 0 finds the app id taken again', async () => {
+    appExists.value = true
+
+    await sendTrigger()
+
+    const statements = sqlStatements()
+    // The deletion is still recorded for billing, but app_id-matched rows now belong to the new app.
+    expect(statements.some(sql => sql.includes('INSERT INTO public.deleted_apps'))).toBe(true)
+    expect(statements.some(sql => sql.startsWith('DELETE FROM public.'))).toBe(false)
+    expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
+  })
+
+  it.each(['superseded', 'running'])('ignores a pass-0 message the database reports as %s', async (claim) => {
+    claimOverride.value = claim
+
+    await sendTrigger()
+
+    const statements = sqlStatements()
+    expect(statements.some(sql => sql.includes('INSERT INTO public.deleted_apps'))).toBe(false)
+    expect(statements.some(sql => sql.startsWith('DELETE FROM public.'))).toBe(false)
+    expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
+    expect(finishCalls()).toHaveLength(0)
+  })
+
+  it('keeps cleaning when the image folder could not be removed', async () => {
+    removeImageFolder.mockRejectedValue(new Error('r2 unavailable'))
+
+    await sendTrigger()
+
+    expect(requeueCalls()).toHaveLength(1)
+  })
+
   it('fails the message when the pass cannot be claimed, so the queue retries it', async () => {
     pgQuery.mockImplementationOnce(async () => {
       throw new Error('db unavailable')
@@ -216,7 +250,7 @@ describe('on_app_delete trigger', () => {
     deleteObjectsWithPrefix.mockResolvedValue({ deleted: 500, failed: 0, done: false })
     pgQuery.mockImplementation(async (sql: string) => {
       if (sql.includes('begin_app_storage_cleanup_pass'))
-        return { rows: [{ claimed: true }], rowCount: 1 }
+        return { rows: [{ claim: 'claimed' }], rowCount: 1 }
       if (sql.includes('finish_app_storage_cleanup_pass'))
         throw new Error('db unavailable')
       return { rows: [], rowCount: 0 }

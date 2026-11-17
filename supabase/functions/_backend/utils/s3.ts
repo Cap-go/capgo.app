@@ -254,6 +254,8 @@ function escapeXml(value: string) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll('\'', '&apos;')
+    // XML parsers turn a literal CR into LF; the entity keeps the key intact.
+    .replaceAll('\r', '&#13;')
 }
 
 function unescapeXml(value: string) {
@@ -262,6 +264,8 @@ function unescapeXml(value: string) {
     .replaceAll('&gt;', '>')
     .replaceAll('&quot;', '"')
     .replaceAll('&apos;', '\'')
+    .replaceAll('&#13;', '\r')
+    .replaceAll('&#xD;', '\r')
     .replaceAll('&amp;', '&')
 }
 

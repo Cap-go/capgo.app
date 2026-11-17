@@ -1,17 +1,24 @@
 BEGIN;
 
-SELECT plan(14);
+SELECT plan(20);
 
 -- Org from seed.sql; the app id is free until it is created below.
-SELECT ok(
+SELECT is(
   public.begin_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 0, 120),
-  'a pass is claimed while the app id is free'
+  'claimed',
+  'pass 0 is claimed while the app id is free'
 );
 
 SELECT is(
   (SELECT pass FROM public.app_storage_cleanups WHERE app_id = 'com.test.storage.cleanup'),
   0,
   'the claimed pass is recorded before the message is acknowledged'
+);
+
+SELECT is(
+  public.begin_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 0, 120),
+  'running',
+  'a duplicate delivery of a running pass is not claimed'
 );
 
 CREATE TEMP TABLE cleanup_msgs AS
@@ -39,7 +46,19 @@ SELECT ok(
   'the next pass is delayed'
 );
 
--- A pass that never finished: the sweeper queues the next one.
+SELECT is(
+  public.begin_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 0, 120),
+  'superseded',
+  'pass 0 delivered again after it finished is not claimed'
+);
+
+SELECT is(
+  public.begin_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 1, 120),
+  'claimed',
+  'the queued pass is claimed'
+);
+
+-- Pass 1 never finished: the sweeper queues pass 2 and pass 1 loses ownership.
 UPDATE public.app_storage_cleanups SET due_at = pg_catalog.now() - interval '1 minute'
 WHERE app_id = 'com.test.storage.cleanup';
 
@@ -49,6 +68,24 @@ SELECT is(
   (SELECT pass FROM public.app_storage_cleanups WHERE app_id = 'com.test.storage.cleanup'),
   2,
   'the sweeper counts the requeue as a pass'
+);
+
+SELECT is(
+  public.begin_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 1, 120),
+  'superseded',
+  'a replaced message cannot start a second chain'
+);
+
+SELECT is(
+  public.finish_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 1, false, 5, 120),
+  NULL,
+  'a pass that lost ownership queues nothing'
+);
+
+SELECT is(
+  (SELECT pass FROM public.app_storage_cleanups WHERE app_id = 'com.test.storage.cleanup'),
+  2,
+  'a pass that lost ownership leaves the state alone'
 );
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
@@ -81,13 +118,14 @@ SELECT is(
   'the first pass of a deletion and other orgs'' passes are kept'
 );
 
-SELECT ok(
-  NOT public.begin_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 3, 120),
-  'a pass is not claimed once the app id exists again in that org'
+SELECT is(
+  public.begin_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 2, 120),
+  'recreated',
+  'no pass is claimed once the app id exists again in that org'
 );
 
 SELECT is(
-  public.finish_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 3, false, 5, 120),
+  public.finish_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 2, false, 5, 120),
   NULL,
   'an in-flight pass does not queue another one once the app id exists again'
 );

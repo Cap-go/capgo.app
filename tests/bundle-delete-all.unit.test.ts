@@ -163,6 +163,19 @@ describe('DELETE /bundle without a version', () => {
       .toMatchObject({ cause: expect.objectContaining({ error: 'cannot_delete_all_version' }) })
   })
 
+  it('keeps earlier committed batches and reports them when a later batch fails', async () => {
+    seed(BUNDLE_DELETE_BATCH_SIZE + 50)
+    let updates = 0
+    db.failUpdate = () => (++updates === 2 ? new Error('boom') : null)
+
+    const error = await deleteBundle(createContext(), { app_id: APP_ID }, { key: 'key-1' } as any).catch(e => e)
+
+    expect(error).toMatchObject({ cause: expect.objectContaining({ error: 'cannot_delete_all_version', moreInfo: expect.objectContaining({ deleted: BUNDLE_DELETE_BATCH_SIZE }) }) })
+    const deleted = [...db.versions.entries()].filter(([, isDeleted]) => isDeleted).map(([id]) => id)
+    expect(deleted).toEqual(Array.from({ length: BUNDLE_DELETE_BATCH_SIZE }, (_, i) => i + 1))
+    expect(db.transactions.map(tx => tx.statements.at(-1))).toEqual(['COMMIT', 'ROLLBACK'])
+  })
+
   it('returns ok for an app without active bundles', async () => {
     seed(0)
 

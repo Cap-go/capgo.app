@@ -52,20 +52,27 @@ async function deleteAppRows(c: Context<MiddlewareKeyVariables>, pg: PgClient, r
   await deleteByAppId('app_versions')
 }
 
+/** Outcome of claiming a storage pass; see public.begin_app_storage_cleanup_pass. */
+export type StorageClaim = 'claimed' | 'recreated' | 'superseded' | 'running' | 'no_storage'
+
 /**
  * Claims storage pass `pass` in public.app_storage_cleanups before the queue message is
  * acknowledged, so a pass that dies is requeued by the sweeper. The database decides, under the
- * lock the apps INSERT trigger takes, whether the app id exists again in this org: false means
- * its prefix is live again and nothing may be deleted.
+ * lock the apps INSERT trigger takes, whether the app id exists again in this org ('recreated':
+ * its prefix and rows are live again) and whether this message still owns the cleanup
+ * ('superseded' / 'running' for a replaced or duplicate delivery).
  */
-async function beginStoragePass(c: Context<MiddlewareKeyVariables>, record: AppRow, pass: number): Promise<boolean> {
+async function beginStoragePass(c: Context<MiddlewareKeyVariables>, record: AppRow, pass: number): Promise<StorageClaim> {
   const pg = await getPgClient(c)
   try {
-    const result = await pg.query<{ claimed: boolean }>(
-      'SELECT public.begin_app_storage_cleanup_pass($1::text, $2::uuid, $3::integer, $4::integer) AS claimed',
+    const result = await pg.query<{ claim: StorageClaim }>(
+      'SELECT public.begin_app_storage_cleanup_pass($1::text, $2::uuid, $3::integer, $4::integer) AS claim',
       [record.app_id, record.owner_org, pass, STORAGE_CLEANUP_LEASE_SECONDS],
     )
-    return result.rows[0]?.claimed === true
+    const claim = result.rows[0]?.claim
+    if (claim !== 'claimed' && claim !== 'recreated' && claim !== 'superseded' && claim !== 'running')
+      throw new Error(`Unexpected storage cleanup claim: ${String(claim)}`)
+    return claim
   }
   finally {
     closeClient(c, pg)
@@ -93,38 +100,44 @@ export async function cleanupDeletedAppResources(
   c: Context<MiddlewareKeyVariables>,
   record: AppRow,
   pass = 0,
-  storageClaimed = true,
+  claim: StorageClaim = 'claimed',
 ) {
   const startTime = Date.now()
   const deadline = startTime + STORAGE_CLEANUP_BUDGET_MS
 
   const pg = await getPgClient(c)
   try {
-    if (pass === 0)
+    // Rows are matched by app_id only: never delete them for an app id that exists again, or
+    // again for a pass-0 message that was already handled.
+    if (pass === 0 && (claim === 'claimed' || claim === 'no_storage'))
       await deleteAppRows(c, pg, record)
 
-    if (!record.owner_org)
-      return
-    if (!storageClaimed) {
-      cloudlog({ requestId: c.get('requestId'), message: 'app recreated, skip storage cleanup', pass, app_id: record.app_id })
+    if (claim !== 'claimed') {
+      if (claim !== 'no_storage')
+        cloudlog({ requestId: c.get('requestId'), message: 'skip app storage cleanup pass', claim, pass, app_id: record.app_id })
       return
     }
 
     // Delete app icon from image storage
     // App icons are stored at: images/org/{org_id}/{app_id}/icon
+    // removeImageFolder cannot report leftovers, so a failure or a deadline hit keeps the
+    // cleanup going: the next pass lists the folder again.
+    let imagesDone = true
     try {
       const deleted = await removeImageFolder(c, `org/${record.owner_org}/${record.app_id}`, { deadline })
+      imagesDone = Date.now() < deadline
       if (deleted > 0)
         cloudlog({ requestId: c.get('requestId'), message: 'deleted app images', count: deleted, app_id: record.app_id })
     }
     catch (error) {
+      imagesDone = false
       cloudlog({ requestId: c.get('requestId'), message: 'error deleting app images', error, app_id: record.app_id })
     }
 
-    let done = true
+    let done = imagesDone
     try {
       const result = await s3.deleteObjectsWithPrefix(c, `orgs/${record.owner_org}/apps/${record.app_id}/`, { deadline })
-      done = result.done
+      done = imagesDone && result.done
       cloudlog({ requestId: c.get('requestId'), message: 'deleted app storage objects', count: result.deleted, failed: result.failed, done, pass, app_id: record.app_id })
     }
     catch (error) {
@@ -171,11 +184,12 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
 
   // Persist the pass before this message is acknowledged: a database error here fails the
   // request, so the queue retries it; once claimed, a pass that dies is requeued by the sweeper.
-  const storageClaimed = record.owner_org ? await beginStoragePass(c, record, pass) : false
+  const claim: StorageClaim = record.owner_org ? await beginStoragePass(c, record, pass) : 'no_storage'
 
   // Track deleted app for billing before returning (queue consumer 15s HTTP budget).
-  // Follow-up storage passes were already recorded by the first one.
-  if (pass === 0) {
+  // Follow-up storage passes, and a pass-0 message delivered again after it was handled,
+  // were already recorded.
+  if (pass === 0 && claim !== 'superseded' && claim !== 'running') {
     let pg: PgClient | undefined
     try {
       pg = await getPgClient(c)
@@ -194,7 +208,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
     }
   }
 
-  await backgroundTask(c, cleanupDeletedAppResources(c, record, pass, storageClaimed))
+  await backgroundTask(c, cleanupDeletedAppResources(c, record, pass, claim))
 
   return c.json(BRES)
 })

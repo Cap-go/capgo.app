@@ -185,4 +185,11 @@ describe('DeleteObjects XML', () => {
     expect(parseDeleteObjectsErrors('<DeleteResult><Error><Key>a&amp;b</Key><Code>InternalError</Code></Error></DeleteResult>')).toEqual(['a&b'])
     expect(parseDeleteObjectsErrors('<DeleteResult><Deleted><Key>x</Key></Deleted></DeleteResult>')).toEqual([])
   })
+
+  it('keeps carriage returns in keys instead of letting XML turn them into line feeds', () => {
+    const body = buildDeleteObjectsBody(['prefix/a\rb', 'prefix/a\nb'])
+    expect(body).toContain('<Key>prefix/a&#13;b</Key>')
+    expect(body).not.toContain('\r')
+    expect(parseDeleteObjectsErrors('<DeleteResult><Error><Key>prefix/a&#13;b</Key><Code>InternalError</Code></Error></DeleteResult>')).toEqual(['prefix/a\rb'])
+  })
 })
