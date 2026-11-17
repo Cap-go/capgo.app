@@ -143,8 +143,8 @@ describe('app transfer security', () => {
     const refresh = new Client({ connectionString: POSTGRES_URL })
     await refresh.connect()
     const today = new Date().toISOString().slice(0, 10)
-    let refreshWrittenAt = 0
-    let refreshCommittingAt = 0
+    let refreshWrittenAtText = ''
+    let refreshCommittingAtText = ''
     try {
       await refresh.query('BEGIN')
       const [{ written_at }] = (await refresh.query<{ written_at: string }>(
@@ -162,7 +162,7 @@ describe('app transfer security', () => {
            )`,
         [appId, ORG_ID, today],
       )).rows
-      refreshWrittenAt = Date.parse(written_at)
+      refreshWrittenAtText = written_at
 
       // .then() sends the request now: the RPC builder is lazy.
       const transferPromise = authClient.rpc('transfer_app', {
@@ -198,7 +198,7 @@ describe('app transfer security', () => {
       // The last instant of the refresh, just before it commits: the transfer started earlier
       // (it is waiting), so its transaction-start now() would be before this.
       const [{ committing_at }] = (await refresh.query<{ committing_at: string }>('SELECT pg_catalog.clock_timestamp()::text AS committing_at')).rows
-      refreshCommittingAt = Date.parse(committing_at)
+      refreshCommittingAtText = committing_at
       await refresh.query('COMMIT')
       const transferResult = await transferPromise
       expect(transferResult.error).toBeNull()
@@ -242,9 +242,16 @@ describe('app transfer security', () => {
     // Recorded after the lock, so later than every hour and the watermark the former owner's
     // refresh wrote (now() would be the transaction start, before the refresh committed).
     const transferredAt = Date.parse(String((appRow.transfer_history![0] as { transferred_at: string }).transferred_at))
-    expect(transferredAt).toBeGreaterThan(refreshWrittenAt)
-    expect(transferredAt).toBeGreaterThan(Date.parse(watermark.written_at))
-    expect(transferredAt).toBeGreaterThan(refreshCommittingAt)
+    // Compared in the database: these instants can share a millisecond, JS Dates drop microseconds.
+    const [order] = await executeSQL<{ after_write: boolean, after_watermark: boolean, after_commit: boolean }>(
+      `SELECT ((apps.transfer_history[1] ->> 'transferred_at')::timestamptz > $2::timestamptz) AS after_write,
+         ((apps.transfer_history[1] ->> 'transferred_at')::timestamptz > $3::timestamptz) AS after_watermark,
+         ((apps.transfer_history[1] ->> 'transferred_at')::timestamptz > $4::timestamptz) AS after_commit
+       FROM public.apps
+       WHERE apps.app_id = $1`,
+      [appId, refreshWrittenAtText, watermark.written_at, refreshCommittingAtText],
+    )
+    expect(order).toEqual({ after_write: true, after_watermark: true, after_commit: true })
 
     // The new owner's refresh then finalizes the former owner exactly up to the transfer, and the
     // new owner accrues nothing before it.
