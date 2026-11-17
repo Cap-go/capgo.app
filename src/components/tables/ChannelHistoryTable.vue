@@ -220,13 +220,18 @@ async function openDetails(item: HistoryEntry) {
   selectedEntry.value = null
 }
 
-// Members and the channel's current bundle only depend on the organization and
-// channel: load them once per scope instead of on every page or search change.
+// Members only depend on the organization and channel: load them once per
+// scope instead of on every page or search change. The current bundle is also
+// kept per scope, but an explicit reload refetches it (it can change from the
+// CLI or another browser while the page is open).
 let historyContextKey = ''
-async function loadHistoryContext() {
+async function loadHistoryContext(options: { refreshCurrentVersion?: boolean } = {}) {
   const key = JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null])
-  if (key === historyContextKey)
+  if (key === historyContextKey) {
+    if (options.refreshCurrentVersion)
+      await fetchCurrentVersion()
     return
+  }
   const [, loadedMembers] = await Promise.all([
     fetchCurrentVersion(),
     organizationStore.getMembers(),
@@ -237,11 +242,11 @@ async function loadHistoryContext() {
     historyContextKey = key
 }
 
-async function fetchHistory() {
+async function fetchHistory(options: { refreshCurrentVersion?: boolean } = {}) {
   loading.value = true
   try {
     historyEntries.value = []
-    await loadHistoryContext()
+    await loadHistoryContext(options)
 
     // Without a search, page audit rows in the database: each meaningful row maps to
     // one or two entries. Searching matches derived text (bundle names, labels,
@@ -480,7 +485,7 @@ watch([search, page], () => {
     @update:search="search = $event"
     @update:current-page="page = $event"
     @update:columns="columns = $event"
-    @reload="fetchHistory"
+    @reload="fetchHistory({ refreshCurrentVersion: true })"
   />
 
   <!-- Details Modal Content -->

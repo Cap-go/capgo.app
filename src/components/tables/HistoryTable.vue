@@ -213,13 +213,18 @@ async function openOneVersion(item: DeployHistory) {
   router.push(`/app/${props.appId}/bundle/${item.version_id}`)
 }
 
-// Members and the channel's current bundle only depend on the organization and
-// channel: load them once per scope instead of on every page or search change.
+// Members only depend on the organization and channel: load them once per
+// scope instead of on every page or search change. The current bundle is also
+// kept per scope, but an explicit reload refetches it (it can change from the
+// CLI or another browser while the page is open).
 let historyContextKey = ''
-async function loadHistoryContext() {
+async function loadHistoryContext(options: { refreshCurrentVersion?: boolean } = {}) {
   const key = JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null, props.bundleId ?? null])
-  if (key === historyContextKey)
+  if (key === historyContextKey) {
+    if (options.refreshCurrentVersion)
+      await fetchCurrentVersion()
     return
+  }
   const [, loadedMembers] = await Promise.all([
     fetchCurrentVersion(),
     organizationStore.getMembers(),
@@ -230,11 +235,11 @@ async function loadHistoryContext() {
     historyContextKey = key
 }
 
-async function fetchDeployHistory() {
+async function fetchDeployHistory(options: { refreshCurrentVersion?: boolean } = {}) {
   loading.value = true
   try {
     deployHistory.value.length = 0
-    await loadHistoryContext()
+    await loadHistoryContext(options)
 
     if (isBundleMode.value) {
       // Bundle mode: fetch both assignments and removals
@@ -544,6 +549,6 @@ watch([() => props.channelId, () => props.bundleId, () => props.appId], () => {
     @update:search="search = $event"
     @update:current-page="page = $event"
     @update:columns="columns = $event"
-    @reload="fetchDeployHistory"
+    @reload="fetchDeployHistory({ refreshCurrentVersion: true })"
   />
 </template>
