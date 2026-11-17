@@ -6,6 +6,7 @@ import { app as changelog } from '../_backend/private/changelog.ts'
 import { app as bundle_install_stats } from '../_backend/private/bundle_install_stats.ts'
 import { app as cli } from '../_backend/private/cli/index.ts'
 import { app as channel_device } from '../_backend/private/channel_device.ts'
+import { app as channel_impact } from '../_backend/private/channel_impact.ts'
 import { app as channel_stats } from '../_backend/private/channel_stats.ts'
 import { app as config } from '../_backend/private/config.ts'
 import { app as console_data } from '../_backend/private/console_data.ts'
@@ -87,6 +88,7 @@ appGlobal.route('/config/builder', configBuilder)
 appGlobal.route('/devices', devices_priv)
 appGlobal.route('/channel_device', channel_device)
 appGlobal.route('/create_device', create_device)
+appGlobal.route('/channel_impact', channel_impact)
 appGlobal.route('/channel_stats', channel_stats)
 appGlobal.route('/bundle_install_stats', bundle_install_stats)
 appGlobal.route('/release_live', release_live)

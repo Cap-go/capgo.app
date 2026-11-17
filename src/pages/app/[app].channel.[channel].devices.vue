@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { OrganizationRole } from '~/stores/organization'
 import type { Database } from '~/types/database.types'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -209,16 +209,20 @@ async function getDeviceIds() {
   }
 }
 
-async function getChannel() {
+async function getChannel(force = false) {
   if (!id.value)
     return
+  const requestedId = id.value
 
   // Check if we already have this channel in the store
-  if (appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
+  if (!force && appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
     channel.value = withBuiltinChannelVersion(appDetailStore.currentChannel as any) as any
     if (channel.value?.name)
       displayStore.setChannelName(String(channel.value.id), channel.value.name)
     displayStore.NavTitle = channel.value?.name ?? t('channel')
+    // Render the cached row at once, then refresh it: the bundle may have been
+    // changed since (bundle page, CLI, API or a teammate).
+    void getChannel(true)
     return
   }
 
@@ -259,6 +263,9 @@ async function getChannel() {
       console.error('no channel', error)
       return
     }
+    // A newer navigation (another channel) won while this read was in flight.
+    if (id.value !== requestedId)
+      return
 
     channel.value = withBuiltinChannelVersion(data as any) as unknown as Database['public']['Tables']['channels']['Row'] & Channel
 
@@ -279,7 +286,9 @@ async function reload() {
   await getDeviceIds()
 }
 
-watchEffect(async () => {
+// Load on navigation only: a watchEffect would also track the cached store
+// channel read inside getChannel and refetch every time the refresh stores it.
+watch(() => route.path, async () => {
   if (route.path.includes('/channel/') && route.path.includes('/devices')) {
     loading.value = true
     packageId.value = route.params.app as string
@@ -295,7 +304,7 @@ watchEffect(async () => {
     await organizationStore.awaitInitialLoad()
     role.value = await organizationStore.getCurrentRoleForApp(packageId.value)
   }
-})
+}, { immediate: true })
 </script>
 
 <template>

@@ -37,7 +37,14 @@ test.describe('channel bundle actions (change, pause, revert)', () => {
     await revertButton.click()
     await expect(page.locator('h3').filter({ hasText: 'Revert this channel?' })).toBeVisible({ timeout: 15000 })
     await expect(page.getByRole('button', { name: 'Select another bundle', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Revert to store version', exact: true })).toBeVisible()
+    // Revert asks first: roll back to the previous bundle, or send everyone to the store version.
+    const confirmRevert = page.locator('[data-test="channel-change-confirm"]')
+    await expect(confirmRevert).toBeDisabled()
+    await page.locator('[data-test="channel-revert-choice-builtin"]').click()
+    await expect(confirmRevert).toHaveText('Revert to store version')
+    await expect(confirmRevert).toBeEnabled()
+    // The device impact of the picked choice is shown before confirming.
+    await expect(page.locator('[data-test="channel-impact-panel"]')).toBeVisible()
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(pauseButton).toHaveText('Pause')
   })
@@ -137,6 +144,7 @@ test.describe('channel pause and revert are saved (isolated app)', () => {
     // Revert sends devices to the store version and stops the rollout.
     await bundleRow.locator('[data-test="channel-revert-builtin"]').click()
     await expect(page.getByText('The progressive rollout to 1.360.0 is stopped as well.', { exact: false })).toBeVisible({ timeout: 15000 })
+    await page.locator('[data-test="channel-revert-choice-builtin"]').click()
     await confirmAndSkipNotification(page, 'Revert this channel?', 'Revert to store version')
     await expect(bundleRow).toContainText('Store version (embedded in the app)', { timeout: 15000 })
     await page.reload()
@@ -149,6 +157,8 @@ test.describe('channel pause and revert are saved (isolated app)', () => {
     // Reassigning a bundle serves it again.
     await bundleRow.locator('[data-test="channel-change-bundle"]').click()
     await page.getByRole('button', { name: /^1\.361\.0/ }).click()
+    // Picking a bundle opens the impact confirm before anything is saved.
+    await confirmAndSkipNotification(page, 'Set 1.361.0 on beta?', 'Set bundle to channel')
     await expect.poll(async () => (await readChannel()).version, { timeout: 15000 }).not.toBeNull()
     await closeDialogIfOpen(page, 'Bundle management')
     await expect(bundleRow.getByRole('button', { name: '1.361.0', exact: true })).toBeVisible({ timeout: 15000 })

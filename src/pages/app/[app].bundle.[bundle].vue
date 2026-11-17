@@ -20,14 +20,16 @@ import IconPencil from '~icons/lucide/pencil'
 import ChangelogUpdateBadge from '~/components/changelog/ChangelogUpdateBadge.vue'
 import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
+import { confirmChannelChange } from '~/composables/useChannelChangeConfirm'
 import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
+import { invalidateChannelImpact } from '~/services/channelImpact'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { useConsole } from '~/services/console'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
-import { checkCompatibilityNativePackages, isCompatible } from '~/services/nativePackageCompatibility'
+import { findIncompatibleNativePackages } from '~/services/nativePackageCompatibility'
 import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { openVersion } from '~/services/versions'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -265,6 +267,7 @@ async function ASChannelChooser() {
   channelSearchVal.value = ''
   filteredChannels.value = getPromotableChannels()
 
+  let picked: Database['public']['Tables']['channels']['Row'] | null = null
   dialogStore.openDialog({
     title: t('channel-linking'),
     size: 'lg',
@@ -276,18 +279,22 @@ async function ASChannelChooser() {
       {
         text: t('set-bundle'),
         role: 'primary',
-        handler: async () => {
+        handler: () => {
           if (!selectedChannelForLink.value) {
             toast.error(t('please-select-channel'))
             return false
           }
-          await handleChannelLink(selectedChannelForLink.value)
+          picked = selectedChannelForLink.value
           return true
         },
       },
     ],
   })
-  return dialogStore.onDialogDismiss()
+  const canceled = await dialogStore.onDialogDismiss()
+  // The chooser is closed first; the impact confirm opens as its own dialog.
+  if (picked)
+    await handleChannelLink(picked)
+  return canceled
 }
 
 async function handleChannelLink(chan: Database['public']['Tables']['channels']['Row']) {
@@ -299,49 +306,33 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
   }
 
   try {
-    const {
-      finalCompatibility,
-      localDependencies,
-    } = await checkCompatibilityNativePackages(version.value.app_id, chan.name, (version.value.native_packages as any) ?? [])
-
-    // Check if any package is incompatible
-    if (localDependencies.length > 0 && finalCompatibility.some(x => !isCompatible(x))) {
-      toast.error(t('bundle-not-compatible-with-channel', { channel: chan.name }))
-
-      dialogStore.openDialog({
-        title: t('compatibility-accept-title'),
-        description: t('set-even-not-compatible'),
-        buttons: [
-          {
-            text: t('button-cancel'),
-            role: 'cancel',
-          },
-          {
-            text: t('view-dependencies'),
-            role: 'cancel',
-            handler: () => {
-              // Pre-select the channel's current bundle as the comparison baseline so the
-              // Dependencies page opens already diffed against what is live on the channel.
-              const compareQuery = chan.version ? `?compare=${chan.version}` : ''
-              router.push(`/app/${packageId.value}/bundle/${version.value!.id}/dependencies${compareQuery}`)
-            },
-          },
-          {
-            text: t('compatibility-accept'),
-            role: 'primary',
-          },
-        ],
-      })
-      if (await dialogStore.onDialogDismiss())
-        return
+    const bundle = version.value
+    const packages = await findIncompatibleNativePackages(bundle.app_id, chan.name, (bundle.native_packages as any) ?? [])
+    // Pre-select the channel's current bundle so the Dependencies page opens already diffed.
+    const dependenciesPath = `/app/${packageId.value}/bundle/${bundle.id}/dependencies${chan.version ? `?compare=${chan.version}` : ''}`
+    const compatibility = packages?.length ? { packages, dependenciesPath } : null
+    const [currentBundleName, rolloutTargetName] = await Promise.all([
+      chan.version ? currentBundleNameOf(chan.version) : null,
+      // A new stable bundle resets any configured rollout (channel trigger).
+      chan.rollout_version ? currentBundleNameOf(chan.rollout_version) : null,
+    ])
+    const result = await confirmChannelChange({
+      appId: bundle.app_id,
+      channelId: chan.id,
+      channelName: chan.name,
+      action: 'set',
+      bundle: { id: bundle.id, name: bundle.name },
+      currentBundleName,
+      stopsRolloutTarget: rolloutTargetName,
+      compatibility,
+    })
+    if (!result.confirmed) {
+      if (result.next === 'view-dependencies')
+        await router.push(dependenciesPath)
+      return
     }
-    else if (localDependencies.length === 0 || finalCompatibility.length === 0) {
-      toast.info(t('ignore-compatibility'))
-    }
-    else {
-      toast.info(t('bundle-compatible-with-channel', { channel: chan.name }))
-    }
-    await setChannel(chan, version.value.id)
+    await setChannel(chan, bundle.id)
+    invalidateChannelImpact(chan.id)
     await getChannels()
     toast.success(t('linked-bundle'))
     toast.info(t('cloud-replication-delay'))
@@ -350,6 +341,17 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
     console.error(error)
     toast.error(t(channelUpdatePackageErrorKey(error) ?? 'cannot-test-app-some'))
   }
+}
+
+/** Name of a bundle linked to a channel, or null for the store version. */
+async function currentBundleNameOf(versionId: number) {
+  const { data } = await capgo
+    .from('app_versions')
+    .select('name')
+    .eq('id', versionId)
+    .maybeSingle()
+  const name = data?.name ?? null
+  return name && !['builtin', 'unknown'].includes(name) ? name : null
 }
 
 const liveChannels = computed(() => {

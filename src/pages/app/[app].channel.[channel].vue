@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import type { ChannelChangeCompatibility } from '~/composables/useChannelChangeConfirm'
 import type { BundlePickerRow } from '~/services/bundleColumns'
 import type { Database } from '~/types/database.types'
 import { greaterOrEqual, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
-import { computed, nextTick, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -17,11 +18,13 @@ import IconExternalLink from '~icons/lucide/external-link'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
+import { confirmChannelChange } from '~/composables/useChannelChangeConfirm'
 import { BUNDLE_PICKER_COLUMNS } from '~/services/bundleColumns'
+import { fetchChannelImpact, invalidateChannelImpact } from '~/services/channelImpact'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate, formatLocalDate } from '~/services/date'
-import { checkCompatibilityNativePackages, isCompatible } from '~/services/nativePackageCompatibility'
+import { findIncompatibleNativePackages } from '~/services/nativePackageCompatibility'
 import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
@@ -30,6 +33,7 @@ import { useDisplayStore } from '~/stores/display'
 import { createChannelRolloutConfirmFlows, formatRolloutCacheTtlDisplay, formatRolloutCacheTtlHuman, isRolloutPercentageDraftChanged, parseRolloutCacheTtlSeconds } from '~/utils/channelRolloutConfirmFlows'
 import { getUpdatePackageDescription as getUpdatePackageDescriptionCopy, getUpdatePackageInfoDescription as getUpdatePackageInfoDescriptionCopy, getUpdatePackageLabel as getUpdatePackageLabelCopy } from '~/utils/channelUpdatePackageCopy'
 import { confirmConsequentialChannelChange } from '~/utils/confirmConsequentialChannelChange'
+import { escapeIlike } from '~/utils/ilike'
 
 interface Channel {
   version: Database['public']['Tables']['app_versions']['Row']
@@ -268,6 +272,7 @@ function openBundle() {
 async function getChannel(force = false) {
   if (!id.value)
     return
+  const requestedId = id.value
 
   // Check if we already have this channel in the store
   if (!force && appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
@@ -275,6 +280,9 @@ async function getChannel(force = false) {
     if (channel.value?.name)
       displayStore.setChannelName(String(channel.value.id), channel.value.name)
     displayStore.NavTitle = channel.value?.name ?? t('channel')
+    // Render the cached row at once, then refresh it: the bundle may have been
+    // changed since (bundle page, CLI, API or a teammate).
+    void getChannel(true)
     return
   }
 
@@ -338,6 +346,9 @@ async function getChannel(force = false) {
       console.error('no channel', error)
       return
     }
+    // A newer navigation (another channel) won while this read was in flight.
+    if (id.value !== requestedId)
+      return
 
     channel.value = withBuiltinChannelVersion(data as any) as unknown as Database['public']['Tables']['channels']['Row'] & Channel
 
@@ -406,6 +417,7 @@ async function saveChannelChanges(update: ChannelUpdate) {
       return false
     }
 
+    invalidateChannelImpact(id.value)
     await getChannel(true)
     toast.info(t('cloud-replication-delay'))
     return true
@@ -524,7 +536,9 @@ async function askUpdateNotificationAfterBundleChange(targetChannelName?: string
   await dialogStore.onDialogDismiss()
 }
 
-watchEffect(async () => {
+// Load on navigation only: a watchEffect would also track the cached store
+// channel read inside getChannel and refetch every time the refresh stores it.
+watch(() => route.path, async () => {
   if (route.path.includes('/channel/')) {
     loading.value = true
     packageId.value = route.params.app as string
@@ -535,7 +549,7 @@ watchEffect(async () => {
       displayStore.NavTitle = t('channel')
     displayStore.defaultBack = `/app/${route.params.app}/channels`
   }
-})
+}, { immediate: true })
 
 function goToDefaultChannelSettings() {
   router.push(`/app/${route.params.app}/settings`)
@@ -568,92 +582,69 @@ async function loadBundleNativePackagesForLink(bundle: BundlePickerRow) {
 }
 
 /**
- * Check a bundle's native packages against a channel and ask the user to accept a mismatch.
- * Returns false when the user cancels.
+ * Native packages of a bundle that the channel's current bundle does not ship.
+ * The impact confirm explains them against the update strategy.
  */
-async function confirmBundleCompatibleWithChannel(
+async function bundleCompatibility(
   appVersion: Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'app_id' | 'native_packages'>,
   channelName: string,
-  compareVersionId?: number,
-) {
-  const {
-    finalCompatibility,
-    localDependencies,
-  } = await checkCompatibilityNativePackages(appVersion.app_id, channelName, (appVersion.native_packages as any) ?? [])
+  compareVersionId?: number | null,
+): Promise<ChannelChangeCompatibility | null> {
+  const packages = await findIncompatibleNativePackages(appVersion.app_id, channelName, (appVersion.native_packages as any) ?? [])
+  if (!packages?.length)
+    return null
+  // Pre-select the channel's current bundle so the Dependencies page opens already diffed.
+  const compareQuery = compareVersionId ? `?compare=${compareVersionId}` : ''
+  return { packages, dependenciesPath: `/app/${route.params.app}/bundle/${appVersion.id}/dependencies${compareQuery}` }
+}
 
-  // Check if any package is incompatible
-  if (localDependencies.length > 0 && finalCompatibility.some(x => !isCompatible(x))) {
-    toast.error(t('bundle-not-compatible-with-channel', { channel: channelName }))
-
-    dialogStore.openDialog({
-      title: t('compatibility-accept-title'),
-      description: t('set-even-not-compatible'),
-      buttons: [
-        {
-          text: t('button-cancel'),
-          role: 'cancel',
-        },
-        {
-          text: t('view-dependencies'),
-          role: 'cancel',
-          handler: () => {
-            // Pre-select the channel's current bundle as the comparison baseline so the
-            // Dependencies page opens already diffed against what is live on the channel.
-            const compareQuery = compareVersionId ? `?compare=${compareVersionId}` : ''
-            router.push(`/app/${route.params.app}/bundle/${appVersion.id}/dependencies${compareQuery}`)
-          },
-        },
-        {
-          text: t('compatibility-accept'),
-          role: 'primary',
-        },
-      ],
-    })
-    if (await dialogStore.onDialogDismiss())
-      return false
-  }
-  else if (localDependencies.length === 0 || finalCompatibility.length === 0) {
-    toast.info(t('ignore-compatibility'))
-  }
-  else {
-    toast.info(t('bundle-compatible-with-channel', { channel: channelName }))
-  }
-  return true
+/** Name of the bundle a channel serves, or null for the store version. */
+function servedBundleName(name: string | null | undefined) {
+  return name && !isInternalVersionName(name) ? name : null
 }
 
 async function handleVersionLink(picked: BundlePickerRow) {
   if (!channel.value)
     return
-  // Close the bundle picker once a bundle is chosen; the compatibility, rollout and
-  // notification prompts below open their own dialogs when needed.
+  // Close the bundle picker once a bundle is chosen; the impact confirm and the
+  // notification prompt below open their own dialogs.
   if (dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management'))
     await dialogStore.closeDialog()
   const appVersion = await loadBundleNativePackagesForLink(picked)
-  if (!appVersion)
+  if (!appVersion || !channel.value)
     return
-  if (!(await confirmBundleCompatibleWithChannel(appVersion, channel.value.name, channel.value.version?.id)))
+  const rollout = bundleLinkMode.value === 'rollout'
+  const previousRolloutVersionId = channel.value.rollout_version
+  const compatibility = await bundleCompatibility(appVersion, channel.value.name, channel.value.version?.id)
+  if (!channel.value)
     return
-  if (bundleLinkMode.value === 'rollout') {
-    const applyRolloutTargetLink = async () => {
-      const saved = await saveChannelChanges({
-        rollout_version: appVersion.id,
-        rollout_enabled: true,
-      })
-      if (saved) {
-        toast.success(t('rollout-target-linked'))
-        await askUpdateNotificationAfterBundleChange()
-      }
-    }
-    const previousRolloutVersionId = channel.value.rollout_version
-    if (previousRolloutVersionId != null && previousRolloutVersionId !== appVersion.id) {
-      await getRolloutConfirmFlows().confirmSetRolloutTarget({
-        currentTargetName: rolloutTargetName.value,
-        nextTargetName: appVersion.name,
-        onConfirm: applyRolloutTargetLink,
-      })
-    }
-    else {
-      await applyRolloutTargetLink()
+  const result = await confirmChannelChange({
+    appId: channel.value.app_id,
+    channelId: channel.value.id,
+    channelName: channel.value.name,
+    action: rollout ? 'rollout' : 'set',
+    bundle: { id: appVersion.id, name: appVersion.name },
+    currentBundleName: servedBundleName(channel.value.version?.name),
+    rolloutPercentageBps: channel.value.rollout_percentage_bps ?? 0,
+    replacesRolloutTarget: rollout && previousRolloutVersionId != null && previousRolloutVersionId !== appVersion.id ? rolloutTargetName.value : null,
+    // Linking a new stable bundle resets an active rollout (channel trigger).
+    stopsRolloutTarget: !rollout && rolloutConfigured.value ? rolloutTargetName.value : null,
+    compatibility,
+  })
+  if (!result.confirmed) {
+    if (result.next === 'view-dependencies' && compatibility)
+      await router.push(compatibility.dependenciesPath)
+    return
+  }
+
+  if (rollout) {
+    const saved = await saveChannelChanges({
+      rollout_version: appVersion.id,
+      rollout_enabled: true,
+    })
+    if (saved) {
+      toast.success(t('rollout-target-linked'))
+      await askUpdateNotificationAfterBundleChange()
     }
     return
   }
@@ -804,9 +795,21 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
     toast.error(t('error-fetching-channels'))
     return
   }
-  const targetVersionId = targetRow?.version ?? undefined
-  if (!(await confirmBundleCompatibleWithChannel(appVersion, target.name, targetVersionId)))
+  const compatibility = await bundleCompatibility(appVersion, target.name, targetRow?.version)
+  const result = await confirmChannelChange({
+    appId: source.app_id,
+    channelId: target.id,
+    channelName: target.name,
+    action: 'promote',
+    bundle: { id: appVersion.id, name: appVersion.name },
+    currentBundleName: servedBundleName(target.versionName),
+    compatibility,
+  })
+  if (!result.confirmed) {
+    if (result.next === 'view-dependencies' && compatibility)
+      await router.push(compatibility.dependenciesPath)
     return
+  }
 
   const { data: updated, error } = await capgo
     .from('channels')
@@ -819,6 +822,7 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
     return
   }
 
+  invalidateChannelImpact(target.id)
   toast.info(t('cloud-replication-delay'))
   toast.success(t('promote-to-channel-success', { bundle: appVersion.name, channel: target.name }))
   void loadPromoteTargets()
@@ -852,62 +856,60 @@ async function handleUnlink() {
   return dialogStore.onDialogDismiss()
 }
 
+// Warm the server-side device scan when the pointer reaches a bundle action, so
+// the impact confirm usually opens with its numbers already cached.
+const IMPACT_WARM_INTERVAL_MS = 60_000
+let impactWarmedAt = 0
+function warmChannelImpact() {
+  if (!channel.value || !canPromoteBundle.value || Date.now() - impactWarmedAt < IMPACT_WARM_INTERVAL_MS)
+    return
+  impactWarmedAt = Date.now()
+  void fetchChannelImpact({ appId: channel.value.app_id, channelId: channel.value.id, targets: [{ kind: 'builtin' }] }).catch(() => {})
+}
+
 async function handleRevert() {
   if (!canPromoteBundle.value) {
     toast.error(t('no-permission'))
     return
   }
-  // Full revert: the stable bundle goes back to built-in and any progressive
-  // rollout stops too, otherwise rollout devices would keep getting updates.
-  const stopsRollout = !!channel.value?.rollout_version || !!channel.value?.rollout_enabled
-  const rolloutTarget = channel.value?.rollout_version_info?.name
-  const description = stopsRollout && rolloutTarget
-    ? `${t('revert-to-builtin-confirm')} ${t('revert-to-builtin-confirm-rollout', { target: rolloutTarget })}`
-    : t('revert-to-builtin-confirm')
-  let selectAnotherBundle = false
-  dialogStore.openDialog({
-    id: 'confirm-revert-to-builtin',
-    title: t('channel-revert-confirm-title'),
-    description,
-    size: 'xl',
-    preventAccidentalClose: true,
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('channel-revert-select-bundle'),
-        role: 'secondary',
-        handler: () => {
-          selectAnotherBundle = true
-        },
-      },
-      {
-        text: t('channel-revert-button'),
-        role: 'danger',
-        handler: async () => {
-          const changes: ChannelUpdate = { version: null }
-          if (stopsRollout) {
-            Object.assign(changes, {
-              rollout_version: null,
-              rollout_enabled: false,
-              rollout_percentage_bps: 0,
-              rollout_paused_at: null,
-              rollout_pause_reason: null,
-            })
-          }
-          if (await saveChannelChanges(changes)) {
-            toast.success(t('channel-reverted-to-builtin'))
-            await askUpdateNotificationAfterBundleChange()
-          }
-        },
-      },
-    ],
+  if (!channel.value)
+    return
+  // Ask first whether to roll back to the channel's previous bundle or send every
+  // device back to the store version, then show who each choice reaches.
+  // Either way any progressive rollout stops, otherwise rollout devices would
+  // keep getting the rollout bundle.
+  const stopsRollout = !!channel.value.rollout_version || !!channel.value.rollout_enabled
+  const result = await confirmChannelChange({
+    appId: channel.value.app_id,
+    channelId: channel.value.id,
+    channelName: channel.value.name,
+    action: 'revert',
+    currentBundleName: servedBundleName(channel.value.version?.name),
+    stopsRolloutTarget: stopsRollout ? (channel.value.rollout_version_info?.name ?? null) : null,
   })
-  await dialogStore.onDialogDismiss()
-  if (selectAnotherBundle)
-    await openSelectStableVersion(true)
+  if (!result.confirmed) {
+    if (result.next === 'select-bundle')
+      await openSelectStableVersion(true)
+    return
+  }
+
+  const rollbackTo = result.choice === 'previous' ? result.previousBundle : null
+  if (result.choice === 'previous' && !rollbackTo)
+    return
+  const changes: ChannelUpdate = { version: rollbackTo?.id ?? null }
+  if (stopsRollout) {
+    Object.assign(changes, {
+      rollout_version: null,
+      rollout_enabled: false,
+      rollout_percentage_bps: 0,
+      rollout_paused_at: null,
+      rollout_pause_reason: null,
+    })
+  }
+  if (await saveChannelChanges(changes)) {
+    toast.success(rollbackTo ? t('channel-rolled-back-to-bundle', { bundle: rollbackTo.name }) : t('channel-reverted-to-builtin'))
+    await askUpdateNotificationAfterBundleChange()
+  }
 }
 
 async function toggleChannelPause() {
@@ -947,24 +949,11 @@ async function openSelectVersion(startInSearch = false) {
   if (!channel.value)
     return
 
-  // Fetch versions when dialog opens — light columns only (no manifest / native_packages).
-  const { data, error } = await capgo.from('app_versions')
-    .select(BUNDLE_PICKER_COLUMNS)
-    .eq('app_id', channel.value.app_id)
-    .eq('deleted', false)
-    .neq('id', channel.value.version.id)
-    .order('created_at', { ascending: false })
-    .limit(5)
-
-  if (error) {
-    console.error(error)
-    toast.error(t('error-fetching-versions'))
-    return
-  }
-
-  bundleLinkVersions.value = data ?? []
   bundleLinkSearchVal.value = ''
   bundleLinkSearchMode.value = startInSearch
+  // Fresh read every time the picker opens: a bundle uploaded seconds ago must be listed.
+  if (!(await refreshFilteredVersions()))
+    return
 
   // Open the dialog
   dialogStore.openDialog({
@@ -1132,39 +1121,41 @@ async function toggleRolloutPause() {
   await getRolloutConfirmFlows().toggleRolloutPause()
 }
 
+const BUNDLE_PICKER_LIMIT = 10
+let bundlePickerRequest = 0
+const bundleLinkLoading = ref(false)
+
+/** Load the picker list (latest bundles, or the ones matching the search). Returns false on error. */
 async function refreshFilteredVersions() {
   if (!channel.value)
-    return
-
-  if (bundleLinkSearchVal.value && bundleLinkSearchVal.value.trim()) {
-    const { data, error } = await capgo.from('app_versions')
-      .select(BUNDLE_PICKER_COLUMNS)
-      .eq('app_id', channel.value.app_id)
-      .eq('deleted', false)
-      .neq('id', channel.value.version.id)
-      .order('created_at', { ascending: false })
-      .like('name', `%${bundleLinkSearchVal.value.trim()}%`)
-      .limit(5)
-    if (error) {
-      console.error(error)
-      toast.error(t('error-fetching-versions'))
-    }
-    bundleLinkVersions.value = data ?? []
+    return false
+  const requestId = ++bundlePickerRequest
+  const term = bundleLinkSearchVal.value.trim()
+  bundleLinkLoading.value = true
+  let query = capgo.from('app_versions')
+    .select(BUNDLE_PICKER_COLUMNS)
+    .eq('app_id', channel.value.app_id)
+    .eq('deleted', false)
+    .neq('id', channel.value.version.id)
+    // Internal placeholder rows are not bundles a channel can serve.
+    .not('name', 'in', '(builtin,unknown)')
+  if (term)
+    query = query.ilike('name', `%${escapeIlike(term)}%`)
+  const { data, error } = await query
+    .order('created_at', { ascending: false })
+    .limit(BUNDLE_PICKER_LIMIT)
+  // A slower response for an older search must not replace the current list.
+  if (requestId !== bundlePickerRequest)
+    return true
+  bundleLinkLoading.value = false
+  if (error) {
+    console.error(error)
+    toast.error(t('error-fetching-versions'))
+    bundleLinkVersions.value = []
+    return false
   }
-  else {
-    const { data, error } = await capgo.from('app_versions')
-      .select(BUNDLE_PICKER_COLUMNS)
-      .eq('app_id', channel.value.app_id)
-      .eq('deleted', false)
-      .neq('id', channel.value.version.id)
-      .order('created_at', { ascending: false })
-      .limit(5)
-    if (error) {
-      console.error(error)
-      toast.error(t('error-fetching-versions'))
-    }
-    bundleLinkVersions.value = data ?? []
-  }
+  bundleLinkVersions.value = data ?? []
+  return true
 }
 
 const debouncedRefreshFilteredVersions = useDebounceFn(() => {
@@ -1585,6 +1576,8 @@ async function copyCurlCommand() {
                   type="button"
                   class="d-btn d-btn-primary d-btn-sm"
                   data-test="promote-to-channel"
+                  @pointerenter="warmChannelImpact"
+                  @focus="warmChannelImpact"
                   @click="openPromoteToChannel()"
                 >
                   {{ t('promote-to-channel-button') }}
@@ -1594,6 +1587,8 @@ async function copyCurlCommand() {
                   class="d-btn d-btn-outline d-btn-sm"
                   data-test="channel-change-bundle"
                   :disabled="!canPromoteBundle"
+                  @pointerenter="warmChannelImpact"
+                  @focus="warmChannelImpact"
                   @click="openSelectStableVersion(channelOnBuiltin)"
                 >
                   {{ t('edit') }}
@@ -1612,6 +1607,8 @@ async function copyCurlCommand() {
                   class="d-btn d-btn-outline d-btn-error d-btn-sm"
                   data-test="channel-revert-builtin"
                   :disabled="!canPromoteBundle || (channelOnBuiltin && !rolloutConfigured)"
+                  @pointerenter="warmChannelImpact"
+                  @focus="warmChannelImpact"
                   @click="handleRevert()"
                 >
                   {{ t('revert') }}
@@ -1643,7 +1640,7 @@ async function copyCurlCommand() {
               {{ channel.version.comment }}
             </InfoRow>
             <InfoRow v-if="showRolloutEnableRow" :label="t('progressive-rollout')" :value="t('disabled')">
-              <button type="button" class="d-btn d-btn-sm d-btn-outline" :disabled="rolloutEnableDisabled" @click="enableRollout()">
+              <button type="button" class="d-btn d-btn-sm d-btn-outline" :disabled="rolloutEnableDisabled" @pointerenter="warmChannelImpact" @focus="warmChannelImpact" @click="enableRollout()">
                 {{ t('enable') }}
               </button>
             </InfoRow>
@@ -1670,7 +1667,7 @@ async function copyCurlCommand() {
                         <span>{{ t('rollout-target') }}:</span>
                         <span class="ml-1 font-semibold text-slate-900 dark:text-white">{{ channel?.rollout_version_info?.name ?? t('not-configured') }}</span>
                       </p>
-                      <button type="button" class="d-btn d-btn-outline d-btn-sm" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
+                      <button type="button" class="d-btn d-btn-outline d-btn-sm" data-test="rollout-change-target" :disabled="!canPromoteBundle" @pointerenter="warmChannelImpact" @focus="warmChannelImpact" @click="openSelectRolloutVersion()">
                         {{ t('edit') }}
                       </button>
                       <button type="button" class="d-btn d-btn-outline d-btn-sm" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
@@ -2303,6 +2300,14 @@ async function copyCurlCommand() {
               {{ bundleLinkMode === 'rollout' ? (channel?.rollout_version_info?.name || t('not-configured')) : (currentChannelVersion?.name || t('unknown')) }}
             </div>
           </div>
+
+          <p
+            v-if="bundleLinkSearchMode && !bundleLinkLoading && bundleLinkVersions.length === 0"
+            class="px-1 text-sm text-gray-500 dark:text-gray-400"
+            data-test="bundle-picker-empty"
+          >
+            {{ t('no-versions-found') }}
+          </p>
 
           <!-- Available Versions (when in search mode) -->
           <div v-if="bundleLinkSearchMode && bundleLinkVersions.length > 0" class="space-y-2">

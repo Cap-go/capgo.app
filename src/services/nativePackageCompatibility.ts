@@ -114,3 +114,21 @@ export async function checkCompatibilityNativePackages(appId: string, channel: s
     localDependencies: nativePackages,
   }
 }
+
+/**
+ * Names of the bundle's native packages that the channel's current bundle does
+ * not satisfy. Empty when everything matches or there is nothing to compare;
+ * null when the channel could not be read.
+ */
+export async function findIncompatibleNativePackages(appId: string, channel: string, nativePackages: { name: string, version: string }[]): Promise<string[] | null> {
+  try {
+    const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(appId, channel, nativePackages)
+    if (!localDependencies.length)
+      return []
+    return finalCompatibility.filter(pkg => !isCompatible(pkg)).map(pkg => pkg.name)
+  }
+  catch (error) {
+    console.error('Cannot check native package compatibility', error)
+    return null
+  }
+}

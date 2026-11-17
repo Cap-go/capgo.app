@@ -6,6 +6,7 @@
 // biome-ignore lint: disable
 export {}
 declare global {
+  const CHANNEL_CHANGE_DIALOG_ID: typeof import('./composables/useChannelChangeConfirm').CHANNEL_CHANGE_DIALOG_ID
   const CLI_PROGRESS_POLL_BASE_MS: typeof import('./composables/useAppOnboardingCliProgress').CLI_PROGRESS_POLL_BASE_MS
   const CLI_PROGRESS_POLL_FAST_PHASE_MS: typeof import('./composables/useAppOnboardingCliProgress').CLI_PROGRESS_POLL_FAST_PHASE_MS
   const CLI_PROGRESS_POLL_MAX_IDLE_MS: typeof import('./composables/useAppOnboardingCliProgress').CLI_PROGRESS_POLL_MAX_IDLE_MS
@@ -24,6 +25,7 @@ declare global {
   const computedEager: typeof import('@vueuse/core').computedEager
   const computedInject: typeof import('@vueuse/core').computedInject
   const computedWithControl: typeof import('@vueuse/core').computedWithControl
+  const confirmChannelChange: typeof import('./composables/useChannelChangeConfirm').confirmChannelChange
   const controlledComputed: typeof import('@vueuse/core').controlledComputed
   const controlledRef: typeof import('@vueuse/core').controlledRef
   const createApp: typeof import('vue').createApp
@@ -116,6 +118,8 @@ declare global {
   const resolveRef: typeof import('@vueuse/core').resolveRef
   const resolveUnref: typeof import('@vueuse/core').resolveUnref
   const roleHasOrgRank: typeof import('./stores/organization').roleHasOrgRank
+  const selectImpact: typeof import('./composables/useChannelChangeConfirm').selectImpact
+  const setRevertChoice: typeof import('./composables/useChannelChangeConfirm').setRevertChoice
   const shallowReactive: typeof import('vue').shallowReactive
   const shallowReadonly: typeof import('vue').shallowReadonly
   const shallowRef: typeof import('vue').shallowRef
@@ -171,6 +175,7 @@ declare global {
   const useBuildChartConfig: typeof import('./composables/useBuildChartConfig').useBuildChartConfig
   const useBundleInstallStats: typeof import('./composables/useBundleInstallStats').useBundleInstallStats
   const useCached: typeof import('@vueuse/core').useCached
+  const useChannelChangeState: typeof import('./composables/useChannelChangeConfirm').useChannelChangeState
   const useClipboard: typeof import('@vueuse/core').useClipboard
   const useClipboardItems: typeof import('@vueuse/core').useClipboardItems
   const useCloned: typeof import('@vueuse/core').useCloned
@@ -373,6 +378,9 @@ declare global {
   export type { BundleInstallStatsItem, BundleInstallStatsResponse } from './composables/useBundleInstallStats'
   import('./composables/useBundleInstallStats')
   // @ts-ignore
+  export type { ChannelChangeAction, RevertChoice, ChannelChangeCompatibility, ChannelChangeOptions, ChannelChangeResult } from './composables/useChannelChangeConfirm'
+  import('./composables/useChannelChangeConfirm')
+  // @ts-ignore
   export type { UpdateEndpointRequest } from './composables/useDeviceUpdateFormat'
   import('./composables/useDeviceUpdateFormat')
   // @ts-ignore
@@ -403,6 +411,7 @@ import { UnwrapRef } from 'vue'
 declare module 'vue' {
   interface GlobalComponents {}
   interface ComponentCustomProperties {
+    readonly CHANNEL_CHANGE_DIALOG_ID: UnwrapRef<typeof import('./composables/useChannelChangeConfirm')['CHANNEL_CHANGE_DIALOG_ID']>
     readonly CLI_PROGRESS_POLL_BASE_MS: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['CLI_PROGRESS_POLL_BASE_MS']>
     readonly CLI_PROGRESS_POLL_FAST_PHASE_MS: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['CLI_PROGRESS_POLL_FAST_PHASE_MS']>
     readonly CLI_PROGRESS_POLL_MAX_IDLE_MS: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['CLI_PROGRESS_POLL_MAX_IDLE_MS']>
@@ -421,6 +430,7 @@ declare module 'vue' {
     readonly computedEager: UnwrapRef<typeof import('@vueuse/core')['computedEager']>
     readonly computedInject: UnwrapRef<typeof import('@vueuse/core')['computedInject']>
     readonly computedWithControl: UnwrapRef<typeof import('@vueuse/core')['computedWithControl']>
+    readonly confirmChannelChange: UnwrapRef<typeof import('./composables/useChannelChangeConfirm')['confirmChannelChange']>
     readonly controlledComputed: UnwrapRef<typeof import('@vueuse/core')['controlledComputed']>
     readonly controlledRef: UnwrapRef<typeof import('@vueuse/core')['controlledRef']>
     readonly createApp: UnwrapRef<typeof import('vue')['createApp']>
@@ -510,6 +520,8 @@ declare module 'vue' {
     readonly refWithControl: UnwrapRef<typeof import('@vueuse/core')['refWithControl']>
     readonly resolveComponent: UnwrapRef<typeof import('vue')['resolveComponent']>
     readonly roleHasOrgRank: UnwrapRef<typeof import('./stores/organization')['roleHasOrgRank']>
+    readonly selectImpact: UnwrapRef<typeof import('./composables/useChannelChangeConfirm')['selectImpact']>
+    readonly setRevertChoice: UnwrapRef<typeof import('./composables/useChannelChangeConfirm')['setRevertChoice']>
     readonly shallowReactive: UnwrapRef<typeof import('vue')['shallowReactive']>
     readonly shallowReadonly: UnwrapRef<typeof import('vue')['shallowReadonly']>
     readonly shallowRef: UnwrapRef<typeof import('vue')['shallowRef']>
@@ -565,6 +577,7 @@ declare module 'vue' {
     readonly useBuildChartConfig: UnwrapRef<typeof import('./composables/useBuildChartConfig')['useBuildChartConfig']>
     readonly useBundleInstallStats: UnwrapRef<typeof import('./composables/useBundleInstallStats')['useBundleInstallStats']>
     readonly useCached: UnwrapRef<typeof import('@vueuse/core')['useCached']>
+    readonly useChannelChangeState: UnwrapRef<typeof import('./composables/useChannelChangeConfirm')['useChannelChangeState']>
     readonly useClipboard: UnwrapRef<typeof import('@vueuse/core')['useClipboard']>
     readonly useClipboardItems: UnwrapRef<typeof import('@vueuse/core')['useClipboardItems']>
     readonly useCloned: UnwrapRef<typeof import('@vueuse/core')['useCloned']>

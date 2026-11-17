@@ -4,6 +4,7 @@
   "auth.spec.ts": 9,
   "billing-details.spec.ts": 100,
   "bundle-incompatible-alert.spec.ts": 15,
+  "channel-impact.spec.ts": 10,
   "compatibility-events.spec.ts": 7,
   "confirmation-redirect.spec.ts": 3,
   "credits-top-up.spec.ts": 30,

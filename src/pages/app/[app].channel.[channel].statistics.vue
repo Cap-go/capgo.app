@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Database } from '~/types/database.types'
-import { ref, watchEffect } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
@@ -27,15 +27,19 @@ const id = ref<number>(0)
 const loading = ref(true)
 const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
 
-async function getChannel() {
+async function getChannel(force = false) {
   if (!id.value)
     return
+  const requestedId = id.value
 
-  if (appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
+  if (!force && appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
     channel.value = appDetailStore.currentChannel as any
     if (channel.value?.name)
       displayStore.setChannelName(String(channel.value.id), channel.value.name)
     displayStore.NavTitle = channel.value?.name ?? t('channel')
+    // Render the cached row at once, then refresh it: the bundle may have been
+    // changed since (bundle page, CLI, API or a teammate).
+    void getChannel(true)
     return
   }
 
@@ -77,6 +81,9 @@ async function getChannel() {
       console.error('no channel', error)
       return
     }
+    // A newer navigation (another channel) won while this read was in flight.
+    if (id.value !== requestedId)
+      return
 
     channel.value = data as unknown as Database['public']['Tables']['channels']['Row'] & Channel
     appDetailStore.setChannel(id.value, channel.value)
@@ -90,7 +97,9 @@ async function getChannel() {
   }
 }
 
-watchEffect(async () => {
+// Load on navigation only: a watchEffect would also track the cached store
+// channel read inside getChannel and refetch every time the refresh stores it.
+watch(() => route.path, async () => {
   if (route.path.includes('/channel/') && route.path.includes('/statistics')) {
     loading.value = true
     packageId.value = route.params.app as string
@@ -102,7 +111,7 @@ watchEffect(async () => {
       displayStore.NavTitle = t('channel')
     displayStore.defaultBack = `/app/${route.params.app}/channels`
   }
-})
+}, { immediate: true })
 </script>
 
 <template>

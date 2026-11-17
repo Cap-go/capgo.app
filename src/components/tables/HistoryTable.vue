@@ -5,12 +5,13 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { z } from 'zod'
+import { confirmChannelChange } from '~/composables/useChannelChangeConfirm'
+import { invalidateChannelImpact } from '~/services/channelImpact'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { createHistoryContextLoader } from '~/services/historyContext'
 import { checkPermissions } from '~/services/permissions'
-import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 import { escapeIlike } from '~/utils/ilike'
 
@@ -68,7 +69,6 @@ const { t } = useI18n()
 const router = useRouter()
 const capgo = useConsole()
 const organizationStore = useOrganizationStore()
-const dialogStore = useDialogV2Store()
 
 const deployHistory = ref<DeployHistory[]>([])
 const loading = ref(true)
@@ -80,6 +80,10 @@ const page = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
 const currentVersionId = ref<number | null>(null)
+const currentVersionName = ref<string | null>(null)
+const channelName = ref('')
+// A rollback sets a new stable bundle, which resets any configured rollout.
+const rolloutTargetName = ref<string | null>(null)
 
 // Fetch current channel's version_id (only relevant for channel mode)
 async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promise<boolean> {
@@ -93,7 +97,7 @@ async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promi
   try {
     const { data, error } = await capgo
       .from('channels')
-      .select('version')
+      .select('name, version, current:app_versions!channels_version_fkey(name), rollout:app_versions!channels_rollout_version_fkey(name)')
       .eq('id', props.channelId)
       .single()
 
@@ -102,8 +106,13 @@ async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promi
       return false
     }
 
-    if (isCurrent())
+    if (isCurrent()) {
       currentVersionId.value = data.version
+      channelName.value = data.name
+      const currentName = (data.current as { name: string } | null)?.name ?? null
+      currentVersionName.value = currentName && !['builtin', 'unknown'].includes(currentName) ? currentName : null
+      rolloutTargetName.value = (data.rollout as { name: string } | null)?.name ?? null
+    }
     return true
   }
   catch (error) {
@@ -484,43 +493,43 @@ async function handleRollback(item: DeployHistory) {
     return
   }
 
-  dialogStore.openDialog({
+  // Same impact confirm as setting a bundle: who gets it and why the others won't.
+  const result = await confirmChannelChange({
+    appId: props.appId,
+    channelId,
+    channelName: channelName.value || item.channel?.name || '',
+    action: 'set',
+    bundle: { id: item.version_id, name: item.version.name },
+    currentBundleName: currentVersionName.value,
+    stopsRolloutTarget: rolloutTargetName.value,
     title: t('rollback-to-version'),
-    description: t('confirm-rollback-desc'),
-    buttons: [
-      {
-        text: t('confirm'),
-        role: 'primary',
-        handler: async () => {
-          try {
-            const { error } = await capgo
-              .from('channels')
-              .update({ version: item.version_id })
-              .eq('id', channelId)
-
-            if (error) {
-              console.error('Error rolling back version:', error)
-              toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
-              return
-            }
-
-            toast.success(t('rollback-success'))
-            currentVersionId.value = item.version_id
-            fetchDeployHistory()
-          }
-          catch (error) {
-            console.error('Error rolling back version:', error)
-            toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
-          }
-        },
-      },
-      {
-        text: t('cancel'),
-        role: 'cancel',
-      },
-    ],
+    confirmText: t('rollback'),
   })
-  await dialogStore.onDialogDismiss()
+  if (!result.confirmed)
+    return
+  try {
+    const { error } = await capgo
+      .from('channels')
+      .update({ version: item.version_id })
+      .eq('id', channelId)
+
+    if (error) {
+      console.error('Error rolling back version:', error)
+      toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
+      return
+    }
+
+    invalidateChannelImpact(channelId)
+    toast.success(t('rollback-success'))
+    currentVersionId.value = item.version_id
+    currentVersionName.value = item.version.name
+    rolloutTargetName.value = null
+    fetchDeployHistory()
+  }
+  catch (error) {
+    console.error('Error rolling back version:', error)
+    toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
+  }
 }
 
 watch([() => props.channelId, () => props.bundleId, () => props.appId], () => {
