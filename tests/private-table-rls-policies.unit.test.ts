@@ -45,6 +45,7 @@ describe('public table RLS protection', () => {
             ('app_stats_refresh_state'),
             ('build_credentials_upload_token_uses'),
             ('cancel_save_offers'),
+            ('channel_auto_pause_attempts'),
             ('delta_gc_orphan_prefixes'),
             ('delta_gc_state'),
             ('delta_gc_unsettled_deletes'),
@@ -54,6 +55,9 @@ describe('public table RLS protection', () => {
             ('mcp_oauth_clients'),
             ('mcp_oauth_requests'),
             ('org_stats_refresh_state'),
+            ('serving_policy_sync_failed'),
+            ('serving_policy_sync_pending'),
+            ('serving_policy_sync_progress'),
             ('updates_cache_purge_pending'),
             ('updates_cache_purge_state')
         )
@@ -84,6 +88,7 @@ describe('public table RLS protection', () => {
         { table_name: 'app_stats_refresh_state', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'build_credentials_upload_token_uses', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'cancel_save_offers', policy_count: 1, denies_all_direct_access: true },
+        { table_name: 'channel_auto_pause_attempts', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'delta_gc_orphan_prefixes', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'delta_gc_state', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'delta_gc_unsettled_deletes', policy_count: 1, denies_all_direct_access: true },
@@ -93,6 +98,9 @@ describe('public table RLS protection', () => {
         { table_name: 'mcp_oauth_clients', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'mcp_oauth_requests', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'org_stats_refresh_state', policy_count: 1, denies_all_direct_access: true },
+        { table_name: 'serving_policy_sync_failed', policy_count: 1, denies_all_direct_access: true },
+        { table_name: 'serving_policy_sync_pending', policy_count: 1, denies_all_direct_access: true },
+        { table_name: 'serving_policy_sync_progress', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'updates_cache_purge_pending', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'updates_cache_purge_state', policy_count: 1, denies_all_direct_access: true },
       ])

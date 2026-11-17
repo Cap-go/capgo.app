@@ -2,7 +2,7 @@ import type { SimulatorBody } from '../public/build/simulator.ts'
 import { Hono } from 'hono/tiny'
 import { savedOutputsForJobs } from '../public/build/outputs.ts'
 import { ensureBuildPermission, getBuildOwnerOrg } from '../public/build/request.ts'
-import { readSimulator, startSimulator, stopSimulator } from '../public/build/simulator.ts'
+import { listSimulators, readSimulator, startSimulator, stopSimulator } from '../public/build/simulator.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { authPrincipal } from '../utils/pg_rls.ts'
@@ -26,6 +26,12 @@ app.get('/outputs', middlewareAuth, async (c) => {
   await ensureBuildPermission(c, appId, id)
   const ownerOrg = await getBuildOwnerOrg(c, principal, appId)
   return c.json({ outputs: await savedOutputsForJobs(c, principal, appId, ownerOrg, jobIds) })
+})
+
+// The app's recent simulators, with the build time each one counted.
+app.get('/', middlewareAuth, async (c) => {
+  const id = userId(c)
+  return listSimulators(c, { app_id: c.req.query('app_id') }, id, authPrincipal(c))
 })
 
 app.post('/', middlewareAuth, async (c) => {

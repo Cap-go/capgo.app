@@ -22,8 +22,11 @@ jobs:
     timeout-minutes: 10
     name: Resolve deploy scope
     permissions:
-      contents: read
+      contents: write
+      actions: read
     outputs:
+      state_oid: ${{ steps.scope.outputs.state_oid }}
+      plugin_matrix: ${{ steps.scope.outputs.plugin_matrix }}
       api: ${{ steps.scope.outputs.api }}
       files: ${{ steps.scope.outputs.files }}
       gotrue: ${{ steps.scope.outputs.gotrue }}
@@ -44,20 +47,26 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Resolve triggering deployment target
+      - name: Resolve immutable deployment attempt target
         id: target
-        run: bun scripts/resolve-deploy-tag.ts --resolve "${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+        run: bun scripts/resolve-deploy-tag.ts --attempt "${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
       - name: Reject stale queued deployment
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ github.ref_name }}"
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ steps.target.outputs.deploy_tag }}"
       - name: Checkout deployment target
         uses: actions/checkout@v6
         with:
           ref: ${{ steps.target.outputs.deploy_sha }}
           fetch-depth: 0
           filter: blob:none
+      - name: Install deployment helper dependencies
+        run: bun install --frozen-lockfile
       - name: Resolve deploy scope
         id: scope
-        run: bun scripts/deploy-scope.ts "${{ steps.target.outputs.deploy_tag }}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_TAG: ${{ steps.target.outputs.deploy_tag }}
+          DEPLOY_SHA: ${{ steps.target.outputs.deploy_sha }}
+        run: bun scripts/deploy-state.ts begin >> "$GITHUB_OUTPUT"
 
   # Tests already passed before tag was created, so just build and deploy
   read_replica_schema:
@@ -540,36 +549,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        region: [eu, as, us, sa, oc, af, me, hk, jp]
-        include:
-          - region: eu
-            region_label: Europe (EU)
-            cf_target: plugin_eu
-          - region: as
-            region_label: Asia (AS)
-            cf_target: plugin_as
-          - region: us
-            region_label: United States (US)
-            cf_target: plugin_na
-          - region: sa
-            region_label: South America (SA)
-            cf_target: plugin_sa
-          - region: oc
-            region_label: Oceania (OC)
-            cf_target: plugin_oc
-          - region: af
-            region_label: Africa (AF)
-            cf_target: plugin_af
-          - region: me
-            region_label: Middle East (ME)
-            cf_target: plugin_me
-          - region: hk
-            region_label: Hong Kong (HK)
-            cf_target: plugin_hk
-          - region: jp
-            region_label: Japan (JP)
-            cf_target: plugin_jp
+      matrix: ${{ fromJSON(needs.changes.outputs.plugin_matrix) }}
     name: Deploy CF Worker Plugin (${{ matrix.region_label }})
     steps:
       - name: Checkout
@@ -855,3 +835,33 @@ jobs:
 
           echo "Schema/types publication could not obtain a stable main snapshot after 3 attempts." >&2
           exit 1
+
+  record_deployments:
+    needs: [changes, read_replica_schema, supabase_deploy, read_replica_subscription, deploy_api, deploy_translation_worker, deploy_files, deploy_gotrue_worker, deploy_plugin_regions]
+    if: ${{ always() && needs.changes.result == 'success' }}
+    name: Record completed deployment operations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout immutable deployment target
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install deployment helper dependencies
+        run: bun install --frozen-lockfile
+      - name: Record actual attempt operations with CAS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_TAG: ${{ needs.changes.outputs.deploy_tag }}
+          DEPLOY_SHA: ${{ needs.changes.outputs.deploy_sha }}
+          DEPLOY_STATE_OID: ${{ needs.changes.outputs.state_oid }}
+        run: bun scripts/deploy-state.ts complete

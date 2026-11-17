@@ -1,7 +1,9 @@
 import { getInvoiceEmailPreferences, updateInvoiceEmailPreferences } from '../utils/invoice_email.ts'
+import { changeBillingCurrency, getBillingCurrencyState, getCurrencyTransitionPreview } from '../utils/stripe_billing_currency.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
+import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { Hono } from 'hono/tiny'
 import { acceptCancelSaveOffer, declineCancelSaveOffer, parseOfferId, prepareCancelSaveOffer } from '../utils/cancel_save_offer.ts'
 import { getInvoiceDocument } from '../utils/invoice_document.ts'
@@ -125,7 +127,9 @@ app.post('/profile', middlewareAuth, async (c) => {
 app.post('/profile/update', middlewareAuth, async (c) => {
   const body = await parseBody<OrgBody & { details?: unknown }>(c)
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
-  return c.json(await updateBillingDetails(ctx, body.details))
+  const details = await updateBillingDetails(ctx, body.details)
+  await syncBillingProfile(c, ctx)
+  return c.json(details)
 })
 
 app.post('/tax-id/add', middlewareAuth, async (c) => {
@@ -289,4 +293,22 @@ app.post('/invoice-email/update', middlewareAuth, async (c) => {
   const body = await parseBody<OrgBody & { preferences?: unknown }>(c)
   await resolveBillingContext(c, body.orgId, 'org.update_billing')
   return c.json(await updateInvoiceEmailPreferences(c, body.orgId!, body.preferences))
+})
+
+app.post('/currency', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.read_billing')
+  return c.json(await getBillingCurrencyState(c, ctx))
+})
+
+app.post('/currency/update', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { currency?: unknown, confirmedSubscription?: unknown, quoteId?: unknown }>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  return c.json(await changeBillingCurrency(c, ctx, body.currency, body.confirmedSubscription, body.quoteId))
+})
+
+app.post('/currency/preview', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { currency?: unknown }>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  return c.json(await getCurrencyTransitionPreview(c, ctx, body.currency))
 })

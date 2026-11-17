@@ -86,7 +86,7 @@ SELECT
             FROM
                 pgmq.q_channel_device_counts
             WHERE
-                message ->> 'device_id' = 'queue-test-device'
+                message ->> 'app_id' = 'com.demo.app'
                 AND (message ->> 'delta')::integer = 1
         ),
         'Insert enqueues +1 delta'
@@ -128,7 +128,7 @@ SELECT
             FROM
                 pgmq.q_channel_device_counts
             WHERE
-                message ->> 'device_id' = 'queue-test-device'
+                message ->> 'app_id' = 'com.demo.app'
                 AND (message ->> 'delta')::integer = -1
         ),
         'Delete enqueues -1 delta'

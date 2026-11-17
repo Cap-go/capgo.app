@@ -44,6 +44,7 @@ export interface SnippetEdgeStatRecord {
   /** /updates answer: the bundle the snippet said is current. */
   n?: string
   ip?: string
+  colo?: string
   country?: string
   /** Device network, so the replay skips the provider IP lookup like a live request. */
   asn?: number
@@ -112,6 +113,8 @@ export function parseLogpushLine(line: string, stats?: LogpushReadStats): Snippe
       record.ip = row.ClientIP
     if (typeof row.ClientCountry === 'string' && row.ClientCountry)
       record.country = row.ClientCountry.toUpperCase()
+    if (typeof row.EdgeColoCode === 'string')
+      record.colo = row.EdgeColoCode
     if (typeof row.ClientASN === 'number' && row.ClientASN > 0)
       record.asn = row.ClientASN
     // timestamp_format unixnano: ms precision survives the float parse.
@@ -253,7 +256,7 @@ export function buildReplayRequest(record: SnippetEdgeStatRecord) {
   if (record.ip)
     headers.set('cf-connecting-ip', record.ip)
   // Stats read the device country and network from request.cf: workerd takes it from the init.
-  const cf = { country: record.country, asn: record.asn }
+  const cf = { country: record.country, asn: record.asn, colo: record.colo }
   const request = new Request(`https://plugin.capgo.app/${record.e}`, {
     method: 'POST',
     headers,

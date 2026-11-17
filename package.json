@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "22.56.0",
+  "version": "22.61.1",
   "private": true,
   "workspaces": [
     "cli",
@@ -477,5 +477,8 @@
   "trustedDependencies": [
     "supabase",
     "core-js"
-  ]
+  ],
+  "patchedDependencies": {
+    "emulate@0.9.0": "patches/emulate@0.9.0.patch"
+  }
 }

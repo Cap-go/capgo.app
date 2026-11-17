@@ -26,9 +26,8 @@ import { useConsole } from '~/services/console'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
-import { tokenizeAssistantText } from '~/utils/assistantText'
 import { parseChatGptCallback } from '~/utils/chatgptCallback'
-import AssistantSpans from './AssistantSpans.vue'
+import AssistantMarkdown from './AssistantMarkdown.vue'
 
 interface ChatEntry extends AssistantTurn {
   id: number
@@ -579,23 +578,14 @@ watch(open, (value) => {
             </div>
             <div
               v-if="entry.content"
-              class="max-w-[90%] rounded-2xl px-3 py-2 text-sm leading-relaxed"
+              class="min-w-0 max-w-[90%] overflow-x-auto rounded-2xl px-3 py-2 text-sm leading-relaxed"
               :class="entry.role === 'user'
                 ? 'bg-azure-500 text-white rounded-br-md'
                 : entry.error
                   ? 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-200 rounded-bl-md'
                   : 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-100 rounded-bl-md'"
             >
-              <template v-for="(block, blockIndex) in tokenizeAssistantText(entry.content)" :key="blockIndex">
-                <ul v-if="block.type === 'list'" class="my-1 list-disc space-y-0.5 pl-4">
-                  <li v-for="(item, itemIndex) in block.items" :key="itemIndex">
-                    <AssistantSpans :spans="item" />
-                  </li>
-                </ul>
-                <p v-else class="my-1 whitespace-pre-wrap">
-                  <AssistantSpans :spans="block.spans" />
-                </p>
-              </template>
+              <AssistantMarkdown :content="entry.content" />
             </div>
 
             <template v-for="(card, cardIndex) in entry.cards" :key="cardIndex">

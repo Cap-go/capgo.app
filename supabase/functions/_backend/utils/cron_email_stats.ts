@@ -58,6 +58,43 @@ export const WEEKLY_REPORT_SQL = `SELECT
 FROM public.daily_version
 WHERE app_id = $1 AND date >= $2::date AND date < $3::date`
 
+export interface WeeklyInstallStatsBatchRow extends WeeklyInstallStatsInput {
+  app_id: string
+  owner_org: string
+}
+
+// Same window and sums as WEEKLY_REPORT_SQL for every app of one queue
+// message. Apps that no longer exist return no row (nothing to report).
+export const WEEKLY_REPORT_BATCH_SQL = `SELECT
+  a.app_id,
+  a.owner_org,
+  COALESCE(SUM(dv.install), 0) AS all_updates,
+  COALESCE(SUM(dv.fail), 0) AS failed_updates,
+  COALESCE(SUM(dv.get), 0) AS update_checks
+FROM public.apps a
+LEFT JOIN public.daily_version dv
+  ON dv.app_id = a.app_id AND dv.date >= $2::date AND dv.date < $3::date
+WHERE a.app_id = ANY($1::text[]) AND a.owner_org IS NOT NULL
+GROUP BY a.app_id, a.owner_org`
+
+export interface MonthlyCreateStatsBatchRow {
+  app_id: string
+  owner_org: string
+  bundle_count: number
+  publish_count: number
+}
+
+// Bundles created and channel publishes per app in [$2, $3).
+export const MONTHLY_REPORT_BATCH_SQL = `SELECT
+  a.app_id,
+  a.owner_org,
+  (SELECT count(*)::int FROM public.app_versions av
+    WHERE av.app_id = a.app_id AND av.created_at >= $2 AND av.created_at < $3) AS bundle_count,
+  (SELECT count(*)::int FROM public.deploy_history dh
+    WHERE dh.app_id = a.app_id AND dh.deployed_at >= $2 AND dh.deployed_at < $3) AS publish_count
+FROM public.apps a
+WHERE a.app_id = ANY($1::text[]) AND a.owner_org IS NOT NULL`
+
 export function buildWeeklyEmailMetadata(
   appId: string,
   stats: WeeklyInstallStatsResult,

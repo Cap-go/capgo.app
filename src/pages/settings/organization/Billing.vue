@@ -75,6 +75,8 @@ const subscriptionLine = computed(() => {
   if (!sub)
     return t('billing-no-subscription')
   const endDate = formatLocalDate(sub.cancelAt ?? sub.currentPeriodEnd)
+  if (sub.pendingCurrency)
+    return t('billing-currency-renews-in', { currency: sub.pendingCurrency.toUpperCase(), date: endDate })
   if (sub.cancelAtPeriodEnd || sub.cancelAt)
     return t('billing-subscription-ends', { date: endDate })
   if (sub.status === 'past_due' || sub.status === 'unpaid')
@@ -547,7 +549,7 @@ onMounted(async () => {
           </section>
         </div>
 
-        <BillingProfileSection :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
+        <BillingProfileSection :key="`${orgId}:${overview?.subscription?.cancelAtPeriodEnd}:${overview?.subscription?.cancelAt}`" :org-id="orgId" @changed="loadOverview" @denied="permissionModal = 'org.update_billing'" />
 
         <BillingInvoiceEmails :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
 

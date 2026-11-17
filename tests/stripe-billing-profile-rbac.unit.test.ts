@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   userId: 'user_example' as string | null,
   org: vi.fn(), permission: vi.fn(), context: vi.fn(),
+  previewCurrency: vi.fn(), currency: vi.fn(), changeCurrency: vi.fn(),
   emailPreferences: vi.fn(), saveEmailPreferences: vi.fn(), invoice: vi.fn(), discounts: vi.fn(), profile: vi.fn(), update: vi.fn(), add: vi.fn(), remove: vi.fn(),
 }))
 vi.mock('../supabase/functions/_backend/utils/hono_jwt.ts', () => ({
@@ -23,6 +24,8 @@ vi.mock('../supabase/functions/_backend/utils/cancel_save_offer.ts', () => ({}))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile.ts', () => ({
   getBillingProfile: mocks.profile, updateBillingDetails: mocks.update, addBillingTaxId: mocks.add, removeBillingTaxId: mocks.remove,
 }))
+vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile_sync.ts', () => ({ syncBillingProfile: vi.fn() }))
+vi.mock('../supabase/functions/_backend/utils/stripe_billing_currency.ts', () => ({ getCurrencyTransitionPreview: mocks.previewCurrency, getBillingCurrencyState: mocks.currency, changeBillingCurrency: mocks.changeCurrency }))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_discounts.ts', () => ({ getBillingDiscounts: mocks.discounts }))
 vi.mock('../supabase/functions/_backend/utils/invoice_document.ts', async (importOriginal) => ({ ...await importOriginal<typeof import('../supabase/functions/_backend/utils/invoice_document.ts')>(), getInvoiceDocument: mocks.invoice }))
 vi.mock('../supabase/functions/_backend/utils/invoice_email.ts', () => ({ getInvoiceEmailPreferences: mocks.emailPreferences, updateInvoiceEmailPreferences: mocks.saveEmailPreferences }))
@@ -32,6 +35,9 @@ const operations = [
   { path: 'invoice-email', permission: 'org.read_billing', action: mocks.emailPreferences },
   { path: 'invoice-email/update', permission: 'org.update_billing', action: mocks.saveEmailPreferences },
   { path: 'invoice-document', permission: 'org.read_invoices', action: mocks.invoice },
+  { path: 'currency/preview', permission: 'org.update_billing', action: mocks.previewCurrency },
+  { path: 'currency', permission: 'org.read_billing', action: mocks.currency },
+  { path: 'currency/update', permission: 'org.update_billing', action: mocks.changeCurrency },
   { path: 'discounts', permission: 'org.read_billing', action: mocks.discounts },
   { path: 'profile', permission: 'org.read_billing', action: mocks.profile },
   { path: 'profile/update', permission: 'org.update_billing', action: mocks.update },
@@ -75,7 +81,7 @@ describe.each(operations)('$path authorization', ({ path, permission, action }) 
       expect(action.mock.calls[0][1]).toBe('org_example')
       return
     }
-    expect(action.mock.calls[0][path === 'discounts' ? 1 : 0]).toEqual({ customerId: 'cus_resolved', billingAccount: 'us' })
+    expect(action.mock.calls[0][['discounts', 'currency', 'currency/update', 'currency/preview'].includes(path) ? 1 : 0]).toEqual({ customerId: 'cus_resolved', billingAccount: 'us' })
   })
 })
 

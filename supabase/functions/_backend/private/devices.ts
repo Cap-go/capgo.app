@@ -8,7 +8,7 @@ import { sanitizeFilename, toCsv } from '../utils/csv.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { appIdSchema, cursorSchema, deviceIdListSchema, hasInvalidQueryLimitInput, MAX_DEVICE_ID_FILTER, hasUnsafeDevicesQueryText, queryLimitSchema, safeQueryTextSchema } from '../utils/privateAnalyticsValidation.ts'
+import { appIdSchema, cursorSchema, deviceIdListSchema, devicesPageOffsetSchema, hasInvalidQueryLimitInput, MAX_DEVICE_ID_FILTER, hasUnsafeDevicesQueryText, queryLimitSchema, safeQueryTextSchema } from '../utils/privateAnalyticsValidation.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { countDevices, countInstallSources, readDevices } from '../utils/stats.ts'
@@ -42,6 +42,8 @@ interface DataDevice {
   cursor?: string
   /** Limit for results (default 1000) */
   limit?: number
+  /** Rows to skip after the cursor (0..MAX_DEVICES_PAGE_OFFSET), to jump to a far page in one request */
+  offset?: number
   updated_at_gt?: string
   updated_at_lte?: string
   format?: 'csv' | 'json'
@@ -84,6 +86,7 @@ const devicesBodyShape = {
   order: z.array(orderItemSchema).optional(),
   cursor: cursorSchema.optional(),
   limit: queryLimitSchema.optional(),
+  offset: devicesPageOffsetSchema.optional(),
   updated_at_gt: z.string().min(1).max(64).optional(),
   updated_at_lte: z.string().min(1).max(64).optional(),
 }
@@ -209,6 +212,7 @@ function toReadDevicesParams(body: z.infer<typeof devicesBodySchema>, limit?: nu
       search: body.search,
       order: body.order,
       cursor: body.cursor,
+      offset: body.offset,
       limit,
       updated_at_gt: body.updated_at_gt,
       updated_at_lte: body.updated_at_lte,
@@ -266,7 +270,7 @@ app.post('/export', middlewareAuth(), async (c) => {
   // An override filter that matches nothing exports nothing rather than every device.
   const rows = overrideIds?.length === 0
     ? []
-    : (await readDevices(c, { ...params, cursor: undefined }, customIdMode)).data
+    : (await readDevices(c, { ...params, cursor: undefined, offset: undefined }, customIdMode)).data
 
   if (format === 'json') {
     return c.json({

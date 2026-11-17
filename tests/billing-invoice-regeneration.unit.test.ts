@@ -9,6 +9,7 @@ import BillingProfileSection from '../src/components/billing/BillingProfileSecti
 
 const mocks = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn(), addTax: vi.fn(), removeTax: vi.fn(), invoice: vi.fn(), download: vi.fn(), error: vi.fn() }))
 vi.mock('~/services/stripe', () => ({
+  getBillingCurrencyState: vi.fn().mockResolvedValue({ currency: 'eur', currencies: ['eur', 'usd'], subscriptionId: 'sub_example', endsAt: null, pendingCurrency: null, regionalDiscountEligible: false }),
   getBillingProfile: mocks.load, updateBillingDetails: mocks.save, getInvoiceDocument: mocks.invoice,
   addBillingTaxId: mocks.addTax, removeBillingTaxId: mocks.removeTax, formatStripeAmount: () => '€14.64',
 }))
@@ -37,6 +38,7 @@ async function mount() {
       h(BillingInvoices, { orgId: 'org_example', invoices: [invoice] }),
     ]),
   })
+  app.component('RouterLink', { render: () => h('a') })
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } }))
   app.mount('#app')
   await settle()

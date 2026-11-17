@@ -1,13 +1,11 @@
 import type { Context } from 'hono'
+import type { PluginRegion } from '../plugin_runtime/utils/pluginRegionTargets.ts'
+import { parsePluginRegions } from '../plugin_runtime/utils/pluginRegionTargets.ts'
 import { existInEnv, getEnv } from './utils.ts'
 
 const PLUGIN_REGION_TARGETS_ENV = 'PLUGIN_REGION_TARGETS'
 
-export interface PluginRegion {
-  name: string
-  envName: string
-  url: string
-}
+export type { PluginRegion }
 
 export const PLUGIN_REGIONS: PluginRegion[] = [
   { name: 'eu', envName: 'capgo_plugin-eu-prod', url: 'https://plugin.eu.capgo.app/ok' },
@@ -20,26 +18,6 @@ export const PLUGIN_REGIONS: PluginRegion[] = [
   { name: 'oc', envName: 'capgo_plugin-oc-prod', url: 'https://plugin.oc.capgo.app/ok' },
   { name: 'sa', envName: 'capgo_plugin-sa-prod', url: 'https://plugin.sa.capgo.app/ok' },
 ]
-
-function isPluginRegion(value: unknown): value is PluginRegion {
-  if (!value || typeof value !== 'object')
-    return false
-
-  const region = value as Record<string, unknown>
-  return typeof region.name === 'string'
-    && typeof region.envName === 'string'
-    && typeof region.url === 'string'
-    && region.url.length > 0
-}
-
-function parsePluginRegions(rawRegions: string) {
-  const parsed = JSON.parse(rawRegions) as unknown
-
-  if (!Array.isArray(parsed) || !parsed.every(isPluginRegion) || !parsed.length)
-    throw new Error('Invalid plugin region targets')
-
-  return parsed
-}
 
 export function getConfiguredPluginRegions(c: Context) {
   if (!existInEnv(c, PLUGIN_REGION_TARGETS_ENV))

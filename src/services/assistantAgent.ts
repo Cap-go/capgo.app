@@ -168,7 +168,7 @@ function instructions(context: AssistantContext): string {
     '- When you need the user to pick something, call ask_user with options from real data instead of asking in plain text.',
     '- Delete, overwrite, cancel and push-notification tools are not run immediately: the user gets a confirm card. Tell them to confirm it.',
     '- Uploading bundle files and starting native builds need the Capgo CLI: give the command (bunx @capgo/cli@latest ...).',
-    '- Reply in the user\'s language, short and plain (a few sentences, simple markdown lists at most).',
+    '- Reply in the user\'s language. Stay short. The chat renders markdown (headings, lists, tables, code, links, images). Do not send HTML.',
     '',
     `Console routes:\n${CONSOLE_ROUTES}`,
     where ? `\n${where}` : '',

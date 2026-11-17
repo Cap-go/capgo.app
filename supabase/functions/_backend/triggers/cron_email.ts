@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import type { WeeklyInstallStatsInput } from '../utils/cron_email_stats.ts'
+import type { MonthlyCreateStatsBatchRow, WeeklyInstallStatsBatchRow, WeeklyInstallStatsInput } from '../utils/cron_email_stats.ts'
 import type { DeployReportState } from '../utils/deploy_report.ts'
 import type { PgClient } from '../utils/pg.ts'
 import { Hono } from 'hono/tiny'
@@ -9,9 +9,11 @@ import {
   computeWeeklyInstallStats,
   getPreviousMonthUtcRange,
   getWeeklyReportRange,
+  MONTHLY_REPORT_BATCH_SQL,
   shouldSendDeployInstallStatsEmail,
   sumVersionFailures,
   sumVersionInstalls,
+  WEEKLY_REPORT_BATCH_SQL,
   WEEKLY_REPORT_SQL,
 } from '../utils/cron_email_stats.ts'
 import { DEPLOY_REPORT_CONSUME_SQL, DEPLOY_REPORT_RELEASE_SQL, DEPLOY_REPORT_SELECT_SQL } from '../utils/deploy_report.ts'
@@ -55,6 +57,7 @@ app.post('/', middlewareAPISecret, async (c) => {
   const {
     email,
     appId,
+    appIds,
     orgId,
     type,
     deployId,
@@ -66,9 +69,12 @@ app.post('/', middlewareAPISecret, async (c) => {
     totalFails,
     failPercentage,
     reportDate,
+    windowAnchor,
   } = await parseBody<{
     email: string
     appId?: string
+    appIds?: unknown
+    windowAnchor?: unknown
     orgId?: string
     type: string
     deployId?: number
@@ -107,6 +113,20 @@ app.post('/', middlewareAPISecret, async (c) => {
       failPercentage,
       reportDate,
     })
+  }
+
+  // Weekly/monthly producers queue one message per org with the apps that
+  // have something to report, so recipients are resolved once per org.
+  if (appIds !== undefined && (type === 'weekly_install_stats' || type === 'monthly_create_stats')) {
+    if (!isStringArray(appIds) || appIds.length === 0) {
+      throw simpleError('invalid_appIds', 'Invalid appIds', { email, type })
+    }
+    // Use the producer's clock so the report window matches the one that
+    // selected these apps, even when the message is consumed on a later day.
+    const anchor = parseWindowAnchor(windowAnchor)
+    return type === 'weekly_install_stats'
+      ? await handleWeeklyInstallStatsBatch(c, appIds, anchor)
+      : await handleMonthlyCreateStatsBatch(c, appIds, anchor)
   }
 
   // All other types require appId
@@ -237,6 +257,90 @@ async function sendMonthlyCreateStats(c: Context, pg: PgClient, appId: string) {
     await sendEmailToOrgMembers(c, 'org:monthly_create_stats', 'monthly_stats', metadata, await getOrgIdForApp(c, appId, pg))
   }
 
+  return c.json(BRES)
+}
+
+export function parseWindowAnchor(value: unknown): Date {
+  if (value === undefined || value === null)
+    return new Date()
+  const anchor = typeof value === 'string' ? new Date(value) : null
+  if (!anchor || Number.isNaN(anchor.getTime()))
+    throw simpleError('invalid_windowAnchor', 'Invalid windowAnchor', { windowAnchor: value })
+  return anchor
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(item => typeof item === 'string' && item.length > 0)
+}
+
+interface OrgReport {
+  orgId: string
+  metadata: Record<string, unknown>
+}
+
+// Resolve every org's recipients before the first send, so a lookup failure
+// retries the message without having emailed part of its apps.
+async function sendOrgReports(c: Context, eventName: string, preferenceKey: 'weekly_stats' | 'monthly_stats', reports: OrgReport[]) {
+  const deliveries = new Map<string, Awaited<ReturnType<typeof prepareEmailToOrgMembers>>>()
+  for (const { orgId } of reports) {
+    if (!deliveries.has(orgId))
+      deliveries.set(orgId, await prepareEmailToOrgMembers(c, eventName, preferenceKey, orgId, undefined, { requireCompleteRecipients: true }))
+  }
+  for (const { orgId, metadata } of reports)
+    deliveries.get(orgId)?.send(metadata)
+}
+
+async function handleWeeklyInstallStatsBatch(c: Context, appIds: string[], anchor: Date) {
+  const range = getWeeklyReportRange(anchor)
+  const pg = await getPgClient(c)
+  let rows: WeeklyInstallStatsBatchRow[]
+  try {
+    rows = await queryJson<WeeklyInstallStatsBatchRow>(pg, WEEKLY_REPORT_BATCH_SQL, [appIds, range.start, range.end])
+  }
+  catch (error) {
+    throw simpleError('cannot_generate_stats', 'Cannot generate stats', { error })
+  }
+  finally {
+    closeClient(c, pg)
+  }
+
+  // Validate every app before sending anything: malformed analytics retry the whole message.
+  const reports = rows.map(row => ({ row, stats: computeWeeklyInstallStats(row) }))
+    .filter(({ stats }) => stats.successfulInstalls > 0 || stats.failedUpdates > 0)
+    .map(({ row, stats }) => ({ orgId: row.owner_org, metadata: buildWeeklyEmailMetadata(row.app_id, stats, range) }))
+
+  cloudlog({ requestId: c.get('requestId'), message: 'weekly_install_stats batch', apps: appIds.length, found: rows.length, reports: reports.length })
+  await sendOrgReports(c, 'user:weekly_stats', 'weekly_stats', reports)
+  return c.json(BRES)
+}
+
+async function handleMonthlyCreateStatsBatch(c: Context, appIds: string[], anchor: Date) {
+  const { startIso, endExclusiveIso, monthName } = getPreviousMonthUtcRange(anchor)
+  const pg = await getPgClient(c)
+  let rows: MonthlyCreateStatsBatchRow[]
+  try {
+    rows = await queryJson<MonthlyCreateStatsBatchRow>(pg, MONTHLY_REPORT_BATCH_SQL, [appIds, startIso, endExclusiveIso])
+  }
+  catch (error) {
+    throw simpleError('cannot_fetch_monthly_stats', 'Cannot fetch monthly stats', { error })
+  }
+  finally {
+    closeClient(c, pg)
+  }
+
+  const reports = rows.filter(row => row.bundle_count > 0 || row.publish_count > 0)
+    .map(row => ({
+      orgId: row.owner_org,
+      metadata: {
+        app_id: row.app_id,
+        month_name: monthName,
+        monthly_bundles_created: row.bundle_count.toString(),
+        monthly_publishes: row.publish_count.toString(),
+      },
+    }))
+
+  cloudlog({ requestId: c.get('requestId'), message: 'monthly_create_stats batch', apps: appIds.length, found: rows.length, reports: reports.length })
+  await sendOrgReports(c, 'org:monthly_create_stats', 'monthly_stats', reports)
   return c.json(BRES)
 }
 

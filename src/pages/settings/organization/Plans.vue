@@ -19,12 +19,13 @@ import { ENTERPRISE_MAU_STOPS, formatMau, getOrgExtraMau, quoteEnterpriseScale }
 import { formatNumberValue, getFormatLocale } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { observeEventsForPlan } from '~/services/observePlanAllowance'
+import { organizationBillingKey } from '~/services/organizationWatchKeys'
 import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
 import { checkPermissions } from '~/services/permissions'
 import { formatPlanAmount, usePlanPrices } from '~/services/planPrices'
 import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getSignupAttributionEventTags } from '~/services/signupAttribution'
-import { startSubscriptionCheckout } from '~/services/stripe'
+import { CheckoutAmountLimitError, startSubscriptionCheckout } from '~/services/stripe'
 import { openSupport } from '~/services/support'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -42,8 +43,6 @@ displayStore.NavTitle = t('plans')
 const initialLoad = ref(false)
 const thankYouPage = ref(false)
 const isSubscribeLoading = ref<Array<boolean>>([])
-const segmentVal = ref<'m' | 'y'>('y')
-const isYearly = computed(() => segmentVal.value === 'y')
 const route = useRoute()
 const router = useRouter()
 const plansVisitTracker = createPlansVisitTracker()
@@ -58,6 +57,13 @@ const showCancelModal = ref(false)
 const embeddedCheckout = ref<{ clientSecret: string, publishableKey: string, planName: string } | null>(null)
 
 const { currentOrganization } = storeToRefs(organizationStore)
+// The org can already be loaded before this page mounts. Honor its interval on
+// entry as well as on org switches; new accounts start with monthly billing.
+const segmentVal = ref<'m' | 'y'>('m')
+const isYearly = computed(() => segmentVal.value === 'y')
+watch(() => [currentOrganization.value?.gid, currentOrganization.value?.is_yearly] as const, () => {
+  segmentVal.value = currentOrganization.value?.is_yearly ? 'y' : 'm'
+}, { immediate: true })
 const billingOrgId = computed(() => currentOrganization.value?.gid)
 const { paidAt, billingLookupFailed, trialSkipped } = useBillingPaidAt(billingOrgId, isMobile)
 const showExpiredTrialState = computed(() => {
@@ -261,24 +267,41 @@ async function loadEnterpriseScale(orgId: string) {
     enterpriseMauIndex.value = index
 }
 
+const checkoutAmountLimit = ref<{ canSwitchToUsd: boolean } | null>(null)
+
+function showUsdPrices() {
+  setStandardPrice(true)
+  setCurrency('usd')
+  checkoutAmountLimit.value = null
+}
+
 async function startPlanCheckout(plan: Plan, isYear: boolean) {
   if (!plan.stripe_id)
     return null
   // Strip a previous ?success/?cancel so Stripe returns to a clean plans URL.
   const returnUrl = `${globalThis.location.origin}${route.path}`
-  return await startSubscriptionCheckout({
-    priceId: plan.stripe_id,
-    successUrl: `${returnUrl}?success=1`,
-    cancelUrl: `${returnUrl}?cancel=1`,
-    isYear,
-    orgId: currentOrganization.value?.gid ?? '',
-    // Enterprise only: MAU added to the plan quota, billed on the same subscription.
-    extraMau: isEnterprisePlan(plan) ? enterpriseQuote.value?.extraMau : undefined,
-    // Only a currency Stripe sells this plan in; otherwise Checkout uses the price default.
-    currency: amountsFor(plan.stripe_id) ? priceCurrency.value ?? undefined : undefined,
-    // The page shows the full price (opt-out, or a currency the discount is not sold in): checkout sells it.
-    standardPrice: showsStandardPrice(plan.stripe_id),
-  })
+  checkoutAmountLimit.value = null
+  try {
+    return await startSubscriptionCheckout({
+      priceId: plan.stripe_id,
+      successUrl: `${returnUrl}?success=1`,
+      cancelUrl: `${returnUrl}?cancel=1`,
+      isYear,
+      orgId: currentOrganization.value?.gid ?? '',
+      // Enterprise only: MAU added to the plan quota, billed on the same subscription.
+      extraMau: isEnterprisePlan(plan) ? enterpriseQuote.value?.extraMau : undefined,
+      // Only a currency Stripe sells this plan in; otherwise Checkout uses the price default.
+      currency: amountsFor(plan.stripe_id) ? priceCurrency.value ?? undefined : undefined,
+      // The page shows the full price (opt-out, or a currency the discount is not sold in): checkout sells it.
+      standardPrice: showsStandardPrice(plan.stripe_id),
+    })
+  }
+  catch (error) {
+    if (!(error instanceof CheckoutAmountLimitError))
+      throw error
+    checkoutAmountLimit.value = { canSwitchToUsd: error.canSwitchToUsd }
+    return null
+  }
 }
 
 function trackPlanCheckoutStarted(plan: Plan, isYear: boolean, checkoutSource: string) {
@@ -351,7 +374,8 @@ async function openChangePlan(plan: Plan, index: number) {
     const checkoutIsYearly = isCheckoutYearly(plan)
     const session = await startPlanCheckout(plan, checkoutIsYearly)
     if (!session) {
-      toast.error(t('billing-checkout-error'))
+      if (!checkoutAmountLimit.value)
+        toast.error(t('billing-checkout-error'))
     }
     else if (session.kind === 'embedded') {
       embeddedCheckout.value = { ...session, planName: plan.name }
@@ -504,7 +528,11 @@ async function findBillableFallbackOrg() {
   }
   return undefined
 }
-watch(currentOrganization, async (newOrg, prevOrg) => {
+// Rerun on organization switch or billing change, not when the store swaps in a
+// refreshed copy of the same organization (logo load, unrelated settings save).
+watch(() => organizationBillingKey(currentOrganization.value), async (_key, previousKey) => {
+  const newOrg = currentOrganization.value
+  const prevOrgId = previousKey ? (JSON.parse(previousKey) as string[])[0] : undefined
   if (newOrg) {
     // Viewing plans requires read_billing; update_billing is only for checkout actions.
     const hasReadBillingPermission = await checkPermissions('org.read_billing', { orgId: newOrg.gid })
@@ -529,16 +557,15 @@ watch(currentOrganization, async (newOrg, prevOrg) => {
         ],
       })
       await dialogStore.onDialogDismiss()
-      if (!prevOrg)
+      if (!prevOrgId)
         router.push('/apps')
       else
-        organizationStore.setCurrentOrganization(prevOrg.gid)
+        organizationStore.setCurrentOrganization(prevOrgId)
       return
     }
   }
 
   await loadData(false)
-  segmentVal.value = currentOrganization.value?.is_yearly ? 'y' : 'm'
 
   // isSubscribeLoading.value.fill(false, 0, plans.value.length)
 })
@@ -723,6 +750,8 @@ function buttonStyle(p: Plan) {
               type="button"
               class="py-1.5 px-4 text-sm font-medium rounded-md transition-all duration-200"
               :class="segmentVal === 'm' ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
+              :aria-pressed="segmentVal === 'm'"
+              data-test="billing-monthly"
               @click="segmentVal = 'm'"
             >
               {{ t('monthly-plan') }}
@@ -731,10 +760,18 @@ function buttonStyle(p: Plan) {
               type="button"
               class="flex gap-2 items-center py-1.5 px-4 text-sm font-medium rounded-md transition-all duration-200"
               :class="segmentVal === 'y' ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
+              :aria-pressed="segmentVal === 'y'"
+              data-test="billing-yearly"
               @click="segmentVal = 'y'"
             >
               {{ t('yearly') }}
               <span v-if="anyYearlyDiscount" class="py-0.5 px-1.5 text-xs font-bold text-green-600 bg-green-100 rounded-full dark:text-green-400 dark:bg-green-900/30">{{ t('yearly-two-months-free') }}</span>
+            </button>
+          </div>
+          <div v-if="checkoutAmountLimit" role="alert" class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100" data-test="checkout-amount-limit">
+            <p>{{ t(checkoutAmountLimit.canSwitchToUsd ? 'checkout-limit-usd-help' : 'checkout-limit-contact-help') }}</p>
+            <button v-if="checkoutAmountLimit.canSwitchToUsd" type="button" class="d-btn d-btn-sm d-btn-primary mt-3" @click="showUsdPrices">
+              {{ t('checkout-limit-show-usd') }}
             </button>
           </div>
           <!-- Billing currency: only currencies set on the Stripe prices -->
@@ -759,6 +796,9 @@ function buttonStyle(p: Plan) {
           </p>
           <p v-if="lockedCurrency" data-test="plans-currency-locked" class="text-xs text-gray-500 dark:text-gray-400">
             {{ t(lockedCurrencyUnavailable ? 'plans-currency-unavailable' : 'plans-currency-locked', { currency: lockedCurrency.toUpperCase() }) }}
+            <RouterLink class="ml-2 underline" to="/settings/organization/billing">
+              {{ t('billing-change-currency') }}
+            </RouterLink>
           </p>
         </div>
       </div>
@@ -886,6 +926,9 @@ function buttonStyle(p: Plan) {
             </button>
             <p v-if="isYearlyPlan(p, segmentVal)" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} {{ formatPlanPrice(p, hasYearlyDiscount(p) ? planAmounts(p).year : planAmounts(p).month) }}
+            </p>
+            <p v-else class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('billed-monthly-at') }} {{ formatPlanPrice(p, planAmounts(p).month) }}
             </p>
           </div>
 

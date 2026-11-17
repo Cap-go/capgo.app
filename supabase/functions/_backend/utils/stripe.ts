@@ -1,8 +1,11 @@
+import { billingRequestOptions, withBillingProfileLock } from './billing_profile_lock.ts'
 import type { Context } from 'hono'
 import type { BillingAccount } from './stripe_billing.ts'
 import type { Database } from './supabase.types.ts'
 import Stripe from 'stripe'
 import type { PriceTier } from './country_price_tier.ts'
+import { isCheckoutAmountLimit } from './checkout_limit.ts'
+import { getCreditQuote } from './credit_currency.ts'
 import { FULL_PRICE_TIER, priceTierForCountries } from './country_price_tier.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
@@ -1246,64 +1249,75 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
   assertBillingAccountReachableForUser(c, billingAccount, customerId)
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return { url: '' }
-  const resolvedPlanId = await resolveCheckoutPlanProductId(c, planId, billingAccount)
-  // Same tier as the Plans page: the most expensive of the visitor, billing address and saved card countries.
-  const customerBilling = await getCustomerBilling(getStripe(c, billingAccount), customerId)
-  const countries = [getRequestCountry(c), ...customerBilling.countries]
-  const loadPlanPrice = async (tier: PriceTier) => {
-    const prices = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount, tier)
-    cloudlog({ requestId: c.get('requestId'), message: 'prices', prices, billingAccount, resolvedPlanId, tier })
-    if (!prices.priceId)
-      throw new Error('Cannot find price')
-    const price = await getStripe(c, billingAccount).prices.retrieve(prices.priceId, { expand: ['currency_options'] })
-    const amounts = getPriceCurrencyAmounts(price)
-    const currencies = Object.keys(amounts)
-    return { priceId: prices.priceId, price, amounts, currencies }
-  }
-  const tier = options.standardPrice ? FULL_PRICE_TIER : priceTierForCountries(countries)
-  let checkoutPrice = await loadPlanPrice(tier)
-  // A regional price is only sold in its region's currency: any other one buys the full price. Decided
-  // before validating the currency, which the regional price may not list while the full price does.
-  const billedCurrency = customerBilling.currency ?? requestedCurrency ?? checkoutPrice.price.currency
-  if (!isRegionalCurrency(countries, tier, billedCurrency, checkoutPrice.currencies))
-    checkoutPrice = await loadPlanPrice(FULL_PRICE_TIER)
-  const { priceId, price: planPrice, amounts: planAmounts } = checkoutPrice
-  const checkoutCurrency = resolveCheckoutCurrency(customerBilling.currency, checkoutPrice.currencies, requestedCurrency)
-  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: priceId, quantity: 1 }]
-  if (extraMau && extraMau.extraMau > 0) {
-    // Same interval as the plan: Checkout bills every item of a subscription together.
-    const interval = recurrence === 'year' ? 'year' : 'month'
-    const extraMauPriceId = await getExtraMauPriceId(c, extraMau.includedMau, interval, planPrice.tax_behavior ?? null, billingAccount, getCurrencyRatios(planAmounts))
-    lineItems.push({ price: extraMauPriceId, quantity: extraMau.extraMau / EXTRA_MAU_UNIT })
-  }
-  const metadata = {
-    ...(attributionId ? { attribution_id: attributionId } : {}),
-    ...getDatafastAttributionMetadata(datafastAttribution),
-    ...getAffonsoReferralMetadata(affonsoReferral),
-  }
-  const allowedSuccessUrl = getAllowedRedirectUrl(c, successUrl, 'success_url')
-  const allowedCancelUrl = getAllowedRedirectUrl(c, cancelUrl, 'cancel_url')
-  const publishableKey = getEmbeddedCheckoutPublishableKey(c, billingAccount, embedded)
-  const session = await getStripe(c, billingAccount).checkout.sessions.create({
-    allow_promotion_codes: true,
-    // A regional discount needs a billing address: the webhook checks it and the card against the region.
-    billing_address_collection: getPriceTier(planPrice) === FULL_PRICE_TIER ? 'auto' : 'required',
-    mode: 'subscription',
-    customer: customerId,
-    ...getCheckoutRedirectParams(publishableKey, `${allowedSuccessUrl}?success=true`, allowedCancelUrl),
-    automatic_tax: { enabled: isAutomaticTaxEnabled(billingAccount) },
-    client_reference_id: clientReferenceId,
-    metadata: Object.keys(metadata).length ? metadata : undefined,
-    customer_update: {
-      address: 'auto',
-      name: 'auto',
-    },
-    tax_id_collection: { enabled: true },
-    saved_payment_method_options: CHECKOUT_SAVED_PAYMENT_METHOD_OPTIONS,
-    line_items: lineItems,
-    ...(checkoutCurrency ? { currency: checkoutCurrency } : {}),
+  return withBillingProfileLock(c, billingAccount, customerId, async (assertHeld) => {
+    const resolvedPlanId = await resolveCheckoutPlanProductId(c, planId, billingAccount)
+    // Same tier as the Plans page: the most expensive of the visitor, billing address and saved card countries.
+    const customerBilling = await getCustomerBilling(getStripe(c, billingAccount), customerId)
+    const countries = [getRequestCountry(c), ...customerBilling.countries]
+    const loadPlanPrice = async (tier: PriceTier) => {
+      const prices = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount, tier)
+      cloudlog({ requestId: c.get('requestId'), message: 'prices', prices, billingAccount, resolvedPlanId, tier })
+      if (!prices.priceId)
+        throw new Error('Cannot find price')
+      const price = await getStripe(c, billingAccount).prices.retrieve(prices.priceId, { expand: ['currency_options'] })
+      const amounts = getPriceCurrencyAmounts(price)
+      const currencies = Object.keys(amounts)
+      return { priceId: prices.priceId, price, amounts, currencies }
+    }
+    const tier = options.standardPrice ? FULL_PRICE_TIER : priceTierForCountries(countries)
+    let checkoutPrice = await loadPlanPrice(tier)
+    // A regional price is only sold in its region's currency: any other one buys the full price. Decided
+    // before validating the currency, which the regional price may not list while the full price does.
+    const billedCurrency = customerBilling.currency ?? requestedCurrency ?? checkoutPrice.price.currency
+    if (!isRegionalCurrency(countries, tier, billedCurrency, checkoutPrice.currencies))
+      checkoutPrice = await loadPlanPrice(FULL_PRICE_TIER)
+    const { priceId, price: planPrice, amounts: planAmounts } = checkoutPrice
+    const checkoutCurrency = resolveCheckoutCurrency(customerBilling.currency, checkoutPrice.currencies, requestedCurrency)
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: priceId, quantity: 1 }]
+    if (extraMau && extraMau.extraMau > 0) {
+      // Same interval as the plan: Checkout bills every item of a subscription together.
+      const interval = recurrence === 'year' ? 'year' : 'month'
+      const extraMauPriceId = await getExtraMauPriceId(c, extraMau.includedMau, interval, planPrice.tax_behavior ?? null, billingAccount, getCurrencyRatios(planAmounts))
+      lineItems.push({ price: extraMauPriceId, quantity: extraMau.extraMau / EXTRA_MAU_UNIT })
+    }
+    const metadata = {
+      ...(attributionId ? { attribution_id: attributionId } : {}),
+      ...getDatafastAttributionMetadata(datafastAttribution),
+      ...getAffonsoReferralMetadata(affonsoReferral),
+    }
+    const allowedSuccessUrl = getAllowedRedirectUrl(c, successUrl, 'success_url')
+    const allowedCancelUrl = getAllowedRedirectUrl(c, cancelUrl, 'cancel_url')
+    const publishableKey = getEmbeddedCheckoutPublishableKey(c, billingAccount, embedded)
+    await assertHeld()
+    const session = await getStripe(c, billingAccount).checkout.sessions.create({
+      allow_promotion_codes: true,
+      // A regional discount needs a billing address: the webhook checks it and the card against the region.
+      billing_address_collection: getPriceTier(planPrice) === FULL_PRICE_TIER ? 'auto' : 'required',
+      mode: 'subscription',
+      customer: customerId,
+      ...getCheckoutRedirectParams(publishableKey, `${allowedSuccessUrl}?success=true`, allowedCancelUrl),
+      automatic_tax: { enabled: isAutomaticTaxEnabled(billingAccount) },
+      client_reference_id: clientReferenceId,
+      metadata: Object.keys(metadata).length ? metadata : undefined,
+      customer_update: {
+        address: 'auto',
+        name: 'auto',
+      },
+      tax_id_collection: { enabled: true },
+      saved_payment_method_options: CHECKOUT_SAVED_PAYMENT_METHOD_OPTIONS,
+      line_items: lineItems,
+      ...(checkoutCurrency ? { currency: checkoutCurrency } : {}),
+    }, billingRequestOptions).catch(async (error: unknown) => {
+      if (!isCheckoutAmountLimit(error))
+        throw error
+      const full = getPriceTier(checkoutPrice.price) === FULL_PRICE_TIER ? checkoutPrice : await loadPlanPrice(FULL_PRICE_TIER)
+      throw simpleError('checkout_amount_limit', 'This total exceeds Stripe’s payment limit for this currency.', {
+        currency: checkoutCurrency ?? checkoutPrice.price.currency,
+        canSwitchToUsd: !customerBilling.currency && full.currencies.includes('usd') && checkoutCurrency !== 'usd',
+      })
+    })
+    return toCheckoutSessionResult(session, publishableKey)
   })
-  return toCheckoutSessionResult(session, publishableKey)
 }
 
 async function listPricesByProduct(c: Context, productId: string, billingAccount: BillingAccount, active?: boolean) {
@@ -1347,62 +1361,68 @@ export async function createOneTimeCheckout(
   assertBillingAccountReachableForUser(c, billingAccount, customerId)
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return { url: '' }
+  return withBillingProfileLock(c, billingAccount, customerId, async (assertHeld) => {
 
-  const priceId = await getOneTimePriceId(c, productId, billingAccount)
-  if (!priceId)
-    throw new Error(`Cannot find one-time price for product ${productId}`)
+    const priceId = await getOneTimePriceId(c, productId, billingAccount)
+    if (!priceId)
+      throw new Error(`Cannot find one-time price for product ${productId}`)
 
-  const allowedSuccessUrl = getAllowedRedirectUrl(c, successUrl, 'success_url')
-  const allowedCancelUrl = getAllowedRedirectUrl(c, cancelUrl, 'cancel_url')
-  const successUrlWithFlag = allowedSuccessUrl.includes('?') ? `${allowedSuccessUrl}&success=true` : `${allowedSuccessUrl}?success=true`
-  const publishableKey = getEmbeddedCheckoutPublishableKey(c, billingAccount, embedded)
+    const allowedSuccessUrl = getAllowedRedirectUrl(c, successUrl, 'success_url')
+    const allowedCancelUrl = getAllowedRedirectUrl(c, cancelUrl, 'cancel_url')
+    const successUrlWithFlag = allowedSuccessUrl.includes('?') ? `${allowedSuccessUrl}&success=true` : `${allowedSuccessUrl}?success=true`
+    const publishableKey = getEmbeddedCheckoutPublishableKey(c, billingAccount, embedded)
 
-  const session = await getStripe(c, billingAccount).checkout.sessions.create({
-    billing_address_collection: 'auto',
-    mode: 'payment',
-    customer: customerId,
-    ...getCheckoutRedirectParams(publishableKey, successUrlWithFlag, allowedCancelUrl),
-    automatic_tax: { enabled: isAutomaticTaxEnabled(billingAccount) },
-    client_reference_id: clientReferenceId,
-    customer_update: {
-      address: 'auto',
-      name: 'auto',
-    },
-    tax_id_collection: { enabled: true },
-    saved_payment_method_options: CHECKOUT_SAVED_PAYMENT_METHOD_OPTIONS,
-    invoice_creation: { enabled: true },
-    line_items: [
-      {
-        price: priceId,
-        quantity,
-        ...(isStripeEmulatorEnabled(c)
-          ? {}
-          : {
-              adjustable_quantity: {
-                enabled: true,
-                minimum: 1,
-                maximum: 100000,
-              },
-            }),
+    const quote = await getCreditQuote(getStripe(c, billingAccount), customerId, priceId, c)
+    await assertHeld()
+    const session = await getStripe(c, billingAccount).checkout.sessions.create({
+      currency: quote.currency,
+      adaptive_pricing: { enabled: false },
+      billing_address_collection: 'auto',
+      mode: 'payment',
+      customer: customerId,
+      ...getCheckoutRedirectParams(publishableKey, successUrlWithFlag, allowedCancelUrl),
+      automatic_tax: { enabled: isAutomaticTaxEnabled(billingAccount) },
+      client_reference_id: clientReferenceId,
+      customer_update: {
+        address: 'auto',
+        name: 'auto',
       },
-    ],
-    custom_text: {
-      submit: {
-        message: 'Your card may be saved so you can later enable optional credit auto top-up in organization settings.',
+      tax_id_collection: { enabled: true },
+      saved_payment_method_options: CHECKOUT_SAVED_PAYMENT_METHOD_OPTIONS,
+      invoice_creation: { enabled: true },
+      line_items: [
+        {
+          ...(quote.priceData ? { price_data: quote.priceData } : { price: priceId }),
+          quantity,
+          ...(isStripeEmulatorEnabled(c)
+            ? {}
+            : {
+                adjustable_quantity: {
+                  enabled: true,
+                  minimum: 1,
+                  maximum: 100000,
+                },
+              }),
+        },
+      ],
+      custom_text: {
+        submit: {
+          message: 'Your card may be saved so you can later enable optional credit auto top-up in organization settings.',
+        },
       },
-    },
-    payment_intent_data: {
-      setup_future_usage: 'off_session',
-    },
-    metadata: {
-      productId,
-      orgId: clientReferenceId ?? '',
-      intendedQuantity: String(quantity),
-      ...getDatafastAttributionMetadata(datafastAttribution),
-      ...getAffonsoReferralMetadata(affonsoReferral),
-    },
+      payment_intent_data: {
+        setup_future_usage: 'off_session',
+      },
+      metadata: {
+        productId,
+        orgId: clientReferenceId ?? '',
+        intendedQuantity: String(quantity),
+        ...getDatafastAttributionMetadata(datafastAttribution),
+        ...getAffonsoReferralMetadata(affonsoReferral),
+      },
+    }, billingRequestOptions)
+    return toCheckoutSessionResult(session, publishableKey)
   })
-  return toCheckoutSessionResult(session, publishableKey)
 }
 
 export async function getCreditCheckoutDetails(c: Context, session: Stripe.Checkout.Session, expectedProductId: string, billingAccount: BillingAccount = 'ee'): Promise<CreditCheckoutDetails> {

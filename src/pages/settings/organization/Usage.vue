@@ -597,6 +597,9 @@ function nextRunDate() {
               <span>{{ formatBuildTime(planUsage?.currentPlan?.build_time_unit || 0) }}</span>
             </div>
           </div>
+          <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('build-time-includes-simulators') }}
+          </p>
         </div>
 
         <div v-if="observeEventsIncluded > 0" class="p-5 transition-shadow border border-slate-200 shadow-sm bg-slate-50 rounded-xl dark:bg-white/[0.03] dark:border-white/10 hover:shadow-md">

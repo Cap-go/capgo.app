@@ -2,14 +2,22 @@ import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { getBuildStatus } from '../public/build/status.ts'
+import { MAX_MEMBERS_PAGE_SIZE } from '../public/organization/members/get.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { DOCS_SEARCH_MAX_RESULTS, searchCapgoDocs } from '../utils/docs_search.ts'
+import { isStatisticsRangeTooLarge, MAX_STATISTICS_RANGE_DAYS } from '../utils/statistics_range.ts'
 import { MCP_EVENT_CATALOG, MCP_EVENT_NAMES, unsubscribeMcpEvent, upsertMcpEventSubscription } from '../utils/mcp_events.ts'
-import { handleCapgoListEventSubscriptions, loadApikeyRbacId, mcpSubscribeInputFromTool } from './events_rpc.ts'
+import { apikeyRbacId, handleCapgoListEventSubscriptions, mcpSubscribeInputFromTool } from './events_rpc.ts'
 import { MCP_OUTPUT_SCHEMAS } from './output_schemas.ts'
 import type { McpToolName } from './output_schemas.ts'
 import { guidanceForError } from './error_guidance.ts'
 import { getSkill, listSkills, readSkillResource } from './skills.ts'
+import { buildChecklist, buildPlan, checkReadiness, latestCapacitorRelease, recommendPlugins } from './mobile_app.ts'
+import type { PlanInput, ReadinessInput } from './mobile_app.ts'
+import { mobileChecklistInputSchema, mobileReadinessInputSchema, planMobileAppInputSchema, recommendPluginsInputSchema } from './mobile_app_schemas.ts'
+
+// Ceiling for the device-selection cap of one push send or update check. Omitting limit still targets the whole audience.
+export const MAX_NOTIFICATION_TARGET_LIMIT = 100_000
 
 /**
  * Hosted Capgo MCP tools.
@@ -206,6 +214,8 @@ interface ApiToolSpec<S extends Shape> {
   input: S
   annotations: McpToolAnnotations
   request: (input: z.infer<z.ZodObject<S>>) => McpApiRequest
+  /** Cross-field checks applied to the whole input after the per-field schema. */
+  refine?: { check: (input: z.infer<z.ZodObject<S>>) => boolean, message: string, path: string[] }
 }
 
 function apiTool<S extends Shape>(spec: ApiToolSpec<S>): McpTool {
@@ -214,7 +224,9 @@ function apiTool<S extends Shape>(spec: ApiToolSpec<S>): McpTool {
     title: spec.title,
     outputSchema: spec.outputSchema,
     description: spec.description,
-    inputSchema: z.object(spec.input) as unknown as z.ZodObject<z.ZodRawShape>,
+    inputSchema: (spec.refine
+      ? z.object(spec.input).refine(input => spec.refine!.check(input as z.infer<z.ZodObject<S>>), { message: spec.refine.message, path: spec.refine.path })
+      : z.object(spec.input)) as unknown as z.ZodObject<z.ZodRawShape>,
     annotations: { title: spec.title, ...spec.annotations },
     run: async (input, ctx) => apiResult(await ctx.call(spec.request(input as z.infer<z.ZodObject<S>>))),
   }
@@ -519,8 +531,13 @@ const accountTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_list_organization_members,
     title: 'List organization members',
     description: 'List the members of an organization with their roles.'
-      + ' Returns member user ids, emails, roles, image URLs and temporary membership flags.',
-    input: { orgId: orgId.describe('Organization whose membership to inspect, using id from capgo_list_organizations.') },
+      + ' Returns member user ids, emails, roles, image URLs and temporary membership flags.'
+      + ' Pass limit (and offset for later pages) to page through large organizations; paged results are sorted by email.',
+    input: {
+      orgId: orgId.describe('Organization whose membership to inspect, using id from capgo_list_organizations.'),
+      limit: z.number().int().min(1).max(MAX_MEMBERS_PAGE_SIZE).optional().describe(`Maximum members to return, 1 to ${MAX_MEMBERS_PAGE_SIZE}. Omit with offset to list every member.`),
+      offset: z.number().int().min(0).optional().describe('Number of members to skip, for the next page: previous offset plus limit.'),
+    },
     annotations: READ,
     request: input => ({ method: 'GET', path: '/organization/members', query: input }),
   }),
@@ -1038,8 +1055,22 @@ const deviceTools: McpTool[] = [
 // ---------------------------------------------------------------------------
 const statsRange = {
   from: dateString.describe('Start of the usage reporting window. Supply a calendar date such as 2026-01-31 or an ISO timestamp with its timezone.'),
-  to: dateString.describe('End of the usage reporting window. Use the same date or timestamp convention as from so the requested period is unambiguous.'),
+  to: dateString.describe(`End of the usage reporting window. Use the same date or timestamp convention as from so the requested period is unambiguous; the window spans at most ${MAX_STATISTICS_RANGE_DAYS} days.`),
   noAccumulate: z.boolean().optional().describe('Return daily values instead of cumulative totals; omitted or false returns accumulated usage.'),
+}
+
+// Mirrors the statistics endpoints, which reject longer ranges with date_range_too_large.
+// Unparseable dates are left to the endpoint, which reports them field by field.
+const statsRangeLimit = {
+  check: (input: { from: string, to: string }) => {
+    const from = new Date(input.from)
+    const to = new Date(input.to)
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()))
+      return true
+    return !isStatisticsRangeTooLarge(from, to)
+  },
+  message: `from and to must be at most ${MAX_STATISTICS_RANGE_DAYS} days apart. Split longer periods into several calls.`,
+  path: ['to'],
 }
 
 function statsQuery(input: { from: string, to: string, noAccumulate?: boolean, breakdown?: boolean }) {
@@ -1060,6 +1091,7 @@ const statsTools: McpTool[] = [
       + ' Returns data as dated usage records with mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.',
     input: { appId, ...statsRange },
     annotations: READ,
+    refine: statsRangeLimit,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}`, query: statsQuery(rest) }),
   }),
   apiTool({
@@ -1070,6 +1102,7 @@ const statsTools: McpTool[] = [
       + ' Returns data as dated usage records, or data.global and data.byApp when breakdown is true. Metrics accumulate unless noAccumulate is true.',
     input: { orgId, ...statsRange, breakdown: z.boolean().optional().describe('Include per-app usage alongside organization totals.') },
     annotations: READ,
+    refine: statsRangeLimit,
     request: ({ orgId: id, ...rest }) => ({ method: 'GET', path: `/statistics/org/${enc(id)}`, query: statsQuery(rest) }),
   }),
   apiTool({
@@ -1081,6 +1114,7 @@ const statsTools: McpTool[] = [
       + ' When records share a date, storage_byte_hours is retained from the first record, not summed.',
     input: statsRange,
     annotations: READ,
+    refine: statsRangeLimit,
     request: input => ({ method: 'GET', path: '/statistics/user', query: statsQuery(input) }),
   }),
   apiTool({
@@ -1091,6 +1125,7 @@ const statsTools: McpTool[] = [
       + ' Returns date labels and version datasets in labels and datasets.',
     input: { appId, from: dateString.describe('Start of the usage reporting window. Supply a calendar date such as 2026-01-31 or an ISO timestamp with its timezone.'), to: statsRange.to },
     annotations: READ,
+    refine: statsRangeLimit,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}/bundle_usage`, query: rest }),
   }),
   apiTool({
@@ -1101,6 +1136,7 @@ const statsTools: McpTool[] = [
       + ' Returns data.labels, data.datasets and data.latestVersion for version adoption, plus data.activeDevices and data.previousPeriodActiveDevices for platform totals and data.dailyPlatformActive for counts aligned with labels. Secondary summary read failures return zero-filled summaries; zeros do not prove inactivity.',
     input: { appId, from: dateString.describe('Start of the usage reporting window. Supply a calendar date such as 2026-01-31 or an ISO timestamp with its timezone.'), to: statsRange.to },
     annotations: READ,
+    refine: statsRangeLimit,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}/native_usage`, query: rest }),
   }),
   apiTool({
@@ -1252,7 +1288,7 @@ const simulatorTools: McpTool[] = [
       name: 'capgo_start_simulator',
       outputSchema: MCP_OUTPUT_SCHEMAS.capgo_start_simulator,
       title: 'Start simulator',
-      description: 'Start an iOS or Android cloud simulator for an app. It uses one builder slot and build minutes. The result includes the session id, viewer URL, and remoteConfig in the Expo device-run shape (agentDeviceRemoteSessionUrl, agentDeviceRemoteSessionToken, webPreviewUrl, webPreviewToken, previewApiUrl). Drive the device with capgo_simulator_command. Pass build_job_id to install a saved iOS build.',
+      description: 'Start an iOS or Android cloud simulator for an app. It uses one builder slot and counts as build time while it runs. It stops by itself after 5 minutes without input (taps, typing, installs, or commands) and after 40 minutes at most, so stop it when done. iOS time counts double. The result includes the session id, viewer URL, and remoteConfig in the Expo device-run shape (agentDeviceRemoteSessionUrl, agentDeviceRemoteSessionToken, webPreviewUrl, webPreviewToken, previewApiUrl). Drive the device with capgo_simulator_command. Pass build_job_id to install a saved iOS build.',
       input: {
         appId,
         platform: z.enum(['ios', 'android']).describe('Choose the operating system of the cloud device used to run and inspect the app.'),
@@ -1289,7 +1325,7 @@ const simulatorTools: McpTool[] = [
       name: 'capgo_stop_simulator',
       outputSchema: MCP_OUTPUT_SCHEMAS.capgo_stop_simulator,
       title: 'Stop simulator',
-      description: 'Stop a cloud simulator belonging to appId; requires build permission on that app. Stops the remote device, records its build minutes and marks the session stopped, ending interactive access. Returns data with session id, url, status, platform and kind, plus build_time_seconds when recorded by this call. Already stopped or errored sessions return their existing state. Retry if billing recording fails.',
+      description: 'Stop a cloud simulator belonging to appId; requires build permission on that app. Stops the remote device, records its build minutes (up to when the device stopped, if it already stopped by itself) and marks the session stopped, ending interactive access. Returns data with session id, url, status, platform and kind, plus build_time_seconds when recorded by this call. Already stopped or errored sessions return their existing state. Retry if billing recording fails.',
       input: { appId, session_id: simulatorSessionId },
       annotations: DESTRUCTIVE,
       request: input => ({ method: 'POST', path: `/build/simulator/${enc(input.session_id)}/stop`, body: { app_id: input.appId } }),
@@ -1577,7 +1613,7 @@ const mcpEventTools: McpTool[] = [
     run: async (input, ctx) => {
       if (!ctx.hono)
         return textResult({ error: 'missing_context', message: 'Server context unavailable' }, true)
-      const rbacId = await loadApikeyRbacId(ctx.hono, ctx.caller.apikeyId)
+      const rbacId = apikeyRbacId(ctx)
       if (!rbacId)
         return textResult({ error: 'missing_rbac', message: 'API key missing RBAC identity' }, true)
       const data = input as {
@@ -1634,7 +1670,7 @@ const mcpEventTools: McpTool[] = [
     run: async (input, ctx) => {
       if (!ctx.hono)
         return textResult({ error: 'missing_context', message: 'Server context unavailable' }, true)
-      const rbacId = await loadApikeyRbacId(ctx.hono, ctx.caller.apikeyId)
+      const rbacId = apikeyRbacId(ctx)
       if (!rbacId)
         return textResult({ error: 'missing_rbac', message: 'API key missing RBAC identity' }, true)
       const data = input as { orgId: string, subscriptionId: string }
@@ -1696,7 +1732,7 @@ const notificationTools: McpTool[] = [
       name: z.string().max(180).optional().describe('Label for identifying this send in capgo_list_notification_campaigns; it is separate from the notification text displayed on devices.'),
       kind: z.enum(['alert', 'background', 'badge', 'update_check']).optional().describe('Push behavior: visible alert, background delivery, badge change, or update check.'),
       payload: z.record(z.string(), z.unknown()).optional().describe('Content passed to the notification provider for the selected kind. For an alert, supply title and body, for example {"title":"Release ready","body":"Open the app for details"}.'),
-      limit: z.number().int().positive().optional().describe('Cap how many matching device registrations this send may select. Omit to use normal audience selection without a caller-specified cap; delivery batching still applies.'),
+      limit: z.number().int().positive().max(MAX_NOTIFICATION_TARGET_LIMIT).optional().describe(`Cap how many matching device registrations this send may select, up to ${MAX_NOTIFICATION_TARGET_LIMIT}. Omit to use normal audience selection without a caller-specified cap; delivery batching still applies.`),
     },
     annotations: EXTERNAL,
     request: input => ({ method: 'POST', path: '/notifications/send', body: compact(input) }),
@@ -1712,7 +1748,7 @@ const notificationTools: McpTool[] = [
       target: notificationTarget.optional(),
       installMode: z.enum(['next', 'set']).optional().describe('Install on the next launch (next) or apply immediately (set); omitted uses the app push update setting.'),
       channel: z.string().nullable().optional().describe('Channel name to check; omitted or null uses the app push update channel setting.'),
-      limit: z.number().int().positive().optional().describe('Maximum matching device registrations to select for this update check.'),
+      limit: z.number().int().positive().max(MAX_NOTIFICATION_TARGET_LIMIT).optional().describe(`Maximum matching device registrations to select for this update check, up to ${MAX_NOTIFICATION_TARGET_LIMIT}. Omit to select every matching registration.`),
     },
     annotations: { ...EXTERNAL, destructiveHint: true },
     request: input => ({ method: 'POST', path: '/notifications/update-check', body: compact(input) }),
@@ -1812,6 +1848,65 @@ const docsTools: McpTool[] = [
   },
 ]
 
+// ---------------------------------------------------------------------------
+// Web app to mobile app: typed guidance built from Capgo's Capacitor skills. These tools read no
+// account data and change nothing; the agent inspects the project and passes what it found.
+// ---------------------------------------------------------------------------
+const mobileAppTools: McpTool[] = [
+  {
+    name: 'capgo_plan_mobile_app',
+    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_plan_mobile_app,
+    title: 'Plan a mobile app',
+    description: 'Plan turning an existing web app, a live website or a new idea into a Capacitor iOS and Android app, end to end. Start here for any "make my website or web app a mobile app" request. '
+      + 'The hosted server cannot read files: first inspect the project yourself (package.json dependencies, devDependencies and lockfile, capacitor.config, ios/ and android/ folders, node --version, xcodebuild -version) and pass what you found. '
+      + 'Returns ordered phases (prepare, static build or scaffold, Capacitor on the latest npm release, mobile design, native plugins, run, Capgo live updates and cloud builds, store submission). Each step has commands, file changes, verify checks, who runs it, the Capgo tools to call and the capgo-skills skill to load. '
+      + 'Also returns plugin picks, run options (local simulator or emulator, physical device, Capgo app preview, Capgo cloud simulator), warnings and the next tool. Confirm the app name and app ID with the user before npx cap init. Read-only: it changes nothing.',
+    inputSchema: planMobileAppInputSchema as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'Plan a mobile app', ...READ, openWorldHint: true },
+    run: async input => textResult(buildPlan(input as unknown as PlanInput, await latestCapacitorRelease())),
+  },
+  {
+    name: 'capgo_recommend_plugins',
+    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_recommend_plugins,
+    title: 'Recommend Capacitor plugins',
+    description: 'Pick Capacitor plugins for native features: camera, files, push and local notifications, location, biometrics, social login, passkeys, in-app purchases, Apple/Google Pay, deep links, offline storage, SQLite, share, scanners, maps, contacts, calendar, health, Bluetooth, NFC, audio, video, ads, native navigation and live updates. '
+      + 'Use it when the app needs a device capability the browser cannot give it, before writing native code or adding permissions. '
+      + 'Uses official @capacitor plugins, and Capgo @capgo plugins where they cover more. Returns each package with its install command, iOS purpose-string keys and capabilities, Android permissions, store rules, docs and alternatives, plus one install command for packages not already in packages. Read-only.',
+    inputSchema: recommendPluginsInputSchema as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'Recommend Capacitor plugins', ...READ },
+    run: async (input) => {
+      const { features, platforms, packageManager, packages, includeBaseline } = input as z.infer<typeof recommendPluginsInputSchema>
+      return textResult(recommendPlugins({ features: features ?? [], platforms, packageManager, installed: packages, includeBaseline }))
+    },
+  },
+  {
+    name: 'capgo_get_mobile_checklist',
+    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_get_mobile_checklist,
+    title: 'Get mobile app checklist',
+    description: 'Get the rules a Capacitor app must meet to feel native on phones and pass App Store and Google Play review. '
+      + 'Use it while turning a web app into a mobile app (design and native setup) and again before submission (store rules); capgo_check_mobile_readiness then checks a project against these rules. '
+      + 'Sections: design (viewport-fit=cover, safe areas, Android edge-to-edge, keyboard, navigation and back button, touch targets, no website chrome, external links, offline states, icon and splash), '
+      + 'native setup (static build, bundled assets, API origins, auth redirects, permission strings, service worker, deep links, live updates), '
+      + 'Apple App Review (Developer Program, SDK deadline, 4.2 minimum functionality, account deletion, Sign in with Apple, In-App Purchase, privacy manifest, App Tracking Transparency, demo account), '
+      + 'Google Play (target API, signed App Bundle, closed testing, Data safety, Play Billing, permission declarations) and release (versions, Capgo Cloud Build, live update policy, channels). '
+      + 'Returns each rule with its severity, how to check it, the fix, the policy link and the skill to load, plus counts by severity and the conditional rules left out for traits you did not pass. Read-only.',
+    inputSchema: mobileChecklistInputSchema as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'Get mobile app checklist', ...READ },
+    run: async input => textResult(buildChecklist(input as z.infer<typeof mobileChecklistInputSchema>)),
+  },
+  {
+    name: 'capgo_check_mobile_readiness',
+    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_check_mobile_readiness,
+    title: 'Check mobile app readiness',
+    description: 'Check a Capacitor project against the mobile checklist using facts you inspected: package.json packages, capacitor.config values, viewport meta tag, safe-area CSS, Info.plist purpose strings, privacy manifest, Android targetSdk, icon, back button, service worker, live updates, and store facts (account deletion, Sign in with Apple, store billing, demo account). '
+      + 'Compares the installed Capacitor with the latest npm release. Returns ready, a verdict, the ids of blocking checks, blocker checks that need facts with how to check them, and every check with status, fix and skill. '
+      + 'Call it after each round of fixes until ready is true, then run the app on devices. Read-only.',
+    inputSchema: mobileReadinessInputSchema as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'Check mobile app readiness', ...READ, openWorldHint: true },
+    run: async input => textResult(checkReadiness(input as ReadinessInput, await latestCapacitorRelease())),
+  },
+]
+
 export const MCP_TOOLS: readonly McpTool[] = [
   ...accountTools,
   ...appTools,
@@ -1826,6 +1921,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   ...mcpEventTools,
   ...notificationTools,
   ...docsTools,
+  ...mobileAppTools,
 ].map(withValidatedOutput)
 
 export const MCP_TOOLS_BY_NAME: ReadonlyMap<string, McpTool> = new Map(MCP_TOOLS.map(tool => [tool.name, tool]))

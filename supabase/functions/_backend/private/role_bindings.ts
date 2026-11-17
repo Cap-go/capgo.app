@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { sValidator } from '@hono/standard-validator'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import { getErrorCode } from '../utils/errors.ts'
 import { createHono, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
@@ -591,6 +591,57 @@ export interface CreateBindingOptions {
   // the same txn and asserting org.manage_apikeys for each org. Do not use this
   // to skip owner-active-member / pending-invite checks on an existing principal.
   skipPrincipalValidation?: boolean
+  // Shared across every binding of one request (see createRoleBindingBatchCache):
+  // roles and the caller's max rank per org are looked up once for the set.
+  batchCache?: RoleBindingBatchCache
+}
+
+/**
+ * Per-request lookups shared by createRoleBindingForPrincipal calls that write
+ * a set of bindings in one transaction (API key create / update).
+ */
+export interface RoleBindingBatchCache {
+  roles: Map<string, RoleRecord | null>
+  callerMaxRank: Map<string, number>
+}
+
+export function createRoleBindingBatchCache(): RoleBindingBatchCache {
+  return { roles: new Map(), callerMaxRank: new Map() }
+}
+
+/**
+ * Load every role named by a binding set with one query into the batch cache.
+ */
+export async function prefetchRolesForBindings(
+  drizzle: ReturnType<typeof getDrizzleClient>,
+  cache: RoleBindingBatchCache,
+  roleNames: string[],
+): Promise<void> {
+  const missing = [...new Set(roleNames)].filter(name => !cache.roles.has(name))
+  if (missing.length === 0)
+    return
+  const rows = await drizzle
+    .select()
+    .from(schema.roles)
+    .where(inArray(schema.roles.name, missing))
+  for (const name of missing)
+    cache.roles.set(name, rows.find(row => row.name === name) ?? null)
+}
+
+async function resolveRoleByName(
+  drizzle: ReturnType<typeof getDrizzleClient>,
+  roleName: string,
+  cache?: RoleBindingBatchCache,
+): Promise<RoleRecord | null> {
+  if (cache?.roles.has(roleName))
+    return cache.roles.get(roleName) ?? null
+  const [role] = await drizzle
+    .select()
+    .from(schema.roles)
+    .where(eq(schema.roles.name, roleName))
+    .limit(1)
+  cache?.roles.set(roleName, role ?? null)
+  return role ?? null
 }
 
 export async function createRoleBindingForPrincipal(
@@ -616,12 +667,10 @@ export async function createRoleBindingForPrincipal(
     await lockRbacOrgs(drizzle, [org_id])
   }
 
+  const batchCache = options?.batchCache
+
   // 1. Resolve role by name
-  const [role] = await drizzle
-    .select()
-    .from(schema.roles)
-    .where(eq(schema.roles.name, role_name))
-    .limit(1)
+  const role = await resolveRoleByName(drizzle, role_name, batchCache)
 
   if (!role) {
     return { ok: false, status: 404, error: 'Role not found' }
@@ -637,7 +686,16 @@ export async function createRoleBindingForPrincipal(
   }
 
   // 3. Anti-escalation: caller's max priority rank must be >= role.priority_rank
-  const callerMaxRank = await getCallerMaxPriorityRank(drizzle, authType, callerPrincipalId, org_id)
+  // The rank is cached per org only when the new binding cannot change it
+  // (it targets another principal than the caller).
+  const rankCacheable = !!batchCache && principal_id !== callerPrincipalId
+  const rankKey = `${authType}|${callerPrincipalId}|${org_id}`
+  let callerMaxRank = rankCacheable ? batchCache.callerMaxRank.get(rankKey) : undefined
+  if (callerMaxRank === undefined) {
+    callerMaxRank = await getCallerMaxPriorityRank(drizzle, authType, callerPrincipalId, org_id)
+    if (rankCacheable)
+      batchCache.callerMaxRank.set(rankKey, callerMaxRank)
+  }
   if (role.priority_rank > callerMaxRank) {
     return { ok: false, status: 403, error: 'Cannot assign a role with higher privileges than your own' }
   }

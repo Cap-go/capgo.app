@@ -13,6 +13,7 @@ import Pencil from '~icons/heroicons/pencil-square'
 import IconTransfer from '~icons/mingcute/transfer-horizontal-line'
 import IconGearSix from '~icons/ph/gear-six'
 import IconName from '~icons/ph/user'
+import AppServingRegions from '~/components/dashboard/AppServingRegions.vue'
 import AppSetupGuides from '~/components/dashboard/AppSetupGuides.vue'
 import FormCheckbox from '~/components/forms/FormCheckbox.vue'
 import FormField from '~/components/forms/FormField.vue'
@@ -21,7 +22,7 @@ import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
-import { checkPermissions } from '~/services/permissions'
+import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -238,6 +239,17 @@ function backToDeleteFeedback() {
   deletionConfirmation.value = ''
 }
 
+// Deleting or transferring an app settles its open simulator sessions at the current time. The
+// simulator list settles first the ones whose device already stopped, up to that stop.
+async function settleSimulators() {
+  try {
+    await invokeCapgoApi(`private/simulator/?app_id=${encodeURIComponent(props.appId)}`, { method: 'GET', retries: 0 })
+  }
+  catch {
+    // Best effort: the deletion or transfer settles anything left at the current time.
+  }
+}
+
 async function deleteApp() {
   if (deletionConfirmation.value !== props.appId || isDeletingApp.value)
     return
@@ -245,6 +257,7 @@ async function deleteApp() {
   isDeletingApp.value = true
   sendOnboardingEvent('app_deletion_confirmed', getDeletionEventProperties())
   try {
+    await settleSimulators()
     const org = organizationStore.getOrgByAppId(props.appId)
     const { error: errorIcon } = await capgo.storage
       .from(`images`)
@@ -292,12 +305,17 @@ const buildTimeoutMinutesInput = ref<number | string>(Math.trunc(DEFAULT_BUILD_T
 const exposeMetadataInput = ref(false)
 const allowPreviewInput = ref(false)
 const allowDeviceCustomIdInput = ref(false)
+const DEFAULT_SERVING_REGIONS = ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME']
+const servingRegionsInput = ref<string[]>([])
+const servingRegionModeInput = ref('route')
 const blockProviderInfraRequestsInput = ref(false)
 const bundleIncompatibleAlertInput = ref<'default' | 'all'>('default')
 const collectInputs = reactive<DeviceDataCollection>(parseAppRowDeviceDataCollection(null))
 const isAppFormVisible = computed(() => !isFirstLoading.value && !isLoading.value)
 
 function seedAppForm() {
+  servingRegionsInput.value = [...(appRef.value?.serving_regions ?? DEFAULT_SERVING_REGIONS)]
+  servingRegionModeInput.value = appRef.value?.serving_region_mode ?? 'route'
   appNameInput.value = appRef.value?.name ?? ''
   iosStoreUrlInput.value = appRef.value?.ios_store_url ?? ''
   androidStoreUrlInput.value = appRef.value?.android_store_url ?? ''
@@ -327,6 +345,10 @@ let isSaving = false
 async function onSubmit() {
   if (isSaving || isDeletingApp.value)
     return
+  if (servingRegionsInput.value.length === 0) {
+    toast.error(t('serving-regions-required'))
+    return
+  }
   isSaving = true
   try {
     await submitAppForm()
@@ -382,6 +404,13 @@ async function submit(form: {
     toast.error(t('no-permission'))
     isLoading.value = false
     return
+  }
+
+  try {
+    await updateServingRegions()
+  }
+  catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
   }
 
   try {
@@ -742,6 +771,28 @@ async function updateDeviceDataCollection(next: DeviceDataCollection) {
   toast.success(t('changed-device-data-collection'))
   if (appRef.value)
     Object.assign(appRef.value, { device_data_collection: merged })
+}
+
+async function updateServingRegions() {
+  const regions = [...servingRegionsInput.value]
+  const mode = servingRegionModeInput.value
+  const savedRegions = appRef.value?.serving_regions ?? DEFAULT_SERVING_REGIONS
+  if (mode === (appRef.value?.serving_region_mode ?? 'route')
+    && regions.length === savedRegions.length
+    && savedRegions.every(region => regions.includes(region))) {
+    return
+  }
+
+  const { error } = await capgo.from('apps').update({
+    serving_regions: regions,
+    serving_region_mode: mode,
+  }).eq('app_id', props.appId)
+  if (error)
+    throw error
+  if (appRef.value) {
+    appRef.value.serving_regions = regions
+    appRef.value.serving_region_mode = mode
+  }
 }
 
 async function updateBlockProviderInfraRequests(enabled: boolean) {
@@ -1374,7 +1425,7 @@ function confirmTransferAppOwnership(org: Organization) {
             toast.error(t('incorrect-app-id'))
             return false
           }
-          // Transfer logic will go here
+          await settleSimulators()
           const { error } = await capgo.rpc('transfer_app', {
             p_app_id: props.appId,
             p_new_org_id: org.gid,
@@ -1433,14 +1484,13 @@ async function transferAppOwnership() {
     return
 
   // Step 2: Organization selection - filter orgs where user has transfer permission
-  const destinationOrgs = await Promise.all(
-    organizationStore.organizations
-      .filter(org => org.gid !== appRef.value?.owner_org.id)
-      .map(async (org) => {
-        const hasTransferPermission = await checkPermissions('app.transfer', { orgId: org.gid })
-        return hasTransferPermission ? org : null
-      }),
-  ).then(results => results.filter((org): org is NonNullable<typeof org> => org !== null))
+  const candidateOrgs = organizationStore.organizations
+    .filter(org => org.gid !== appRef.value?.owner_org.id)
+  const canTransferTo = await checkPermissionsBatch(candidateOrgs.map(org => ({
+    permissions: 'app.transfer' as const,
+    scope: { orgId: org.gid },
+  })))
+  const destinationOrgs = candidateOrgs.filter((_org, idx) => canTransferTo[idx])
 
   if (destinationOrgs.length === 0) {
     toast.error(t('no-super-admin-organizations'))
@@ -1715,6 +1765,7 @@ async function transferAppOwnership() {
                   :label="t('block-provider-infra-requests')"
                   :help="t('block-provider-infra-requests-help')"
                 />
+                <AppServingRegions v-model:regions="servingRegionsInput" v-model:mode="servingRegionModeInput" :disabled="!canUpdateSettings" :app-id="props.appId" />
                 <details
                   id="device-data-collection"
                   class="pt-2 group"

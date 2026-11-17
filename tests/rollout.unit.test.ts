@@ -239,28 +239,22 @@ describe('rollout auto-pause policy', () => {
 })
 
 describe('rollout auto-pause channel loading', () => {
-  it.concurrent('pages through all matching channels', async () => {
-    const pageOne = Array.from({ length: 1000 }, (_, index) => ({ id: index + 1 }))
-    const pageTwo = [{ id: 1001 }, { id: 1002 }]
-    const rangeCalls: Array<[number, number]> = []
-    const pages = [pageOne, pageTwo]
-
-    const queries: string[] = []
+  it.concurrent('loads a bounded batch, oldest-checked channels first', async () => {
+    const queries: Array<{ text: string, values: unknown[] }> = []
     const pg = {
       query: async (text: string, values: unknown[] = []) => {
-        queries.push(text)
-        rangeCalls.push([values[1] as number, (values[1] as number) + (values[0] as number) - 1])
-        return { rows: (pages.shift() ?? []).map(row => ({ row })) }
+        queries.push({ text, values })
+        return { rows: [{ row: { id: 1 } }, { row: { id: 2 } }] }
       },
     }
 
     const result = await __rolloutAutoPauseTestUtils__.loadAutoPauseChannels(pg)
 
     expect(result.error).toBeNull()
-    expect(result.data).toHaveLength(1002)
-    expect(queries).toHaveLength(2)
-    for (const query of queries)
-      expect(query).toContain('ch.rollout_percentage_bps > 0')
-    expect(rangeCalls).toEqual([[0, 999], [1000, 1999]])
+    expect(result.data).toEqual([{ id: 1 }, { id: 2 }])
+    expect(queries).toHaveLength(1)
+    expect(queries[0]!.text).toContain('ch.rollout_percentage_bps > 0')
+    expect(queries[0]!.text).toContain('ORDER BY GREATEST(ch.auto_pause_last_checked_at, attempt.failed_at) ASC NULLS FIRST, ch.id ASC')
+    expect(queries[0]!.values).toEqual([500])
   })
 })

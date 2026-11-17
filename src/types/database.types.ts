@@ -432,6 +432,8 @@ export type Database = {
       }
       apps: {
         Row: {
+          serving_regions: string[]
+          serving_region_mode: string
           allow_device_custom_id: boolean
           allow_preview: boolean
           android_store_url: string | null
@@ -465,6 +467,8 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          serving_regions?: string[]
+          serving_region_mode?: string
           allow_device_custom_id?: boolean
           allow_preview?: boolean
           android_store_url?: string | null
@@ -498,6 +502,8 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          serving_regions?: string[]
+          serving_region_mode?: string
           allow_device_custom_id?: boolean
           allow_preview?: boolean
           android_store_url?: string | null
@@ -3367,6 +3373,8 @@ export type Database = {
           canceled_at: string | null
           churn_reason: string | null
           created_at: string
+          billing_address: Json | null
+          billing_currency: string | null
           customer_country: string | null
           customer_id: string
           extra_mau: number
@@ -3397,6 +3405,8 @@ export type Database = {
           canceled_at?: string | null
           churn_reason?: string | null
           created_at?: string
+          billing_address?: Json | null
+          billing_currency?: string | null
           customer_country?: string | null
           customer_id: string
           extra_mau?: number
@@ -3427,6 +3437,8 @@ export type Database = {
           canceled_at?: string | null
           churn_reason?: string | null
           created_at?: string
+          billing_address?: Json | null
+          billing_currency?: string | null
           customer_country?: string | null
           customer_id?: string
           extra_mau?: number
@@ -4244,6 +4256,10 @@ export type Database = {
         Args: { event_id: number; note: string }
         Returns: undefined
       }
+      acknowledge_compatibility_events: {
+        Args: { event_ids: number[]; note: string }
+        Returns: undefined
+      }
       apikey_has_current_org_create_capability: {
         Args: { p_apikey_rbac_id: string }
         Returns: boolean
@@ -4914,6 +4930,21 @@ export type Database = {
           bundle_name: string
         }[]
       }
+      get_channels_previous_deploys: {
+        Args: {
+          p_app_id: string
+          p_channel_ids: number[]
+          p_cutoffs: (string | null)[]
+          p_exclude_version_id: number
+          p_per_channel: number
+        }
+        Returns: {
+          channel_id: number
+          created_at: string
+          deployed_at: string
+          version_id: number
+        }[]
+      }
       get_credit_auto_top_up_month_total: {
         Args: { p_org_id: string }
         Returns: number
@@ -5350,6 +5381,16 @@ export type Database = {
             }[]
           }
       get_total_storage_size_org: { Args: { org_id: string }; Returns: number }
+      get_update_daily_counts: {
+        Args: { p_app_ids: string[]; p_end: string; p_start: string }
+        Returns: {
+          app_id: string
+          date: string
+          fail_count: number
+          get_count: number
+          install_count: number
+        }[]
+      }
       get_update_stats: {
         Args: never
         Returns: {
@@ -5778,6 +5819,14 @@ export type Database = {
           p_permission_key: string
         }
         Returns: boolean
+      }
+      rbac_check_permissions: {
+        Args: { p_checks: Json }
+        Returns: {
+          allowed: boolean
+          idx: number
+          key: string
+        }[]
       }
       rbac_denied_channel_ids_for_permission: {
         Args: { p_permission_key: string }

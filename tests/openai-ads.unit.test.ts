@@ -40,6 +40,24 @@ describe('openai ads conversions api', () => {
       delete envValues[key]
   })
 
+  it('keeps the original click reference on registration and confirmed subscription events', async () => {
+    const oppref = 'opaque-Example_click+/=='
+    const user = { ...record, oppref }
+    const registration = await buildOpenAIRegistrationEvent(user, now)
+    const subscription = await buildOpenAISubscriptionEvent({ orgId: 'org-example', user, paidAt: record.created_at }, now)
+    expect(registration?.oppref).toBe(oppref)
+    expect(subscription?.oppref).toBe(oppref)
+    expect(registration?.user).not.toHaveProperty('oppref')
+    expect(registration?.id).toBe((await buildOpenAIRegistrationEvent(record, now))?.id)
+    expect(subscription?.id).toBe((await buildOpenAISubscriptionEvent({ orgId: 'org-example', user: record, paidAt: record.created_at }, now))?.id)
+  })
+
+  it.each([undefined, null, {}, '', 'x'.repeat(1025), 'bad\nreference'])('omits invalid click references from both event types: %s', async (oppref) => {
+    const user = { ...record, oppref }
+    expect(await buildOpenAIRegistrationEvent(user, now)).not.toHaveProperty('oppref')
+    expect(await buildOpenAISubscriptionEvent({ orgId: 'org-example', user, paidAt: record.created_at }, now)).not.toHaveProperty('oppref')
+  })
+
   it('normalizes names like the spec', () => {
     expect(normalizeOpenAIName('Mary Jane')).toBe('maryjane')
     expect(normalizeOpenAIName('O\'Connor')).toBe('oconnor')

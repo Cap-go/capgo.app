@@ -49,7 +49,9 @@ export function directOfferTrialTagsToRemove(trialPlanNames: readonly string[] |
 /**
  * Direct-offer (paid ads) users never had a trial: tag them `offer=direct`,
  * never add trial tags, and remove any trial tags they still carry, so trial
- * email sequences do not fire for them. Standard users (`false`) are returned
+ * tags cannot enroll them. Running workflows must also check offer=direct
+ * before each trial email (docs/bento/trial-email-rollout.md).
+ * Standard users (`false`) are returned
  * unchanged. When the offer is unknown (`null`, lookup failed) trial tags are
  * not added, and nothing else changes until a later sync knows the offer.
  */

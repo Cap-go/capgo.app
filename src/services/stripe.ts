@@ -1,10 +1,11 @@
 import type { Stripe } from '@stripe/stripe-js'
-import type { BillingDetails, BillingProfile, BillingTaxId } from '../../supabase/functions/shared/billing-profile'
+import type { BillingCurrencyPreview, BillingCurrencyState, BillingDetails, BillingProfile, BillingTaxId } from '../../supabase/functions/shared/billing-profile'
 import type { InvoiceDocument } from '../../supabase/functions/shared/invoice-document'
 import { loadStripe } from '@stripe/stripe-js'
 import { toast } from 'vue-sonner'
 import { i18n } from '~/modules/i18n'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { FunctionsHttpError } from '~/services/consoleClient'
 import { getFormatLocale } from '~/services/formatLocale'
 import { stripeAmountToMajorUnits } from '../../supabase/functions/shared/stripe-amount.ts'
 
@@ -91,6 +92,12 @@ export interface SubscriptionCheckoutRequest {
   standardPrice?: boolean
 }
 
+export class CheckoutAmountLimitError extends Error {
+  constructor(readonly canSwitchToUsd: boolean) {
+    super('checkout_amount_limit')
+  }
+}
+
 export async function startSubscriptionCheckout(request: SubscriptionCheckoutRequest): Promise<CheckoutSession | null> {
   const datafastAttribution = await getDatafastAttribution()
   const affonsoReferral = await getAffonsoReferral()
@@ -112,10 +119,22 @@ export async function startSubscriptionCheckout(request: SubscriptionCheckoutReq
     }),
   })
   if (error || !data) {
+    if (error instanceof FunctionsHttpError) {
+      const body = await error.context.clone().json().catch(() => null) as { error?: string, moreInfo?: { canSwitchToUsd?: boolean } } | null
+      if (body?.error === 'checkout_amount_limit')
+        throw new CheckoutAmountLimitError(body.moreInfo?.canSwitchToUsd === true)
+    }
     console.error('Cannot start subscription checkout', error)
     return null
   }
   return toCheckoutSession(data)
+}
+
+export async function getCreditQuote(orgId: string): Promise<{ currency: string, unitAmount: number, unitPrice: number }> {
+  const { data, error } = await invokeCapgoApi<{ currency: string, unitAmount: number, unitPrice: number }>('private/credits/quote', { body: JSON.stringify({ orgId }) })
+  if (error || !data)
+    throw new Error('Credit pricing unavailable')
+  return data
 }
 
 export async function startCreditTopUp(orgId: string, quantity = 100): Promise<CheckoutSession> {
@@ -237,6 +256,7 @@ export interface BillingCard {
 }
 
 export interface BillingSubscription {
+  pendingCurrency?: string
   status: string
   cancelAtPeriodEnd: boolean
   cancelAt: string | null
@@ -468,4 +488,25 @@ export function getInvoiceEmailPreferences(orgId: string) {
 
 export function updateInvoiceEmailPreferences(orgId: string, preferences: { enabled: boolean, recipients: string[] }) {
   return callBilling<{ enabled: boolean, recipients: string[] }>('invoice-email/update', { orgId, preferences })
+}
+
+export function getBillingCurrencyState(orgId: string) {
+  return callBilling<BillingCurrencyState>('currency', { orgId })
+}
+
+export function changeBillingCurrency(orgId: string, currency: string, confirmedSubscription: string | null, quoteId?: string) {
+  return callBilling<BillingCurrencyState>('currency/update', { orgId, currency, confirmedSubscription, quoteId })
+}
+
+export function previewBillingCurrency(orgId: string, currency: string) {
+  return callBilling<BillingCurrencyPreview>('currency/preview', { orgId, currency })
+}
+
+export async function billingCurrencyErrorMessage(error: unknown, fallback: 'billing-currency-preview-error' | 'billing-currency-save-error') {
+  if (error instanceof FunctionsHttpError) {
+    const body = await error.context.clone().json().catch(() => null) as { error?: string } | null
+    if (body?.error === 'billing_currency_payment_method_required')
+      return i18n.global.t('billing-currency-update-card')
+  }
+  return i18n.global.t(fallback)
 }
