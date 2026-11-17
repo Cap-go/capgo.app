@@ -114,7 +114,10 @@ async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, 
       client,
       'SELECT owner_org FROM public.apps WHERE app_id = $1',
       [appId],
-    )).catch(() => null)
+    )).catch((error) => {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'error settling simulator sessions', error, app_id: appId })
+      return null
+    })
 
     // Legacy per-user Supabase storage folder used by older CLI uploads.
     // The `apps` bucket stores objects under {user_id}/{app_id}/...
