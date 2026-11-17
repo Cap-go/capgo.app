@@ -16,7 +16,7 @@
 --    The producers queued one cron_email message per app, and the handler
 --    resolved the org recipients once per app even when the app had nothing
 --    to report. They now queue only apps the handler would email about, one
---    message per org carrying its appIds, with pgmq.send_batch.
+--    message per org carrying its appIds, with one pgmq.send per org (Tinbase has no send_batch).
 
 -- ---------------------------------------------------------------------------
 -- 1a. Statement-level enqueue trigger
@@ -30,6 +30,7 @@ SET search_path = ''
 AS $$
 DECLARE
   v_messages jsonb[];
+  v_message jsonb;
 BEGIN
   IF TG_OP = 'INSERT' THEN
     SELECT array_agg(
@@ -63,7 +64,9 @@ BEGIN
   END IF;
 
   IF cardinality(v_messages) > 0 THEN
-    PERFORM pgmq.send_batch('channel_device_counts', v_messages);
+    FOREACH v_message IN ARRAY v_messages LOOP
+      PERFORM pgmq.send('channel_device_counts', v_message);
+    END LOOP;
   END IF;
 
   RETURN NULL;
@@ -234,6 +237,7 @@ DECLARE
   v_end date := (now() AT TIME ZONE 'UTC')::date;
   v_start date := (now() AT TIME ZONE 'UTC')::date - 7;
   v_messages jsonb[];
+  v_message jsonb;
 BEGIN
   SELECT array_agg(
     jsonb_build_object(
@@ -268,7 +272,9 @@ BEGIN
   ) AS org_apps;
 
   IF cardinality(v_messages) > 0 THEN
-    PERFORM pgmq.send_batch('cron_email', v_messages);
+    FOREACH v_message IN ARRAY v_messages LOOP
+      PERFORM pgmq.send('cron_email', v_message);
+    END LOOP;
   END IF;
 END;
 $$;
@@ -287,6 +293,7 @@ DECLARE
   v_end timestamptz := date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
   v_start timestamptz := (date_trunc('month', now() AT TIME ZONE 'UTC') - interval '1 month') AT TIME ZONE 'UTC';
   v_messages jsonb[];
+  v_message jsonb;
 BEGIN
   SELECT array_agg(
     jsonb_build_object(
@@ -323,7 +330,9 @@ BEGIN
   ) AS org_apps;
 
   IF cardinality(v_messages) > 0 THEN
-    PERFORM pgmq.send_batch('cron_email', v_messages);
+    FOREACH v_message IN ARRAY v_messages LOOP
+      PERFORM pgmq.send('cron_email', v_message);
+    END LOOP;
   END IF;
 END;
 $$;

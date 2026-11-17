@@ -37,9 +37,9 @@ SELECT
 FROM (VALUES ('q1', 'q'), ('q2', 'q'), ('q3', 'q'), ('q4', 'q'), ('d1', 'q'), ('r1', 'r')) AS v (name, org);
 
 INSERT INTO public.apps (app_id, icon_url, owner_org, name)
-SELECT fa.app_id, '', fo.org_id, fa.name
+SELECT fa.app_id, '', fan_org.org_id, fa.name
 FROM fanout_apps AS fa
-INNER JOIN fanout_orgs AS fo ON fa.org = fo.name;
+INNER JOIN fanout_orgs AS fan_org ON fa.org = fan_org.name;
 
 INSERT INTO public.app_versions (app_id, name, owner_org)
 SELECT a.app_id, '1.0.0', a.owner_org
