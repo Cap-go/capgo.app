@@ -43,8 +43,6 @@ displayStore.NavTitle = t('plans')
 const initialLoad = ref(false)
 const thankYouPage = ref(false)
 const isSubscribeLoading = ref<Array<boolean>>([])
-const segmentVal = ref<'m' | 'y'>('y')
-const isYearly = computed(() => segmentVal.value === 'y')
 const route = useRoute()
 const router = useRouter()
 const plansVisitTracker = createPlansVisitTracker()
@@ -59,6 +57,13 @@ const showCancelModal = ref(false)
 const embeddedCheckout = ref<{ clientSecret: string, publishableKey: string, planName: string } | null>(null)
 
 const { currentOrganization } = storeToRefs(organizationStore)
+// The org can already be loaded before this page mounts. Honor its interval on
+// entry as well as on org switches; new accounts start with monthly billing.
+const segmentVal = ref<'m' | 'y'>('m')
+const isYearly = computed(() => segmentVal.value === 'y')
+watch(() => [currentOrganization.value?.gid, currentOrganization.value?.is_yearly] as const, () => {
+  segmentVal.value = currentOrganization.value?.is_yearly ? 'y' : 'm'
+}, { immediate: true })
 const billingOrgId = computed(() => currentOrganization.value?.gid)
 const { paidAt, billingLookupFailed, trialSkipped } = useBillingPaidAt(billingOrgId, isMobile)
 const showExpiredTrialState = computed(() => {
@@ -561,7 +566,6 @@ watch(() => organizationBillingKey(currentOrganization.value), async (_key, prev
   }
 
   await loadData(false)
-  segmentVal.value = currentOrganization.value?.is_yearly ? 'y' : 'm'
 
   // isSubscribeLoading.value.fill(false, 0, plans.value.length)
 })
@@ -746,6 +750,8 @@ function buttonStyle(p: Plan) {
               type="button"
               class="py-1.5 px-4 text-sm font-medium rounded-md transition-all duration-200"
               :class="segmentVal === 'm' ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
+              :aria-pressed="segmentVal === 'm'"
+              data-test="billing-monthly"
               @click="segmentVal = 'm'"
             >
               {{ t('monthly-plan') }}
@@ -754,6 +760,8 @@ function buttonStyle(p: Plan) {
               type="button"
               class="flex gap-2 items-center py-1.5 px-4 text-sm font-medium rounded-md transition-all duration-200"
               :class="segmentVal === 'y' ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
+              :aria-pressed="segmentVal === 'y'"
+              data-test="billing-yearly"
               @click="segmentVal = 'y'"
             >
               {{ t('yearly') }}
@@ -918,6 +926,9 @@ function buttonStyle(p: Plan) {
             </button>
             <p v-if="isYearlyPlan(p, segmentVal)" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} {{ formatPlanPrice(p, hasYearlyDiscount(p) ? planAmounts(p).year : planAmounts(p).month) }}
+            </p>
+            <p v-else class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('billed-monthly-at') }} {{ formatPlanPrice(p, planAmounts(p).month) }}
             </p>
           </div>
 
