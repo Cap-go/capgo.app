@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(20);
+SELECT plan(24);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -254,6 +254,64 @@ SELECT
         NOT has_function_privilege('authenticated', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz)', 'EXECUTE')
         AND NOT has_function_privilege('anon', 'public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz)', 'EXECUTE'),
         'replace_app_storage_hourly is not callable by clients'
+    );
+
+-- get_org_storage_usage: the console's cycle GB-hours, as billed.
+CREATE TEMP TABLE usage_ctx AS
+SELECT
+    org_id,
+    (cycle.cycle_start AT TIME ZONE 'UTC')::date AS cycle_start,
+    (cycle.cycle_end AT TIME ZONE 'UTC')::date AS cycle_end
+FROM gbh_ctx, public.get_org_billing_cycle(gbh_ctx.org_id) AS cycle;
+
+INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+SELECT 'com.test.gbhours.usage', org_id, cycle_start, cycle_start, 4800 FROM usage_ctx
+UNION ALL
+-- The previous cycle's part of the first day is not this cycle's usage.
+SELECT 'com.test.gbhours.usage', org_id, cycle_start - 30, cycle_start, 999999 FROM usage_ctx;
+
+SELECT
+    is(
+        (SELECT ARRAY[storage_byte_hours, cycle_hours] FROM public.get_org_storage_usage((SELECT org_id FROM usage_ctx))),
+        (SELECT ARRAY[4800, (cycle_end - cycle_start) * 24]::double precision[] FROM usage_ctx),
+        'get_org_storage_usage returns the cycle byte-hours and hours billing uses'
+    );
+
+SELECT
+    ok(
+        has_function_privilege('authenticated', 'public.get_org_storage_usage(uuid)', 'EXECUTE')
+        AND NOT has_function_privilege('anon', 'public.get_org_storage_usage(uuid)', 'EXECUTE'),
+        'get_org_storage_usage is callable by signed-in users only'
+    );
+
+SELECT set_config('test.gbh_org_id', (SELECT org_id::text FROM gbh_ctx), true);
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub": "00000000-0000-4000-8000-0000000000aa", "role": "authenticated"}', true);
+SELECT
+    is(
+        (SELECT count(*)::integer FROM public.get_org_storage_usage(current_setting('test.gbh_org_id')::uuid)),
+        0,
+        'get_org_storage_usage returns nothing without billing read access'
+    );
+RESET ROLE;
+SELECT set_config('request.jwt.claims', '', true);
+
+-- stats_jobs keeps refreshing an app that only stores bundles, for billable orgs.
+UPDATE public.orgs SET has_usage_credits = true WHERE id = (SELECT org_id FROM gbh_ctx);
+UPDATE public.app_versions
+SET created_at = now() - interval '90 days'
+WHERE app_id = (SELECT live_app FROM gbh_ctx);
+DELETE FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' = (SELECT live_app FROM gbh_ctx);
+DELETE FROM public.app_stats_refresh_state WHERE app_id = (SELECT live_app FROM gbh_ctx);
+SELECT public.process_cron_stats_jobs();
+
+SELECT
+    ok(
+        EXISTS (
+            SELECT 1 FROM pgmq.q_cron_stat_app
+            WHERE message->'payload'->>'appId' = (SELECT live_app FROM gbh_ctx)
+        ),
+        'stats_jobs queues an app that stores bundles without other activity'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.

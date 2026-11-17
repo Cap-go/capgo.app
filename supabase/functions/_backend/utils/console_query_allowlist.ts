@@ -51,6 +51,7 @@ export const CONSOLE_RPCS = new Set([
   'get_org_members',
   'get_org_members_rbac',
   'get_org_stats_refresh_state',
+  'get_org_storage_usage',
   'get_org_user_access_rbac',
   'get_orgs_v7',
   'get_plan_usage_percent_detailed',

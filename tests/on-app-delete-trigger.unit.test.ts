@@ -5,6 +5,7 @@ const cleanupStarted = vi.fn()
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: vi.fn(),
+  cloudlogErr: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
@@ -87,5 +88,45 @@ describe('on_app_delete trigger', () => {
     expect(statements.indexOf(inserts[0])).toBe(0)
     expect(statements.at(-1)).toBe('DELETE FROM public.app_versions WHERE app_id = $1')
     expect(statements.filter(sql => sql.startsWith('DELETE FROM public.'))).toHaveLength(9)
+  })
+
+  it('records the storage hours from the last refresh up to the deletion', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-10T12:00:00.000Z'))
+    try {
+      pgQuery.mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM public.version_meta'))
+          return { rows: [{ timestamp: '2026-01-10T00:00:00.000Z', version_id: 1, size: 100 }], rowCount: 1 } as any
+        if (sql.includes('billing_cycle_for_anchor'))
+          return { rows: [{ cycle_start: '2026-01-01T00:00:00.000Z', cycle_end: '2026-02-01T00:00:00.000Z' }], rowCount: 1 } as any
+        return { rows: [], rowCount: 0 }
+      })
+
+      const response = await app.request('http://local/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'DELETE',
+          table: 'apps',
+          record: {
+            app_id: 'com.test.delete',
+            owner_org: 'org-1',
+            created_at: '2026-01-01T00:00:00.000Z',
+            transfer_history: [],
+          },
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const replace = pgQuery.mock.calls.find(([sql]) => sql.includes('replace_app_storage_hourly'))
+      expect(replace?.[1]?.slice(0, 5)).toEqual(['com.test.delete', 'org-1', '2026-01-01', '2026-02-01', '2026-02-01'])
+      // 100 bytes for the 12 hours between the upload and the deletion.
+      expect(JSON.parse(replace?.[1]?.[5] as string)).toEqual([{ cycle_start: '2026-01-01', date: '2026-01-10', storage_byte_hours: 1200 }])
+    }
+    finally {
+      pgQuery.mockReset()
+      pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+      vi.useRealTimers()
+    }
   })
 })

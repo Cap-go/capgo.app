@@ -9,9 +9,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import CreditsCta from '~/components/CreditsCta.vue'
 import PageLoader from '~/components/PageLoader.vue'
-import { calculateCreditCost, getAllDashboard, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getUsageCreditDeductions } from '~/services/console'
+import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getOrgStorageUsage, getPlans, getPlanUsagePercent, getUsageCreditDeductions } from '~/services/console'
 import { bytesToGb } from '~/services/conversion'
-import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal, normalizeToUtcStartOfDay } from '~/services/date'
+import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
 import { formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
@@ -77,13 +77,6 @@ async function estimateOverageCost(orgId: string, org: UsageOrganization, plan: 
     console.error('Error estimating credit overage cost:', err)
     return null
   }
-}
-
-// Storage GB-hours used in the billing cycle. The dashboard only holds the last 30 UTC days,
-// which misses the first day of a 31 day cycle, so read the whole cycle.
-async function getCycleStorageByteHours(orgId: string, cycleStart: string, now: string) {
-  const { global } = await getAllDashboard(orgId, cycleStart, now)
-  return global.reduce((acc, entry) => acc + (entry.storage_byte_hours ?? 0), 0)
 }
 
 // `org` is the organization captured by loadData: the store may switch organization while this
@@ -167,15 +160,17 @@ async function getUsage(orgId: string, org: UsageOrganization) {
   const totalBandwidth = bytesToGb(totalBandwidthBytes)
   // Storage is billed in GB-hours over the cycle. The plan includes its GB x hours-in-cycle,
   // and overage is priced on the average stored (byte-hours / hours), like get_total_metrics.
-  // Only the current cycle counts: an empty cycle uses no storage, even when the dashboard
-  // still shows the previous one.
+  // Storage GB-hours of the current billing cycle, read with the same rows and hours as billing:
+  // the 30-day chart series misses the first day of a 31-day cycle and holds the previous cycle's
+  // part of a boundary day. An empty cycle uses no storage.
   const cycleStart = org?.subscription_start ?? dayjs().subtract(30, 'day').toISOString()
   const cycleEnd = org?.subscription_end ?? dayjs(cycleStart).add(1, 'month').toISOString()
-  const totalStorageByteHours = await getCycleStorageByteHours(orgId, normalizeToUtcStartOfDay(new Date(cycleStart)).toISOString(), new Date(normalizeToUtcStartOfDay().getTime() + 86_400_000).toISOString())
-    .catch((error) => {
-      console.error('Error loading cycle storage usage:', error)
-      return usageInCycle.reduce((acc, entry) => acc + (entry.storage_byte_hours ?? 0), 0)
-    })
+  const storageUsage = await getOrgStorageUsage(orgId).catch((error) => {
+    console.error('Error loading cycle storage usage:', error)
+    return null
+  })
+  const totalStorageByteHours = storageUsage?.storage_byte_hours
+    ?? usageInCycle.reduce((acc, entry) => acc + (entry.storage_byte_hours ?? 0), 0)
   const totalStorageBytes = billableStorageBytes(totalStorageByteHours, cycleStart, cycleEnd)
   const totalStorage = bytesToGb(totalStorageByteHours, 2)
   const includedStorage = currentPlan ? includedStorageGbHours(currentPlan.storage, cycleStart, cycleEnd) : 0

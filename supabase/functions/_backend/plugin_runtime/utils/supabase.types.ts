@@ -4393,6 +4393,13 @@ export type Database = {
         Args: { p_end_date: string; p_org_id: string; p_start_date: string }
         Returns: number
       }
+      get_org_storage_usage: {
+        Args: { orgid: string }
+        Returns: {
+          cycle_hours: number
+          storage_byte_hours: number
+        }[]
+      }
       get_org_user_access_rbac: {
         Args: { p_org_id: string; p_user_id: string }
         Returns: {
@@ -5197,6 +5204,18 @@ export type Database = {
       }
       remove_old_jobs: { Args: never; Returns: undefined }
       request_actor_user_id: { Args: never; Returns: string }
+      replace_app_storage_hourly: {
+        Args: {
+          p_app_id: string
+          p_cycle_end_day: string
+          p_cycle_start_day: string
+          p_end_exclusive_day: string
+          p_owner_org: string
+          p_rows: Json
+          p_written_at: string
+        }
+        Returns: undefined
+      }
       request_app_chart_refresh: {
         Args: { app_id: string }
         Returns: {

@@ -5,10 +5,11 @@ import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, triggerValidator } from '../utils/hono.ts'
 import { removeImageFolder } from '../utils/image_storage.ts'
-import { cloudlog } from '../utils/logging.ts'
+import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { s3 } from '../utils/s3.ts'
 import { backgroundTask } from '../utils/utils.ts'
+import { finalizeDeletedAppStorageHourly } from './cron_stat_app.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -92,6 +93,15 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
   }
   catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'error inserting deleted_apps', error, app_id: record.app_id })
+  }
+  // Storage is billed in GB-hours: record the hours since the last stats refresh up to the deletion.
+  // cron_stat_app no longer refreshes the app once it is gone.
+  try {
+    pg ??= await getPgClient(c)
+    await finalizeDeletedAppStorageHourly(c, pg, record, new Date().toISOString())
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'error finalizing deleted app storage hours', error, app_id: record.app_id })
   }
   finally {
     if (pg)

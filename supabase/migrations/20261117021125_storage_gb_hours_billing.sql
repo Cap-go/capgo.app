@@ -155,6 +155,137 @@ REVOKE ALL ON FUNCTION public.replace_app_storage_hourly(character varying, uuid
 GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(character varying, uuid, date, date, date, jsonb, timestamptz) TO service_role;
 
 -- ---------------------------------------------------------------------------
+-- 2c. Cycle storage usage for the console
+-- ---------------------------------------------------------------------------
+-- The usage page shows GB-hours used vs included. It reads them here, with the
+-- same rows and hours as billing, instead of summing the calendar-day chart
+-- series (which also holds the previous cycle's part of a boundary day).
+CREATE OR REPLACE FUNCTION public.get_org_storage_usage(orgid uuid)
+RETURNS TABLE(storage_byte_hours double precision, cycle_hours double precision)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+DECLARE
+  v_start_date date;
+  v_end_date date;
+BEGIN
+  IF NOT public.is_internal_request_role(public.current_request_role())
+    AND NOT public.rbac_check_permission_request(
+      public.rbac_perm_org_read_billing(),
+      get_org_storage_usage.orgid,
+      NULL::character varying,
+      NULL::bigint
+    )
+  THEN
+    RETURN;
+  END IF;
+
+  SELECT (cycle.cycle_start AT TIME ZONE 'UTC')::date, (cycle.cycle_end AT TIME ZONE 'UTC')::date
+  INTO v_start_date, v_end_date
+  FROM public.get_org_billing_cycle(get_org_storage_usage.orgid) AS cycle;
+
+  IF v_start_date IS NULL OR v_end_date IS NULL THEN
+    RETURN;
+  END IF;
+
+  RETURN QUERY
+  SELECT
+    COALESCE(SUM(dsh.storage_byte_hours), 0)::double precision,
+    (GREATEST(v_end_date - v_start_date, 1) * 24)::double precision
+  FROM public.daily_storage_hourly dsh
+  WHERE dsh.owner_org = get_org_storage_usage.orgid
+    AND dsh.date BETWEEN v_start_date AND v_end_date
+    AND dsh.cycle_start >= v_start_date
+    AND dsh.cycle_start < GREATEST(v_end_date, v_start_date + 1);
+END;
+$$;
+
+ALTER FUNCTION public.get_org_storage_usage(uuid) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.get_org_storage_usage(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_org_storage_usage(uuid) FROM anon;
+GRANT EXECUTE ON FUNCTION public.get_org_storage_usage(uuid) TO authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- 2d. Keep refreshing apps that store bundles without other activity
+-- ---------------------------------------------------------------------------
+-- Byte-hours only exist once cron_stat_app wrote them. stats_jobs queued only
+-- apps with recent uploads, MAU, device usage or bandwidth, so an app that
+-- keeps bundles but has no other activity stopped accruing billed hours. Such
+-- apps of billable orgs (active subscription or usage credits) are queued too,
+-- at most once a day.
+CREATE OR REPLACE FUNCTION public.process_cron_stats_jobs()
+RETURNS void
+LANGUAGE plpgsql
+SET search_path TO ''
+AS $$
+DECLARE
+  app_record RECORD;
+  -- stat_app_queue drains up to 50/min; release 30/min to keep headroom.
+  v_per_minute CONSTANT integer := 30;
+  v_index integer := 0;
+BEGIN
+  FOR app_record IN (
+    WITH active_apps AS (
+      SELECT DISTINCT av.app_id
+      FROM public.app_versions av
+      WHERE av.created_at >= pg_catalog.now() - INTERVAL '30 days'
+
+      UNION
+
+      SELECT DISTINCT dm.app_id
+      FROM public.daily_mau dm
+      WHERE dm.date >= pg_catalog.now() - INTERVAL '30 days' AND dm.mau > 0
+
+      UNION
+
+      SELECT DISTINCT du.app_id
+      FROM public.device_usage du
+      WHERE du.timestamp >= pg_catalog.now() - INTERVAL '30 days'
+
+      UNION
+
+      SELECT DISTINCT bu.app_id
+      FROM public.bandwidth_usage bu
+      WHERE bu.timestamp >= pg_catalog.now() - INTERVAL '30 days'
+
+      UNION
+
+      SELECT a.app_id
+      FROM public.apps a
+      INNER JOIN public.orgs o ON o.id = a.owner_org
+      LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
+      LEFT JOIN public.app_stats_refresh_state s ON s.app_id = a.app_id
+      WHERE (si.status = 'succeeded' OR o.has_usage_credits)
+        AND (s.stats_updated_at IS NULL
+          OR s.stats_updated_at < pg_catalog.timezone('UTC', pg_catalog.now()) - INTERVAL '20 hours')
+        AND EXISTS (
+          SELECT 1
+          FROM public.app_versions stored
+          WHERE stored.app_id = a.app_id
+            AND stored.deleted = false
+        )
+    )
+    SELECT DISTINCT
+      active_apps.app_id,
+      a.owner_org
+    FROM active_apps
+    INNER JOIN public.apps a ON a.app_id = active_apps.app_id
+  )
+  LOOP
+    IF public.queue_cron_stat_app_for_app(
+      app_record.app_id,
+      app_record.owner_org,
+      (v_index / v_per_minute) * 60
+    ) THEN
+      v_index := v_index + 1;
+    END IF;
+  END LOOP;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- 3. Org billing metrics read storage from byte-hours
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.calculate_org_metrics_cache_entry(

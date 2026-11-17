@@ -501,6 +501,49 @@ async function refreshStorageHourly(
   return calculation
 }
 
+interface DeletedAppRecord {
+  app_id: string
+  owner_org: string | null
+  created_at?: string | null
+  transfer_history?: unknown[] | null
+}
+
+/** When the app's last owner got it: its creation or its last transfer to that org. */
+export function deletedAppOwnedSince(record: DeletedAppRecord): string | null {
+  const times: number[] = []
+  if (record.created_at)
+    times.push(parseTimestampMs(record.created_at))
+  for (const entry of record.transfer_history ?? []) {
+    const transfer = entry as { transferred_at?: string, transferred_to?: string } | null
+    if (transfer?.transferred_at && transfer.transferred_to === record.owner_org)
+      times.push(parseTimestampMs(transfer.transferred_at))
+  }
+  return times.length > 0 ? new Date(Math.max(...times)).toISOString() : null
+}
+
+/**
+ * Records a deleted app's storage hours from its last refresh up to the deletion, in its owner's
+ * billing cycle: cron_stat_app skips apps that no longer exist, so that interval would be lost.
+ */
+export async function finalizeDeletedAppStorageHourly(c: Context, pg: PgClient, record: DeletedAppRecord, deletedAt: string) {
+  if (!record.owner_org)
+    return null
+  const writtenAt = new Date().toISOString()
+  const events = await readVersionMetaStorageRows(pg, record.app_id, deletedAt)
+  const cycle = await readCycleBefore(pg, record.owner_org, deletedAt)
+  if (!cycle?.cycle_start || !cycle.cycle_end)
+    return null
+  return replaceCycleStorageHourly(c, pg, events, {
+    appId: record.app_id,
+    ownerOrg: record.owner_org,
+    cycleStart: cycle.cycle_start,
+    cycleEnd: cycle.cycle_end,
+    currentHour: deletedAt,
+    accrualStart: deletedAppOwnedSince(record),
+    writtenAt,
+  })
+}
+
 async function syncAppStatsRefresh(
   c: Context,
   pg: PgClient,
