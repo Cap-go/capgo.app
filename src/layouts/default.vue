@@ -39,6 +39,7 @@ const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 const main = useMainStore()
 let onboardingLookupRun = 0
+const ONBOARDING_APPS_MAX_AGE_MS = 60_000
 
 const selectableOrganizations = computed(() => organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)))
 const selectableOrganizationIds = computed(() => selectableOrganizations.value.map(org => org.gid).sort().join(','))
@@ -61,9 +62,10 @@ async function refreshPendingOnboardingApp() {
   const routeAppId = 'app' in route.params && typeof route.params.app === 'string' ? route.params.app : null
   const candidateAppId = routeAppId ?? getOnboardingResumeAppId(main.user?.id ?? main.auth?.id)
 
-  // Reuse the organization store's apps when it can vouch for them, instead of
-  // querying the apps table on every route change.
-  const storeApps = organizationStore.getFreshOrgApps(singleOrganization.gid)
+  // Reuse the organization store's apps when it loaded them recently, instead
+  // of querying the apps table on every route change. An app registered
+  // outside this session (CLI or AI agent) shows up within that window.
+  const storeApps = organizationStore.getFreshOrgApps(singleOrganization.gid, ONBOARDING_APPS_MAX_AGE_MS)
   let data: { app_id: string, need_onboarding: boolean, onboarding?: OrganizationApp['onboarding'] }[] | null
   if (storeApps) {
     data = storeApps.slice(0, 2)
@@ -108,7 +110,7 @@ watch([
   // Onboarding state the store refreshed (getting started, CLI progress).
   () => {
     const orgs = selectableOrganizations.value
-    return orgs.length === 1 ? JSON.stringify(organizationStore.getFreshOrgApps(orgs[0].gid)?.slice(0, 2).map(app => [app.app_id, app.need_onboarding, app.onboarding]) ?? null) : ''
+    return orgs.length === 1 ? JSON.stringify(organizationStore.getFreshOrgApps(orgs[0].gid, ONBOARDING_APPS_MAX_AGE_MS)?.slice(0, 2).map(app => [app.app_id, app.need_onboarding, app.onboarding]) ?? null) : ''
   },
 ], refreshPendingOnboardingApp, { immediate: true })
 
