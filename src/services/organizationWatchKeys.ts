@@ -45,8 +45,3 @@ export function organizationSecurityKey(org: OrganizationLike | null | undefined
 export function organizationBillingKey(org: OrganizationLike | null | undefined): string {
   return keyOf(org, ['role', 'paying', 'is_yearly', 'trial_left', 'can_use_more', 'is_canceled', 'subscription_start', 'subscription_end'])
 }
-
-/** Identity plus the settings fields shown on the organization settings page. */
-export function organizationSettingsKey(org: OrganizationLike | null | undefined): string {
-  return keyOf(org, ['role', 'name', 'management_email'])
-}

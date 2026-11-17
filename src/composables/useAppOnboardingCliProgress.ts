@@ -8,6 +8,8 @@ import { hasDualOnboardingChecklists } from '~/utils/dualOnboardingChecklists'
 
 /** First poll delay, and the delay again after any progress. */
 export const CLI_PROGRESS_POLL_BASE_MS = 2_000
+/** Poll every CLI_PROGRESS_POLL_BASE_MS for this long after the last progress, then back off. */
+export const CLI_PROGRESS_POLL_FAST_PHASE_MS = 2 * 60_000
 /** Longest delay between polls once nothing changes. */
 export const CLI_PROGRESS_POLL_MAX_MS = 30_000
 const CLI_PROGRESS_POLL_BACKOFF = 1.5
@@ -88,8 +90,9 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
     }
     pollTimer = setTimeout(async () => {
       pollTimer = undefined
-      // Back off first; a poll that sees progress resets the delay.
-      pollDelay = Math.min(Math.round(pollDelay * CLI_PROGRESS_POLL_BACKOFF), CLI_PROGRESS_POLL_MAX_MS)
+      // Back off once the fast phase is over; a poll that sees progress resets the delay.
+      if (Date.now() - lastProgressAt >= CLI_PROGRESS_POLL_FAST_PHASE_MS)
+        pollDelay = Math.min(Math.round(pollDelay * CLI_PROGRESS_POLL_BACKOFF), CLI_PROGRESS_POLL_MAX_MS)
       await refreshProgress(false)
       scheduleNextPoll()
     }, pollDelay)

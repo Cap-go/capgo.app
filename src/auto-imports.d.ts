@@ -6,6 +6,10 @@
 // biome-ignore lint: disable
 export {}
 declare global {
+  const CLI_PROGRESS_POLL_BASE_MS: typeof import('./composables/useAppOnboardingCliProgress').CLI_PROGRESS_POLL_BASE_MS
+  const CLI_PROGRESS_POLL_FAST_PHASE_MS: typeof import('./composables/useAppOnboardingCliProgress').CLI_PROGRESS_POLL_FAST_PHASE_MS
+  const CLI_PROGRESS_POLL_MAX_IDLE_MS: typeof import('./composables/useAppOnboardingCliProgress').CLI_PROGRESS_POLL_MAX_IDLE_MS
+  const CLI_PROGRESS_POLL_MAX_MS: typeof import('./composables/useAppOnboardingCliProgress').CLI_PROGRESS_POLL_MAX_MS
   const EffectScope: typeof import('vue').EffectScope
   const RBAC_ORG_ROLE_I18N_KEYS: typeof import('./stores/organization').RBAC_ORG_ROLE_I18N_KEYS
   const RELEASE_LIVE_POLL_INTERVAL_MS: typeof import('./composables/useReleaseLive').RELEASE_LIVE_POLL_INTERVAL_MS
@@ -399,6 +403,10 @@ import { UnwrapRef } from 'vue'
 declare module 'vue' {
   interface GlobalComponents {}
   interface ComponentCustomProperties {
+    readonly CLI_PROGRESS_POLL_BASE_MS: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['CLI_PROGRESS_POLL_BASE_MS']>
+    readonly CLI_PROGRESS_POLL_FAST_PHASE_MS: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['CLI_PROGRESS_POLL_FAST_PHASE_MS']>
+    readonly CLI_PROGRESS_POLL_MAX_IDLE_MS: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['CLI_PROGRESS_POLL_MAX_IDLE_MS']>
+    readonly CLI_PROGRESS_POLL_MAX_MS: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['CLI_PROGRESS_POLL_MAX_MS']>
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
     readonly RBAC_ORG_ROLE_I18N_KEYS: UnwrapRef<typeof import('./stores/organization')['RBAC_ORG_ROLE_I18N_KEYS']>
     readonly RELEASE_LIVE_POLL_INTERVAL_MS: UnwrapRef<typeof import('./composables/useReleaseLive')['RELEASE_LIVE_POLL_INTERVAL_MS']>

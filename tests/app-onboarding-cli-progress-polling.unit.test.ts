@@ -123,31 +123,35 @@ describe('useAppOnboardingCliProgress polling', () => {
     document.dispatchEvent(new Event('visibilitychange'))
   }
 
-  it('backs off while nothing changes instead of polling every 2 seconds', async () => {
+  it('polls every 2 seconds at first, then backs off while nothing changes', async () => {
+    const { CLI_PROGRESS_POLL_FAST_PHASE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
     invokeCapgoApiMock.mockResolvedValue({ data: { onboarding: PENDING_ONBOARDING }, error: null })
     const app = await mountProgress()
+    await vi.advanceTimersByTimeAsync(10_000)
+    // Initial request plus one poll every 2 s.
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(6)
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_FAST_PHASE_MS + 60_000)
+    let calls = invokeCapgoApiMock.mock.calls.length
     await vi.advanceTimersByTimeAsync(60_000)
-    // A fixed 2 s interval would have sent 31 requests in that minute.
-    expect(invokeCapgoApiMock.mock.calls.length).toBeLessThan(12)
-    const calls = invokeCapgoApiMock.mock.calls.length
+    // A fixed 2 s interval would send 30 requests a minute; the backoff caps at one per 30 s.
+    expect(invokeCapgoApiMock.mock.calls.length - calls).toBeLessThanOrEqual(2)
+    calls = invokeCapgoApiMock.mock.calls.length
     await vi.advanceTimersByTimeAsync(30_000)
-    // Capped at one poll per 30 s.
     expect(invokeCapgoApiMock.mock.calls.length - calls).toBeLessThanOrEqual(1)
     app.unmount()
   })
 
   it('polls quickly again once the CLI reports progress', async () => {
+    const { CLI_PROGRESS_POLL_FAST_PHASE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
     let step = 0
     invokeCapgoApiMock.mockImplementation(async () => ({ data: { onboarding: { ...PENDING_ONBOARDING, step } }, error: null }))
     const app = await mountProgress()
-    await vi.advanceTimersByTimeAsync(60_000)
-    const calls = invokeCapgoApiMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_FAST_PHASE_MS + 120_000)
     step = 1
     await vi.advanceTimersByTimeAsync(30_000)
     const afterProgress = invokeCapgoApiMock.mock.calls.length
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(afterProgress).toBeGreaterThan(calls)
-    expect(invokeCapgoApiMock.mock.calls.length).toBe(afterProgress + 1)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(invokeCapgoApiMock.mock.calls.length).toBe(afterProgress + 5)
     app.unmount()
   })
 
