@@ -39,6 +39,6 @@ it('refuses to rebuild a discount schedule if its paid period renewed after conf
     subscriptions: { retrieve: vi.fn(async () => ({ schedule: 'sched_owned', items: { data: [{ current_period_end: 1896134400 }] } })) },
     subscriptionSchedules: { retrieve: vi.fn(async () => ({ status: 'active', current_phase: { start_date: 1893456000 }, metadata: { capgo_currency_replaces: 'sub_old' } })), update: vi.fn() },
   }
-  await expect(updateCurrencyDiscountSchedule(stripe as any, 'sub_example', true, async () => {}, 1893456000)).rejects.toThrow('updated renewal date')
+  await expect(updateCurrencyDiscountSchedule(stripe as any, 'sub_example', true, async () => {}, { expectedPeriodEnd: 1893456000 })).rejects.toThrow('updated renewal date')
   expect(stripe.subscriptionSchedules.update).not.toHaveBeenCalled()
 })

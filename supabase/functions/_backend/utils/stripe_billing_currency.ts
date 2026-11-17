@@ -85,10 +85,13 @@ export async function changeBillingCurrency(c: Context, ctx: InAppBillingContext
       if (preview.quoteId !== quoteId)
         throw simpleError('billing_currency_quote_changed', 'Review the updated renewal price and confirm the currency change again.')
       const periodEnd = Math.max(...current.items.data.map(item => item.current_period_end))
-      const scheduled = await updateCurrencyDiscountSchedule(ctx.stripe, current.id, true, assertHeld, periodEnd)
-      await assertHeld()
-      // An explicit date cannot silently move to another paid period during renewal.
-      await ctx.stripe.subscriptions.update(current.id, { ...(scheduled ? {} : { cancel_at: periodEnd }), proration_behavior: 'none', metadata: { [CURRENCY_TRANSITION_KEY]: value, [CURRENCY_TRANSITION_END_KEY]: String(periodEnd) } }, billingRequestOptions)
+      const metadata = { [CURRENCY_TRANSITION_KEY]: value, [CURRENCY_TRANSITION_END_KEY]: String(periodEnd) }
+      const scheduled = await updateCurrencyDiscountSchedule(ctx.stripe, current.id, true, assertHeld, { expectedPeriodEnd: periodEnd, metadata })
+      if (!scheduled) {
+        await assertHeld()
+        // Save the explicit boundary and replacement intent in the same write.
+        await ctx.stripe.subscriptions.update(current.id, { cancel_at: periodEnd, proration_behavior: 'none', metadata }, billingRequestOptions)
+      }
       await syncSubscriptionData(c, ctx.customerId, current.id)
     }
     await assertHeld()

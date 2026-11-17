@@ -60,7 +60,7 @@ export async function replacementDiscounts(stripe: Stripe, discounts: Array<stri
 // Keep cancellation/resume self-service while an automatic replacement's discount
 // schedule is still active. Rebuild only our own schedule, preserving the invoice
 // anchor and original discount expiry instead of releasing an indefinite coupon.
-export async function updateCurrencyDiscountSchedule(stripe: Stripe, subscriptionId: string, cancel: boolean, assertHeld: () => Promise<void> = async () => {}, expectedPeriodEnd?: number): Promise<boolean> {
+export async function updateCurrencyDiscountSchedule(stripe: Stripe, subscriptionId: string, cancel: boolean, assertHeld: () => Promise<void> = async () => {}, options: { expectedPeriodEnd?: number, metadata?: Stripe.MetadataParam } = {}): Promise<boolean> {
   const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['discounts.source.coupon', 'items.data.discounts'] }, billingRequestOptions)
   const scheduleId = typeof subscription.schedule === 'string' ? subscription.schedule : subscription.schedule?.id
   if (!scheduleId)
@@ -70,7 +70,7 @@ export async function updateCurrencyDiscountSchedule(stripe: Stripe, subscriptio
     return false
   const now = Math.floor(Date.now() / 1000)
   const periodEnd = Math.max(...subscription.items.data.map(item => item.current_period_end))
-  if (expectedPeriodEnd !== undefined && periodEnd !== expectedPeriodEnd)
+  if (options.expectedPeriodEnd !== undefined && periodEnd !== options.expectedPeriodEnd)
     throw simpleError('billing_currency_quote_changed', 'Review the updated renewal date and confirm the currency change again.')
   const describe = async (discounts: Array<string | Stripe.Discount>) => Promise.all(discounts.map(async (discount) => {
     if (typeof discount === 'string')
@@ -90,6 +90,9 @@ export async function updateCurrencyDiscountSchedule(stripe: Stripe, subscriptio
       ...(index === 0 ? { start_date: schedule.current_phase!.start_date } : {}),
       ...(end ? { end_date: end } : { duration: { interval: 'month', interval_count: 1 } }),
       currency: subscription.currency, billing_cycle_anchor: 'automatic', proration_behavior: 'none',
+      // Updating the active phase updates the subscription too. Save its intent
+      // with cancellation in one Stripe write, and retain it across future phases.
+      ...(options.metadata ? { metadata: { ...subscription.metadata, ...options.metadata } } : {}),
       default_tax_rates: subscription.default_tax_rates?.map(rate => rate.id),
       discounts: discounts.filter(active).map(discount => discount.params),
       items: subscription.items.data.map((item, itemIndex) => ({

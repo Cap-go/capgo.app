@@ -4,11 +4,11 @@ import type { BillingCurrencyPreview } from '../../shared/billing-profile.ts'
 import type { InAppBillingContext } from './stripe_in_app.ts'
 import { BILLING_CURRENCY_KEY } from './billing_currency.ts'
 import { currencyForCountry } from './country_currency.ts'
-import { FULL_PRICE_TIER } from './country_price_tier.ts'
+import { FULL_PRICE_TIER, isCheaperTier } from './country_price_tier.ts'
 import { simpleError } from './hono.ts'
 import { billingRequestOptions, expireBillingCheckouts, withBillingProfileLock } from './billing_profile_lock.ts'
 import { replacementDiscounts } from './billing_currency_discounts.ts'
-import { getPriceTier, paymentMethodCountry } from './regional_price.ts'
+import { getPriceTier, paymentMethodCountry, priceTierForCurrency } from './regional_price.ts'
 import { getCheckoutPlanPrice } from './stripe.ts'
 
 export const CURRENCY_TRANSITION_KEY = 'capgo_currency_transition'
@@ -26,6 +26,7 @@ async function replacementParams(c: Context, ctx: InAppBillingContext, subscript
   const paymentMethod = paymentMethodId ? await ctx.stripe.paymentMethods.retrieve(paymentMethodId) : null
   const country = customer.address?.country
   const eligible = !!country && paymentMethodCountry(paymentMethod) === country && currencyForCountry(country) === currency
+  const requiredTier = eligible ? priceTierForCurrency([country], currency, null) : FULL_PRICE_TIER
   const periodEnd = Math.max(...subscription.items.data.map(item => item.current_period_end))
   const startsAt = Math.max(periodEnd, now ?? 0)
   const wasTrial = !!subscription.trial_end && subscription.trial_end >= periodEnd
@@ -33,7 +34,7 @@ async function replacementParams(c: Context, ctx: InAppBillingContext, subscript
   const itemDiscounts = await Promise.all(subscription.items.data.map(item => replacementDiscounts(ctx.stripe, item.discounts ?? [], currency, startsAt, wasTrial)))
   const items = await Promise.all(subscription.items.data.map(async (item, index) => {
     let price: Stripe.Price = await ctx.stripe.prices.retrieve(item.price.id, { expand: ['currency_options'] })
-    if (getPriceTier(price) !== FULL_PRICE_TIER && !eligible) {
+    if (isCheaperTier(getPriceTier(price), requiredTier)) {
       const productId = id(price.product)!
       const full = await getCheckoutPlanPrice(c, productId, price.recurring?.interval === 'year' ? 'year' : 'month', ctx.billingAccount, FULL_PRICE_TIER)
       if (!full)

@@ -173,3 +173,88 @@ it('reports a repeat currency change before the cancellation schedule enters its
   stripe.subscriptionSchedules.retrieve.mockResolvedValue({ status: 'active', subscription: sub.id, end_behavior: 'release', metadata: { capgo_currency_replaces: 'sub_previous' } })
   expect((await getBillingCurrencyState({} as any, ctx)).pendingCurrency).toBeNull()
 })
+
+describe('atomic currency changes on discount schedules', () => {
+  function ownedSchedule() {
+    const current = {
+      ...sub, schedule: 'sched_owned', metadata: { capgo_currency_replaces: 'sub_previous', org_id: 'org_example' } as Record<string, string>,
+      discounts: [{ id: 'di_example', end: 1893369600, source: { coupon: { metadata: {} } } }],
+      items: { data: [{ price: { id: 'price_example' }, current_period_end: 1893456000 }] },
+    }
+    const schedule = {
+      id: 'sched_owned', status: 'active', subscription: current.id, end_behavior: 'release',
+      metadata: { capgo_currency_replaces: 'sub_previous' }, current_phase: { start_date: 1890777600 },
+      phases: [{ end_date: 1893369600 }, { end_date: 1896048000 }],
+    }
+    stripe.subscriptions.list.mockResolvedValue({ data: [current], has_more: false })
+    stripe.subscriptions.retrieve.mockResolvedValue(current)
+    stripe.subscriptionSchedules.list.mockResolvedValue({ data: [schedule], has_more: false })
+    stripe.subscriptionSchedules.retrieve.mockResolvedValue(schedule)
+    stripe.subscriptionSchedules.update.mockImplementation(async (_id, params) => {
+      Object.assign(schedule, params)
+      // Stripe applies updates to the active phase to the subscription as well.
+      Object.assign(current.metadata, params.phases[0].metadata)
+      return schedule
+    })
+    return { current, schedule }
+  }
+
+  it('saves cancellation and automatic replacement together without a later subscription write', async () => {
+    const { current } = ownedSchedule()
+    stripe.subscriptions.update.mockRejectedValue(new Error('must not need a second write'))
+    expect(await changeBillingCurrency({} as any, ctx, 'usd', sub.id, 'quote_example')).toMatchObject({ pendingCurrency: 'usd' })
+    expect(stripe.subscriptions.update).not.toHaveBeenCalled()
+    const params = stripe.subscriptionSchedules.update.mock.calls[0][1]
+    expect(params.end_behavior).toBe('cancel')
+    expect(params.phases).toHaveLength(2)
+    for (const phase of params.phases) {
+      expect(phase.metadata).toEqual({
+        capgo_currency_replaces: 'sub_previous', org_id: 'org_example',
+        capgo_currency_transition: 'usd', capgo_currency_transition_end: '1893456000',
+      })
+    }
+    expect(current.metadata.capgo_currency_transition).toBe('usd')
+    expect(params.phases.at(-1).end_date).toBe(1893456000)
+  })
+
+  it.each(['lock', 'schedule'])('keeps renewal unchanged when the %s fails before the atomic write', async (failure) => {
+    const state = ownedSchedule()
+    const before = structuredClone(state)
+    if (failure === 'lock') {
+      mocks.query.mockImplementation(async (sql) => {
+        if (sql === 'SELECT 1')
+          throw new Error('lock lost')
+      })
+    }
+    else {
+      stripe.subscriptionSchedules.update.mockRejectedValue(new Error('schedule unavailable'))
+    }
+    await expect(changeBillingCurrency({} as any, ctx, 'usd', sub.id, 'quote_example')).rejects.toThrow()
+    expect(state).toEqual(before)
+    expect(stripe.subscriptions.update).not.toHaveBeenCalled()
+    expect(stripe.customers.update).not.toHaveBeenCalled()
+    expect(mocks.syncSubscription).not.toHaveBeenCalled()
+  })
+
+  it.each(['response', 'lock', 'database-sync', 'customer'])('retains automatic replacement when %s fails after Stripe applies cancellation', async (failure) => {
+    const { current, schedule } = ownedSchedule()
+    const apply = stripe.subscriptionSchedules.update.getMockImplementation()!
+    stripe.subscriptionSchedules.update.mockImplementation(async (...args) => {
+      const result = await apply(...args)
+      if (failure === 'response')
+        throw new Error('response lost')
+      if (failure === 'lock')
+        mocks.query.mockRejectedValue(new Error('lock lost'))
+      return result
+    })
+    if (failure === 'database-sync')
+      mocks.syncSubscription.mockRejectedValue(new Error('sync unavailable'))
+    if (failure === 'customer')
+      stripe.customers.update.mockRejectedValue(new Error('customer unavailable'))
+    await expect(changeBillingCurrency({} as any, ctx, 'usd', sub.id, 'quote_example')).rejects.toThrow()
+    expect(schedule.end_behavior).toBe('cancel')
+    expect(current.metadata).toMatchObject({ capgo_currency_transition: 'usd', capgo_currency_transition_end: '1893456000' })
+    expect(await getBillingCurrencyState({} as any, ctx)).toMatchObject({ pendingCurrency: 'usd', endsAt: '2030-01-01T00:00:00.000Z' })
+    expect(stripe.subscriptions.update).not.toHaveBeenCalled()
+  })
+})

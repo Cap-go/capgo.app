@@ -532,14 +532,20 @@ describe('payOpenInvoice', () => {
   })
 })
 
-it('exposes a multi-phase replacement cancellation before Stripe sets cancel_at, and clears it on resume', async () => {
+it.each([
+  { cancel: false, laterWriteFails: false },
+  { cancel: true, laterWriteFails: false },
+  { cancel: false, laterWriteFails: true },
+  { cancel: true, laterWriteFails: true },
+])('clears replacement intent in every schedule phase on cancel/resume, even if a later write fails: %j', async ({ cancel, laterWriteFails }) => {
   const stripe = { ...createStripe(), subscriptionSchedules: { retrieve: vi.fn(), update: vi.fn() } }
   mockActiveSubscription('sub_123')
   const periodEnd = Math.floor(Date.now() / 1000) + 30 * 86400
   const discountEnd = periodEnd - 15 * 86400
   stripe.subscriptions.retrieve.mockResolvedValue({
     id: 'sub_123', status: 'active', currency: 'eur', schedule: 'sched_owned', cancel_at_period_end: false, cancel_at: null,
-    metadata: { capgo_currency_transition: 'usd' }, discounts: [],
+    metadata: { capgo_currency_transition: 'usd', capgo_currency_transition_end: String(periodEnd), capgo_currency_replaces: 'sub_previous' },
+    discounts: [{ id: 'di_example', end: discountEnd, source: { coupon: { metadata: {} } } }],
     items: { data: [{ price: { id: 'price_example' }, current_period_end: periodEnd }] },
   })
   const schedule = {
@@ -548,14 +554,32 @@ it('exposes a multi-phase replacement cancellation before Stripe sets cancel_at,
     phases: [{ end_date: discountEnd }, { end_date: periodEnd }],
   }
   stripe.subscriptionSchedules.retrieve.mockResolvedValue(schedule)
-  stripe.subscriptionSchedules.update.mockImplementation(async (_id, params) => Object.assign(schedule, params))
+  stripe.subscriptionSchedules.update.mockImplementation(async (_id, params) => {
+    const subscription = await stripe.subscriptions.retrieve()
+    Object.assign(subscription.metadata, params.phases[0].metadata)
+    return Object.assign(schedule, params)
+  })
   stripe.subscriptions.update.mockImplementation(async (_id, params) => {
+    if (laterWriteFails)
+      throw new Error('feedback write unavailable')
     const subscription = await stripe.subscriptions.retrieve()
     return Object.assign(subscription, params)
   })
   expect(await getSubscriptionSummary(createContext(), createBillingContext(stripe))).toMatchObject({
     cancelAt: new Date(periodEnd * 1000).toISOString(), pendingCurrency: 'usd',
   })
-  expect(await resumeSubscription(createContext(), createBillingContext(stripe))).toMatchObject({ cancelAt: null })
+  const change = cancel
+    ? scheduleSubscriptionCancel(createContext(), createBillingContext(stripe), 'too_expensive')
+    : resumeSubscription(createContext(), createBillingContext(stripe))
+  const expectedCancelAt = cancel ? new Date(periodEnd * 1000).toISOString() : null
+  if (laterWriteFails)
+    await expect(change).rejects.toThrow('feedback write unavailable')
+  else
+    expect(await change).toMatchObject({ cancelAt: expectedCancelAt })
+  expect(await getSubscriptionSummary(createContext(), createBillingContext(stripe))).toMatchObject({ cancelAt: expectedCancelAt })
   expect(await getSubscriptionSummary(createContext(), createBillingContext(stripe))).not.toHaveProperty('pendingCurrency')
+  const phases = stripe.subscriptionSchedules.update.mock.calls[0][1].phases
+  expect(phases).toHaveLength(2)
+  for (const phase of phases)
+    expect(phase.metadata).toMatchObject({ capgo_currency_transition: '', capgo_currency_transition_end: '', capgo_currency_replaces: 'sub_previous' })
 })

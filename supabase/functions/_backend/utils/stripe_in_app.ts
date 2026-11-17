@@ -434,7 +434,7 @@ export async function scheduleSubscriptionCancel(c: Context, ctx: InAppBillingCo
   const subscriptionId = await requireActiveSubscriptionId(c, ctx)
   await withBillingProfileLock(c, ctx.billingAccount, ctx.customerId, async (assertHeld) => {
     await assertHeld()
-    const scheduled = await updateCurrencyDiscountSchedule(ctx.stripe, subscriptionId, true, assertHeld)
+    const scheduled = await updateCurrencyDiscountSchedule(ctx.stripe, subscriptionId, true, assertHeld, { metadata: clearCurrencyTransition })
     await releaseTrialPlanSchedule(c, ctx.stripe, subscriptionId)
     await assertHeld()
     await ctx.stripe.subscriptions.update(subscriptionId, {
@@ -452,7 +452,7 @@ export async function resumeSubscription(c: Context, ctx: InAppBillingContext) {
   const subscriptionId = await requireActiveSubscriptionId(c, ctx)
   await withBillingProfileLock(c, ctx.billingAccount, ctx.customerId, async (assertHeld) => {
     await releaseTrialPlanSchedule(c, ctx.stripe, subscriptionId)
-    const scheduled = await updateCurrencyDiscountSchedule(ctx.stripe, subscriptionId, false, assertHeld)
+    const scheduled = await updateCurrencyDiscountSchedule(ctx.stripe, subscriptionId, false, assertHeld, { metadata: clearCurrencyTransition })
     // Clear both cancel styles: period end, and an explicit cancel_at date.
     await assertHeld()
     const subscription = await ctx.stripe.subscriptions.update(subscriptionId, {

@@ -197,3 +197,31 @@ it('binds the confirmation token to the exact renewal boundary', async () => {
   sub.items.data[0].current_period_end += 86400
   expect((await previewCurrencyTransition({} as any, ctx, sub, 'usd')).quoteId).not.toBe(original.quoteId)
 })
+
+it.each([
+  { country: 'DE', carriedTier: 'p50', fallback: true },
+  { country: 'DE', carriedTier: 'p85', fallback: false },
+  { country: 'FR', carriedTier: 'p70', fallback: false },
+  { country: 'FR', carriedTier: 'p85', fallback: false },
+  { country: 'DE', carriedTier: 'p100', fallback: false },
+])('checks the carried tier against the buyer in both preview and phased replacement: %j', async ({ country, carriedTier, fallback }) => {
+  sub.currency = 'usd'
+  sub.metadata.capgo_currency_transition = 'eur'
+  sub.discounts = [{ id: 'di_finite', subscription: null, subscription_item: null, end: 1896134400 }]
+  stripe.customers.retrieve.mockResolvedValue({ id: ctx.customerId, address: { country }, invoice_settings: {} })
+  stripe.paymentMethods.retrieve.mockResolvedValue({ card: { country } })
+  stripe.prices.retrieve.mockResolvedValue({ id: 'price_carried', product: 'prod_example', active: true, currency: 'eur', recurring: { interval: 'year' }, metadata: { capgo_tier: carriedTier } })
+  mocks.fullPrice.mockResolvedValue({ id: 'price_standard', active: true, currency: 'eur' })
+  const expected = fallback ? 'price_standard' : 'price_carried'
+  await previewCurrencyTransition({} as any, ctx, sub, 'eur')
+  expect(stripe.invoices.createPreview).toHaveBeenCalledWith(expect.objectContaining({
+    subscription_details: expect.objectContaining({ items: [expect.objectContaining({ price: expected })] }),
+  }))
+  expect(await completeCurrencyTransition({} as any, ctx, sub)).toBe(true)
+  for (const phase of stripe.subscriptionSchedules.create.mock.calls[0][0].phases)
+    expect(phase.items[0].price).toBe(expected)
+  if (fallback)
+    expect(mocks.fullPrice).toHaveBeenCalledWith(expect.anything(), 'prod_example', 'year', 'us', 'p100')
+  else
+    expect(mocks.fullPrice).not.toHaveBeenCalled()
+})
