@@ -591,7 +591,7 @@ async function bundleCompatibility(
   compareVersionId?: number | null,
 ): Promise<ChannelChangeCompatibility | null> {
   const packages = await findIncompatibleNativePackages(appVersion.app_id, channelName, (appVersion.native_packages as any) ?? [])
-  if (!packages?.length)
+  if (!packages.length)
     return null
   // Pre-select the channel's current bundle so the Dependencies page opens already diffed.
   const compareQuery = compareVersionId ? `?compare=${compareVersionId}` : ''
@@ -615,7 +615,16 @@ async function handleVersionLink(picked: BundlePickerRow) {
     return
   const rollout = bundleLinkMode.value === 'rollout'
   const previousRolloutVersionId = channel.value.rollout_version
-  const compatibility = await bundleCompatibility(appVersion, channel.value.name, channel.value.version?.id)
+  let compatibility: ChannelChangeCompatibility | null
+  try {
+    compatibility = await bundleCompatibility(appVersion, channel.value.name, channel.value.version?.id)
+  }
+  catch (error) {
+    // Never skip the native package warning because the check itself failed.
+    console.error('Cannot check native package compatibility', error)
+    toast.error(t('channel-impact-compat-check-failed'))
+    return
+  }
   if (!channel.value)
     return
   const result = await confirmChannelChange({
@@ -795,7 +804,15 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
     toast.error(t('error-fetching-channels'))
     return
   }
-  const compatibility = await bundleCompatibility(appVersion, target.name, targetRow?.version)
+  let compatibility: ChannelChangeCompatibility | null
+  try {
+    compatibility = await bundleCompatibility(appVersion, target.name, targetRow?.version)
+  }
+  catch (error) {
+    console.error('Cannot check native package compatibility', error)
+    toast.error(t('channel-impact-compat-check-failed'))
+    return
+  }
   const result = await confirmChannelChange({
     appId: source.app_id,
     channelId: target.id,

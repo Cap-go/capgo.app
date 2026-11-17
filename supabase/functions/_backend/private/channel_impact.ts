@@ -47,6 +47,7 @@ interface BundleRef {
   id: number
   name: string
   min_update_version?: string | null
+  key_id?: string | null
 }
 
 interface ChannelRow {
@@ -126,7 +127,7 @@ async function readChannelRow(c: Context<MiddlewareKeyVariables>, body: ChannelI
       ch.rollout_enabled, ch.rollout_percentage_bps, ch.rollout_paused_at,
       (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name) FROM public.app_versions av WHERE av.id = ch.version) AS current_bundle,
       (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name) FROM public.app_versions av WHERE av.id = ch.rollout_version) AS rollout_bundle,
-      (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name, 'min_update_version', av.min_update_version)
+      (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name, 'min_update_version', av.min_update_version, 'key_id', av.key_id)
         FROM public.deploy_history dh
         JOIN public.app_versions av ON av.id = dh.version_id
         WHERE dh.channel_id = ch.id
@@ -136,7 +137,7 @@ async function readChannelRow(c: Context<MiddlewareKeyVariables>, body: ChannelI
           AND av.name NOT IN ('builtin', 'unknown')
         ORDER BY dh.deployed_at DESC NULLS LAST, dh.id DESC
         LIMIT 1) AS previous_bundle,
-      (SELECT pg_catalog.json_agg(pg_catalog.json_build_object('id', av.id, 'name', av.name, 'min_update_version', av.min_update_version, 'deleted', av.deleted))
+      (SELECT pg_catalog.json_agg(pg_catalog.json_build_object('id', av.id, 'name', av.name, 'min_update_version', av.min_update_version, 'key_id', av.key_id, 'deleted', av.deleted))
         FROM public.app_versions av
         WHERE av.app_id = ch.app_id AND av.id = ANY($3::bigint[])) AS bundles
     FROM public.channels ch
@@ -168,14 +169,14 @@ function resolveTarget(row: ChannelRow, requested: RequestedTarget): ChannelImpa
     const previous = row.previous_bundle
     if (!previous)
       throw simpleError('no_previous_bundle', 'This channel has no previous bundle to roll back to')
-    return { kind: 'bundle', id: Number(previous.id), name: previous.name, min_update_version: previous.min_update_version ?? null }
+    return { kind: 'bundle', id: Number(previous.id), name: previous.name, min_update_version: previous.min_update_version ?? null, key_id: previous.key_id ?? null }
   }
   const bundle = (row.bundles ?? []).find(item => Number(item.id) === requested.version_id)
   if (!bundle || bundle.deleted)
     throw simpleError('cannot_find_version', 'Cannot find version', { version_id: requested.version_id })
   if (INTERNAL_VERSION_NAMES.has(bundle.name))
     return { kind: 'builtin', id: null }
-  return { kind: 'bundle', id: Number(bundle.id), name: bundle.name, min_update_version: bundle.min_update_version ?? null }
+  return { kind: 'bundle', id: Number(bundle.id), name: bundle.name, min_update_version: bundle.min_update_version ?? null, key_id: bundle.key_id ?? null }
 }
 
 function channelConfig(row: ChannelRow): ChannelImpactChannelConfig {

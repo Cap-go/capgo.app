@@ -22,6 +22,7 @@ export interface ChannelDevicePopulation {
 
 interface PopulationRowCF {
   forced?: number | string
+  key_id?: string
   platform: number | string
   version_build: string
   version_name: string
@@ -76,12 +77,13 @@ function forcedColumnCF(into: string[]) {
 
 function deviceScopeInnerCF(appId: string, windowStart: Date, into: string[] = []) {
   // Schema: blob1=device_id, blob2=version_name, blob3=plugin_version, blob6=version_build,
-  //         blob7=default_channel, double1=platform, double2=is_prod, double3=is_emulator
+  //         blob7=default_channel, blob8=key_id, double1=platform, double2=is_prod, double3=is_emulator
   return `SELECT
     blob1 AS device_id,
     argMax(blob2, timestamp) AS version_name,
     argMax(blob3, timestamp) AS plugin_version,
     argMax(blob6, timestamp) AS version_build,
+    argMax(blob8, timestamp) AS key_id,
     argMax(blob7, timestamp) AS default_channel,
     argMax(double1, timestamp) AS platform,
     argMax(double2, timestamp) AS is_prod,
@@ -96,6 +98,7 @@ function deviceScopeInnerCF(appId: string, windowStart: Date, into: string[] = [
 export function buildChannelPopulationCFQuery(appId: string, channelName: string, overrides: ChannelDeviceOverrideIds | undefined, windowStart: Date, limit = CHANNEL_IMPACT_MAX_GROUPS) {
   return `SELECT
   forced,
+  key_id,
   platform,
   version_build,
   version_name,
@@ -109,7 +112,7 @@ FROM (
   ${deviceScopeInnerCF(appId, windowStart, overrides?.into)}
 )
 WHERE ${buildDeviceChannelScopeCF(channelName, overrides)}
-GROUP BY forced, platform, version_build, version_name, plugin_version, is_prod, is_emulator
+GROUP BY forced, key_id, platform, version_build, version_name, plugin_version, is_prod, is_emulator
 ORDER BY device_count DESC
 LIMIT ${Math.max(1, Math.floor(limit))}`
 }
@@ -132,6 +135,7 @@ export function toPopulationGroupsCF(rows: PopulationRowCF[]): ChannelImpactDevi
     is_emulator: flagFromCF(row.is_emulator),
     device_count: Number(row.device_count) || 0,
     forced: Number(row.forced) === 1,
+    key_id: row.key_id ?? '',
     sample_device_id: row.sample_device_id ?? '',
     last_seen: isoFromCF(row.latest_seen),
   }))
@@ -160,6 +164,7 @@ export async function readChannelDevicePopulationCF(c: Context, appId: string, c
 
 interface PopulationRowSB {
   forced: boolean | null
+  key_id: string | null
   platform: string | null
   version_build: string | null
   version_name: string | null
@@ -188,6 +193,7 @@ export async function readChannelDevicePopulationSB(c: Context, appId: string, c
         d.is_prod,
         d.is_emulator,
         lower(d.device_id) = ANY($6::text[]) AS forced,
+        COALESCE(d.key_id, '') AS key_id,
         count(*)::int AS device_count,
         (array_agg(d.device_id ORDER BY d.updated_at DESC))[1] AS sample_device_id,
         max(d.updated_at) AS last_seen
@@ -201,7 +207,7 @@ export async function readChannelDevicePopulationSB(c: Context, appId: string, c
           )
           OR lower(d.device_id) = ANY($6::text[])
         )
-      GROUP BY 1, 2, 3, 4, 5, 6, 7
+      GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
       ORDER BY device_count DESC
       LIMIT $7`,
       [appId, windowStart.toISOString(), channelName, defaultPlatforms, elsewhere, into, CHANNEL_IMPACT_MAX_GROUPS],
@@ -215,6 +221,7 @@ export async function readChannelDevicePopulationSB(c: Context, appId: string, c
       is_emulator: row.is_emulator,
       device_count: Number(row.device_count) || 0,
       forced: !!row.forced,
+      key_id: row.key_id ?? '',
       sample_device_id: row.sample_device_id ?? '',
       last_seen: row.last_seen ? new Date(row.last_seen).toISOString() : null,
     }))

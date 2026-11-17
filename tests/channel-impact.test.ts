@@ -22,6 +22,8 @@ let channelId: number
 let foreignChannelId: number
 let majorBundleId: number
 let betaChannelId: number
+let devChannelId: number
+let encryptedBundleId: number
 
 function postImpact(body: Record<string, unknown>) {
   return fetchTestRequest(getEndpointUrl('/private/channel_impact'), {
@@ -32,23 +34,24 @@ function postImpact(body: Record<string, unknown>) {
   })
 }
 
-async function insertBundle(name: string) {
+async function insertBundle(name: string, keyId: string | null = null) {
   const [row] = await executeSQL<{ id: number }>(
-    `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, r2_path, storage_provider, checksum)
-     SELECT a.app_id, $2::text, a.owner_org, a.user_id, 'orgs/' || a.owner_org || '/apps/' || a.app_id || '/' || $2::text || '.zip', 'r2', 'deadbeef'
+    `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, r2_path, storage_provider, checksum, key_id)
+     SELECT a.app_id, $2::text, a.owner_org, a.user_id, 'orgs/' || a.owner_org || '/apps/' || a.app_id || '/' || $2::text || '.zip', 'r2', 'deadbeef', $3::text
      FROM public.apps a WHERE a.app_id = $1
      RETURNING id`,
-    [APPNAME, name],
+    [APPNAME, name, keyId],
   )
   return Number(row.id)
 }
 
-async function insertDevices(count: number, values: { platform: 'ios' | 'android', native: string, bundle: string, channel: string | null }) {
+async function insertDevices(count: number, values: { platform: 'ios' | 'android', native: string, bundle: string, channel: string | null, plugin?: string, keyId?: string }) {
+  const plugin = values.plugin ?? '7.20.0'
   await executeSQL(
-    `INSERT INTO public.devices (updated_at, device_id, app_id, platform, plugin_version, os_version, version_build, custom_id, is_prod, is_emulator, version_name, default_channel)
-     SELECT now(), $1::text || '-' || g, $2::text, $3::public.platform_os, '7.20.0', '18.0', $4::text, '', true, false, $5::text, $6::text
+    `INSERT INTO public.devices (updated_at, device_id, app_id, platform, plugin_version, os_version, version_build, custom_id, is_prod, is_emulator, version_name, default_channel, key_id)
+     SELECT now(), $1::text || '-' || g, $2::text, $3::public.platform_os, $8::text, '18.0', $4::text, '', true, false, $5::text, $6::text, $9::text
      FROM generate_series(1, $7::int) AS g`,
-    [`impact-${suffix}-${values.channel ?? 'none'}-${values.platform}-${values.native}-${values.bundle}`, APPNAME, values.platform, values.native, values.bundle, values.channel, count],
+    [`impact-${suffix}-${values.channel ?? 'none'}-${values.platform}-${values.native}-${values.bundle}-${values.keyId ?? 'nokey'}`, APPNAME, values.platform, values.native, values.bundle, values.channel, count, plugin, values.keyId ?? null],
   )
 }
 
@@ -86,10 +89,20 @@ beforeAll(async () => {
   // the one assigned through channel_devices can be served.
   const [beta] = await executeSQL<{ id: number }>(`UPDATE public.channels SET allow_device_self_set = false, ios = true, disable_auto_update = 'none' WHERE app_id = $1 AND name = 'beta' RETURNING id`, [APPNAME])
   betaChannelId = Number(beta.id)
+  // development: an encrypted bundle only reaches devices holding its key (current key id format).
+  const [dev] = await executeSQL<{ id: number }>(
+    `UPDATE public.channels SET ios = true, android = true, allow_prod = true, allow_device = true, disable_auto_update = 'none' WHERE app_id = $1 AND name = 'development' RETURNING id`,
+    [APPNAME],
+  )
+  devChannelId = Number(dev.id)
+  encryptedBundleId = await insertBundle('1.9.5', 'kbnd')
+  await insertDevices(2, { platform: 'ios', native: '1.9.0', bundle: '1.9.4', channel: 'development', plugin: '8.41.0', keyId: 'kdev' })
+  await insertDevices(1, { platform: 'ios', native: '1.9.0', bundle: '1.9.4', channel: 'development', plugin: '8.41.0', keyId: 'kbnd' })
+
   await executeSQL(
     `INSERT INTO public.channel_devices (app_id, channel_id, device_id, owner_org)
      SELECT $1::text, $2::bigint, $3::text, owner_org FROM public.apps WHERE app_id = $1`,
-    [APPNAME, betaChannelId, `impact-${suffix}-beta-ios-1.9.0-1.9.4-1`],
+    [APPNAME, betaChannelId, `impact-${suffix}-beta-ios-1.9.0-1.9.4-nokey-1`],
   )
 })
 
@@ -144,6 +157,14 @@ describe('POST /private/channel_impact', () => {
     expect(response.status, JSON.stringify(body)).toBe(200)
     expect(body.total_devices).toBe(4)
     expect(body.impacts[0].outcomes.blocked_private_channel).toBe(3)
+    expect(body.impacts[0].receive).toBe(1)
+  })
+
+  it('excludes devices whose encryption key does not match the bundle', async () => {
+    const response = await postImpact({ app_id: APPNAME, channel_id: devChannelId, targets: [{ kind: 'bundle', version_id: encryptedBundleId }] })
+    const body = await response.json() as any
+    expect(response.status, JSON.stringify(body)).toBe(200)
+    expect(body.impacts[0].outcomes.blocked_key_mismatch).toBe(2)
     expect(body.impacts[0].receive).toBe(1)
   })
 

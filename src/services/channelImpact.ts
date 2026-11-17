@@ -18,6 +18,7 @@ export type ChannelImpactOutcome
     | 'blocked_platform'
     | 'blocked_build_type'
     | 'plugin_too_old'
+    | 'blocked_key_mismatch'
     | 'unknown_native'
 
 export type ChannelImpactTargetRequest

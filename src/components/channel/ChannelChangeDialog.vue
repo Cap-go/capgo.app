@@ -44,6 +44,7 @@ const OUTCOME_ORDER: ChannelImpactOutcome[] = [
   'blocked_platform',
   'blocked_build_type',
   'plugin_too_old',
+  'blocked_key_mismatch',
   'unknown_native',
 ]
 
@@ -353,6 +354,9 @@ const showImpact = computed(() => !isRevert.value || !!state.choice)
             </p>
             <p v-if="impact.outcomes.blocked_private_channel" class="text-sm text-slate-600 dark:text-slate-300">
               {{ t('channel-impact-why-private-channel', { count: fmt(impact.outcomes.blocked_private_channel) }) }}
+            </p>
+            <p v-if="impact.outcomes.blocked_key_mismatch" class="text-sm text-amber-800 dark:text-amber-200">
+              {{ t('channel-impact-why-key-mismatch', { count: fmt(impact.outcomes.blocked_key_mismatch), bundle: targetName }) }}
             </p>
             <p v-if="impact.outcomes.plugin_too_old" class="text-sm text-slate-600 dark:text-slate-300">
               {{ t('channel-impact-why-plugin-too-old', { count: fmt(impact.outcomes.plugin_too_old) }) }}

@@ -307,10 +307,19 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
 
   try {
     const bundle = version.value
-    const packages = await findIncompatibleNativePackages(bundle.app_id, chan.name, (bundle.native_packages as any) ?? [])
+    let packages: string[]
+    try {
+      packages = await findIncompatibleNativePackages(bundle.app_id, chan.name, (bundle.native_packages as any) ?? [])
+    }
+    catch (error) {
+      // Never skip the native package warning because the check itself failed.
+      console.error('Cannot check native package compatibility', error)
+      toast.error(t('channel-impact-compat-check-failed'))
+      return
+    }
     // Pre-select the channel's current bundle so the Dependencies page opens already diffed.
     const dependenciesPath = `/app/${packageId.value}/bundle/${bundle.id}/dependencies${chan.version ? `?compare=${chan.version}` : ''}`
-    const compatibility = packages?.length ? { packages, dependenciesPath } : null
+    const compatibility = packages.length ? { packages, dependenciesPath } : null
     const [currentBundleName, rolloutTargetName] = await Promise.all([
       chan.version ? currentBundleNameOf(chan.version) : null,
       // A new stable bundle resets any configured rollout (channel trigger).

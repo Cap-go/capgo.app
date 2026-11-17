@@ -78,6 +78,18 @@ describe('channel impact outcomes', () => {
     expect(evaluateDeviceOutcome(group({ version_build: '1.0.0' }), { ...privateChannel, disable_auto_update: 'minor' }, bundle('1.1.0'))).toBe('blocked_private_channel')
   })
 
+  it.concurrent('refuses an encrypted bundle to devices holding another key, like /updates', () => {
+    const encrypted = { kind: 'bundle' as const, name: '1.4.3', min_update_version: null, key_id: 'key-bundle' }
+    // Current key id format (plugin above 8.40.7): refused before anything else.
+    expect(evaluateDeviceOutcome(group({ plugin_version: '8.41.0', key_id: 'key-device' }), openChannel, encrypted)).toBe('blocked_key_mismatch')
+    expect(evaluateDeviceOutcome(group({ plugin_version: '8.41.0', key_id: 'key-device', version_name: '1.4.3' }), openChannel, encrypted)).toBe('blocked_key_mismatch')
+    expect(evaluateDeviceOutcome(group({ plugin_version: '8.41.0', key_id: 'key-bundle' }), openChannel, encrypted)).toBe('receive')
+    // Legacy key id format and devices without a key are not checked.
+    expect(evaluateDeviceOutcome(group({ plugin_version: '8.40.7', key_id: 'key-device' }), openChannel, encrypted)).toBe('receive')
+    expect(evaluateDeviceOutcome(group({ plugin_version: '8.41.0', key_id: '' }), openChannel, encrypted)).toBe('receive')
+    expect(evaluateDeviceOutcome(group({ plugin_version: '8.41.0', key_id: 'key-device' }), openChannel, bundle('1.4.3'))).toBe('receive')
+  })
+
   it.concurrent('reverts to the store bundle only where the plugin supports it', () => {
     const builtin = { kind: 'builtin' as const }
     expect(evaluateDeviceOutcome(group({ version_build: '1.4.0', version_name: '1.4.2' }), openChannel, builtin)).toBe('revert_to_builtin')
@@ -181,7 +193,8 @@ describe('channel population query', () => {
     expect(query).toContain('platform IN (1.0)')
     expect(query).toContain('LIMIT 500')
     expect(query).toContain('if(lower(blob1) IN (\'forced-in\'), 1, 0) AS forced')
-    expect(query).toContain('GROUP BY forced, platform')
+    expect(query).toContain('argMax(blob8, timestamp) AS key_id')
+    expect(query).toContain('GROUP BY forced, key_id, platform')
     expect(lintAnalyticsEngineSql(buildChannelPopulationCountCFQuery('com.example.app', 'production', overrides, windowStart))).toEqual([])
   })
 
@@ -193,6 +206,7 @@ describe('channel population query', () => {
   it.concurrent('maps Analytics Engine rows to device setups', () => {
     expect(toPopulationGroupsCF([{
       forced: 1,
+      key_id: 'k1',
       platform: 1,
       version_build: '2.0.0',
       version_name: '2.0.0',
@@ -211,6 +225,7 @@ describe('channel population query', () => {
       is_emulator: null,
       device_count: 12,
       forced: true,
+      key_id: 'k1',
       sample_device_id: 'abc',
       last_seen: '2026-11-17T09:30:00.000Z',
     }])

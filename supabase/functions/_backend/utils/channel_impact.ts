@@ -1,5 +1,6 @@
 import type { SemVer } from '@std/semver'
 import { greaterOrEqual, greaterThan, lessThan, tryParse } from '@std/semver'
+import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 
 /**
  * Pure impact preview for a channel change ("who gets what if I set this?").
@@ -33,6 +34,8 @@ export interface ChannelImpactDeviceGroup {
   device_count: number
   /** Assigned to the channel through channel_devices (console, API or self-assignment), not only reporting it. */
   forced?: boolean
+  /** Encryption key id the device reports ('' when none). */
+  key_id?: string
   /** Most recently seen device of this setup, shown as an example. */
   sample_device_id: string
   last_seen: string | null
@@ -53,7 +56,7 @@ export interface ChannelImpactChannelConfig {
 }
 
 export type ChannelImpactTarget
-  = | { kind: 'bundle', name: string, min_update_version: string | null }
+  = | { kind: 'bundle', name: string, min_update_version: string | null, key_id?: string | null }
     | { kind: 'builtin' }
 
 export const CHANNEL_IMPACT_OUTCOMES = [
@@ -71,6 +74,7 @@ export const CHANNEL_IMPACT_OUTCOMES = [
   'blocked_platform',
   'blocked_build_type',
   'plugin_too_old',
+  'blocked_key_mismatch',
   'unknown_native',
 ] as const
 export type ChannelImpactOutcome = typeof CHANNEL_IMPACT_OUTCOMES[number]
@@ -134,7 +138,7 @@ function parseVersion(value: string | null | undefined): SemVer | null {
 
 /** Mirrors the strategy, guard, platform and build-type gates of /updates for one device setup. */
 export function evaluateDeviceOutcome(
-  device: Pick<ChannelImpactDeviceGroup, 'platform' | 'version_build' | 'version_name' | 'plugin_version' | 'is_prod' | 'is_emulator' | 'forced'>,
+  device: Pick<ChannelImpactDeviceGroup, 'platform' | 'version_build' | 'version_name' | 'plugin_version' | 'is_prod' | 'is_emulator' | 'forced' | 'key_id'>,
   channel: ChannelImpactChannelConfig,
   target: ChannelImpactTarget,
 ): ChannelImpactOutcome {
@@ -144,6 +148,14 @@ export function evaluateDeviceOutcome(
     return 'unknown_native'
 
   const targetName = target.kind === 'builtin' ? 'builtin' : target.name
+  // /updates refuses an encrypted bundle whose key differs from the device's key
+  // (current key id format only) before it even checks whether the device runs it.
+  if (target.kind === 'bundle' && target.key_id && device.key_id && device.key_id !== target.key_id) {
+    const plugin = parseVersion(device.plugin_version)
+    if (plugin && usesCurrentEncryptionKeyIdFormat(plugin))
+      return 'blocked_key_mismatch'
+  }
+
   // Already running the bundle: /updates answers "no new version" before the channel gates.
   if (target.kind === 'bundle' && device.version_name === target.name)
     return 'already_on_target'
