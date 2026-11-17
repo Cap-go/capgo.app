@@ -2,6 +2,7 @@
 import type { ChannelChangeCompatibility, ChannelChangeResult } from '~/composables/useChannelChangeConfirm'
 import type { BundlePickerRow } from '~/services/bundleColumns'
 import type { Database } from '~/types/database.types'
+import type { ConfirmedRollout } from '~/utils/channelRolloutConfirmFlows'
 import { greaterOrEqual, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
 import { computed, nextTick, ref, watch } from 'vue'
@@ -293,10 +294,11 @@ async function getDefaultUploadChannel() {
 
 /**
  * Save channel columns. With `guard`, the write only applies while the channel
- * still targets that rollout bundle: a confirm the user answered for target A
- * never enables a target B set meanwhile by another session.
+ * still has that rollout target and percentage: a confirm the user answered for
+ * "A at 25%" never enables B, or A at another percentage, set meanwhile by
+ * another session.
  */
-async function saveChannelChanges(update: ChannelUpdate, guard?: { rolloutVersion: number }) {
+async function saveChannelChanges(update: ChannelUpdate, guard?: ConfirmedRollout) {
   const changesStableVersion = Object.prototype.hasOwnProperty.call(update, 'version')
   const changesRolloutVersion = Object.prototype.hasOwnProperty.call(update, 'rollout_version')
   // Unlinking rollout_version (including disable) requires promote_bundle — matches refresh_channel_rollout_id.
@@ -331,8 +333,11 @@ async function saveChannelChanges(update: ChannelUpdate, guard?: { rolloutVersio
       .from('channels')
       .update(update)
       .eq('id', channelId)
-    if (guard)
-      request = request.eq('rollout_version', guard.rolloutVersion)
+    if (guard) {
+      request = request
+        .eq('rollout_version', guard.rolloutVersion)
+        .eq('rollout_percentage_bps', guard.rolloutPercentageBps)
+    }
     const { data: updated, error } = await request.select('id')
     if (error) {
       toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-update-channel'))
@@ -340,7 +345,7 @@ async function saveChannelChanges(update: ChannelUpdate, guard?: { rolloutVersio
       return false
     }
     if (guard && !updated?.length) {
-      // The rollout target changed after the user confirmed: nothing was saved.
+      // The rollout changed after the user confirmed it: nothing was saved.
       toast.error(t('channel-rollout-target-changed'))
       if (id.value === channelId)
         await getChannel(true)
@@ -560,7 +565,7 @@ type LinkBundle = NonNullable<Awaited<ReturnType<typeof loadBundleNativePackages
  * The impact confirm for a bundle picked in the bundle picker. Null when the
  * page left the channel before the confirm opened.
  */
-async function confirmVersionLink(appVersion: LinkBundle, rollout: boolean, confirmedChannelId: number): Promise<ChannelChangeResult | null> {
+async function confirmVersionLink(appVersion: LinkBundle, rollout: boolean, confirmedChannelId: number, rolloutPercentageBps?: number): Promise<ChannelChangeResult | null> {
   if (!channel.value || !stillOnChannel(confirmedChannelId))
     return null
   const check = await checkBundleCompatibility(appVersion, channel.value.name, channel.value.version?.id)
@@ -575,7 +580,7 @@ async function confirmVersionLink(appVersion: LinkBundle, rollout: boolean, conf
     action: rollout ? 'rollout' : 'set',
     bundle: { id: appVersion.id, name: appVersion.name },
     currentBundleName: servedBundleName(shown.version?.name),
-    rolloutPercentageBps: shown.rollout_percentage_bps ?? 0,
+    rolloutPercentageBps: rolloutPercentageBps ?? shown.rollout_percentage_bps ?? 0,
     replacesRolloutTarget: rollout && shown.rollout_version != null && shown.rollout_version !== appVersion.id ? rolloutTargetName.value : null,
     // A new stable bundle resets a configured rollout (channel trigger); the
     // same bundle again does not change the version, so the rollout stays.
@@ -964,18 +969,22 @@ async function enableRollout() {
 /**
  * Starting a configured rollout shows the same impact confirm as picking a
  * rollout target: who gets it first and the native-package warning. Resolves
- * with the rollout target the user confirmed, or null.
+ * with the target and percentage the dialog showed and the user confirmed.
  */
-async function confirmRolloutStart(): Promise<number | null> {
+async function confirmRolloutStart(): Promise<ConfirmedRollout | null> {
   if (!channel.value?.rollout_version)
     return null
   const confirmedChannelId = channel.value.id
-  const targetId = channel.value.rollout_version
-  const target = await loadBundleNativePackagesForLink({ app_id: channel.value.app_id, id: targetId })
+  const confirmed: ConfirmedRollout = {
+    rolloutVersion: channel.value.rollout_version,
+    rolloutPercentageBps: channel.value.rollout_percentage_bps ?? 0,
+  }
+  const target = await loadBundleNativePackagesForLink({ app_id: channel.value.app_id, id: confirmed.rolloutVersion })
   if (!target)
     return null
-  const result = await confirmVersionLink(target, true, confirmedChannelId)
-  return result?.confirmed && stillOnChannel(confirmedChannelId) ? targetId : null
+  // The dialog shows exactly the captured percentage, so the guard matches what the user saw.
+  const result = await confirmVersionLink(target, true, confirmedChannelId, confirmed.rolloutPercentageBps)
+  return result?.confirmed && stillOnChannel(confirmedChannelId) ? confirmed : null
 }
 
 function syncRolloutSettingsDraft() {

@@ -4757,7 +4757,7 @@
   "channel-impact-compat-check-failed": "Couldn't check this bundle's native packages against the channel, so nothing was changed. Try again.",
   "channel-revert-compat-check-failed": "Couldn't check the native packages of {bundle} against this channel, so you can't roll back to it right now. Try again, or pick another option.",
   "channel-impact-bundle-read-failed": "Couldn't read the bundles this channel serves now, so nothing was changed. Try again.",
-  "channel-rollout-target-changed": "The rollout target changed while you were confirming, so the rollout was not enabled. Check the new target and try again.",
+  "channel-rollout-target-changed": "The rollout changed while you were confirming, so it was not enabled. Check its target and percentage, then try again.",
   "channel-impact-outcome-blocked-no-bundle": "Keeps its bundle: cannot download it",
   "channel-impact-headline-gets-at-least": "At least {count} of {total} active devices ({percent}) will get {bundle}.",
   "channel-impact-headline-builtin-at-least": "At least {count} of {total} active devices ({percent}) will go back to the store version.",

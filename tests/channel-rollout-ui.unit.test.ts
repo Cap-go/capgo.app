@@ -92,7 +92,7 @@ function createTestFlows(options: {
   const saveChannelChanges = options.saveChannelChanges ?? vi.fn(async () => true)
   const askUpdateNotificationAfterBundleChange = options.askUpdateNotificationAfterBundleChange ?? vi.fn(async () => {})
   const openSelectRolloutVersion = vi.fn(async () => {})
-  const confirmRolloutStart = options.confirmRolloutStart ?? vi.fn(async () => 42)
+  const confirmRolloutStart = options.confirmRolloutStart ?? vi.fn(async () => ({ rolloutVersion: 42, rolloutPercentageBps: 500 }))
   const closeUpdatePackageDropdown = vi.fn()
   const toast = { error: vi.fn(), info: vi.fn() }
 
@@ -325,14 +325,14 @@ describe('channel information rollout and update package UX', () => {
     expect(container.textContent).not.toContain('Update rollout settings?')
   })
 
-  it('enableRollout uses the shared impact confirm and enables only the confirmed target', async () => {
+  it('enableRollout uses the shared impact confirm and enables only the confirmed rollout', async () => {
     const { container, t } = mountDialogShell()
     const channel: TestChannel = { rollout_version: 42, rollout_percentage_bps: 500, rollout_paused_at: null }
-    const confirmed = createTestFlows({ container, t, channel, confirmRolloutStart: vi.fn(async () => 42) })
+    const confirmed = createTestFlows({ container, t, channel, confirmRolloutStart: vi.fn(async () => ({ rolloutVersion: 42, rolloutPercentageBps: 500 })) })
     await confirmed.flows.enableRollout()
     expect(confirmed.confirmRolloutStart).toHaveBeenCalledTimes(1)
-    // The write is guarded by the target the user confirmed.
-    expect(confirmed.saveChannelChanges).toHaveBeenCalledWith({ rollout_enabled: true }, { rolloutVersion: 42 })
+    // The write is guarded by the target and percentage the user confirmed.
+    expect(confirmed.saveChannelChanges).toHaveBeenCalledWith({ rollout_enabled: true }, { rolloutVersion: 42, rolloutPercentageBps: 500 })
 
     const canceled = createTestFlows({ container, t, channel, confirmRolloutStart: vi.fn(async () => null) })
     await canceled.flows.enableRollout()

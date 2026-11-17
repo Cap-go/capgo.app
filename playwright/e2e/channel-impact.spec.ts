@@ -125,19 +125,24 @@ test.describe('channel change impact preview (isolated app)', () => {
     await confirmButton.click()
     await expect.poll(async () => (await readRollout()).rollout_enabled, { timeout: 15000 }).toBe(true)
 
-    // Another session switches the target while the confirm is open: nothing is enabled.
+    // Another session changes the rollout while the confirm is open (target,
+    // then percentage): nothing is enabled.
     const [otherTarget] = await executeSQL<{ id: number }>(`SELECT id FROM public.app_versions WHERE app_id = $1 AND name = '2.0.0'`, [appId])
-    await executeSQL(`UPDATE public.channels SET rollout_enabled = false WHERE id = $1`, [channelId])
-    await page.reload()
-    await dismissSupportPrompt(page)
-    await page.locator('[data-test="rollout-enable"]').click({ timeout: 30000 })
-    await expect(page.locator('h3').filter({ hasText: 'Roll out 1.9.3 to 50% of production?' })).toBeVisible({ timeout: 15000 })
-    await expect(confirmButton).toBeEnabled({ timeout: 15000 })
-    await executeSQL(`UPDATE public.channels SET rollout_version = $2 WHERE id = $1`, [channelId, otherTarget.id])
-    await confirmButton.click()
-    await expect(page.getByText('The rollout target changed while you were confirming, so the rollout was not enabled.', { exact: false })).toBeVisible({ timeout: 15000 })
-    const stale = await readRollout()
-    expect(stale.rollout_enabled).toBe(false)
-    expect(Number(stale.rollout_version)).toBe(Number(otherTarget.id))
+    const staleChanges = [
+      { sql: `UPDATE public.channels SET rollout_version = $2 WHERE id = $1`, params: [channelId, otherTarget.id], title: 'Roll out 1.9.3 to 50% of production?' },
+      { sql: `UPDATE public.channels SET rollout_percentage_bps = 9000 WHERE id = $1`, params: [channelId], title: 'Roll out 2.0.0 to 50% of production?' },
+    ]
+    for (const change of staleChanges) {
+      await executeSQL(`UPDATE public.channels SET rollout_enabled = false WHERE id = $1`, [channelId])
+      await page.reload()
+      await dismissSupportPrompt(page)
+      await page.locator('[data-test="rollout-enable"]').click({ timeout: 30000 })
+      await expect(page.locator('h3').filter({ hasText: change.title })).toBeVisible({ timeout: 15000 })
+      await expect(confirmButton).toBeEnabled({ timeout: 15000 })
+      await executeSQL(change.sql, change.params)
+      await confirmButton.click()
+      await expect(page.getByText('The rollout changed while you were confirming, so it was not enabled.', { exact: false })).toBeVisible({ timeout: 15000 })
+      expect((await readRollout()).rollout_enabled).toBe(false)
+    }
   })
 })
