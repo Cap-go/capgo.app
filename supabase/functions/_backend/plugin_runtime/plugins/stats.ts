@@ -1,3 +1,4 @@
+import { enforceServingPolicy } from '../utils/servingPolicy.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
@@ -434,6 +435,7 @@ app.post('/', async (c) => {
     return simpleRateLimit({ app_id: firstAppId })
   }
 
+  await enforceServingPolicy(c, firstAppId)
   const appStatus = await getAppStatus(c, firstAppId)
   const appStatusByAppId = new Map<string, AppStatusResult>([[firstAppId, appStatus]])
   if (appStatus.cacheHit && requestIp !== 'unknown') {
