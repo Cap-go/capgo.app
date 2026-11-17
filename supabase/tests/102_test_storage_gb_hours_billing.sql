@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(32);
+SELECT plan(33);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -268,6 +268,32 @@ SELECT
         ),
         ARRAY[120]::double precision[],
         'an older refresh never re-inserts a day a newer refresh removed'
+    );
+
+-- The anchor time moves within the cycle's first day (00:00 -> 12:00): the
+-- newer whole-cycle refresh replaces the old anchor's segment, and a late
+-- refresh under the old anchor is refused instead of re-inserting it.
+SELECT public.replace_app_storage_hourly(
+    'com.test.gbhours.anchor', org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T00:00:00Z', true,
+    '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 24}]'::jsonb,
+    '2026-03-02T08:00:00Z'
+) FROM replace_ctx;
+SELECT public.replace_app_storage_hourly(
+    'com.test.gbhours.anchor', org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T12:00:00Z', true,
+    '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 12}]'::jsonb,
+    '2026-03-02T11:00:00Z'
+) FROM replace_ctx;
+SELECT public.replace_app_storage_hourly(
+    'com.test.gbhours.anchor', org_id, cycle_start, cycle_end, cycle_end, '2026-03-01T00:00:00Z', true,
+    '[{"cycle_start": "2026-03-01", "date": "2026-03-01", "storage_byte_hours": 24}]'::jsonb,
+    '2026-03-02T10:00:00Z'
+) FROM replace_ctx;
+
+SELECT
+    is(
+        (SELECT array_agg(storage_byte_hours) FROM public.daily_storage_hourly WHERE app_id = 'com.test.gbhours.anchor'),
+        ARRAY[12]::double precision[],
+        'a late refresh under a moved anchor does not re-insert the replaced segment'
     );
 
 -- A legacy row (written before the migration) of an app created mid-cycle is

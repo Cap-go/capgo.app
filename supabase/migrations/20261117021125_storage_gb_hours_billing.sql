@@ -126,7 +126,11 @@ COMMENT ON FUNCTION public.get_org_storage_billable_bytes(uuid, date, date) IS
 -- Latest refresh of each app/org/cycle/segment. replace_app_storage_hourly only
 -- runs when its refresh started after the recorded one, so a refresh finishing
 -- late can neither overwrite a newer result nor re-insert a day a newer refresh
--- removed. Internal: no client access.
+-- removed. Whole-cycle refreshes (p_replace_legacy) all share the segment key
+-- '-infinity': if the anchor time moves within the cycle's first day, a late
+-- refresh under the old anchor is refused instead of re-inserting the segment
+-- the newer one replaced. Partial segments (a later incarnation or owner)
+-- keep their own key. Internal: no client access.
 CREATE TABLE IF NOT EXISTS public.daily_storage_hourly_refreshes (
     app_id character varying NOT NULL,
     owner_org uuid NOT NULL,
@@ -173,7 +177,13 @@ BEGIN
   -- Advance the watermark, or stop: a refresh that started later already
   -- replaced this cycle and segment. The row lock serializes concurrent ones.
   INSERT INTO public.daily_storage_hourly_refreshes AS refresh (app_id, owner_org, cycle_start, segment_start, written_at)
-  VALUES (p_app_id, p_owner_org, p_cycle_start_day, p_segment_start, p_written_at)
+  VALUES (
+    p_app_id,
+    p_owner_org,
+    p_cycle_start_day,
+    CASE WHEN p_replace_legacy THEN '-infinity'::timestamptz ELSE p_segment_start END,
+    p_written_at
+  )
   ON CONFLICT (app_id, owner_org, cycle_start, segment_start) DO UPDATE
     SET written_at = EXCLUDED.written_at
     WHERE refresh.written_at <= EXCLUDED.written_at;

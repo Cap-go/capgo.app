@@ -506,7 +506,9 @@ async function finalizeFormerOwner(
   // No time window: an idle app's first refresh after the transfer can come much later. Finalize
   // once, until a refresh of the former owner's segment started after the transfer.
   const formerCycleStartMs = parseTimestampMs(formerCycle.cycle_start)
-  const formerSegmentStart = new Date(formerOwnedSince ? Math.max(formerCycleStartMs, parseTimestampMs(formerOwnedSince)) : formerCycleStartMs).toISOString()
+  const formerSegmentStartMs = formerOwnedSince ? Math.max(formerCycleStartMs, parseTimestampMs(formerOwnedSince)) : formerCycleStartMs
+  // Whole-cycle refreshes share the '-infinity' watermark key (see replace_app_storage_hourly).
+  const formerSegmentStart = formerSegmentStartMs === formerCycleStartMs ? '-infinity' : new Date(formerSegmentStartMs).toISOString()
   const finalizedAt = (await runSupabaseResultWithRetry<string | null>(c, 'read_former_owner_refresh', async () => ({
     data: await readStorageRefreshedAt(pg, options.appId, transferredFrom, formatUtcDay(floorToDay(formerCycleStartMs)), formerSegmentStart),
     error: null,
