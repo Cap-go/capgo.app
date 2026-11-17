@@ -1,6 +1,7 @@
 import type Stripe from 'stripe'
-import type { InvoiceBillingDetails, InvoiceDocument } from '../../shared/invoice-document.ts'
+import type { InvoiceDocument } from '../../shared/invoice-document.ts'
 import type { InAppBillingContext } from './stripe_in_app.ts'
+import { BILLING_COUNTRIES } from '../../shared/billing-profile.ts'
 import { stripeAmountToMajorUnits } from '../../shared/stripe-amount.ts'
 import { simpleError } from './hono.ts'
 
@@ -79,15 +80,52 @@ export function buildInvoiceDocument(invoice: Stripe.Invoice, account: Stripe.Ac
   }
 }
 
-export function parseInvoiceBillingDetails(value: unknown): InvoiceBillingDetails {
-  if (value === undefined || value === 'issued')
-    return 'issued'
-  if (value === 'current')
-    return 'current'
-  throw simpleError('invalid_billing_details_source', 'Choose issued or current billing details')
+type InvoiceTaxId = NonNullable<Stripe.Invoice['customer_tax_ids']>[number]
+
+function taxCountry(taxId: InvoiceTaxId) {
+  if (taxId.type === 'eu_vat') {
+    const prefix = taxId.value?.trim().slice(0, 2).toUpperCase()
+    // Stripe's EU VAT type also covers EL (Greece) and XI (Northern Ireland).
+    // https://docs.stripe.com/tax/invoicing/tax-ids
+    if (prefix === 'EL')
+      return 'GR'
+    if (prefix === 'XI')
+      return 'GB'
+    return prefix && 'AT BE BG HR CY CZ DE DK EE ES FI FR GR HU IE IT LT LU LV MT NL PL PT RO SE SI SK'.split(' ').includes(prefix) ? prefix : null
+  }
+  const prefix = taxId.type.split('_')[0].toUpperCase()
+  return BILLING_COUNTRIES.includes(prefix) ? prefix : null
 }
 
-export async function getInvoiceDocument(ctx: InAppBillingContext, invoiceId: unknown, billingDetails: InvoiceBillingDetails = 'issued'): Promise<InvoiceDocument> {
+function sameTaxJurisdiction(left: InvoiceTaxId, right: InvoiceTaxId) {
+  const country = taxCountry(left)
+  return !!country && left.type === right.type && country === taxCountry(right)
+}
+
+export function applySavedInvoiceDetails(invoice: Stripe.Invoice, customer: Stripe.Customer, savedTaxIds: InvoiceTaxId[]): Stripe.Invoice {
+  const issuedCountry = invoice.customer_address?.country?.toUpperCase()
+  const canUpdateAddress = !!issuedCountry && !!customer.address?.line1 && customer.address.country?.toUpperCase() === issuedCountry
+  const issuedTaxIds = invoice.customer_tax_ids ?? []
+  // Keep an issued ID unless a single replacement has the same tax type/country.
+  // In particular, a removed ID or a changed billing country cannot rewrite history.
+  const customerTaxIds = issuedTaxIds.length
+    ? issuedTaxIds.map((issued) => {
+        const candidates = savedTaxIds.filter(saved => sameTaxJurisdiction(issued, saved))
+        if (candidates.some(saved => saved.value === issued.value))
+          return issued
+        const issuedInJurisdiction = issuedTaxIds.filter(other => sameTaxJurisdiction(issued, other))
+        return candidates.length === 1 && issuedInJurisdiction.length === 1 ? candidates[0] : issued
+      })
+    : savedTaxIds.filter(saved => !!issuedCountry && taxCountry(saved) === issuedCountry)
+  return {
+    ...invoice,
+    customer_name: customer.name?.trim() || invoice.customer_name,
+    customer_address: canUpdateAddress && customer.address ? customer.address : invoice.customer_address,
+    customer_tax_ids: customerTaxIds,
+  }
+}
+
+export async function getInvoiceDocument(ctx: InAppBillingContext, invoiceId: unknown): Promise<InvoiceDocument> {
   if (typeof invoiceId !== 'string' || !/^in_[a-zA-Z0-9]+$/.test(invoiceId))
     throw simpleError('invalid_invoice', 'Invalid invoice')
   const invoice = await ctx.stripe.invoices.retrieve(invoiceId)
@@ -99,27 +137,16 @@ export async function getInvoiceDocument(ctx: InAppBillingContext, invoiceId: un
     throw simpleError('invoice_not_finalized', 'The invoice is not finalized')
   if (invoice.issuer?.type === 'account' || invoice.on_behalf_of)
     throw simpleError('unsupported_invoice_issuer', 'This invoice has a different issuer')
-  let documentInvoice = invoice
-  if (billingDetails === 'current') {
-    // Read current billing identity from the authorized customer, never the request.
-    // Printing a new tax ID must not change the issued tax treatment or amounts.
-    const customer = await ctx.stripe.customers.retrieve(ctx.customerId)
-    if (customer.deleted)
-      throw simpleError('no_customer', 'No customer')
-    if (!customer.address?.line1 || !customer.address.country)
-      throw simpleError('missing_billing_address', 'Save a billing address before regenerating an invoice')
-    const customerTaxIds: NonNullable<Stripe.Invoice['customer_tax_ids']> = []
+  const customer = await ctx.stripe.customers.retrieve(ctx.customerId)
+  let documentInvoice: Stripe.Invoice = invoice
+  if (!customer.deleted) {
+    const customerTaxIds: InvoiceTaxId[] = []
     for await (const taxId of ctx.stripe.customers.listTaxIds(ctx.customerId, { limit: 100 })) {
       if (customerTaxIds.length >= 100)
-        throw simpleError('too_many_billing_tax_ids', 'Contact support to regenerate this invoice')
+        throw simpleError('too_many_billing_tax_ids', 'Contact support to download this invoice')
       customerTaxIds.push({ type: taxId.type, value: taxId.value })
     }
-    documentInvoice = {
-      ...invoice,
-      customer_name: customer.name ?? invoice.customer_name,
-      customer_address: customer.address,
-      customer_tax_ids: customerTaxIds,
-    }
+    documentInvoice = applySavedInvoiceDetails(invoice, customer, customerTaxIds)
   }
   const lines: Stripe.InvoiceLineItem[] = []
   for await (const line of ctx.stripe.invoices.listLineItems(invoiceId, { limit: 100 })) {

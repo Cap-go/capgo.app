@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
 import { Hono } from 'hono/tiny'
 import { acceptCancelSaveOffer, declineCancelSaveOffer, parseOfferId, prepareCancelSaveOffer } from '../utils/cancel_save_offer.ts'
-import { getInvoiceDocument, parseInvoiceBillingDetails } from '../utils/invoice_document.ts'
+import { getInvoiceDocument } from '../utils/invoice_document.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
@@ -269,11 +269,10 @@ app.post('/invoice-payment-intent', middlewareAuth, async (c) => {
 })
 
 app.post('/invoice-document', middlewareAuth, async (c) => {
-  const body = await parseBody<OrgBody & { invoiceId?: unknown, billingDetails?: unknown }>(c)
-  const billingDetails = parseInvoiceBillingDetails(body.billingDetails)
+  const body = await parseBody<OrgBody & { invoiceId?: unknown }>(c)
   const ctx = await resolveBillingContext(c, body.orgId, 'org.read_invoices')
-  if (billingDetails === 'current' && !await checkPermission(c, 'org.read_billing', { orgId: body.orgId }))
+  if (!await checkPermission(c, 'org.read_billing', { orgId: body.orgId }))
     throw simpleError('not_authorized', 'Not authorized')
   c.header('Cache-Control', 'private, no-store')
-  return c.json(await getInvoiceDocument(ctx, body.invoiceId, billingDetails))
+  return c.json(await getInvoiceDocument(ctx, body.invoiceId))
 })

@@ -82,18 +82,14 @@ it('marks invoice data private and uncacheable', async () => {
   expect(response.headers.get('Cache-Control')).toBe('private, no-store')
 })
 
-it('requires current billing read permission in addition to invoice read permission for regeneration', async () => {
+it('requires current billing read permission in addition to invoice read permission for every invoice download', async () => {
   mocks.permission.mockImplementation((_c, permission) => permission === 'org.read_invoices')
-  expect((await request('invoice-document', { invoiceId: 'in_example', billingDetails: 'current' })).status).toBe(400)
+  expect((await request('invoice-document', { invoiceId: 'in_example' })).status).toBe(400)
   expect(mocks.invoice).not.toHaveBeenCalled()
 })
-it('passes only the validated details selector, never a caller-supplied address', async () => {
-  const response = await request('invoice-document', { invoiceId: 'in_example', billingDetails: 'current', customerId: 'cus_other', address: { line1: 'Untrusted address' } })
+it('ignores caller-supplied addresses, tax IDs, country and customer replacements', async () => {
+  const response = await request('invoice-document', { invoiceId: 'in_example', customerId: 'cus_other', address: { line1: 'Untrusted address', country: 'FR' }, taxIds: [{ type: 'eu_vat', value: 'FR00000000000' }] })
   expect(response.status).toBe(200)
-  expect(mocks.invoice).toHaveBeenCalledWith({ customerId: 'cus_resolved', billingAccount: 'us' }, 'in_example', 'current')
+  expect(mocks.invoice).toHaveBeenCalledWith({ customerId: 'cus_resolved', billingAccount: 'us' }, 'in_example')
   expect(response.headers.get('Cache-Control')).toBe('private, no-store')
-})
-it('rejects unsupported details selectors', async () => {
-  expect((await request('invoice-document', { invoiceId: 'in_example', billingDetails: true })).status).toBe(400)
-  expect(mocks.invoice).not.toHaveBeenCalled()
 })

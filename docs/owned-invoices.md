@@ -23,43 +23,47 @@ Stripe payment URLs or private metadata. Drafts cannot be downloaded. Line items
 are paginated, with a 1,000-line bound that fails explicitly instead of producing
 a partial invoice.
 
-By default, customer identity, address, tax IDs, descriptions, periods, discounts,
-credits, taxes, totals, and payment status come from the invoice record. Seller
-contact and address come from the issuing Stripe account; seller tax IDs are those
-referenced by the invoice. Changing a billing profile leaves the issued invoice
-record intact. Customers can explicitly regenerate its PDF using the current
-saved billing name, address and tax IDs; see below. Updating the seller's account address can
-change its address on a regenerated PDF, so retain previously issued documents
-when changing legal details. Existing account routing and invoice-history scope
-are unchanged; this does not merge historical invoices between Stripe entities.
+Customer names and same-country address corrections are read from the saved
+billing profile whenever an invoice is downloaded. Email, periods, discounts,
+credits, taxes, totals and payment status come from the issued invoice record.
+Seller contact/address come from the issuing Stripe account; seller tax IDs are
+those referenced by the invoice. Updating the seller's account address can change
+its address on a downloaded PDF, so retain previously issued documents when
+changing legal details. Existing account routing and invoice-history scope are
+unchanged; this does not merge historical invoices between Stripe entities.
 
-The renderer embeds Inter 4.1 (SIL Open Font License; see `public/invoice/INTER-LICENSE.txt`) and supports its Latin, Greek, and Cyrillic glyphs.
-Additional script fonts are not bundled. The PDF rendering regression covers
-accented names, long descriptions, and automatic multi-page layout.
+The renderer embeds Inter 4.1 (SIL Open Font License; see
+`public/invoice/INTER-LICENSE.txt`) and supports its Latin, Greek and Cyrillic
+glyphs. Additional script fonts are not bundled. PDF regressions cover accented
+names, long descriptions and automatic multi-page layout.
 
-## Correcting billing details on an older invoice
+## Billing details and country boundaries
 
-1. Open Billing, edit the billing details, and save the corrected name and address.
-   To replace a VAT/tax number, add the new number in **Manage tax IDs**, then
-   remove the old number.
-2. **Use current billing details** is selected after a successful save or tax ID change.
-   It can also be selected later in the Invoices section.
-3. Select **Regenerate PDF** on the invoice. Clear the checkbox to download a PDF
-   with the originally issued details instead.
+Customers use the ordinary invoice number or PDF link. Every download reads the
+saved billing details; there is no separate regeneration action or details mode.
+The endpoint requires `org.read_invoices` and `org.read_billing`, checks invoice
+ownership, and reads only the server-resolved customer's profile and tax IDs.
+Caller-supplied replacement identities, addresses and tax IDs are ignored.
 
-The API accepts `billingDetails: 'issued' | 'current'` (default `issued`). Current
-mode requires both `org.read_invoices` and `org.read_billing`. It checks invoice
-ownership, then reads the authorized customer's saved name, address and tax IDs
-directly from the server-selected Stripe account. It never accepts replacement addresses
-or customer IDs from the download request. A deleted customer or incomplete
-current address fails explicitly instead of silently downloading an old address.
+An issued invoice's billing and tax countries remain fixed:
 
-Only the printed customer name, address and tax IDs change. Removed tax IDs are
-omitted and newly saved IDs are included. Verification status does not imply a
-new tax exemption: the original invoice number, dates, billing email, tax
-treatment, line items, payments and totals stay as issued. This creates a corrected PDF, without issuing a second invoice or
-changing Stripe's finalized record. Recalculating VAT or issuing a tax refund
-is a separate billing task.
+- A saved address replaces the printed address only when its country matches the
+  issued billing country. A moved, incomplete or missing address retains the
+  issued address. Missing historical country data is never inferred from today's
+  profile.
+- An existing tax number can be replaced only by a single saved ID of the same
+  tax type and country. Different-country, different-type, ambiguous, removed or
+  unknown-jurisdiction IDs retain the issued number. For EU VAT, the number's
+  prefix identifies the country, including Greece (`EL`) and Northern Ireland
+  (`XI`); see [Stripe's tax ID formats](https://docs.stripe.com/tax/invoicing/tax-ids).
+- When the invoice has no tax IDs, saved IDs can be added only if they belong to
+  its original billing country. Without an issued country, no ID is added.
+
+The issued number, dates, tax treatment, line items, payments and amounts are
+never recalculated or rewritten. Adding a VAT number does not retroactively apply
+reverse charge or issue a refund. Future billing profile changes do not change
+these boundaries on historical invoices. A deleted customer retains the issued
+details; a failed profile read returns an error instead of serving stale data.
 
 ## Comparison
 

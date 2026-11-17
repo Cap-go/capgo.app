@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import type { App } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, h, nextTick, ref } from 'vue'
+import { createApp, h, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import messages from '../messages/en.json'
 import BillingInvoices from '../src/components/billing/BillingInvoices.vue'
@@ -22,6 +22,7 @@ const details = {
 }
 const invoice = { id: 'in_example', number: 'EXAMPLE1-00042', created: '2026-11-01', total: 1464, amountDue: 0, currency: 'eur', status: 'paid' as const }
 let app: App | undefined
+let savedDetails = structuredClone(details)
 async function settle() {
   for (let i = 0; i < 15; i++) {
     await Promise.resolve()
@@ -31,13 +32,10 @@ async function settle() {
 async function mount() {
   document.body.innerHTML = '<div id="app"></div>'
   app = createApp({
-    setup() {
-      const current = ref(false)
-      return () => h('div', [
-        h(BillingProfileSection, { orgId: 'org_example', onDetailsSaved: () => { current.value = true } }),
-        h(BillingInvoices, { orgId: 'org_example', invoices: [invoice], useCurrentDetails: current.value, 'onUpdate:useCurrentDetails': (value: boolean) => { current.value = value } }),
-      ])
-    },
+    render: () => h('div', [
+      h(BillingProfileSection, { orgId: 'org_example' }),
+      h(BillingInvoices, { orgId: 'org_example', invoices: [invoice] }),
+    ]),
   })
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } }))
   app.mount('#app')
@@ -55,36 +53,34 @@ async function saveAddress() {
   document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
   await settle()
 }
-const checkbox = () => document.querySelector<HTMLInputElement>('[data-test="billing-invoice-use-current-details"]')!
 beforeEach(() => {
   vi.clearAllMocks()
+  savedDetails = structuredClone(details)
   mocks.load.mockResolvedValue({ ...structuredClone(details), taxIds: [] })
-  mocks.save.mockImplementation(async (_org, saved) => saved)
-  mocks.invoice.mockImplementation(async (_org, _id, source) => ({ number: invoice.number, customer: [source === 'current' ? '456 Example Avenue' : details.address.line1] }))
+  mocks.save.mockImplementation(async (_org, saved) => { savedDetails = { ...saved, address: { ...saved.address } }; return saved })
+  mocks.invoice.mockImplementation(async () => ({ number: invoice.number, customer: [savedDetails.address.line1] }))
 })
 afterEach(() => {
   app?.unmount()
   app = undefined
   document.body.innerHTML = ''
 })
-describe('correcting an invoice address', () => {
-  it('saves the address, regenerates the selected invoice and retains the issued-details option', async () => {
+describe('automatic invoice downloads', () => {
+  it('uses the same invoice/PDF links before and after a billing correction with no extra controls', async () => {
     await mount()
-    expect(checkbox().checked).toBe(false)
+    expect(document.querySelector('[data-test="billing-invoices"] input')).toBeNull()
+    expect(document.querySelector('[data-test="billing-invoices"]')?.textContent).not.toMatch(/Regenerate|Use current/)
+    await click('[data-test="billing-download-invoice"]')
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledWith({ number: invoice.number, customer: [details.address.line1] }, 'org_example'))
     await saveAddress()
     expect(mocks.save).toHaveBeenCalledWith('org_example', { ...details, address: { ...details.address, line1: '456 Example Avenue' } })
-    expect(checkbox().checked).toBe(true)
-    expect(document.querySelector('[data-test="billing-download-invoice"]')?.textContent).toContain('Regenerate PDF')
-    await click('[data-test="billing-download-invoice"]')
-    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledWith({ number: invoice.number, customer: ['456 Example Avenue'] }, 'org_example'))
-    expect(mocks.invoice).toHaveBeenCalledWith('org_example', invoice.id, 'current')
-    await settle()
-    await click('[data-test="billing-invoice-use-current-details"]')
-    await click('[data-test="billing-download-invoice"]')
-    await vi.waitFor(() => expect(mocks.download).toHaveBeenLastCalledWith({ number: invoice.number, customer: [details.address.line1] }, 'org_example'))
-    expect(mocks.invoice).toHaveBeenLastCalledWith('org_example', invoice.id, 'issued')
+    expect(document.querySelector('dialog')).toBeNull()
+    expect(document.querySelector('[data-test="billing-download-invoice"]')?.textContent?.trim()).toBe('PDF')
+    await click('[data-test="billing-invoice-link"]')
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenLastCalledWith({ number: invoice.number, customer: ['456 Example Avenue'] }, 'org_example'))
+    expect(mocks.invoice.mock.calls).toEqual([['org_example', invoice.id], ['org_example', invoice.id]])
   })
-  it('replaces a VAT number, then offers regeneration with the saved billing details', async () => {
+  it('uses an ordinary invoice download after a VAT number replacement', async () => {
     const oldTaxId = { id: 'txi_old', type: 'eu_vat', value: 'IT00000000000', status: 'verified' }
     const newTaxId = { id: 'txi_new', type: 'eu_vat', value: 'IT00000000001', status: 'pending' }
     mocks.load.mockResolvedValue({ ...structuredClone(details), taxIds: [oldTaxId] })
@@ -99,7 +95,6 @@ describe('correcting an invoice address', () => {
     document.querySelector('[data-test="billing-tax-form"]')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await settle()
     expect(mocks.addTax).toHaveBeenCalledWith('org_example', { type: 'eu_vat', value: newTaxId.value })
-    expect(checkbox().checked).toBe(true)
     const removeOld = () => Array.from(document.querySelectorAll<HTMLButtonElement>('dialog li button')).find(button => button.textContent?.trim() === 'Remove tax ID')!
     removeOld().click()
     await settle()
@@ -107,37 +102,23 @@ describe('correcting an invoice address', () => {
     removeOld().click()
     await settle()
     expect(mocks.removeTax).toHaveBeenCalledWith('org_example', oldTaxId.id)
-    expect(document.querySelector('dialog')?.textContent).not.toContain(oldTaxId.value)
     Array.from(document.querySelectorAll<HTMLButtonElement>('dialog button')).find(button => button.textContent?.trim() === 'Done')!.click()
     await settle()
-    await click('[data-test="billing-download-invoice"]')
+    await click('[data-test="billing-invoice-link"]')
     await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledWith({ number: invoice.number, customer: [newTaxId.value] }, 'org_example'))
-    expect(mocks.invoice).toHaveBeenCalledWith('org_example', invoice.id, 'current')
+    expect(mocks.invoice).toHaveBeenCalledWith('org_example', invoice.id)
   })
-  it('keeps the issued-details selection when saving a VAT number fails', async () => {
-    mocks.addTax.mockRejectedValue(new Error('Invalid tax ID'))
-    await mount()
-    await click('[data-test="billing-manage-tax"]')
-    const input = document.querySelector<HTMLInputElement>('input[name="taxValue"]')!
-    input.value = 'EXAMPLE'
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    document.querySelector('[data-test="billing-tax-form"]')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-    await settle()
-    expect(checkbox().checked).toBe(false)
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not add the tax ID')
-    expect(mocks.invoice).not.toHaveBeenCalled()
-  })
-  it('does not select new details when saving the address fails', async () => {
+  it('does not download unsaved details after a rejected save', async () => {
     mocks.save.mockRejectedValueOnce(new Error('save failed'))
     await mount()
     await saveAddress()
-    expect(checkbox().checked).toBe(false)
+    expect(savedDetails.address.line1).toBe(details.address.line1)
     expect(mocks.invoice).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not save')
   })
-  it('does not download or fall back to the old address when regeneration fails', async () => {
+  it('does not download a stale fallback after a read failure', async () => {
     mocks.invoice.mockRejectedValueOnce(new Error('customer unavailable'))
     await mount()
-    await click('[data-test="billing-invoice-use-current-details"]')
     await click('[data-test="billing-download-invoice"]')
     await vi.waitFor(() => expect(mocks.error).toHaveBeenCalled())
     expect(mocks.download).not.toHaveBeenCalled()

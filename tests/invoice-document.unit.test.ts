@@ -1,7 +1,7 @@
 import type Stripe from 'stripe'
 import type { InAppBillingContext } from '../supabase/functions/_backend/utils/stripe_in_app'
 import { describe, expect, it, vi } from 'vitest'
-import { buildInvoiceDocument, getInvoiceDocument, parseInvoiceBillingDetails } from '../supabase/functions/_backend/utils/invoice_document'
+import { applySavedInvoiceDetails, buildInvoiceDocument, getInvoiceDocument } from '../supabase/functions/_backend/utils/invoice_document'
 import { exampleAccount, exampleInvoice, exampleLines, exampleRate } from './fixtures/invoices/example'
 
 function document(overrides: Partial<Stripe.Invoice> = {}) {
@@ -10,7 +10,7 @@ function document(overrides: Partial<Stripe.Invoice> = {}) {
 function context(invoice = exampleInvoice, lines = exampleLines) {
   const stripe = {
     invoices: { retrieve: vi.fn().mockResolvedValue(invoice), listLineItems: vi.fn().mockImplementation(async function* () { yield* lines }) },
-    customers: { retrieve: vi.fn().mockResolvedValue({ id: 'cus_example', name: 'Updated Example Company', address: { line1: '456 Example Avenue', line2: null, city: 'Paris', state: null, postal_code: '75001', country: 'FR' } }), listTaxIds: vi.fn().mockImplementation(async function* () { yield { type: 'eu_vat', value: 'FR00000000000' } }), update: vi.fn() },
+    customers: { retrieve: vi.fn().mockResolvedValue({ id: 'cus_example', name: 'Updated Example Company', address: { line1: '456 Example Avenue', line2: null, city: 'Rome', state: null, postal_code: '00100', country: 'IT' } }), listTaxIds: vi.fn().mockImplementation(async function* () { yield { type: 'eu_vat', value: 'IT00000000001' } }), update: vi.fn() },
     accounts: { retrieve: vi.fn().mockResolvedValue(exampleAccount) },
     taxIds: { retrieve: vi.fn() },
     taxRates: { retrieve: vi.fn().mockResolvedValue(exampleRate) },
@@ -62,66 +62,50 @@ describe('owned invoice documents', () => {
     expect(stripe.taxRates.retrieve).toHaveBeenCalledWith('txr_example')
     expect(result.lines[0].tax).toBe('22%')
   })
-  it.concurrent('regenerates the saved billing identity including VAT number without changing issued tax treatment or amounts', async () => {
+  it.concurrent('automatically uses same-country billing corrections on every download without changing financial data', async () => {
     const invoice = { ...exampleInvoice, customer_tax_ids: [{ type: 'eu_vat' as const, value: 'IT00000000000' }] }
     const { ctx, stripe } = context(invoice)
-    const issued = await getInvoiceDocument(ctx, 'in_example')
-    expect(stripe.customers.retrieve).not.toHaveBeenCalled()
-    expect(stripe.customers.listTaxIds).not.toHaveBeenCalled()
-    const current = await getInvoiceDocument(ctx, 'in_example', 'current')
-    expect(stripe.customers.retrieve).toHaveBeenCalledWith('cus_example')
-    expect(current.customer).toEqual(['Updated Example Company', '456 Example Avenue', '75001 Paris', 'France', 'billing@example.com', 'FR VAT FR00000000000'])
+    const issued = buildInvoiceDocument(invoice, exampleAccount, exampleLines, [], new Map([[exampleRate.id, exampleRate]]))
+    const current = await getInvoiceDocument(ctx, 'in_example')
+    expect(current.customer).toEqual(['Updated Example Company', '456 Example Avenue', '00100 Rome', 'Italy', 'billing@example.com', 'IT VAT IT00000000001'])
     expect(stripe.customers.listTaxIds).toHaveBeenCalledWith('cus_example', { limit: 100 })
     expect(invoice.customer_tax_ids).toEqual([{ type: 'eu_vat', value: 'IT00000000000' }])
     expect({ ...current, customer: [] }).toEqual({ ...issued, customer: [] })
     expect(stripe.customers.update).not.toHaveBeenCalled()
-    expect(invoice.customer_address).toEqual(exampleInvoice.customer_address)
-    expect((await getInvoiceDocument(ctx, 'in_example')).customer).toEqual(issued.customer)
+    stripe.customers.listTaxIds.mockImplementation(async function* () { yield { type: 'eu_vat', value: 'IT00000000002' } })
+    expect((await getInvoiceDocument(ctx, 'in_example')).customer).toContain('IT VAT IT00000000002')
   })
-  it.concurrent('rejects current-details requests before reading a different customer profile', async () => {
+  it.concurrent('checks invoice ownership before reading current customer details', async () => {
     const { ctx, stripe } = context({ ...exampleInvoice, customer: 'cus_other' })
-    await expect(getInvoiceDocument(ctx, 'in_example', 'current')).rejects.toThrow()
+    await expect(getInvoiceDocument(ctx, 'in_example')).rejects.toThrow()
     expect(stripe.customers.retrieve).not.toHaveBeenCalled()
     expect(stripe.customers.listTaxIds).not.toHaveBeenCalled()
   })
-  it.concurrent.each([{ deleted: true }, { address: null }, { address: { line1: '456 Example Avenue' } }])('rejects unavailable or incomplete current billing addresses', async (customer) => {
+  it.concurrent('keeps an invoice downloadable with its issued details after the customer is deleted', async () => {
     const { ctx, stripe } = context()
-    stripe.customers.retrieve.mockResolvedValue(customer)
-    await expect(getInvoiceDocument(ctx, 'in_example', 'current')).rejects.toThrow()
-    expect(stripe.invoices.listLineItems).not.toHaveBeenCalled()
+    stripe.customers.retrieve.mockResolvedValue({ deleted: true })
+    expect((await getInvoiceDocument(ctx, 'in_example')).customer).toContain('123 Example Street')
+    expect(stripe.customers.listTaxIds).not.toHaveBeenCalled()
   })
-  it.concurrent('reflects removed tax IDs without changing the original invoice or its reverse-charge treatment', async () => {
-    const invoice = { ...exampleInvoice, customer_tax_ids: [{ type: 'eu_vat' as const, value: 'IT00000000000' }], customer_tax_exempt: 'reverse' as const }
-    const { ctx, stripe } = context(invoice)
-    stripe.customers.listTaxIds.mockImplementation(async function* () {})
-    const current = await getInvoiceDocument(ctx, 'in_example', 'current')
-    expect(current.customer).not.toContain('IT VAT IT00000000000')
-    expect(current.notes).toContain('Tax to be paid on reverse charge basis.')
-    expect((await getInvoiceDocument(ctx, 'in_example')).customer).toContain('IT VAT IT00000000000')
-  })
-  it.concurrent('reads every saved tax ID and fails explicitly if the bounded list is exceeded', async () => {
+  it.concurrent('reads all saved tax IDs and refuses an oversized list rather than truncating it', async () => {
     const { ctx, stripe } = context()
     stripe.customers.listTaxIds.mockImplementation(async function* () {
-      yield { type: 'eu_vat', value: 'FR00000000000' }
       yield { type: 'gb_vat', value: 'GB000000000' }
+      yield { type: 'eu_vat', value: 'IT00000000001' }
     })
-    expect((await getInvoiceDocument(ctx, 'in_example', 'current')).customer).toEqual(expect.arrayContaining(['FR VAT FR00000000000', 'GB VAT GB000000000']))
+    const current = await getInvoiceDocument(ctx, 'in_example')
+    expect(current.customer).toContain('IT VAT IT00000000001')
+    expect(current.customer).not.toContain('GB VAT GB000000000')
     stripe.customers.listTaxIds.mockImplementation(async function* () {
       for (let i = 0; i < 101; i++)
         yield { type: 'eu_vat', value: `EXAMPLE${i}` }
     })
-    await expect(getInvoiceDocument(ctx, 'in_example', 'current')).rejects.toThrow()
+    await expect(getInvoiceDocument(ctx, 'in_example')).rejects.toThrow()
   })
-  it.concurrent('does not fall back to the old VAT number when current tax IDs cannot be read', async () => {
+  it.concurrent('does not silently fall back to stale data on a Stripe read failure', async () => {
     const { ctx, stripe } = context()
     stripe.customers.listTaxIds.mockImplementation(() => { throw new Error('Stripe unavailable') })
-    await expect(getInvoiceDocument(ctx, 'in_example', 'current')).rejects.toThrow('Stripe unavailable')
-  })
-  it.concurrent('defaults to issued details and rejects unsupported selectors', () => {
-    expect(parseInvoiceBillingDetails(undefined)).toBe('issued')
-    expect(parseInvoiceBillingDetails('current')).toBe('current')
-    for (const value of [true, null, {}, 'another-customer'])
-      expect(() => parseInvoiceBillingDetails(value)).toThrow()
+    await expect(getInvoiceDocument(ctx, 'in_example')).rejects.toThrow('Stripe unavailable')
   })
   it.concurrent('fetches every line rather than the first embedded Stripe page', async () => {
     const lines = Array.from({ length: 101 }, (_, i) => ({ ...exampleLines[0], id: `il_${i}` }))
@@ -142,5 +126,47 @@ describe('owned invoice documents', () => {
   it.concurrent('bounds unexpectedly large invoices instead of returning a truncated PDF', async () => {
     const { ctx } = context(exampleInvoice, Array.from({ length: 1001 }, () => exampleLines[0]))
     await expect(getInvoiceDocument(ctx, 'in_example')).rejects.toThrow()
+  })
+})
+
+describe('issued invoice country boundaries', () => {
+  type TaxId = NonNullable<Stripe.Invoice['customer_tax_ids']>[number]
+  const id = (value: string, type: TaxId['type'] = 'eu_vat'): TaxId => ({ type, value })
+  function corrected(issued: TaxId[], saved: TaxId[], country: string | null = 'IT', currentCountry = 'IT') {
+    const invoice = { ...exampleInvoice, customer_address: country ? { ...exampleInvoice.customer_address!, country } : null, customer_tax_ids: issued, customer_tax_exempt: 'reverse' as const }
+    const customer = { name: 'Updated Example', address: { ...exampleInvoice.customer_address!, country: currentCountry, line1: '456 Example Avenue' } } as Stripe.Customer
+    const result = applySavedInvoiceDetails(invoice, customer, saved)
+    expect({ ...result, customer_name: null, customer_address: null, customer_tax_ids: [] }).toEqual({ ...invoice, customer_name: null, customer_address: null, customer_tax_ids: [] })
+    return result
+  }
+  it.concurrent('keeps both the issued address country and VAT country when a customer moves countries', () => {
+    const result = corrected([id('IT00000000000')], [id('FR00000000000')], 'IT', 'FR')
+    expect(result.customer_address).toEqual(exampleInvoice.customer_address)
+    expect(result.customer_tax_ids).toEqual([id('IT00000000000')])
+  })
+  it.concurrent('corrects a VAT number only within its issued tax type and country', () => {
+    expect(corrected([id('IT00000000000')], [id('IT00000000001')]).customer_tax_ids).toEqual([id('IT00000000001')])
+    expect(corrected([id('GB000000000', 'gb_vat')], [id('XI000000000')], 'GB', 'GB').customer_tax_ids).toEqual([id('GB000000000', 'gb_vat')])
+  })
+  it.concurrent('adds a missing tax ID only from the issued billing country', () => {
+    expect(corrected([], [id('IT00000000001'), id('FR00000000000')]).customer_tax_ids).toEqual([id('IT00000000001')])
+    expect(corrected([], [id('IT00000000001')], null).customer_tax_ids).toEqual([])
+  })
+  it.concurrent('does not erase an issued tax ID when the profile removes it', () => {
+    expect(corrected([id('IT00000000000')], []).customer_tax_ids).toEqual([id('IT00000000000')])
+  })
+  it.concurrent('keeps issued details when replacement IDs are ambiguous or the jurisdiction is unknown', () => {
+    const issued = [id('IT00000000000')]
+    expect(corrected(issued, [id('IT00000000000'), id('IT00000000001')]).customer_tax_ids).toEqual(issued)
+    expect(corrected(issued, [id('IT00000000001'), id('IT00000000002')]).customer_tax_ids).toEqual(issued)
+    expect(corrected([id('UNKNOWN', 'unknown')], [id('IT00000000001')]).customer_tax_ids).toEqual([id('UNKNOWN', 'unknown')])
+  })
+  it.concurrent.each([['GR', 'EL000000000', 'EL000000001'], ['GB', 'XI000000000', 'XI000000001']])('handles the VAT prefix for %s without switching jurisdiction', (country, oldValue, newValue) => {
+    expect(corrected([id(oldValue)], [id(newValue)], country, country).customer_tax_ids).toEqual([id(newValue)])
+    expect(corrected([], [id(newValue)], country, country).customer_tax_ids).toEqual([id(newValue)])
+  })
+  it.concurrent('keeps the historical address if a saved address is incomplete', () => {
+    const customer = { address: null } as Stripe.Customer
+    expect(applySavedInvoiceDetails(exampleInvoice, customer, []).customer_address).toEqual(exampleInvoice.customer_address)
   })
 })

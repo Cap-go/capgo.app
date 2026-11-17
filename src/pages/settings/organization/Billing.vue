@@ -33,7 +33,6 @@ displayStore.NavTitle = t('billing-portal-tab')
 
 const overview = ref<BillingOverview | null>(null)
 const isLoading = ref(true)
-const useCurrentBillingDetails = ref(false)
 const loadFailed = ref(false)
 const isPaying = ref(false)
 const isResuming = ref(false)
@@ -318,7 +317,6 @@ async function onSubscriptionUpdated(sub: BillingSubscription | null) {
 }
 
 watch(orgId, () => {
-  useCurrentBillingDetails.value = false
   permissionModal.value = null
   trialPlanOfferOrgId.value = null
   showStartNowModal.value = false
@@ -548,9 +546,9 @@ onMounted(async () => {
           </section>
         </div>
 
-        <BillingProfileSection :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" @details-saved="useCurrentBillingDetails = true" />
+        <BillingProfileSection :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
 
-        <BillingInvoices :key="orgId" v-model:use-current-details="useCurrentBillingDetails" :org-id="orgId" :invoices="invoices" />
+        <BillingInvoices :key="orgId" :org-id="orgId" :invoices="invoices" />
       </template>
     </div>
 
