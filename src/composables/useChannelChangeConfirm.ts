@@ -14,6 +14,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
  * Rendered by ChannelChangeDialog.vue, mounted once in App.vue.
  */
 export const CHANNEL_CHANGE_DIALOG_ID = 'channel-change-impact'
+const CHANNEL_CHANGE_CONFIRM_BUTTON_ID = 'channel-change-confirm'
 
 export type ChannelChangeAction = 'set' | 'promote' | 'rollout' | 'revert'
 export type RevertChoice = 'previous' | 'builtin'
@@ -208,7 +209,7 @@ export async function confirmChannelChange(options: ChannelChangeOptions): Promi
     }
     const revertUnchosen = options.action === 'revert' && !state.choice
     buttons.push({
-      id: 'channel-change-confirm',
+      id: CHANNEL_CHANGE_CONFIRM_BUTTON_ID,
       text: confirmLabel(options, state.choice, state.response?.previous_bundle ?? null),
       role: options.action === 'revert' || options.compatibility ? 'danger' : 'primary',
       disabled: revertUnchosen,
@@ -235,6 +236,10 @@ export async function confirmChannelChange(options: ChannelChangeOptions): Promi
   })
 
   const canceled = await dialogStore.onDialogDismiss()
+  // Another dialog may have replaced this one (openDialog does not check for an
+  // open dialog). Its buttons also close the dialog, so only this confirm's own
+  // button counts as a yes.
+  const confirmedByButton = dialogStore.lastButtonRole === CHANNEL_CHANGE_CONFIRM_BUTTON_ID
   stopWatching()
   const choice = state.choice
   const previousBundle = state.response?.previous_bundle ?? null
@@ -245,7 +250,7 @@ export async function confirmChannelChange(options: ChannelChangeOptions): Promi
   state.failed = false
   state.choice = null
 
-  if (canceled || next)
+  if (canceled || next || !confirmedByButton)
     return { confirmed: false, next }
   return { confirmed: true, choice, previousBundle }
 }

@@ -169,9 +169,116 @@ function canDeliverWithoutZip(device: Pick<ChannelImpactDeviceGroup, 'plugin_ver
   return !isDeprecatedPluginVersion(plugin, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7)
 }
 
+type ImpactDevice = Pick<ChannelImpactDeviceGroup, 'platform' | 'version_build' | 'version_name' | 'plugin_version' | 'is_prod' | 'is_emulator' | 'forced' | 'key_id'>
+
+/** What every /updates gate looks at for one device setup and one target. */
+interface GateContext {
+  device: ImpactDevice
+  channel: ChannelImpactChannelConfig
+  target: ChannelImpactTarget
+  native: SemVer
+  plugin: SemVer | null
+  /** Semver of the target bundle; null for the store version or a non-semver bundle name. */
+  bundle: SemVer | null
+}
+
+/** A gate returns the outcome that stops the device, or null to let /updates go on. */
+type Gate = (ctx: GateContext) => ChannelImpactOutcome | null
+
+/** Checks /updates runs before the channel config: updater age, delivery format, encryption key, current bundle. */
+function deliveryGate({ device, channel, target, plugin }: GateContext): ChannelImpactOutcome | null {
+  // /updates rejects every 4.x updater before looking at the channel.
+  if (plugin?.major === 4)
+    return 'plugin_too_old'
+  if (target.kind !== 'bundle')
+    return null
+  if (target.has_zip === false && !canDeliverWithoutZip(device, channel))
+    return 'blocked_no_bundle'
+  // /updates refuses an encrypted bundle whose key differs from the device's key
+  // (current key id format only) before it even checks whether the device runs it.
+  if (target.key_id && device.key_id && device.key_id !== target.key_id && plugin && usesCurrentEncryptionKeyIdFormat(plugin))
+    return 'blocked_key_mismatch'
+  // Already running the bundle: /updates answers "no new version" before the channel gates.
+  return device.version_name === target.name ? 'already_on_target' : null
+}
+
+function platformGate({ device, channel }: GateContext): ChannelImpactOutcome | null {
+  const enabled: Partial<Record<ChannelImpactPlatform, boolean>> = { ios: channel.ios, android: channel.android, electron: channel.electron }
+  const platformEnabled = enabled[device.platform]
+  // Devices of an unknown platform pass: /updates has no switch for them.
+  return platformEnabled === undefined || platformEnabled ? null : 'blocked_platform'
+}
+
+/** The major strategy runs before the private-channel gate in /updates. */
+function majorGate({ channel, native, bundle }: GateContext): ChannelImpactOutcome | null {
+  return bundle && channel.disable_auto_update === 'major' && bundle.major > native.major ? 'blocked_major' : null
+}
+
+function privateChannelGate({ device, channel }: GateContext): ChannelImpactOutcome | null {
+  // A private channel without self-assignment only serves devices assigned to it;
+  // devices that merely report it get cannot_update_via_private_channel.
+  return channel.assigned_devices_only && !device.forced ? 'blocked_private_channel' : null
+}
+
+function minorPatchGate({ channel, native, bundle }: GateContext): ChannelImpactOutcome | null {
+  if (!bundle)
+    return null
+  const sameMinor = bundle.major === native.major && bundle.minor === native.minor
+  if (channel.disable_auto_update === 'minor' && !sameMinor)
+    return 'blocked_minor'
+  if (channel.disable_auto_update === 'patch' && !(sameMinor && bundle.patch === native.patch))
+    return 'blocked_patch'
+  return null
+}
+
+function metadataGate({ channel, target, native }: GateContext): ChannelImpactOutcome | null {
+  if (target.kind !== 'bundle' || channel.disable_auto_update !== 'version_number')
+    return null
+  const minUpdate = parseVersion(target.min_update_version)
+  if (!minUpdate)
+    return 'blocked_misconfigured'
+  return greaterThan(minUpdate, native) ? 'blocked_metadata' : null
+}
+
+function underNativeGate({ channel, native, bundle }: GateContext): ChannelImpactOutcome | null {
+  return bundle && channel.disable_auto_update_under_native && lessThan(bundle, native) ? 'blocked_under_native' : null
+}
+
+function buildTypeGate({ device, channel }: GateContext): ChannelImpactOutcome | null {
+  // Unknown build flags are treated like the plugin defaults (prod, physical device).
+  const buildAllowed = (device.is_prod ?? true) ? channel.allow_prod : channel.allow_dev
+  const hardwareAllowed = (device.is_emulator ?? false) ? channel.allow_emulator : channel.allow_device
+  return buildAllowed && hardwareAllowed ? null : 'blocked_build_type'
+}
+
+/** The /updates gates, in the order /updates applies them (plugin_runtime/utils/update.ts). */
+const UPDATE_GATES: readonly Gate[] = [
+  deliveryGate,
+  platformGate,
+  majorGate,
+  privateChannelGate,
+  minorPatchGate,
+  metadataGate,
+  underNativeGate,
+  buildTypeGate,
+]
+
+/** What a device that passed every gate gets. */
+function passedOutcome({ device, target, native, plugin, bundle }: GateContext): ChannelImpactOutcome {
+  if (target.kind === 'bundle')
+    return bundle && lessThan(bundle, native) ? 'receive_below_native' : 'receive'
+  // On the store bundle the plugin reports version_name = version_build.
+  if (device.version_name === device.version_build)
+    return 'already_on_target'
+  const minPlugin = parseVersion(BUILTIN_REVERT_MIN_PLUGIN_VERSION)
+  if (!plugin || !minPlugin || !greaterOrEqual(plugin, minPlugin))
+    return 'plugin_too_old'
+  return 'revert_to_builtin'
+}
+
 /** Mirrors the strategy, guard, platform and build-type gates of /updates for one device setup. */
 export function evaluateDeviceOutcome(
-  device: Pick<ChannelImpactDeviceGroup, 'platform' | 'version_build' | 'version_name' | 'plugin_version' | 'is_prod' | 'is_emulator' | 'forced' | 'key_id'>,
+  device: ImpactDevice,
   channel: ChannelImpactChannelConfig,
   target: ChannelImpactTarget,
 ): ChannelImpactOutcome {
@@ -179,87 +286,20 @@ export function evaluateDeviceOutcome(
   // /updates refuses a missing or non-semver native build before any channel gate.
   if (!native)
     return 'unknown_native'
-
-  // /updates rejects every 4.x updater before looking at the channel.
-  if (parseVersion(device.plugin_version)?.major === 4)
-    return 'plugin_too_old'
-
-  const targetName = target.kind === 'builtin' ? 'builtin' : target.name
-  if (target.kind === 'bundle' && target.has_zip === false && !canDeliverWithoutZip(device, channel))
-    return 'blocked_no_bundle'
-
-  // /updates refuses an encrypted bundle whose key differs from the device's key
-  // (current key id format only) before it even checks whether the device runs it.
-  if (target.kind === 'bundle' && target.key_id && device.key_id && device.key_id !== target.key_id) {
-    const plugin = parseVersion(device.plugin_version)
-    if (plugin && usesCurrentEncryptionKeyIdFormat(plugin))
-      return 'blocked_key_mismatch'
+  const ctx: GateContext = {
+    device,
+    channel,
+    target,
+    native,
+    plugin: parseVersion(device.plugin_version),
+    bundle: target.kind === 'bundle' ? parseVersion(target.name) : null,
   }
-
-  // Already running the bundle: /updates answers "no new version" before the channel gates.
-  if (target.kind === 'bundle' && device.version_name === target.name)
-    return 'already_on_target'
-
-  if (device.platform === 'ios' && !channel.ios)
-    return 'blocked_platform'
-  if (device.platform === 'android' && !channel.android)
-    return 'blocked_platform'
-  if (device.platform === 'electron' && !channel.electron)
-    return 'blocked_platform'
-
-  const bundle = target.kind === 'bundle' ? parseVersion(targetName) : null
-  if (target.kind === 'bundle' && bundle && channel.disable_auto_update === 'major' && bundle.major > native.major)
-    return 'blocked_major'
-
-  // A private channel without self-assignment only serves devices assigned to it;
-  // devices that merely report it get cannot_update_via_private_channel.
-  if (channel.assigned_devices_only && !device.forced)
-    return 'blocked_private_channel'
-
-  if (target.kind === 'bundle') {
-    if (bundle) {
-      if (channel.disable_auto_update === 'minor' && (bundle.major !== native.major || bundle.minor !== native.minor))
-        return 'blocked_minor'
-      if (channel.disable_auto_update === 'patch' && (bundle.major !== native.major || bundle.minor !== native.minor || bundle.patch !== native.patch))
-        return 'blocked_patch'
-    }
-    if (channel.disable_auto_update === 'version_number') {
-      const minUpdate = parseVersion(target.min_update_version)
-      if (!minUpdate)
-        return 'blocked_misconfigured'
-      if (greaterThan(minUpdate, native))
-        return 'blocked_metadata'
-    }
-    if (bundle && channel.disable_auto_update_under_native && lessThan(bundle, native))
-      return 'blocked_under_native'
+  for (const gate of UPDATE_GATES) {
+    const outcome = gate(ctx)
+    if (outcome)
+      return outcome
   }
-
-  // Unknown build flags are treated like the plugin defaults (prod, physical device).
-  const isProd = device.is_prod ?? true
-  const isEmulator = device.is_emulator ?? false
-  if (!channel.allow_prod && isProd)
-    return 'blocked_build_type'
-  if (!channel.allow_dev && !isProd)
-    return 'blocked_build_type'
-  if (!channel.allow_device && !isEmulator)
-    return 'blocked_build_type'
-  if (!channel.allow_emulator && isEmulator)
-    return 'blocked_build_type'
-
-  if (target.kind === 'builtin') {
-    // On the store bundle the plugin reports version_name = version_build.
-    if (device.version_name === device.version_build)
-      return 'already_on_target'
-    const plugin = parseVersion(device.plugin_version)
-    const minPlugin = parseVersion(BUILTIN_REVERT_MIN_PLUGIN_VERSION)
-    if (!plugin || !minPlugin || !greaterOrEqual(plugin, minPlugin))
-      return 'plugin_too_old'
-    return 'revert_to_builtin'
-  }
-
-  if (bundle && lessThan(bundle, native))
-    return 'receive_below_native'
-  return 'receive'
+  return passedOutcome(ctx)
 }
 
 /** Native build a device needs before a strategy-gated bundle can reach it. */

@@ -114,8 +114,15 @@ export function useChannelRecord<T extends { id: number, name?: string | null }>
     }
     try {
       const row = await readChannelRow(channelId)
-      if (!row || generation !== readGeneration)
+      if (generation !== readGeneration)
         return
+      if (!row) {
+        // Never leave another channel's row under this channel's URL (writes use
+        // the route id). A failed refresh of the shown channel keeps its row.
+        if (channel.value?.id !== channelId)
+          channel.value = undefined
+        return
+      }
       const value = normalize(row)
       appDetailStore.setChannel(channelId, value as any)
       show(value)

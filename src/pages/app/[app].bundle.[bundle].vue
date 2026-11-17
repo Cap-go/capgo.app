@@ -320,20 +320,17 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
     // Pre-select the channel's current bundle so the Dependencies page opens already diffed.
     const dependenciesPath = `/app/${packageId.value}/bundle/${bundle.id}/dependencies${chan.version ? `?compare=${chan.version}` : ''}`
     const compatibility = packages.length ? { packages, dependenciesPath } : null
-    const [currentBundleName, rolloutTargetName] = await Promise.all([
-      chan.version ? currentBundleNameOf(chan.version) : null,
-      // A new stable bundle resets any configured rollout (channel trigger); the
-      // same bundle again does not change the version, so the rollout stays.
-      chan.rollout_version && chan.version !== bundle.id ? currentBundleNameOf(chan.rollout_version) : null,
-    ])
+    const names = await readChannelBundleNames(chan, bundle.id)
+    if (!names)
+      return
     const result = await confirmChannelChange({
       appId: bundle.app_id,
       channelId: chan.id,
       channelName: chan.name,
       action: 'set',
       bundle: { id: bundle.id, name: bundle.name },
-      currentBundleName,
-      stopsRolloutTarget: rolloutTargetName,
+      currentBundleName: names.currentBundleName,
+      stopsRolloutTarget: names.rolloutTargetName,
       compatibility,
     })
     if (!result.confirmed) {
@@ -353,15 +350,73 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
   }
 }
 
-/** Name of a bundle linked to a channel, or null for the store version. */
+/** Name of a bundle linked to a channel, or null for the store version. Throws when it cannot be read. */
 async function currentBundleNameOf(versionId: number) {
-  const { data } = await capgo
+  const { data, error } = await capgo
     .from('app_versions')
     .select('name')
     .eq('id', versionId)
     .maybeSingle()
+  if (error)
+    throw error
   const name = data?.name ?? null
   return name && !['builtin', 'unknown'].includes(name) ? name : null
+}
+
+/**
+ * What the impact confirm says the channel serves now, and which rollout the
+ * change stops. Null (after an error toast) when it cannot be read: the confirm
+ * must never describe a channel it could not read as serving the store version.
+ */
+async function readChannelBundleNames(chan: Database['public']['Tables']['channels']['Row'], nextVersionId: number | null) {
+  try {
+    const [currentBundleName, rolloutTargetName] = await Promise.all([
+      chan.version ? currentBundleNameOf(chan.version) : null,
+      // A new stable bundle resets any configured rollout (channel trigger); the
+      // same bundle again does not change the version, so the rollout stays.
+      chan.rollout_version && chan.version !== nextVersionId ? currentBundleNameOf(chan.rollout_version) : null,
+    ])
+    return { currentBundleName, rolloutTargetName }
+  }
+  catch (error) {
+    console.error('Cannot read the channel bundles', error)
+    toast.error(t('channel-impact-bundle-read-failed'))
+    return null
+  }
+}
+
+/** Unlink: the channel serves the store version again, so show who goes back to it first. */
+async function unlinkChannelBundle(chan: Database['public']['Tables']['channels']['Row']) {
+  if (!canPromoteChannel(chan.id)) {
+    toast.error(t('no-permission'))
+    return
+  }
+  const names = await readChannelBundleNames(chan, null)
+  if (!names)
+    return
+  const result = await confirmChannelChange({
+    appId: chan.app_id,
+    channelId: chan.id,
+    channelName: chan.name,
+    action: 'set',
+    currentBundleName: names.currentBundleName,
+    stopsRolloutTarget: names.rolloutTargetName,
+    title: t('unlink-channel'),
+    confirmText: t('continue'),
+  })
+  if (!result.confirmed)
+    return
+  try {
+    await setChannel(chan, null)
+    invalidateChannelImpact(chan.id)
+    await getChannels()
+    toast.success(t('channels-unlinked-successfully'))
+    toast.info(t('cloud-replication-delay'))
+  }
+  catch (error) {
+    console.error(error)
+    toast.error(t(channelUpdatePackageErrorKey(error) ?? 'cannot-test-app-some'))
+  }
 }
 
 const liveChannels = computed(() => {
@@ -425,16 +480,7 @@ async function handleChannelAction(action: 'set' | 'open' | 'unlink') {
     await openChannelLink()
   }
   else if (action === 'unlink') {
-    try {
-      await setChannel(channel.value, null)
-      await getChannels()
-      toast.success(t('channels-unlinked-successfully'))
-      toast.info(t('cloud-replication-delay'))
-    }
-    catch (error) {
-      console.error(error)
-      toast.error(t('cannot-test-app-some'))
-    }
+    await unlinkChannelBundle(channel.value)
   }
 }
 

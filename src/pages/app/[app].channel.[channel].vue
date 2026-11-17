@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ChannelChangeCompatibility } from '~/composables/useChannelChangeConfirm'
+import type { ChannelChangeCompatibility, ChannelChangeResult } from '~/composables/useChannelChangeConfirm'
 import type { BundlePickerRow } from '~/services/bundleColumns'
 import type { Database } from '~/types/database.types'
 import { greaterOrEqual, parse } from '@std/semver'
@@ -22,6 +22,7 @@ import { confirmChannelChange } from '~/composables/useChannelChangeConfirm'
 import { useChannelRecord } from '~/composables/useChannelRecord'
 import { BUNDLE_PICKER_COLUMNS } from '~/services/bundleColumns'
 import { invalidateChannelImpact, warmChannelImpactCache } from '~/services/channelImpact'
+import { readChannelRollbackContext } from '~/services/channelRollback'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate, formatLocalDate } from '~/services/date'
@@ -530,6 +531,67 @@ function stillOnChannel(channelId: number) {
   return id.value === channelId && channel.value?.id === channelId
 }
 
+/** bundleCompatibility, with an error toast (and null) when the check itself fails. */
+async function checkBundleCompatibility(...args: Parameters<typeof bundleCompatibility>) {
+  try {
+    return { compatibility: await bundleCompatibility(...args) }
+  }
+  catch (error) {
+    // Never skip the native package warning because the check itself failed.
+    console.error('Cannot check native package compatibility', error)
+    toast.error(t('channel-impact-compat-check-failed'))
+    return null
+  }
+}
+
+type LinkBundle = NonNullable<Awaited<ReturnType<typeof loadBundleNativePackagesForLink>>>
+
+/**
+ * The impact confirm for a bundle picked in the bundle picker. Null when the
+ * page left the channel before the confirm opened.
+ */
+async function confirmVersionLink(appVersion: LinkBundle, rollout: boolean, confirmedChannelId: number): Promise<ChannelChangeResult | null> {
+  if (!channel.value || !stillOnChannel(confirmedChannelId))
+    return null
+  const check = await checkBundleCompatibility(appVersion, channel.value.name, channel.value.version?.id)
+  // The dialog must describe the channel the save goes to.
+  if (!check || !channel.value || !stillOnChannel(confirmedChannelId))
+    return null
+  const shown = channel.value
+  const result = await confirmChannelChange({
+    appId: shown.app_id,
+    channelId: shown.id,
+    channelName: shown.name,
+    action: rollout ? 'rollout' : 'set',
+    bundle: { id: appVersion.id, name: appVersion.name },
+    currentBundleName: servedBundleName(shown.version?.name),
+    rolloutPercentageBps: shown.rollout_percentage_bps ?? 0,
+    replacesRolloutTarget: rollout && shown.rollout_version != null && shown.rollout_version !== appVersion.id ? rolloutTargetName.value : null,
+    // A new stable bundle resets a configured rollout (channel trigger); the
+    // same bundle again does not change the version, so the rollout stays.
+    stopsRolloutTarget: !rollout && rolloutConfigured.value && shown.version?.id !== appVersion.id ? rolloutTargetName.value : null,
+    compatibility: check.compatibility,
+  })
+  if (!result.confirmed && result.next === 'view-dependencies' && check.compatibility)
+    await router.push(check.compatibility.dependenciesPath)
+  return result
+}
+
+/** Saves a confirmed bundle-picker link: the rollout target or the stable bundle. */
+async function saveVersionLink(rollout: boolean, appVersionId: number) {
+  if (rollout) {
+    if (!(await saveChannelChanges({ rollout_version: appVersionId, rollout_enabled: true })))
+      return
+    toast.success(t('rollout-target-linked'))
+  }
+  else {
+    if (!(await saveChannelChange('version', appVersionId)))
+      return
+    toast.success(t('linked-bundle'))
+  }
+  await askUpdateNotificationAfterBundleChange()
+}
+
 async function handleVersionLink(picked: BundlePickerRow) {
   if (!channel.value)
     return
@@ -541,60 +603,12 @@ async function handleVersionLink(picked: BundlePickerRow) {
   if (dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management'))
     await dialogStore.closeDialog()
   const appVersion = await loadBundleNativePackagesForLink(picked)
-  if (!appVersion || !channel.value || !stillOnChannel(confirmedChannelId))
+  if (!appVersion)
     return
   const rollout = bundleLinkMode.value === 'rollout'
-  const previousRolloutVersionId = channel.value.rollout_version
-  let compatibility: ChannelChangeCompatibility | null
-  try {
-    compatibility = await bundleCompatibility(appVersion, channel.value.name, channel.value.version?.id)
-  }
-  catch (error) {
-    // Never skip the native package warning because the check itself failed.
-    console.error('Cannot check native package compatibility', error)
-    toast.error(t('channel-impact-compat-check-failed'))
-    return
-  }
-  // The dialog must describe the channel the save goes to.
-  if (!channel.value || !stillOnChannel(confirmedChannelId))
-    return
-  const result = await confirmChannelChange({
-    appId: channel.value.app_id,
-    channelId: channel.value.id,
-    channelName: channel.value.name,
-    action: rollout ? 'rollout' : 'set',
-    bundle: { id: appVersion.id, name: appVersion.name },
-    currentBundleName: servedBundleName(channel.value.version?.name),
-    rolloutPercentageBps: channel.value.rollout_percentage_bps ?? 0,
-    replacesRolloutTarget: rollout && previousRolloutVersionId != null && previousRolloutVersionId !== appVersion.id ? rolloutTargetName.value : null,
-    // Linking a new stable bundle resets an active rollout (channel trigger).
-    stopsRolloutTarget: !rollout && rolloutConfigured.value ? rolloutTargetName.value : null,
-    compatibility,
-  })
-  if (!result.confirmed) {
-    if (result.next === 'view-dependencies' && compatibility)
-      await router.push(compatibility.dependenciesPath)
-    return
-  }
-  if (!stillOnChannel(confirmedChannelId))
-    return
-
-  if (rollout) {
-    const saved = await saveChannelChanges({
-      rollout_version: appVersion.id,
-      rollout_enabled: true,
-    })
-    if (saved) {
-      toast.success(t('rollout-target-linked'))
-      await askUpdateNotificationAfterBundleChange()
-    }
-    return
-  }
-
-  if (await saveChannelChange('version', appVersion.id)) {
-    toast.success(t('linked-bundle'))
-    await askUpdateNotificationAfterBundleChange()
-  }
+  const result = await confirmVersionLink(appVersion, rollout, confirmedChannelId)
+  if (result?.confirmed && stillOnChannel(confirmedChannelId))
+    await saveVersionLink(rollout, appVersion.id)
 }
 
 // Linking a bundle from the console is a direct channels UPDATE: RLS needs
@@ -727,32 +741,26 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
     return
   }
 
-  const { data: targetRow, error: targetError } = await capgo
-    .from('channels')
-    .select('version')
-    .eq('id', target.id)
-    .single()
-  if (targetError) {
-    console.error('cannot load target channel', targetError)
+  // Read the target fresh: the confirm states what it serves now and which
+  // rollout the promotion stops.
+  const targetState = await readChannelRollbackContext(target.id)
+  if (!targetState) {
     toast.error(t('error-fetching-channels'))
     return
   }
-  let compatibility: ChannelChangeCompatibility | null
-  try {
-    compatibility = await bundleCompatibility(appVersion, target.name, targetRow?.version)
-  }
-  catch (error) {
-    console.error('Cannot check native package compatibility', error)
-    toast.error(t('channel-impact-compat-check-failed'))
+  const check = await checkBundleCompatibility(appVersion, target.name, targetState.versionId)
+  if (!check)
     return
-  }
+  const { compatibility } = check
   const result = await confirmChannelChange({
     appId: source.app_id,
     channelId: target.id,
     channelName: target.name,
     action: 'promote',
     bundle: { id: appVersion.id, name: appVersion.name },
-    currentBundleName: servedBundleName(target.versionName),
+    currentBundleName: targetState.versionName,
+    // A new stable bundle resets the target's configured rollout (channel trigger).
+    stopsRolloutTarget: targetState.versionId === appVersion.id ? null : targetState.rolloutTargetName,
     compatibility,
   })
   if (!result.confirmed) {

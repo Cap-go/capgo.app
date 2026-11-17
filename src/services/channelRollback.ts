@@ -14,7 +14,11 @@ export interface ChannelRollbackContext {
   rolloutTargetName: string | null
 }
 
-/** What the history tables need about a channel to offer a rollback; null when it cannot be read. */
+/**
+ * What a confirm needs about a channel it reads fresh (history rollbacks, promote
+ * to another channel): what it serves and its rollout target. Null when it
+ * cannot be read.
+ */
 export async function readChannelRollbackContext(channelId: number): Promise<ChannelRollbackContext | null> {
   try {
     const { data, error } = await useConsole()

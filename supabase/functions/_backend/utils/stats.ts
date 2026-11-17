@@ -274,7 +274,9 @@ export async function readDeviceVersionCounts(c: Context, app_id: string, channe
 export async function readChannelDevicePopulation(c: Context, app_id: string, channel: VersionUsageChannel & { name: string }): Promise<ChannelDevicePopulation> {
   const [deviceOverrides, defaultForPlatforms] = await Promise.all([
     readChannelDeviceOverrideIdsSB(c, app_id, channel),
-    readChannelDefaultPlatformsSB(c, app_id, channel),
+    // A failed lookup must not read as "default for no platform": devices that
+    // report no channel would be dropped and the smaller population cached.
+    readChannelDefaultPlatformsSB(c, app_id, channel, { throwOnError: true }),
   ])
   // A failed override lookup must not read as "no overrides": forced devices
   // would be missed and the wrong population cached.
