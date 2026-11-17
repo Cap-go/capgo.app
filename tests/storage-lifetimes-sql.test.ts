@@ -139,4 +139,18 @@ describe('deletion time of a legacy app deletion message', () => {
     await executeSQL('DELETE FROM public.version_meta WHERE app_id = $1 AND version_id = 1', [reusedAppId])
     expect(await readAppDeletedAt(pg, reusedAppId, '2026-01-01T00:00:00.000Z', handlerClock)).toBe('2026-01-05T00:00:00.000Z')
   })
+
+  it('ignores a later app deleted after messages carried occurred_at, before it is in deleted_apps', async () => {
+    await executeSQL('DELETE FROM public.version_meta WHERE app_id = $1', [reusedAppId])
+    await executeSQL('DELETE FROM public.deleted_apps WHERE app_id = $1', [reusedAppId])
+    // A removed a bundle on 01-03 and was deleted before messages carried occurred_at. C recreated
+    // the app ID since, removed a bundle now and was deleted, but its handler has not recorded it.
+    await executeSQL(
+      `INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+       VALUES ('2026-01-03 00:00', $1, 1, -5), (pg_catalog.timezone('UTC', pg_catalog.clock_timestamp()), $1, 3, -5)`,
+      [reusedAppId],
+    )
+    const handlerClock = new Date(Date.now() + 60_000).toISOString()
+    expect(await readAppDeletedAt(pg, reusedAppId, '2026-01-01T00:00:00.000Z', handlerClock)).toBe('2026-01-03T00:00:00.000Z')
+  })
 })

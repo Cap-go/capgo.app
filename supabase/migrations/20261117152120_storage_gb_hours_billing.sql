@@ -758,6 +758,24 @@ $$;
 
 ALTER FUNCTION "public"."trigger_http_queue_post_to_function"() OWNER TO "postgres";
 
+-- When trigger messages started carrying occurred_at: a message without it was
+-- queued before, so its change happened before this time. on_app_delete bounds
+-- the inferred deletion time of such a message here, so events of a later app
+-- with the same ID (even deleted and not yet in deleted_apps) never count.
+DO $migration$
+BEGIN
+  EXECUTE pg_catalog.format(
+    'CREATE OR REPLACE FUNCTION public.trigger_occurred_at_since() RETURNS timestamp '
+    'LANGUAGE sql IMMUTABLE SET search_path TO '''' AS %L',
+    pg_catalog.format('SELECT %L::timestamp', pg_catalog.timezone('UTC', pg_catalog.now()))
+  );
+END;
+$migration$;
+ALTER FUNCTION public.trigger_occurred_at_since() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.trigger_occurred_at_since() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.trigger_occurred_at_since() FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.trigger_occurred_at_since() TO service_role;
+
 -- ---------------------------------------------------------------------------
 -- 2g. Transfers take their timestamp after locking the app
 -- ---------------------------------------------------------------------------

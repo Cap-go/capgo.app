@@ -756,8 +756,9 @@ export function appStorageOwnership(record: AppOwnershipRecord): StorageOwnershi
  * close_app_storage_lifetimes closes every open bundle lifetime at the deletion, so the latest
  * closing event is the deletion time. Falls back to `fallback` (the handler's clock) when the app
  * had no bundle to close. Only events of the deleted incarnation count: from its creation
- * (`createdAt`) until the app ID was created again, by a live app or one deleted since (in
- * deleted_apps), and the handler's clock is capped there too.
+ * (`createdAt`) until the app ID was created again (a live app, or one in deleted_apps) or, at the
+ * latest, until messages started carrying occurred_at (trigger_occurred_at_since): such a message
+ * was queued before. The handler's clock is capped there too.
  */
 export async function readAppDeletedAt(pg: PgClient, appId: string, createdAt: string | Date | null | undefined, fallback: string): Promise<string> {
   const { rows } = await pg.query<{ deleted_at: string | Date | null }>(
@@ -776,7 +777,9 @@ export async function readAppDeletedAt(pg: PgClient, appId: string, createdAt: s
          AND pg_catalog.timezone('UTC', deleted_apps.created_at) > incarnation.created_at
      ),
      bound AS (
-       SELECT LEAST($2::timestamp, (SELECT min(recreated.at) FROM recreated)) AS at
+       -- A message without occurred_at was queued, so its deletion happened, before messages
+       -- carried it: a later app with this ID, even deleted and not yet in deleted_apps, is after.
+       SELECT LEAST($2::timestamp, (SELECT min(recreated.at) FROM recreated), public.trigger_occurred_at_since()) AS at
      )
      SELECT COALESCE(
        (
