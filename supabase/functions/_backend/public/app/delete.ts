@@ -108,6 +108,14 @@ async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, 
     // Use the API key's RLS context for data queries - RLS will enforce access
     const apikeyRls = apikeyPrincipal(c, apikey.key)
 
+    // The app's org, read before any row is deleted: simulator sessions of a device that
+    // stopped by itself are settled for this org below, before the apps row goes away.
+    const app = await withRlsTransaction(pg, apikeyRls, client => queryJsonOne<{ owner_org: string }>(
+      client,
+      'SELECT owner_org FROM public.apps WHERE app_id = $1',
+      [appId],
+    )).catch(() => null)
+
     // Legacy per-user Supabase storage folder used by older CLI uploads.
     // The `apps` bucket stores objects under {user_id}/{app_id}/...
     if (apikey.user_id)
@@ -131,11 +139,6 @@ async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, 
 
     // A simulator whose device stopped by itself is billed up to that stop: settle it now, before the
     // apps delete trigger settles the sessions still open at the current time.
-    const app = await queryJsonOne<{ owner_org: string | null }>(pg, 'SELECT owner_org FROM public.apps WHERE app_id = $1', [appId])
-      .catch((error: unknown) => {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'error reading app owner for simulator settlement', error, app_id: appId })
-        return null
-      })
     if (app?.owner_org) {
       await expireSimulatorSessions(c, app.owner_org)
         .catch(error => cloudlogErr({ requestId: c.get('requestId'), message: 'error settling simulator sessions', error, app_id: appId }))

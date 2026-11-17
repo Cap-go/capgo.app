@@ -38,9 +38,13 @@ const USER_ID = '11111111-1111-4111-8111-111111111111'
 const APP_ID = 'com.example.app'
 const ORG_ID = '22222222-2222-4222-8222-222222222222'
 
-// Direct Postgres: every delete succeeds.
+// Direct Postgres: the owner_org lookup returns the org, every delete succeeds.
 const pgClient = {
-  query: vi.fn(async (_text: string, _values?: unknown[]): Promise<{ rows: unknown[] }> => ({ rows: [] })),
+  query: vi.fn(async (text: string) => {
+    if (text.includes('SELECT owner_org FROM public.apps'))
+      return { rows: [{ row: { owner_org: ORG_ID } }] }
+    return { rows: [] as unknown[] }
+  }),
 }
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
