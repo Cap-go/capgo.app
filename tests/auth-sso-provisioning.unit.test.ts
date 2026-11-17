@@ -52,6 +52,8 @@ function createTestContext() {
       organizationStore.hasOrganizations = true
     }),
     dedupFetchOrganizations: vi.fn(async () => {}),
+    // The store has no verified app catalog here: the guard queries the apps table.
+    getFreshOrgApps: vi.fn((_orgId: string): undefined => undefined),
   }
 
   const mockGetClaims = vi.fn().mockResolvedValue({

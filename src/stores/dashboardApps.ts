@@ -59,6 +59,19 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
       currentOrgId.value = orgId
     }
 
+    // The organization store already holds this organization's apps (same
+    // columns): reuse them instead of querying the apps table again.
+    const storeApps = force ? undefined : organizationStore.getFreshOrgApps(orgId)
+    if (storeApps) {
+      apps.value = storeApps
+        .map(app => ({ app_id: app.app_id, name: app.name }))
+        .sort((a, b) => (a.app_id < b.app_id ? -1 : a.app_id > b.app_id ? 1 : 0))
+      isLoaded.value = true
+      const display = useDisplayStore()
+      display.setAppNameResolver(appId => appNames.value[appId])
+      return
+    }
+
     isLoading.value = true
 
     const capgo = useConsole()

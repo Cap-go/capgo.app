@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { PreviousDeployRow } from '~/services/bundleComparePrevious'
 import type { Database } from '~/types/database.types'
 import { useDebounceFn } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
@@ -6,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 import IconDown from '~icons/ic/round-keyboard-arrow-down'
 import IconSearch from '~icons/ic/round-search'
 import FormField from '~/components/forms/FormField.vue'
+import { groupPreviousDeploysByChannel } from '~/services/bundleComparePrevious'
 import { useConsole } from '~/services/console'
 import { readAllConsoleRows } from '~/services/consoleRows'
 import { formatLocalDate } from '~/services/date'
@@ -196,47 +198,29 @@ async function loadPreferredCompareVersions() {
   // otherwise leave the channel with no baseline. Keeping a small lookback lets
   // us fall back to the next older non-deleted deployment instead.
   const PREFERRED_LOOKBACK = 20
-  const LOOKBACK_CONCURRENCY = 6
-  // One lookback query per channel, a few at a time so many channels don't burst
-  // the API, and stop early once a newer request has replaced this one.
-  const loadLookback = (channelId: number) => {
-    const cutoff = deployedAtByChannel.get(channelId)
-    let query = capgo
-      .from('deploy_history')
-      .select('version_id, created_at, deployed_at')
-      .eq('app_id', props.appId)
-      .eq('channel_id', channelId)
-      .neq('version_id', currentVersionId)
-
-    if (cutoff)
-      query = query.lt('created_at', cutoff)
-
-    return query
-      .order('created_at', { ascending: false })
-      .limit(PREFERRED_LOOKBACK)
-  }
-  const lookbacks: Awaited<ReturnType<typeof loadLookback>>[] = []
+  // One request for every channel's lookback (newest first per channel)
+  // instead of one deploy_history query per channel.
   const pendingChannelIds = [...channelIds]
-  for (let index = 0; index < pendingChannelIds.length; index += LOOKBACK_CONCURRENCY) {
-    lookbacks.push(...await Promise.all(pendingChannelIds.slice(index, index + LOOKBACK_CONCURRENCY).map(loadLookback)))
-    if (requestId !== preferredCompareRequestId)
-      return
+  const { data: lookbackRows, error: lookbackError } = await readAllConsoleRows<PreviousDeployRow>(
+    (from, to) => capgo
+      .rpc('get_channels_previous_deploys', {
+        p_app_id: props.appId,
+        p_exclude_version_id: currentVersionId,
+        p_channel_ids: pendingChannelIds,
+        p_cutoffs: pendingChannelIds.map(channelId => deployedAtByChannel.get(channelId) || null),
+        p_per_channel: PREFERRED_LOOKBACK,
+      })
+      .range(from, to),
+  )
+  if (requestId !== preferredCompareRequestId)
+    return
+
+  if (lookbackError) {
+    console.error('Failed to load previous deploy history', lookbackError)
+    return
   }
 
-  const candidatesByChannel: Array<Array<{ versionId: number, deployedAt: string | null }>> = []
-  for (const { data, error } of lookbacks) {
-    if (error) {
-      console.error('Failed to load previous deploy history', error)
-      continue
-    }
-
-    const candidates = ((data ?? []) as DeployHistoryRow[]).map(entry => ({
-      versionId: entry.version_id,
-      deployedAt: entry.created_at ?? entry.deployed_at ?? null,
-    }))
-    if (candidates.length)
-      candidatesByChannel.push(candidates)
-  }
+  const candidatesByChannel = groupPreviousDeploysByChannel(pendingChannelIds, lookbackRows ?? [])
 
   if (!candidatesByChannel.length)
     return

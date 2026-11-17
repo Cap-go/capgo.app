@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { Database } from '~/types/database.types'
 import colors from 'tailwindcss/colors'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -8,9 +9,11 @@ import XCircleIcon from '~icons/heroicons/x-circle'
 import UpdateStatsChart from '~/components/dashboard/UpdateStatsChart.vue'
 import { useDashboardRequestState } from '~/composables/useDashboardRequestState'
 import { useConsole } from '~/services/console'
+import { readAllConsoleRows } from '~/services/consoleRows'
 import { addUtcDays, formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 import { calculateDemoEvolution, calculateDemoTotal, generateDemoUpdateStatsData } from '~/services/demoChartData'
 import { formatNumberValue } from '~/services/formatLocale'
+import { splitUpdateStatsWindow, toDailyVersionStat } from '~/services/updateStats'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { createUndefinedArray, incrementArrayValue } from '~/utils/chartOptimizations'
@@ -64,11 +67,14 @@ const dataScope = computed(() => `${effectiveOrganization.value?.gid}:${props.ap
 const loading = useDashboardRequestState(dataScope)
 const { isLoading, isRefreshing, error: loadError } = loading
 
+type UpdateDailyCount = Database['public']['Functions']['get_update_daily_counts']['Returns'][number]
+
 // Per-org cache for raw API data, keyed by "orgId:billingMode"
 // Using shallowRef for Vue reactivity - cache invalidates properly on org changes
 const cacheByOrgAndMode = shallowRef(new Map<string, any[]>())
 
 const dashboardAppsStore = useDashboardAppsStore()
+const singleAppNameCache = new Map<string, string>()
 
 // Convert undefined values to 0 for chart consumption
 function capitalize(text: string) {
@@ -121,38 +127,30 @@ const effectiveLastDayEvolution = computed(() => isDemoMode.value ? calculateDem
 
 const hasData = computed(() => effectiveTotalUpdates.value > 0 || isDemoMode.value)
 
-const PAGE_SIZE = 1000
-
+// Per app and day sums, aggregated in the database instead of downloading
+// every daily_version row of the window (one per app, bundle and day).
 async function fetchDailyVersionStats(targetAppIds: string[], startDate: string, endDate: string, isCurrent: () => boolean) {
   const capgo = useConsole()
-  const allRows: any[] = []
-  let offset = 0
-
-  while (isCurrent()) {
-    const { data, error } = await capgo
-      .from('daily_version')
-      .select('date, app_id, install, fail, get')
-      .in('app_id', targetAppIds)
-      .gte('date', startDate)
-      .lte('date', endDate)
-      .order('date', { ascending: true })
-      .range(offset, offset + PAGE_SIZE - 1)
-
+  const windows = splitUpdateStatsWindow(startDate, endDate)
+  const results = await Promise.all(windows.map(window => readAllConsoleRows<UpdateDailyCount>((from, to) => {
     if (!isCurrent())
-      return []
-    if (error)
-      throw error
+      return Promise.resolve({ data: [], error: null })
+    return capgo
+      .rpc('get_update_daily_counts', {
+        p_app_ids: targetAppIds,
+        p_start: window.start,
+        p_end: window.end,
+      })
+      .range(from, to)
+  })))
 
-    if (data && data.length > 0)
-      allRows.push(...data)
+  if (!isCurrent())
+    return []
+  const failed = results.find(result => result.error)
+  if (failed)
+    throw failed.error
 
-    if (!data || data.length < PAGE_SIZE)
-      break
-
-    offset += PAGE_SIZE
-  }
-
-  return allRows
+  return results.flatMap(result => (result.data ?? []).map(toDailyVersionStat))
 }
 
 async function calculateStats(forceRefetch = false) {
@@ -200,18 +198,24 @@ async function calculateStats(forceRefetch = false) {
     if (props.appId) {
       // Single app mode
       targetAppIds = [props.appId]
-      try {
-        const { data: appRow } = await useConsole()
-          .from('apps')
-          .select('name')
-          .eq('app_id', props.appId)
-          .single()
-        localAppNames[props.appId] = appRow?.name ?? props.appId
+      // The name only labels the series: resolve it once per app, not per load.
+      let cachedName = singleAppNameCache.get(props.appId) ?? dashboardAppsStore.appNames[props.appId] ?? ''
+      if (!cachedName) {
+        try {
+          const { data: appRow } = await useConsole()
+            .from('apps')
+            .select('name')
+            .eq('app_id', props.appId)
+            .single()
+          cachedName = appRow?.name ?? props.appId
+        }
+        catch (error) {
+          console.error('Error fetching app name for update stats:', error)
+          cachedName = props.appId
+        }
+        singleAppNameCache.set(props.appId, cachedName)
       }
-      catch (error) {
-        console.error('Error fetching app name for update stats:', error)
-        localAppNames[props.appId] = props.appId
-      }
+      localAppNames[props.appId] = cachedName || props.appId
       if (!request.isCurrent())
         return
       appNames.value = localAppNames
@@ -247,7 +251,7 @@ async function calculateStats(forceRefetch = false) {
       data = cachedData
     }
     else {
-      // Get update stats from daily_version table (paginate to avoid PostgREST 1000-row limit)
+      // Per app and day update sums from daily_version, aggregated in the database
       data = await fetchDailyVersionStats(targetAppIds, startDate, endDate, request.isCurrent)
       if (!request.isCurrent())
         return

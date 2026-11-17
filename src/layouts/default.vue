@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { OrganizationApp } from '~/stores/organization'
 import { Capacitor } from '@capacitor/core'
 import { useLocalStorage, useMediaQuery } from '@vueuse/core'
 import { computed, defineAsyncComponent, ref, useTemplateRef, watch } from 'vue'
@@ -60,17 +61,27 @@ async function refreshPendingOnboardingApp() {
   const routeAppId = 'app' in route.params && typeof route.params.app === 'string' ? route.params.app : null
   const candidateAppId = routeAppId ?? getOnboardingResumeAppId(main.user?.id ?? main.auth?.id)
 
-  const { data, error } = await capgo.from('apps')
-    .select('app_id, need_onboarding, onboarding')
-    .eq('owner_org', singleOrganization.gid)
-    .limit(2)
+  // Reuse the organization store's apps when it can vouch for them, instead of
+  // querying the apps table on every route change.
+  const storeApps = organizationStore.getFreshOrgApps(singleOrganization.gid)
+  let data: { app_id: string, need_onboarding: boolean, onboarding?: OrganizationApp['onboarding'] }[] | null
+  if (storeApps) {
+    data = storeApps.slice(0, 2)
+  }
+  else {
+    const result = await capgo.from('apps')
+      .select('app_id, need_onboarding, onboarding')
+      .eq('owner_org', singleOrganization.gid)
+      .limit(2)
 
-  if (lookupRun !== onboardingLookupRun)
-    return
+    if (lookupRun !== onboardingLookupRun)
+      return
 
-  if (error) {
-    console.error('Cannot resolve pending onboarding app', error)
-    return
+    if (result.error) {
+      console.error('Cannot resolve pending onboarding app', result.error)
+      return
+    }
+    data = result.data
   }
 
   if (!data || data.length !== 1)
@@ -94,6 +105,11 @@ watch([
   () => route.path,
   selectableOrganizationIds,
   () => main.user?.id ?? main.auth?.id,
+  // Onboarding state the store refreshed (getting started, CLI progress).
+  () => {
+    const orgs = selectableOrganizations.value
+    return orgs.length === 1 ? JSON.stringify(organizationStore.getFreshOrgApps(orgs[0].gid)?.slice(0, 2).map(app => [app.app_id, app.need_onboarding, app.onboarding]) ?? null) : ''
+  },
 ], refreshPendingOnboardingApp, { immediate: true })
 
 // Initialize realtime CLI activity feed (toasts for CLI actions)

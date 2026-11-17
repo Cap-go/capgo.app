@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { Database } from '~/types/database.types'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -17,6 +18,7 @@ import { invokeCapgoApi } from '~/services/capgoApi'
 import { getCurrentPlanNameOrg, useConsole } from '~/services/console'
 import { FunctionsHttpError } from '~/services/consoleClient'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { organizationSecurityKey } from '~/services/organizationWatchKeys'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -257,19 +259,51 @@ async function goToMembersPage(closeDialog = false) {
   await router.push('/settings/organization/members')
 }
 
+type OrgMembers = Database['public']['Functions']['get_org_members']['Returns']
+
+// One get_org_members call shared by the 2FA and password policy member lists.
+async function fetchOrgMembers(orgId: string): Promise<OrgMembers | null> {
+  if (!hasOrgPerm.value)
+    return null
+  const { data: members, error: membersError } = await capgo
+    .rpc('get_org_members', {
+      guild_id: orgId,
+    })
+
+  if (membersError) {
+    console.error('Error loading members:', membersError)
+    return null
+  }
+  return members ?? []
+}
+
 async function loadData() {
-  if (!currentOrganization.value?.gid)
+  const orgId = currentOrganization.value?.gid
+  if (!orgId)
     return
 
   isLoading.value = true
 
   try {
-    // Load current org's security settings
-    const { data: orgData, error: orgError } = await capgo
-      .from('orgs')
-      .select('enforcing_2fa, enforce_hashed_api_keys, enforce_encrypted_bundles, required_encryption_key')
-      .eq('id', currentOrganization.value.gid)
-      .single()
+    // Independent reads, sent together instead of one after another.
+    const [orgResult, planName, members] = await Promise.all([
+      // Load current org's security settings
+      capgo
+        .from('orgs')
+        .select('enforcing_2fa, enforce_hashed_api_keys, enforce_encrypted_bundles, required_encryption_key')
+        .eq('id', orgId)
+        .single(),
+      // Load current plan name for feature gating
+      getCurrentPlanNameOrg(orgId).catch((planError) => {
+        console.error('Error loading plan name:', planError)
+        return null
+      }),
+      fetchOrgMembers(orgId).catch((membersError) => {
+        console.error('Error loading members:', membersError)
+        return null
+      }),
+    ])
+    const { data: orgData, error: orgError } = orgResult
 
     if (orgError) {
       console.error('Error loading org settings:', orgError)
@@ -282,26 +316,19 @@ async function loadData() {
     enforceEncryptedBundles.value = orgData?.enforce_encrypted_bundles ?? false
     requiredEncryptionKey.value = orgData?.required_encryption_key ?? null
 
-    // Load members with their 2FA status
-    await loadMembersWithMfaStatus()
-
     // Load password policy settings
     loadPolicyFromOrg()
 
     // Load API key expiration policy settings
     loadApikeyPolicyFromOrg()
 
-    // Load current plan name for feature gating
-    try {
-      currentPlanName.value = await getCurrentPlanNameOrg(currentOrganization.value.gid)
-    }
-    catch (planError) {
-      console.error('Error loading plan name:', planError)
-      currentPlanName.value = null
-    }
+    currentPlanName.value = planName
 
-    // Load members with their password policy compliance status
-    await loadMembersWithPasswordPolicyStatus()
+    // Members with their 2FA and password policy compliance status
+    await Promise.all([
+      loadMembersWithMfaStatus(members),
+      loadMembersWithPasswordPolicyStatus(members),
+    ])
   }
   catch (error) {
     console.error('Error loading security settings:', error)
@@ -312,21 +339,17 @@ async function loadData() {
   }
 }
 
-async function loadMembersWithMfaStatus() {
+async function loadMembersWithMfaStatus(preloadedMembers?: OrgMembers | null) {
   if (!currentOrganization.value?.gid || !hasOrgPerm.value)
     return
 
   try {
-    // Get org members
-    const { data: members, error: membersError } = await capgo
-      .rpc('get_org_members', {
-        guild_id: currentOrganization.value.gid,
-      })
-
-    if (membersError) {
-      console.error('Error loading members:', membersError)
+    // Get org members (reuse the list loadData already fetched)
+    const members = preloadedMembers === undefined
+      ? await fetchOrgMembers(currentOrganization.value.gid)
+      : preloadedMembers
+    if (!members)
       return
-    }
 
     // Get 2FA status for all members
     const { data: mfaStatus, error: mfaError } = await capgo
@@ -375,7 +398,7 @@ async function loadMembersWithMfaStatus() {
   }
 }
 
-async function loadMembersWithPasswordPolicyStatus() {
+async function loadMembersWithPasswordPolicyStatus(preloadedMembers?: OrgMembers | null) {
   if (!currentOrganization.value?.gid || !hasOrgPerm.value)
     return
 
@@ -385,16 +408,12 @@ async function loadMembersWithPasswordPolicyStatus() {
     return
 
   try {
-    // Get org members
-    const { data: members, error: membersError } = await capgo
-      .rpc('get_org_members', {
-        guild_id: currentOrganization.value.gid,
-      })
-
-    if (membersError) {
-      console.error('Error loading members:', membersError)
+    // Get org members (reuse the list loadData already fetched)
+    const members = preloadedMembers === undefined
+      ? await fetchOrgMembers(currentOrganization.value.gid)
+      : preloadedMembers
+    if (!members)
       return
-    }
 
     // Get password policy compliance status for all members
     const { data: complianceStatus, error: complianceError } = await capgo
@@ -996,7 +1015,9 @@ async function saveApikeyPolicy() {
   await organizationStore.fetchOrganizations()
 }
 
-watch(currentOrganization, loadData)
+// Reload when the organization or a security setting it carries changes, not
+// when the store swaps in a refreshed copy (logo load, unrelated settings save).
+watch(() => organizationSecurityKey(currentOrganization.value), loadData)
 
 onMounted(async () => {
   await organizationStore.dedupFetchOrganizations()

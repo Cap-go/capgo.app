@@ -28,6 +28,7 @@ vi.mock('~/stores/organization', () => ({ useOrganizationStore: () => ({
   dedupFetchOrganizations: async () => undefined,
   fetchOrganizations: mocks.fetchOrganizations,
   getOrgByAppId: () => ({ gid: 'org-example' }),
+  getFreshOrgApps: () => undefined,
 }) }))
 vi.mock('~/stores/display', () => ({ useDisplayStore: () => ({ setAppNameResolver: vi.fn() }) }))
 vi.mock('~/stores/dialogv2', () => ({ useDialogV2Store: () => ({ closeDialog: vi.fn() }) }))

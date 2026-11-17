@@ -397,7 +397,7 @@ async function handleReloadClick() {
 }
 
 // Function to reload all chart data
-async function reloadAllCharts() {
+async function reloadAllCharts(options: { refreshAppCatalog?: boolean } = {}) {
   // Force reload of main dashboard data
   // End date should be next UTC midnight to include all of today's UTC data
   const todayUtc = normalizeToUtcStartOfDay()
@@ -409,7 +409,9 @@ async function reloadAllCharts() {
   const request = usageLoading.start()
   try {
     await Promise.all([
-      dashboardAppsStore.fetchApps(true).then(() => {
+      // Only an explicit refresh (?refresh=true, e.g. after creating an app)
+      // refetches the app list; a usage stats refresh does not change it.
+      dashboardAppsStore.fetchApps(options.refreshAppCatalog === true).then(() => {
         if (!disposed && scopeKey === currentScopeKey.value)
           reloadTrigger.value++
       }),
@@ -820,7 +822,7 @@ async function ensureDashboard() {
 watch([currentScopeKey, () => props.forceDemo], () => {
   if (needsForceRefresh.value) {
     needsForceRefresh.value = false
-    void reloadAllCharts()
+    void reloadAllCharts({ refreshAppCatalog: true })
   }
   else {
     void ensureDashboard()

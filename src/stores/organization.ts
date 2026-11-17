@@ -4,6 +4,7 @@ import type { Database } from '~/types/database.types'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { stripeEnabled, useConsole } from '~/services/console'
+import { readAllConsoleRows } from '~/services/consoleRows'
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
 import { invalidatePermissionCache } from '~/services/permissions'
 import { clearSimulatorSessions } from '~/services/simulatorSessions'
@@ -148,6 +149,11 @@ export const useOrganizationStore = defineStore('organization', () => {
   const _appsByOrgId: Ref<Map<string, OrganizationApp[]>> = ref(new Map())
   const _appsByAppId: Ref<Map<string, OrganizationApp>> = ref(new Map())
   const _initialLoadPromise = ref(createDeferredPromise<boolean>())
+  // When the app catalog (_appsByOrgId) was last loaded from the API; 0 = never.
+  const _appsCatalogLoadedAt = ref(0)
+  // Each organization's app_count (from the organization list) when the catalog
+  // was loaded. A later list with another count means apps were added or removed.
+  let appsCatalogOrgAppCounts = new Map<string, number>()
   const _initialized = ref(false)
 
   const organizations: ComputedRef<Organization[]> = computed(
@@ -373,15 +379,15 @@ export const useOrganizationStore = defineStore('organization', () => {
     () => invalidatePermissionCache(),
   )
 
-  watch([currentOrganization, stripeEnabled], async ([currentOrganizationRaw, stripeEnabledValue], [previousOrganization]) => {
+  // Derived state only (no requests): the current organization object is
+  // replaced on every refetch or logo load, so recompute the role and the
+  // failed state from it each time.
+  watch([currentOrganization, stripeEnabled], async ([currentOrganizationRaw, stripeEnabledValue]) => {
     if (!currentOrganizationRaw) {
       currentRole.value = null
-      useDashboardAppsStore().reset()
-      localStorage.removeItem(STORAGE_KEY)
       return
     }
 
-    localStorage.setItem(STORAGE_KEY, currentOrganizationRaw.gid)
     currentRole.value = await getCurrentRole(currentOrganizationRaw.created_by)
     // Don't mark as failed if user lacks 2FA or password access - the data is redacted and unreliable
     const lacks2FAAccess = currentOrganizationRaw.enforcing_2fa === true && currentOrganizationRaw['2fa_has_access'] === false
@@ -392,11 +398,23 @@ export const useOrganizationStore = defineStore('organization', () => {
     else {
       currentOrganizationFailed.value = !(!!currentOrganizationRaw.paying || (currentOrganizationRaw.trial_left ?? 0) > 0 || !!currentOrganizationRaw.can_use_more)
     }
+  })
+
+  // Requests: only when the selected organization (or the Stripe flag) actually
+  // changes, not when a settings save or a signed logo replaces the object.
+  watch([() => currentOrganization.value?.gid, stripeEnabled], async ([currentOrganizationId], [previousOrganizationId]) => {
+    if (!currentOrganizationId) {
+      useDashboardAppsStore().reset()
+      localStorage.removeItem(STORAGE_KEY)
+      return
+    }
+
+    localStorage.setItem(STORAGE_KEY, currentOrganizationId)
 
     // Clear caches when org changes to prevent showing stale data from other orgs
-    if (previousOrganization?.gid !== currentOrganizationRaw.gid) {
+    if (previousOrganizationId !== currentOrganizationId) {
       const displayStore = useDisplayStore()
-      displayStore.clearCachesForOrg(currentOrganizationRaw.gid)
+      displayStore.clearCachesForOrg(currentOrganizationId)
 
       const dashboardAppsStore = useDashboardAppsStore()
       dashboardAppsStore.fetchApps()
@@ -408,7 +426,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     const last30DaysEnd = addUtcDays(todayUtc, 1)
     const last30DaysStart = addUtcDays(todayUtc, -29)
     try {
-      await main.updateDashboard(currentOrganizationRaw.gid, last30DaysStart.toISOString(), last30DaysEnd.toISOString())
+      await main.updateDashboard(currentOrganizationId, last30DaysStart.toISOString(), last30DaysEnd.toISOString())
     }
     catch (error) {
       // Silently catch dashboard errors - they're logged elsewhere and shouldn't block UI
@@ -427,10 +445,21 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
 
     const appIconLoadRun = ++organizationAppIconLoadRun
-    const { error, data: allAppsByOwner } = await capgo
+    // Paged: the API caps one request at CONSOLE_PAGE_ROWS rows.
+    const { error, data } = await readAllConsoleRows<{
+      app_id: string
+      name: string | null
+      owner_org: string
+      need_onboarding: boolean
+      icon_url: string | null
+      onboarding: Exclude<OrganizationApp['onboarding'], undefined>
+    }>((from, to) => capgo
       .from('apps')
       .select('app_id, name, owner_org, need_onboarding, icon_url, onboarding')
       .in('owner_org', orgIds)
+      .order('app_id')
+      .range(from, to))
+    const allAppsByOwner = data ?? []
 
     if (error) {
       console.error('Cannot get app apps for org store', error)
@@ -470,9 +499,40 @@ export const useOrganizationStore = defineStore('organization', () => {
     _organizationsByAppId.value = organizationsByAppId
     _appsByOrgId.value = appsByOrgId
     _appsByAppId.value = appsByAppId
+    appsCatalogOrgAppCounts = new Map(selectableOrganizations.map(org => [org.gid, org.app_count ?? 0]))
+    _appsCatalogLoadedAt.value = Date.now()
     if (loadImages)
       void loadOrganizationAppIcons(Array.from(appsByAppId.values()), appIconLoadRun)
     _initialLoadPromise.value.resolve(true)
+  }
+
+  /**
+   * The organization's apps from the store, or undefined when the store cannot
+   * vouch for them: catalog not loaded yet, older than maxAgeMs, or the
+   * organization list now reports another app count than when the catalog was
+   * loaded (an app was created or deleted elsewhere). Apps created in this
+   * session are already indexed (upsertOrganizationApp). Callers fall back to
+   * querying the API when this returns undefined.
+   */
+  const getFreshOrgApps = (orgId: string, maxAgeMs = Number.POSITIVE_INFINITY): OrganizationApp[] | undefined => {
+    const loadedAt = _appsCatalogLoadedAt.value
+    if (!loadedAt || Date.now() - loadedAt > maxAgeMs)
+      return undefined
+    const org = _organizations.value.get(orgId)
+    if (!org)
+      return undefined
+    if (appsCatalogOrgAppCounts.get(orgId) !== (org.app_count ?? 0))
+      return undefined
+    return _appsByOrgId.value.get(orgId) ?? []
+  }
+
+  // The catalog is loaded once; reload it only when the refreshed organization
+  // list says an organization's app count no longer matches (app created or
+  // deleted), instead of every caller querying the apps table on its own.
+  const isAppsCatalogOutOfDate = (selectableOrganizations: Organization[]) => {
+    if (!_appsCatalogLoadedAt.value)
+      return false
+    return selectableOrganizations.some(org => appsCatalogOrgAppCounts.get(org.gid) !== (org.app_count ?? 0))
   }
 
   const getOrgByAppId = (appId: string) => {
@@ -713,6 +773,8 @@ export const useOrganizationStore = defineStore('organization', () => {
           _organizationsByAppId.value = new Map()
           _appsByOrgId.value = new Map()
           _appsByAppId.value = new Map()
+          _appsCatalogLoadedAt.value = 0
+          appsCatalogOrgAppCounts = new Map()
           _initialLoadPromise.value = createDeferredPromise<boolean>()
           currentOrganization.value = undefined
           currentRole.value = null
@@ -757,7 +819,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       .filter(org => isSelectableOrganization(org))
       .sort((a, b) => b.app_count - a.app_count)
 
-    if (_organizationsByAppId.value.size === 0)
+    if (_organizationsByAppId.value.size === 0 || isAppsCatalogOutOfDate(selectableOrganizations))
       void loadOrganizationApps(selectableOrganizations, loadImages)
 
     const organization = selectableOrganizations[0]
@@ -939,6 +1001,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     getOrgByAppId,
     getAppByAppId,
     getAppsByOrgId,
+    getFreshOrgApps,
     upsertOrganizationApp,
     awaitInitialLoad,
     updateAppOnboarding,

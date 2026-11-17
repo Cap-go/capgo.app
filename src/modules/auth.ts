@@ -313,15 +313,25 @@ async function guard(
     if (selectableOrganizations.length !== 1)
       return null
 
-    const { data: apps, error } = await capgo
-      .from('apps')
-      .select('app_id, need_onboarding, onboarding')
-      .eq('owner_org', selectableOrganizations[0].gid)
-      .limit(2)
+    // Reuse the organization store's apps when it can vouch for them, instead
+    // of querying the apps table on every navigation.
+    const storeApps = organizationStore.getFreshOrgApps(selectableOrganizations[0].gid)
+    let apps: { app_id: string, need_onboarding: boolean, onboarding?: unknown }[] | null
+    if (storeApps) {
+      apps = storeApps.slice(0, 2)
+    }
+    else {
+      const { data, error } = await capgo
+        .from('apps')
+        .select('app_id, need_onboarding, onboarding')
+        .eq('owner_org', selectableOrganizations[0].gid)
+        .limit(2)
 
-    if (error) {
-      console.error('Cannot resolve onboarding redirect', error)
-      return null
+      if (error) {
+        console.error('Cannot resolve onboarding redirect', error)
+        return null
+      }
+      apps = data
     }
 
     if (shouldRedirectToAiOnboarding({

@@ -95,11 +95,11 @@ watch(onboardingAppOrgId, async (orgId) => {
   if (!orgId)
     return
 
-  const { data, error } = await capgo
-    .from('apps')
-    .select('need_onboarding')
-    .eq('owner_org', orgId)
-    .limit(1)
+  // Reuse the organization store's apps when it can vouch for them.
+  const storeApps = organizationStore.getFreshOrgApps(orgId)
+  const { data, error } = storeApps
+    ? { data: storeApps.slice(0, 1), error: null }
+    : await capgo.from('apps').select('need_onboarding').eq('owner_org', orgId).limit(1)
 
   if (request !== onboardingAppRequest)
     return

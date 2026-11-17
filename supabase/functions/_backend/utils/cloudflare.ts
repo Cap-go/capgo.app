@@ -8,6 +8,7 @@ import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceRes, Device
 import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { canSkipDeviceInfoWrite, DEVICE_INFO_REFRESH_TTL_SECONDS, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
+import { devicesOffsetClause } from './devicesPageOffset.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { DEFAULT_LIMIT } from './types.ts'
 import { legacyDownloadFailKey, legacyDownloadFailPluginSqlCF, subtractLegacyDownloadFails, summarizeLegacyCheckFailures, sumLegacyDownloadFails } from './legacyDownloadFail.ts'
@@ -1457,6 +1458,7 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
     outerFilter,
     `ORDER BY ${orderBy}`,
     `LIMIT ${limit + 1}`,
+    devicesOffsetClause(params.offset),
   ].filter(Boolean).join('\n')
 }
 

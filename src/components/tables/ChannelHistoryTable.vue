@@ -220,12 +220,28 @@ async function openDetails(item: HistoryEntry) {
   selectedEntry.value = null
 }
 
+// Members and the channel's current bundle only depend on the organization and
+// channel: load them once per scope instead of on every page or search change.
+let historyContextKey = ''
+async function loadHistoryContext() {
+  const key = JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null])
+  if (key === historyContextKey)
+    return
+  const [, loadedMembers] = await Promise.all([
+    fetchCurrentVersion(),
+    organizationStore.getMembers(),
+  ])
+  members.value = loadedMembers
+  // An empty list means the members request failed: retry on the next load.
+  if (loadedMembers.length > 0)
+    historyContextKey = key
+}
+
 async function fetchHistory() {
   loading.value = true
   try {
     historyEntries.value = []
-    await fetchCurrentVersion()
-    members.value = await organizationStore.getMembers()
+    await loadHistoryContext()
 
     // Without a search, page audit rows in the database: each meaningful row maps to
     // one or two entries. Searching matches derived text (bundle names, labels,

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     currentOrganization: { gid: 'org-many-apps' },
     dedupFetchOrganizations: vi.fn(async () => undefined),
     awaitInitialLoad: vi.fn(async (): Promise<void> => undefined),
+    getFreshOrgApps: vi.fn((_orgId: string): { app_id: string, name: string | null }[] | undefined => undefined),
   },
   eq: vi.fn(),
   setAppNameResolver: vi.fn(),
@@ -173,5 +174,30 @@ describe('global dashboard shared app loading', () => {
     finally {
       errorLog.mockRestore()
     }
+  })
+
+  it('reuses the organization store catalog instead of querying the apps table', async () => {
+    mocks.organization.getFreshOrgApps.mockReturnValueOnce([
+      { app_id: 'com.example.b', name: 'B' },
+      { app_id: 'com.example.a', name: null },
+    ])
+    const store = useDashboardAppsStore()
+    await store.fetchApps()
+
+    expect(mocks.eq).not.toHaveBeenCalled()
+    expect(mocks.organization.getFreshOrgApps).toHaveBeenCalledWith('org-many-apps')
+    expect(store.appIds).toEqual(['com.example.a', 'com.example.b'])
+    expect(store.appNames).toEqual({ 'com.example.a': 'com.example.a', 'com.example.b': 'B' })
+    expect(store.isLoaded).toBe(true)
+  })
+
+  it('still queries the apps table on a forced refresh', async () => {
+    mocks.organization.getFreshOrgApps.mockReturnValue([{ app_id: 'com.example.cached', name: 'Cached' }])
+    const store = useDashboardAppsStore()
+    await store.fetchApps(true)
+
+    expect(mocks.eq).toHaveBeenCalledTimes(1)
+    expect(store.apps).toHaveLength(999)
+    mocks.organization.getFreshOrgApps.mockReturnValue(undefined)
   })
 })

@@ -213,12 +213,28 @@ async function openOneVersion(item: DeployHistory) {
   router.push(`/app/${props.appId}/bundle/${item.version_id}`)
 }
 
+// Members and the channel's current bundle only depend on the organization and
+// channel: load them once per scope instead of on every page or search change.
+let historyContextKey = ''
+async function loadHistoryContext() {
+  const key = JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null, props.bundleId ?? null])
+  if (key === historyContextKey)
+    return
+  const [, loadedMembers] = await Promise.all([
+    fetchCurrentVersion(),
+    organizationStore.getMembers(),
+  ])
+  members.value = loadedMembers
+  // An empty list means the members request failed: retry on the next load.
+  if (loadedMembers.length > 0)
+    historyContextKey = key
+}
+
 async function fetchDeployHistory() {
   loading.value = true
   try {
     deployHistory.value.length = 0
-    await fetchCurrentVersion()
-    members.value = await organizationStore.getMembers()
+    await loadHistoryContext()
 
     if (isBundleMode.value) {
       // Bundle mode: fetch both assignments and removals
