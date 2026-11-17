@@ -620,7 +620,8 @@ BEGIN
 
     INSERT INTO "public"."apps" ("created_at", "app_id", "icon_url", "name", "last_version", "updated_at", "owner_org", "user_id") VALUES
     (NOW(), 'com.demoadmin.app', '', 'Demo Admin app', '1.0.0', NOW(), '22dbad8a-b885-4309-9b3b-a09f8460fb6d', 'c591b04e-cf29-4945-b9a0-776d0672061a'),
-    (NOW(), 'com.demo.app', '', 'Demo app', '1.0.0', NOW(), '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097'),
+    -- Created a month ago: storage byte-hours accrue from the bundle uploads below.
+    (NOW() - interval '30 days', 'com.demo.app', '', 'Demo app', '1.0.0', NOW(), '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097'),
     (NOW(), 'com.stats.app', '', 'Stats Test App', '1.0.0', NOW(), 'b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d'),
     (NOW(), 'com.rls.app', '', 'RLS Test App', '1.0.0', NOW(), 'c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e'),
     (NOW(), 'com.encrypted.app', '', 'Encrypted Test App', '1.0.0', NOW(), 'a7b8c9d0-e1f2-4a3b-9c4d-5e6f7a8b9ca4', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193'),
@@ -745,6 +746,14 @@ BEGIN
     (10, NOW(), 'com.demoadmin.app', NOW(), 'admin123', 1500000),
     (13, NOW(), 'com.stats.app', NOW(), 'stats123', 850000);
 
+    -- Upload events of the demo bundles: storage is billed in byte-hours from version_meta,
+    -- so a stats refresh recomputes the same history the stats seed writes.
+    DELETE FROM public.version_meta WHERE app_id = 'com.demo.app';
+    INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+    SELECT pg_catalog.timezone('UTC', NOW() - uploads.age), 'com.demo.app', uploads.version_id, avm.size
+    FROM (VALUES (3, interval '28 days'), (5, interval '20 days'), (6, interval '12 days'), (7, interval '5 days')) AS uploads(version_id, age)
+    JOIN public.app_versions_meta avm ON avm.id = uploads.version_id;
+
     INSERT INTO "public"."channels" ("id", "created_at", "name", "app_id", "version", "updated_at", "public", "disable_auto_update_under_native", "disable_auto_update", "ios", "android", "electron", "allow_device_self_set", "allow_emulator", "allow_device", "allow_dev", "allow_prod", "created_by") VALUES
     (1, NOW(), 'production', 'com.demo.app', 3, NOW(), 't', 't', 'major'::"public"."disable_update", 'f', 't', 't', 't', 't', 't', 't', 't', '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid),
     (2, NOW(), 'no_access', 'com.demo.app', 5, NOW(), 'f', 't', 'major'::"public"."disable_update", 't', 't', 'f', 't', 't', 't', 't', 't', '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid),
@@ -798,7 +807,6 @@ DECLARE
   curr_date DATE;
   random_mau INTEGER;
   random_bandwidth BIGINT;
-  random_storage BIGINT;
   random_file_size BIGINT;
   random_uuid UUID;
   random_version_id BIGINT := 3;
@@ -811,7 +819,7 @@ DECLARE
   demo_org_id uuid := '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid;
 BEGIN
   -- Truncate all tables
-  TRUNCATE TABLE public.daily_mau, public.daily_bandwidth, public.daily_storage, public.daily_version, public.storage_usage, public.version_usage, public.device_usage, public.bandwidth_usage, public.devices, public.stats;
+  TRUNCATE TABLE public.daily_mau, public.daily_bandwidth, public.daily_storage_hourly, public.daily_version, public.storage_usage, public.version_usage, public.device_usage, public.bandwidth_usage, public.devices, public.stats;
 
   -- Generate a random UUID
   random_uuid := gen_random_uuid();
@@ -835,19 +843,31 @@ BEGIN
   INSERT INTO public.stats (created_at, action, device_id, version_name, app_id, metadata) VALUES
     (NOW(), 'webview_javascript_error'::"public"."stats_action", '44444444-4444-4444-4444-444444444444', '1.0.0', 'com.demo.app', '{"message":"Uncaught ReferenceError: foo is not defined","error_type":"javascript_error","href":"capacitor://localhost/index.html"}'::jsonb);
 
-  -- Seed data for daily_mau, daily_bandwidth, and daily_storage
+  -- Seed data for daily_mau, daily_bandwidth, and daily_storage_hourly
   curr_date := start_date::DATE;
   WHILE curr_date <= end_date::DATE LOOP
     random_mau := FLOOR(RANDOM() * 1000) + 1;
     random_bandwidth := FLOOR(RANDOM() * 1000000000) + 1;
-    random_storage := FLOOR(RANDOM() * 1000000000) + 1;
 
     INSERT INTO public.daily_mau (app_id, date, mau) VALUES ('com.demo.app', curr_date, random_mau);
     INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES ('com.demo.app', curr_date, random_bandwidth);
-    INSERT INTO public.daily_storage (app_id, date, storage) VALUES ('com.demo.app', curr_date, random_storage);
 
     curr_date := curr_date + INTERVAL '1 day';
   END LOOP;
+
+  -- Storage byte-hours of each day from the demo bundles' upload events (what a stats refresh
+  -- computes), so a refresh keeps the same history.
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+  SELECT 'com.demo.app', demo_org_id, day.d::date, day.d::date,
+    pg_catalog.round(SUM(vm.size * EXTRACT(EPOCH FROM (
+      LEAST(day.d + interval '1 day', pg_catalog.timezone('UTC', NOW())) - GREATEST(day.d, vm.timestamp)
+    )) / 3600))::bigint
+  FROM pg_catalog.generate_series(start_date, end_date, interval '1 day') AS day(d)
+  JOIN public.version_meta vm
+    ON vm.app_id = 'com.demo.app'
+    AND vm.size > 0
+    AND vm.timestamp < LEAST(day.d + interval '1 day', pg_catalog.timezone('UTC', NOW()))
+  GROUP BY day.d;
 
   -- Seed data for daily_version
 
@@ -1158,7 +1178,7 @@ BEGIN
   -- Delete existing data for the specified app_id in dependency order
   DELETE FROM public.daily_mau WHERE app_id = p_app_id;
   DELETE FROM public.daily_bandwidth WHERE app_id = p_app_id;
-  DELETE FROM public.daily_storage WHERE app_id = p_app_id;
+  DELETE FROM public.daily_storage_hourly WHERE app_id = p_app_id;
   DELETE FROM public.daily_version WHERE app_id = p_app_id;
   DELETE FROM public.daily_build_time WHERE app_id = p_app_id;
   DELETE FROM public.storage_usage WHERE app_id = p_app_id;
@@ -1217,7 +1237,7 @@ BEGIN
     random_mau := FLOOR(RANDOM() * 1000) + 1; random_bandwidth := FLOOR(RANDOM() * 1000000000) + 1; random_storage := FLOOR(RANDOM() * 1000000000) + 1;
     INSERT INTO public.daily_mau (app_id, date, mau) VALUES (p_app_id, curr_date, random_mau);
     INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES (p_app_id, curr_date, random_bandwidth);
-    INSERT INTO public.daily_storage (app_id, date, storage) VALUES (p_app_id, curr_date, random_storage);
+    INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours) VALUES (p_app_id, org_id, curr_date, curr_date, random_storage);
     INSERT INTO public.daily_build_time (app_id, date, build_time_unit, build_count)
     VALUES (p_app_id, curr_date, FLOOR(RANDOM() * 7200) + 300, FLOOR(RANDOM() * 10) + 1);
     INSERT INTO public.daily_version (date, app_id, version_id, version_name, get, fail, install, uninstall)
@@ -1705,7 +1725,7 @@ BEGIN
   DELETE FROM public.version_usage WHERE app_id = ANY (v_apps);
   DELETE FROM public.daily_mau WHERE app_id = ANY (v_apps);
   DELETE FROM public.daily_bandwidth WHERE app_id = ANY (v_apps);
-  DELETE FROM public.daily_storage WHERE app_id = ANY (v_apps);
+  DELETE FROM public.daily_storage_hourly WHERE app_id = ANY (v_apps);
   DELETE FROM public.daily_version WHERE app_id = ANY (v_apps);
 
   -- ------------------------------------------------------------------
@@ -1973,10 +1993,10 @@ BEGIN
     GROUP BY 1, 2
   ) inst ON inst.app_id = days.app_id AND inst.date = days.date;
 
-  -- Storage: bundles kept in R2 on each day.
-  INSERT INTO public.daily_storage (app_id, date, storage)
-  SELECT a.app_id, day.d::date,
-    COALESCE((
+  -- Storage: byte-hours of the bundles kept in R2 on each day (stored all day).
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+  SELECT a.app_id, apps.owner_org, day.d::date, day.d::date,
+    24 * COALESCE((
       SELECT SUM(avm.size) FROM public.app_versions av
       JOIN public.app_versions_meta avm ON avm.id = av.id
       WHERE av.app_id = a.app_id
@@ -1984,6 +2004,7 @@ BEGIN
         AND (av.deleted_at IS NULL OR av.deleted_at::date > day.d::date)
     ), 0)
   FROM pg_catalog.unnest(v_apps) AS a(app_id)
+  JOIN public.apps ON apps.app_id = a.app_id
   CROSS JOIN pg_catalog.generate_series(v_today - 59, v_today, interval '1 day') AS day(d);
 
   -- ------------------------------------------------------------------

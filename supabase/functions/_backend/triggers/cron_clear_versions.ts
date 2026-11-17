@@ -55,6 +55,8 @@ async function clearVersion(c: Context<MiddlewareKeyVariables>, pg: PgClient, ve
   }
 
   let notFound = false
+  let repairedSize: number | null = null
+  let repairedUploadedAt: string | null = null
   try {
     const v2Path = await getPath(c, version)
       .catch((e) => {
@@ -70,7 +72,7 @@ async function clearVersion(c: Context<MiddlewareKeyVariables>, pg: PgClient, ve
       notFound = true
       return quickError(404, 'no_path', 'No path', { versionId: version.id })
     }
-    const size = await s3.getSize(c, v2Path).catch((e) => {
+    const stored = await s3.getSizeAndUploadedAt(c, v2Path).catch((e) => {
       cloudlog({ requestId: c.get('requestId'), message: 'error getSize', error: e })
       // if error is rate limit this terminate the function
       if (e.message.includes('Rate limit exceeded')) {
@@ -78,6 +80,7 @@ async function clearVersion(c: Context<MiddlewareKeyVariables>, pg: PgClient, ve
       }
       return null
     })
+    const size = stored?.size ?? null
     if (!size) {
       cloudlog({ requestId: c.get('requestId'), message: `No size for ${v2Path}, ${size}` })
       // throw error to trigger the deletion
@@ -117,6 +120,8 @@ async function clearVersion(c: Context<MiddlewareKeyVariables>, pg: PgClient, ve
     ).catch((error: unknown) => {
       cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot upsert app_versions_meta', versionId: version.id, error })
     })
+    repairedSize = size
+    repairedUploadedAt = stored?.uploadedAt ?? null
   }
   catch (errorSize) {
     if (errorSize instanceof Error && errorSize.message.includes('Rate limit exceeded')) {
@@ -151,6 +156,30 @@ async function clearVersion(c: Context<MiddlewareKeyVariables>, pg: PgClient, ve
     }
     catch (error1) {
       throw simpleError('cannot_delete_version', 'Cannot delete version', { error: error1 })
+    }
+  }
+
+  // Storage is billed in GB-hours from version_meta events. The upload path records the bundle's
+  // event only once it knows the size, so a bundle repaired here would never be billed without it.
+  // Idempotent (one positive event per bundle); a failure fails the job so the queue retries.
+  if (repairedSize) {
+    try {
+      await pg.query(
+        // At the upload's completion (the stored object's Last-Modified), not the repair: the hours
+        // in between are billed. Not the version creation: an upload can start long after its row
+        // exists, and the bundle was not stored before. Unknown: the repair time (never overbills).
+        `SELECT public.upsert_version_meta(
+           p_app_id => $1::varchar,
+           p_version_id => $2::bigint,
+           p_size => $3::bigint,
+           p_timestamp => $4::timestamptz
+         )`,
+        [version.app_id, version.id, repairedSize, repairedUploadedAt],
+      )
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot record repaired bundle storage event', versionId: version.id, error })
+      throw simpleError('cannot_record_storage_event', 'Cannot record the repaired bundle storage event', { versionId: version.id }, error)
     }
   }
   return c.json(BRES)

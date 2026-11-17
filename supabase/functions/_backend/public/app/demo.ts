@@ -639,11 +639,11 @@ async function seedOnboardingDemoDataInTransaction(
     )
 
     await pgClient.query(
-      `INSERT INTO public.daily_storage (app_id, date, storage)
-      SELECT $2::text, date, storage
-      FROM jsonb_to_recordset($1::jsonb) AS daily_data(date date, storage bigint)
-      ON CONFLICT (app_id, date) DO NOTHING`,
-      [JSON.stringify(options.dailyStorageRows), options.appId],
+      `INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+      SELECT $2::text, $3::uuid, date, date, storage_byte_hours
+      FROM jsonb_to_recordset($1::jsonb) AS daily_data(date date, storage_byte_hours double precision)
+      ON CONFLICT DO NOTHING`,
+      [JSON.stringify(options.dailyStorageRows), options.appId, options.ownerOrg],
     )
 
     await pgClient.query(
@@ -899,7 +899,7 @@ export async function createDemoApp(c: Context<MiddlewareKeyVariables>, body: Cr
     cloudlog({ requestId, message: 'Creating demo app with demo data', appId, owner_org: body.owner_org })
 
     // RLS bypass needed: Demo app creation inserts into multiple tables (apps, app_versions,
-    // channels, devices, daily_mau, daily_bandwidth, daily_storage, daily_version, build_requests,
+    // channels, devices, daily_mau, daily_bandwidth, daily_storage_hourly, daily_version, build_requests,
     // manifest, deploy_history) where RLS policies may not grant direct user insert access.
     // Authorization is enforced at endpoint level via checkPermission above.
 
@@ -1076,9 +1076,14 @@ export async function createDemoApp(c: Context<MiddlewareKeyVariables>, body: Cr
       }
       // Only add storage entry if we have some storage
       if (cumulativeStorage > 0) {
+        // Every bundle released so far stays stored all day; today only for the hours elapsed, like
+        // a real refresh (the statistics divide today's byte-hours by its elapsed hours).
+        const startOfTodayUtc = new Date()
+        startOfTodayUtc.setUTCHours(0, 0, 0, 0)
+        const hoursStored = daysAgo === 0 ? Math.max(0, (Date.now() - startOfTodayUtc.getTime()) / 3_600_000) : 24
         dailyStorageRows.push({
           date,
-          storage: cumulativeStorage,
+          storage_byte_hours: cumulativeStorage * hoursStored,
         })
       }
 

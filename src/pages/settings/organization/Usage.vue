@@ -9,13 +9,14 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import CreditsCta from '~/components/CreditsCta.vue'
 import PageLoader from '~/components/PageLoader.vue'
-import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/console'
+import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getOrgStorageUsage, getPlans, getPlanUsagePercent, getUsageCreditDeductions } from '~/services/console'
 import { bytesToGb } from '~/services/conversion'
 import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
 import { formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { observeEventsForPlan } from '~/services/observePlanAllowance'
+import { billableStorageBytes, includedStorageGbHours } from '~/services/storageUsage'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
@@ -49,11 +50,12 @@ watchEffect(async () => {
 })
 
 type UsageTotals = Record<'mau' | 'bandwidth' | 'storage' | 'build_time', number>
+type UsageOrganization = typeof organizationStore.currentOrganization
 
-async function estimateOverageCost(orgId: string, plan: Plan, usage: UsageTotals) {
+async function estimateOverageCost(orgId: string, org: UsageOrganization, plan: Plan, usage: UsageTotals) {
   // Credit-only orgs have no plan allowance: billing prices all usage
   // from the bottom of the tier ladder.
-  const creditsOnly = isCreditsOnlyOrg(organizationStore.currentOrganization)
+  const creditsOnly = isCreditsOnlyOrg(org)
   const included: UsageTotals = {
     mau: creditsOnly ? 0 : plan.mau,
     bandwidth: creditsOnly ? 0 : Math.round(plan.bandwidth * 1073741824),
@@ -77,7 +79,9 @@ async function estimateOverageCost(orgId: string, plan: Plan, usage: UsageTotals
   }
 }
 
-async function getUsage(orgId: string) {
+// `org` is the organization captured by loadData: the store may switch organization while this
+// awaits, and the plan, cycle and usage must all come from the same one.
+async function getUsage(orgId: string, org: UsageOrganization) {
   const usage = main.dashboard
 
   const planCurrent = await getCurrentPlanNameOrg(orgId)
@@ -104,13 +108,13 @@ async function getUsage(orgId: string) {
   detailPlanUsage = roundUsagePercents(detailPlanUsage)
 
   const nowEndOfDay = dayjs().endOf('day')
-  const billingStart = organizationStore.currentOrganization?.subscription_start
-    ? dayjs(organizationStore.currentOrganization.subscription_start).startOf('day')
+  const billingStart = org?.subscription_start
+    ? dayjs(org.subscription_start).startOf('day')
     : null
 
   const creditDeductions = await getUsageCreditDeductions(orgId, billingStart?.toISOString())
-  const billingEndRaw = organizationStore.currentOrganization?.subscription_end
-    ? dayjs(organizationStore.currentOrganization.subscription_end).endOf('day')
+  const billingEndRaw = org?.subscription_end
+    ? dayjs(org.subscription_end).endOf('day')
     : null
   const billingEnd = billingEndRaw && billingEndRaw.isBefore(nowEndOfDay) ? billingEndRaw : nowEndOfDay
 
@@ -154,8 +158,22 @@ async function getUsage(orgId: string) {
   const totalMau = relevantUsage.reduce((acc, entry) => acc + (entry.mau ?? 0), 0)
   const totalBandwidthBytes = relevantUsage.reduce((acc, entry) => acc + (entry.bandwidth ?? 0), 0)
   const totalBandwidth = bytesToGb(totalBandwidthBytes)
-  const totalStorageBytes = await getTotalStorage(orgId)
-  const totalStorage = bytesToGb(totalStorageBytes)
+  // Storage is billed in GB-hours over the cycle. The plan includes its GB x hours-in-cycle,
+  // and overage is priced on the average stored (byte-hours / hours), like get_total_metrics.
+  // Storage GB-hours of the current billing cycle, read with the same rows and hours as billing:
+  // the 30-day chart series misses the first day of a 31-day cycle and holds the previous cycle's
+  // part of a boundary day. An empty cycle uses no storage.
+  const cycleStart = org?.subscription_start ?? dayjs().subtract(30, 'day').toISOString()
+  const cycleEnd = org?.subscription_end ?? dayjs(cycleStart).add(1, 'month').toISOString()
+  const storageUsage = await getOrgStorageUsage(orgId).catch((error) => {
+    console.error('Error loading cycle storage usage:', error)
+    return null
+  })
+  // No fallback to the chart series: its boundary day also holds the previous cycle's hours.
+  const totalStorageByteHours = storageUsage?.storage_byte_hours ?? 0
+  const totalStorageBytes = billableStorageBytes(totalStorageByteHours, cycleStart, cycleEnd)
+  const totalStorage = bytesToGb(totalStorageByteHours, 2)
+  const includedStorage = currentPlan ? includedStorageGbHours(currentPlan.storage, cycleStart, cycleEnd) : 0
   const totalBuildTime = relevantUsage.reduce((acc, entry) => acc + (entry.build_time_seconds ?? 0), 0)
 
   detailPlanUsage = maybeDeriveMissingUsagePercents({
@@ -165,6 +183,7 @@ async function getUsage(orgId: string) {
     totalBuildTime,
     totalMau,
     totalStorage,
+    includedStorage,
   })
 
   // Extra MAU is priced on the global MAU tiers, like the Stripe item. null = price unavailable.
@@ -177,7 +196,7 @@ async function getUsage(orgId: string) {
   }
 
   const estimatedUsagePrice = currentPlan
-    ? await estimateOverageCost(orgId, currentPlan, {
+    ? await estimateOverageCost(orgId, org, currentPlan, {
         mau: totalMau,
         bandwidth: totalBandwidthBytes,
         storage: totalStorageBytes,
@@ -201,11 +220,12 @@ async function getUsage(orgId: string) {
     totalMau,
     totalBandwidth,
     totalStorage,
+    includedStorage,
     totalBuildTime,
     detailPlanUsage,
     cycle: {
-      subscription_anchor_start: formatLocalDate(organizationStore.currentOrganization?.subscription_start) || t('unknown'),
-      subscription_anchor_end: formatLocalDate(organizationStore.currentOrganization?.subscription_end) || t('unknown'),
+      subscription_anchor_start: formatLocalDate(org?.subscription_start) || t('unknown'),
+      subscription_anchor_end: formatLocalDate(org?.subscription_end) || t('unknown'),
     },
   }
 }
@@ -270,7 +290,10 @@ function maybeDeriveMissingUsagePercents(params: {
   currentPlan: Plan | undefined
   totalMau: number
   totalBandwidth: number
+  /** GB-hours used in the cycle. */
   totalStorage: number
+  /** GB-hours the plan includes for the cycle. */
+  includedStorage: number
   totalBuildTime: number
 }) {
   const {
@@ -280,6 +303,7 @@ function maybeDeriveMissingUsagePercents(params: {
     totalBuildTime,
     totalMau,
     totalStorage,
+    includedStorage,
   } = params
 
   if (!currentPlan || (
@@ -295,7 +319,7 @@ function maybeDeriveMissingUsagePercents(params: {
   const fallback = {
     mau_percent: percent(totalMau, currentPlan.mau),
     bandwidth_percent: percent(totalBandwidth, currentPlan.bandwidth),
-    storage_percent: percent(totalStorage, currentPlan.storage),
+    storage_percent: percent(totalStorage, includedStorage),
     build_time_percent: percent(totalBuildTime, currentPlan.build_time_unit),
   }
 
@@ -346,7 +370,8 @@ onMounted(async () => {
 
 async function loadData() {
   await Promise.all([organizationStore.awaitInitialLoad(), main.awaitInitialLoad()])
-  const gid = organizationStore?.currentOrganization?.gid ?? ''
+  const org = organizationStore?.currentOrganization
+  const gid = org?.gid ?? ''
 
   if (isLoading.value)
     return
@@ -359,7 +384,7 @@ async function loadData() {
     plans.value.push(...pls)
   }
 
-  const usageDetails = await getUsage(gid)
+  const usageDetails = await getUsage(gid, org)
   planUsageMap.value?.set(gid, usageDetails as any)
   isLoading.value = false
   initialLoad.value = false
@@ -540,11 +565,11 @@ function nextRunDate() {
           <div class="space-y-1 text-sm">
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('used-in-period') }}</span>
-              <span class="font-medium text-gray-900 dark:text-white">{{ formatNumberValue(planUsage?.totalStorage) }} GB</span>
+              <span class="font-medium text-gray-900 dark:text-white">{{ formatNumberValue(planUsage?.totalStorage) }} {{ t('units-gb-hours') }}</span>
             </div>
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('included-in-plan') }}</span>
-              <span>{{ formatNumberValue(planUsage?.currentPlan?.storage) }} GB</span>
+              <span>{{ formatNumberValue(planUsage?.includedStorage, { maximumFractionDigits: 0 }) }} {{ t('units-gb-hours') }}</span>
             </div>
           </div>
         </div>

@@ -1088,7 +1088,8 @@ const statsTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_get_app_statistics,
     title: 'App statistics',
     description: 'Daily MAU, storage, bandwidth and build time for an app.'
-      + ' Returns data as dated usage records with mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.',
+      + ' Returns data as dated usage records with mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.'
+      + ' Storage is billed in GB-hours: storage_byte_hours / 2^30 is GB-hours.',
     input: { appId, ...statsRange },
     annotations: READ,
     refine: statsRangeLimit,
@@ -1111,7 +1112,7 @@ const statsTools: McpTool[] = [
     title: 'Account statistics',
     description: 'Daily usage summed across apps accessible to this connection\'s API key; a scoped key may return only part of the account usage.'
       + ' Returns data as dated totals for mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.'
-      + ' When records share a date, storage_byte_hours is retained from the first record, not summed.',
+      + ' Storage is billed in GB-hours: storage_byte_hours / 2^30 is GB-hours.',
     input: statsRange,
     annotations: READ,
     refine: statsRangeLimit,
