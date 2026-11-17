@@ -69,6 +69,7 @@ vi.mock('~/services/apikeys', async (importOriginal) => {
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
 vi.mock('~/services/console', () => ({
   getLocalConfig: () => ({ apiHost: 'https://api.capgo.app' }),
+  PROD_API_URL: 'https://api.capgo.app',
   isLocal: () => false,
   useConsole: () => {
     const query = {
