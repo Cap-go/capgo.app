@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(20);
+SELECT plan(19);
 
 -- Org from seed.sql; the app id is free until it is created below.
 SELECT is(
@@ -23,15 +23,7 @@ SELECT is(
 
 CREATE TEMP TABLE cleanup_msgs AS
 SELECT
-  public.finish_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 0, false, 5, 120) AS follow_up_id,
-  pgmq.send('on_app_delete', pg_catalog.jsonb_build_object(
-    'function_name', 'on_app_delete',
-    'payload', pg_catalog.jsonb_build_object(
-      'type', 'DELETE', 'table', 'apps', 'schema', 'public', 'record', NULL,
-      'old_record', pg_catalog.jsonb_build_object('app_id', 'com.test.storage.cleanup', 'owner_org', '046a36ac-e03c-4590-9257-bd6c9dba9ee8')
-    )
-  )) AS first_pass_id,
-  pgmq.send('on_app_delete', public.app_storage_cleanup_message('com.test.storage.cleanup', '34a8c55d-2d0f-4652-a43f-684c7a9403ac', 1)) AS other_org_id;
+  public.finish_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 0, false, 5, 120) AS follow_up_id;
 
 SELECT isnt((SELECT follow_up_id FROM cleanup_msgs), NULL, 'an unfinished pass queues the next one');
 
@@ -98,30 +90,23 @@ VALUES (
 );
 
 SELECT is(
-  (SELECT count(*)::integer FROM pgmq.q_on_app_delete
-   WHERE message -> 'payload' ? 'storage_cleanup_pass'
-     AND message -> 'payload' -> 'old_record' ->> 'app_id' = 'com.test.storage.cleanup'
-     AND message -> 'payload' -> 'old_record' ->> 'owner_org' = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
-  0,
-  'recreating the app in the same org drops its queued follow-up passes'
-);
-
-SELECT is(
   (SELECT count(*)::integer FROM public.app_storage_cleanups WHERE app_id = 'com.test.storage.cleanup' AND owner_org = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
   0,
   'recreating the app clears its cleanup state'
 );
 
 SELECT is(
-  (SELECT count(*)::integer FROM pgmq.q_on_app_delete WHERE msg_id IN (SELECT first_pass_id FROM cleanup_msgs UNION ALL SELECT other_org_id FROM cleanup_msgs)),
-  2,
-  'the first pass of a deletion and other orgs'' passes are kept'
-);
-
-SELECT is(
   public.begin_app_storage_cleanup_pass('com.test.storage.cleanup', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 2, 120),
   'recreated',
   'no pass is claimed once the app id exists again in that org'
+);
+
+-- Recreating an app only clears its state: a follow-up message queued before
+-- (or replayed after) that finds no state and is rejected at its claim.
+SELECT is(
+  public.begin_app_storage_cleanup_pass('com.test.storage.cleanup.stale', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 2, 120),
+  'superseded',
+  'a follow-up pass without cleanup state is rejected'
 );
 
 SELECT is(

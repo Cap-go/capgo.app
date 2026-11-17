@@ -12,12 +12,13 @@
 -- again. Every decision about it runs here on the primary, under one advisory
 -- lock per app id, never from a worker read that the query cache could serve
 -- stale: claiming and finishing a pass check the apps row, and creating such
--- an app (or moving one into the org) drops queued passes and the state row.
+-- an app (or moving one into the org) clears the state row, so its queued
+-- passes are rejected when they claim.
 --
 -- Scale: one call per pass (internal queue worker, never plugin traffic), one
 -- trigger run per apps INSERT or owner_org change, and a sweeper reading at
--- most p_limit due rows through the due_at index. The on_app_delete queue
--- scan in the trigger is bounded by the pending app deletions it holds.
+-- most p_limit due rows through the due_at index. The apps trigger is one
+-- primary-key delete.
 
 CREATE TABLE public.app_storage_cleanups (
   app_id character varying NOT NULL,
@@ -207,27 +208,17 @@ ALTER FUNCTION public.requeue_stalled_app_storage_cleanups(integer) OWNER TO pos
 REVOKE ALL ON FUNCTION public.requeue_stalled_app_storage_cleanups(integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.requeue_stalled_app_storage_cleanups(integer) TO service_role;
 
+-- Clearing the state is enough: a queued or replayed follow-up message then
+-- finds no state (or the app) and is rejected by its claim, so the queue is
+-- never scanned. The first message of a deletion still records deleted_apps.
 CREATE FUNCTION public.drop_app_storage_cleanup_passes() RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-DECLARE
-  v_msg_id bigint;
 BEGIN
   PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('app_storage_cleanup:' || NEW.app_id, 0));
   DELETE FROM public.app_storage_cleanups WHERE app_id = NEW.app_id AND owner_org = NEW.owner_org;
-  -- Only follow-up passes: the first message of a deletion also records
-  -- deleted_apps and removes the app's rows, which must still happen.
-  FOR v_msg_id IN
-    SELECT q.msg_id
-    FROM pgmq.q_on_app_delete AS q
-    WHERE q.message -> 'payload' ? 'storage_cleanup_pass'
-      AND q.message -> 'payload' -> 'old_record' ->> 'app_id' = NEW.app_id
-      AND q.message -> 'payload' -> 'old_record' ->> 'owner_org' = NEW.owner_org::text
-  LOOP
-    PERFORM pgmq.delete('on_app_delete'::text, v_msg_id);
-  END LOOP;
   RETURN NULL;
 END;
 $$;
