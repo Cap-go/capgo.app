@@ -89,7 +89,7 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
   s3: {
     deleteObject,
     moveObjectToTrash,
-    getSizeDiagnostics: vi.fn(async () => ({ size: 4321, selectedCandidateKey: 'bundle.zip' })),
+    getSizeDiagnostics: vi.fn(async () => ({ size: 4321, selectedCandidateKey: 'bundle.zip', lastModified: '2026-01-02T03:04:05.000Z' })),
   },
 }))
 
@@ -219,6 +219,13 @@ describe('deleted version storage boundaries', () => {
     await expect(onVersionUpdateTestUtils.v2PathSize(createContext(), { query: pgQuery } as any, createVersion(), createVersion().r2_path)).rejects.toThrow()
     // No storage event without the size the removal will need.
     expect(createStatsMeta).not.toHaveBeenCalled()
+  })
+
+  it('dates the upload storage event when the upload completed, not when the job runs', async () => {
+    pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+    const { onVersionUpdateTestUtils } = await import('../supabase/functions/_backend/triggers/on_version_update.ts')
+    await onVersionUpdateTestUtils.v2PathSize(createContext(), { query: pgQuery } as any, createVersion(), createVersion().r2_path)
+    expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), 'com.cleanup.test', 123, 4321, '2026-01-02T03:04:05.000Z')
   })
 
   it('treats an already zero size as recorded', async () => {

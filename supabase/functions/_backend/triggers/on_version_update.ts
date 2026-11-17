@@ -214,7 +214,10 @@ async function v2PathSize(c: Context, pg: PgClient, record: Database['public']['
     cloudlog({ requestId: c.get('requestId'), message: 'errorUpdate', error: errorUpdate, ...versionUpdateLogFields(record), size })
     throw simpleError('cannot_update_version_meta', 'Cannot record the bundle size', { id: record.id }, errorUpdate)
   }
-  const { error } = await createStatsMeta(c, record.app_id, record.id, size)
+  // Dated when the upload completed (the object's Last-Modified, from the same HEAD as its size), not
+  // when this job runs: a delayed or retried job would otherwise drop the hours in between.
+  // upsert_version_meta caps it at now and falls back to now when it is unknown.
+  const { error } = await createStatsMeta(c, record.app_id, record.id, size, diagnostics.lastModified ?? null)
   if (isLostStorageEvent(error)) {
     // Storage is billed in GB-hours from version_meta: a missing upload event would never bill the
     // bundle. Fail the job so the queue retries (both writes are idempotent).
