@@ -584,10 +584,17 @@ DECLARE
     v_new_org_id_key constant text := 'new_org_id';
     v_uid_key constant text := 'uid';
 BEGIN
+  -- Lock the app before reading its owner and last transfer: a concurrent
+  -- transfer then waits, and this one checks permissions and the cooldown
+  -- against the committed owner (else A->B and A->C could both pass and
+  -- record A->C, attributing B's storage hours to A). A running storage
+  -- refresh of the owner holds a share lock on the app until it commits, so
+  -- the transfer time, taken after this lock, follows every hour it wrote.
   SELECT owner_org, transfer_history[array_length(transfer_history, 1)]
   INTO v_old_org_id, v_last_transfer
   FROM public.apps
-  WHERE app_id = p_app_id;
+  WHERE app_id = p_app_id
+  FOR UPDATE;
 
   IF v_old_org_id IS NULL THEN
     RAISE EXCEPTION '%', v_transfer_error;
@@ -653,12 +660,9 @@ BEGIN
     -- Allow the guarded owner_org cascade only inside the approved transfer path.
     PERFORM set_config('capgo.allow_owner_org_transfer', 'true', true);
 
-    -- Storage is billed per owner up to transferred_at. Lock the app first: a
-    -- running storage refresh of the former owner holds a share lock on it
-    -- until it commits, so every hour it wrote precedes the transfer time
-    -- taken after the lock (now() is the transaction start, which could be
-    -- earlier than that refresh).
-    PERFORM 1 FROM public.apps WHERE app_id = p_app_id FOR UPDATE;
+    -- Storage is billed per owner up to transferred_at: taken after the lock
+    -- above (now() is the transaction start, which could precede a refresh
+    -- the transfer waited for).
     v_transferred_at := pg_catalog.clock_timestamp();
 
     UPDATE public.apps
@@ -862,12 +866,22 @@ GRANT EXECUTE ON FUNCTION public.backfill_missing_storage_lifetimes() TO service
 
 SELECT public.backfill_missing_storage_lifetimes();
 
--- An upload event can arrive after its bundle was deleted: the upload job was
--- still reading the size when the deletion job found no lifetime to close.
+-- Storage events are recorded at the time they happened (p_timestamp), not at
+-- job processing time: a repaired upload bills from the upload, a removal
+-- processed late stops at the deletion. Capped at now; NULL keeps now().
+-- An upload event can also arrive after its bundle was deleted: the upload job
+-- was still reading the size when the deletion job found no lifetime to close.
 -- The version row is locked (FOR SHARE) so a deletion cannot commit in between,
--- and a positive event for a version already deleted is closed in the same
--- transaction, so a removed bundle never accrues byte-hours.
-CREATE OR REPLACE FUNCTION public.upsert_version_meta(p_app_id character varying, p_version_id bigint, p_size bigint)
+-- and a positive event for a version already deleted is closed at its deletion
+-- in the same transaction, so a removed bundle stops accruing byte-hours.
+DROP FUNCTION IF EXISTS public.upsert_version_meta(character varying, bigint, bigint);
+
+CREATE OR REPLACE FUNCTION public.upsert_version_meta(
+  p_app_id character varying,
+  p_version_id bigint,
+  p_size bigint,
+  p_timestamp timestamptz DEFAULT NULL
+)
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -877,6 +891,8 @@ DECLARE
   v_owner_org uuid;
   v_existing_count integer;
   v_deleted boolean;
+  v_deleted_at timestamptz;
+  v_event_at timestamp;
   v_added_at timestamp;
 BEGIN
   IF p_size = 0 THEN
@@ -893,8 +909,8 @@ BEGIN
     RETURN FALSE;
   END IF;
 
-  SELECT av.deleted
-  INTO v_deleted
+  SELECT av.deleted, COALESCE(av.deleted_at, av.updated_at)
+  INTO v_deleted, v_deleted_at
   FROM public.app_versions av
   WHERE av.app_id = p_app_id
     AND av.id = p_version_id
@@ -934,14 +950,31 @@ BEGIN
     RETURN FALSE;
   END IF;
 
-  INSERT INTO public.version_meta (app_id, version_id, size)
-  VALUES (p_app_id, p_version_id, p_size)
+  v_event_at := pg_catalog.timezone('UTC', LEAST(COALESCE(p_timestamp, pg_catalog.now()), pg_catalog.now()));
+
+  IF p_size < 0 THEN
+    -- A removal never precedes the bundle's upload event.
+    SELECT GREATEST(v_event_at, max(added.timestamp))
+    INTO v_event_at
+    FROM public.version_meta added
+    WHERE added.app_id = p_app_id
+      AND added.version_id = p_version_id
+      AND added.size > 0;
+  END IF;
+
+  INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+  VALUES (v_event_at, p_app_id, p_version_id, p_size)
   RETURNING timestamp INTO v_added_at;
 
-  -- A late upload event of a deleted bundle: close its lifetime at once.
+  -- A late upload event of a deleted bundle: close its lifetime at the deletion.
   IF p_size > 0 AND COALESCE(v_deleted, false) THEN
     INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
-    VALUES (v_added_at, p_app_id, p_version_id, -p_size)
+    VALUES (
+      GREATEST(v_added_at, pg_catalog.timezone('UTC', LEAST(COALESCE(v_deleted_at, pg_catalog.now()), pg_catalog.now()))),
+      p_app_id,
+      p_version_id,
+      -p_size
+    )
     ON CONFLICT DO NOTHING;
   END IF;
 
@@ -952,10 +985,10 @@ EXCEPTION
 END;
 $$;
 
-ALTER FUNCTION public.upsert_version_meta(character varying, bigint, bigint) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.upsert_version_meta(character varying, bigint, bigint) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.upsert_version_meta(character varying, bigint, bigint) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.upsert_version_meta(character varying, bigint, bigint) TO service_role;
+ALTER FUNCTION public.upsert_version_meta(character varying, bigint, bigint, timestamptz) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.upsert_version_meta(character varying, bigint, bigint, timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.upsert_version_meta(character varying, bigint, bigint, timestamptz) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.upsert_version_meta(character varying, bigint, bigint, timestamptz) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 3. Org billing metrics read storage from byte-hours

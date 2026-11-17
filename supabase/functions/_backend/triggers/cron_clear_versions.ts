@@ -162,7 +162,13 @@ async function clearVersion(c: Context<MiddlewareKeyVariables>, pg: PgClient, ve
   if (repairedSize) {
     try {
       await pg.query(
-        'SELECT public.upsert_version_meta(p_app_id => $1::varchar, p_version_id => $2::bigint, p_size => $3::bigint)',
+        // At the bundle's upload (its version creation), not the repair: the hours in between are billed.
+        `SELECT public.upsert_version_meta(
+           p_app_id => $1::varchar,
+           p_version_id => $2::bigint,
+           p_size => $3::bigint,
+           p_timestamp => (SELECT app_versions.created_at FROM public.app_versions WHERE app_versions.id = $2::bigint)
+         )`,
         [version.app_id, version.id, repairedSize],
       )
     }

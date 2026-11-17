@@ -5383,7 +5383,12 @@ export type Database = {
         Returns: string
       }
       upsert_version_meta: {
-        Args: { p_app_id: string; p_size: number; p_version_id: number }
+        Args: {
+          p_app_id: string
+          p_size: number
+          p_timestamp?: string
+          p_version_id: number
+        }
         Returns: boolean
       }
       usage_credit_readable_org_ids: { Args: never; Returns: string[] }

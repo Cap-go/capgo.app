@@ -62,6 +62,8 @@ describe('cron_clear_versions storage event', () => {
     expect(response.status).toBe(200)
     const event = pgQuery.mock.calls.find(([sql]) => sql.includes('upsert_version_meta'))
     expect(event?.[1]).toEqual(['com.test.repair', 77, 2048])
+    // Recorded at the bundle's upload (its version creation), not the repair.
+    expect(event?.[0]).toContain('p_timestamp => (SELECT app_versions.created_at FROM public.app_versions WHERE app_versions.id = $2::bigint)')
   })
 
   it('fails the job when the event cannot be recorded', async () => {

@@ -336,12 +336,18 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
   }
 }
 
-/** Writes the missing removal event of a bundle from its upload event (idempotent). */
+/**
+ * Writes the missing removal event of a bundle from its upload event (idempotent), at the bundle's
+ * deletion time (processing time when unknown, never before the upload): a job that runs late
+ * does not bill the hours after the deletion.
+ */
 async function closeVersionStorageLifetime(c: Context, pg: PgClient, record: Database['public']['Tables']['app_versions']['Row']) {
   try {
     await pg.query(
-      `INSERT INTO public.version_meta (app_id, version_id, size)
-       SELECT added.app_id, added.version_id, -added.size
+      `INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+       SELECT
+         GREATEST(added.timestamp, pg_catalog.timezone('UTC', LEAST(COALESCE($3::timestamptz, pg_catalog.now()), pg_catalog.now()))),
+         added.app_id, added.version_id, -added.size
        FROM public.version_meta added
        WHERE added.app_id = $1
          AND added.version_id = $2
@@ -353,7 +359,7 @@ async function closeVersionStorageLifetime(c: Context, pg: PgClient, record: Dat
              AND removed.size < 0
          )
        ON CONFLICT DO NOTHING`,
-      [record.app_id, record.id],
+      [record.app_id, record.id, record.deleted_at ?? null],
     )
   }
   catch (error) {
@@ -400,7 +406,8 @@ async function deleteVersionDatabaseState(c: Context, pg: PgClient, record: Data
     await closeVersionStorageLifetime(c, pg, record)
   }
   else {
-    const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size)
+    // Removed at the deletion, not when this job runs.
+    const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size, record.deleted_at)
     if (isLostStorageEvent(errorCreateStatsMeta)) {
       // Storage is billed in GB-hours from version_meta: without the removal event the bundle stays
       // billed forever. Fail before zeroing the size, so the queue retry can still record it.

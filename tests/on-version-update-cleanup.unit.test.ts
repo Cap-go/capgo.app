@@ -166,7 +166,8 @@ describe('deleted version storage boundaries', () => {
     expect(statements.filter(sql => sql.startsWith('UPDATE public.channels'))).toHaveLength(2)
     expect(purgeFileReadCache).toHaveBeenCalledWith(createVersion().r2_path, createVersion().checksum)
     expect(pgQuery).toHaveBeenCalledWith('UPDATE public.app_versions_meta SET size = 0 WHERE id = $1', [123])
-    expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), 'com.cleanup.test', 123, -1234)
+    // Removed at the bundle's deletion, not when the job runs.
+    expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), 'com.cleanup.test', 123, -1234, '2026-01-01T00:00:00Z')
   })
 
   it('fails without zeroing the size when the removal storage event is not recorded', async () => {
@@ -195,7 +196,12 @@ describe('deleted version storage boundaries', () => {
     const response = await deleteIt(createContext(), createVersion())
     expect(response.status).toBe(200)
     const statements = pgQuery.mock.calls.map(([sql]) => sql as string)
-    expect(statements.some(sql => sql.includes('INSERT INTO public.version_meta') && sql.includes('-added.size'))).toBe(true)
+    const close = pgQuery.mock.calls.find(([sql]) => (sql as string).includes('INSERT INTO public.version_meta') && (sql as string).includes('-added.size'))
+    expect(close).toBeDefined()
+    // Closed at the bundle's deletion, never before its upload event.
+    expect(close?.[1]).toEqual(['com.cleanup.test', 123, '2026-01-01T00:00:00Z'])
+    expect(close?.[0]).toContain('GREATEST(added.timestamp')
+    expect(statements.length).toBeGreaterThan(0)
     expect(createStatsMeta).not.toHaveBeenCalled()
   })
 

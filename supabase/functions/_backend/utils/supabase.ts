@@ -1294,13 +1294,14 @@ export async function trackMetaSB(
   app_id: string,
   version_id: number,
   size: number,
+  at?: string | null,
 ): Promise<{ data: boolean | null, error: unknown | null }> {
-  cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size })
+  cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size, at })
   try {
     const data = await scalarRpc<boolean>(
       c,
-      'SELECT public.upsert_version_meta(p_app_id => $1::varchar, p_version_id => $2::bigint, p_size => $3::bigint) AS result',
-      [app_id, version_id, size],
+      'SELECT public.upsert_version_meta(p_app_id => $1::varchar, p_version_id => $2::bigint, p_size => $3::bigint, p_timestamp => $4::timestamptz) AS result',
+      [app_id, version_id, size, at ?? null],
     )
     return { data, error: null }
   }

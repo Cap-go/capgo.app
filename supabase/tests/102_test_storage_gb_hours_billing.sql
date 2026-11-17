@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(47);
+SELECT plan(51);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -647,6 +647,46 @@ SELECT
         (SELECT array_agg(size ORDER BY size) FROM public.version_meta WHERE version_id = 9100305),
         ARRAY[-900::bigint, 900::bigint],
         'and closed in the same transaction, so it accrues no byte-hours'
+    );
+
+-- Storage events are recorded when they happened, capped at now.
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider, deleted, deleted_at)
+SELECT 9100306, live_app, '9.9.4', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', false, NULL FROM gbh_ctx
+UNION ALL
+SELECT 9100307, live_app, '9.9.3', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', true, TIMESTAMPTZ '2026-01-06 00:00:00+00' FROM gbh_ctx;
+SELECT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100306, 100, TIMESTAMPTZ '2026-01-02 00:00:00+00');
+-- A removal processed late is recorded at the deletion; one dated before the upload is clamped.
+SELECT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100306, -100, TIMESTAMPTZ '2026-01-01 00:00:00+00');
+
+SELECT
+    is(
+        (SELECT array_agg(ARRAY[timestamp::text, size::text] ORDER BY size) FROM public.version_meta WHERE version_id = 9100306),
+        ARRAY[ARRAY['2026-01-02 00:00:00', '-100'], ARRAY['2026-01-02 00:00:00', '100']],
+        'a removal never precedes its upload event'
+    );
+
+SELECT
+    ok(
+        public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100307, 200, TIMESTAMPTZ '2026-01-03 00:00:00+00'),
+        'a late upload event of a deleted bundle is recorded at its upload time'
+    );
+
+SELECT
+    is(
+        (SELECT array_agg(ARRAY[timestamp::text, size::text] ORDER BY size) FROM public.version_meta WHERE version_id = 9100307),
+        ARRAY[ARRAY['2026-01-06 00:00:00', '-200'], ARRAY['2026-01-03 00:00:00', '200']],
+        'and closed at the deletion, so it is billed from upload to deletion only'
+    );
+
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider)
+SELECT 9100308, live_app, '9.9.2', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2' FROM gbh_ctx;
+SELECT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100308, 300, TIMESTAMPTZ '2999-01-01 00:00:00+00');
+
+SELECT
+    is(
+        (SELECT timestamp FROM public.version_meta WHERE version_id = 9100308 AND size > 0),
+        pg_catalog.timezone('UTC', pg_catalog.now()),
+        'a future event time is capped at now'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.

@@ -155,15 +155,16 @@ export function sendStatsAndDevice(c: Context, device: DeviceWithoutCreatedAt, s
   return Promise.all(jobs)
 }
 
-export function createStatsMeta(c: Context, app_id: string, version_id: number, size: number) {
+/** Records a bundle storage event; `at` is when it happened (defaults to now, capped at now). */
+export function createStatsMeta(c: Context, app_id: string, version_id: number, size: number, at?: string | null) {
   if (size === 0)
     return { error: 'size is 0' }
-  cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size })
+  cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size, at })
   if (shouldSkipSupabaseStatsFallback(c)) {
     logSkippedSupabaseWrite(c, 'trackMetaSB')
     return { error: 'supabase_write_forbidden' }
   }
-  return trackMetaSB(c, app_id, version_id, size)
+  return trackMetaSB(c, app_id, version_id, size, at)
 }
 
 export function readStatsMau(c: Context, app_id: string, start_date: string, end_date: string) {
