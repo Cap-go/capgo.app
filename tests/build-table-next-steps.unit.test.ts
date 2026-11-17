@@ -4,7 +4,7 @@ import { createApp, defineComponent, h } from 'vue'
 import BuildTable from '../src/components/tables/BuildTable.vue'
 import { simulatorConfigured } from '../src/services/simulatorSessions'
 
-const mocks = vi.hoisted(() => ({ builds: [] as any[], buildQueries: 0, sendEvent: vi.fn(), push: vi.fn() }))
+const mocks = vi.hoisted(() => ({ builds: [] as any[], buildQueries: 0, gate: undefined as Promise<void> | undefined, sendEvent: vi.fn(), push: vi.fn() }))
 vi.mock('../src/services/capgoApi', () => ({ invokeCapgoApi: vi.fn(async () => ({ data: { canEnable: true }, error: null })) }))
 vi.mock('../src/services/tracking', () => ({ sendEvent: mocks.sendEvent }))
 vi.mock('../src/services/date', () => ({ formatDate: () => '' }))
@@ -29,10 +29,11 @@ vi.mock('../src/services/console', () => ({
       let head = false
       const query: any = {
         then: (resolve: (data: unknown) => void) => {
-          if (table === 'build_requests' && !head)
+          const listing = table === 'build_requests' && !head
+          if (listing)
             mocks.buildQueries++
           const data = table === 'build_requests' ? mocks.builds : []
-          return Promise.resolve({ data, count: mocks.builds.length, error: null }).then(resolve)
+          return (listing && mocks.gate ? mocks.gate : Promise.resolve()).then(() => ({ data, count: mocks.builds.length, error: null })).then(resolve)
         },
         select: (_columns: string, options?: { head?: boolean }) => {
           head = options?.head === true
@@ -57,14 +58,15 @@ function mount() {
   // Renders each row as a button using the first column's click, and the saved-build cell.
   app.component('DataTable', defineComponent({
     props: { columns: { type: Array, default: () => [] }, elementList: { type: Array, default: () => [] } },
-    setup: props => () => h('div', { 'data-test': 'table' }, (props.elementList as any[]).map((elem) => {
+    emits: ['reload'],
+    setup: (props, { emit }) => () => h('div', { 'data-test': 'table' }, [h('button', { 'data-test': 'table-reload', 'onClick': () => emit('reload') }), ...(props.elementList as any[]).map((elem) => {
       const columns = props.columns as any[]
       const artifact = columns.find(col => col.key === 'artifact')
       return h('div', [
         h('button', { 'data-test': `row-${elem.id}`, 'onClick': () => columns[0].onClick(elem) }),
         artifact.renderFunction(elem),
       ])
-    })),
+    })]),
   }))
   app.mount(host)
   cleanups.push(() => app.unmount())
@@ -75,6 +77,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
   mocks.buildQueries = 0
+  mocks.gate = undefined
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: { job_1: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } } }), { status: 200 })))
 })
 afterEach(() => {
@@ -205,5 +208,56 @@ describe('builds table after a successful build', () => {
     mocks.builds = [{ ...queued, status: 'succeeded', builder_job_id: 'job_2' }]
     vi.advanceTimersByTime(10_000)
     await vi.waitFor(() => expect(host.querySelector('[data-test="build-detail-simulator"]')).not.toBeNull())
+  })
+
+  it('does not offer the simulator for an expired saved build', async () => {
+    mocks.builds = [succeeded]
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: { job_1: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2000-01-01T00:00:00Z' } } }), { status: 200 })))
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-expired"]')).not.toBeNull())
+    expect(host.querySelector('[data-test="build-next-steps"]')).not.toBeNull()
+    expect(host.querySelector('[data-test="build-next-steps-simulator"]')).toBeNull()
+  })
+
+  it('asks for saved builds again after a failed lookup', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    mocks.builds = [running, succeeded]
+    const saved = () => new Response(JSON.stringify({ outputs: { job_1: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } } }), { status: 200 })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(saved())
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementation(async () => saved())
+    vi.stubGlobal('fetch', fetchMock)
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-download"]')).not.toBeNull())
+    ;(host.querySelector('[data-test="table-reload"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(host.querySelector('[data-test="saved-build-not-saved"]')).toBeNull()
+    vi.advanceTimersByTime(10_000)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-download"]')).not.toBeNull())
+  })
+
+  it('waits for a slow refresh before polling again', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    mocks.builds = [running]
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    let release: () => void = () => {}
+    mocks.gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const before = mocks.buildQueries
+    vi.advanceTimersByTime(10_000)
+    await vi.waitFor(() => expect(mocks.buildQueries).toBe(before + 1))
+    vi.advanceTimersByTime(30_000)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(mocks.buildQueries).toBe(before + 1)
+    mocks.gate = undefined
+    release()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    vi.advanceTimersByTime(10_000)
+    await vi.waitFor(() => expect(mocks.buildQueries).toBe(before + 2))
   })
 })

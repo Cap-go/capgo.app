@@ -69,6 +69,7 @@ const nextStepsDismissed = ref(isBuildNextStepsDismissed(props.appId))
 // While a build can still change on its own, the table refreshes itself.
 const REFRESH_MS = 10_000
 let refreshTimer: ReturnType<typeof setInterval> | undefined
+let polling = false
 const savedBuildNow = ref(Date.now())
 let savedBuildClock: ReturnType<typeof setInterval> | undefined
 const openingJobs = ref<string[]>([])
@@ -392,8 +393,12 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean, silen
     }
   }
   catch {
-    if (current())
+    // Unknown, not "not saved": the next refresh asks again.
+    if (current()) {
       savedOutputs.value = {}
+      savedOutputsReady.value = false
+      savedOutputsKey = ''
+    }
   }
 }
 
@@ -449,8 +454,14 @@ function savedOutputFor(elem: Element) {
 }
 
 // A simulator button only where it can work: an iOS .ipa, on a server with a simulator host.
+// An iOS .ipa that can still be downloaded: the simulator installs it from that saved file.
+function hasCurrentIpa(elem: Element) {
+  const output = savedOutputFor(elem)
+  return output?.kind === 'ios_ipa' && savedBuildState(elem, output, savedBuildNow.value) === 'available'
+}
+
 function canOpenInSimulator(elem: Element) {
-  return savedOutputFor(elem)?.kind === 'ios_ipa' && simulatorConfigured.value !== false
+  return hasCurrentIpa(elem) && simulatorConfigured.value !== false
 }
 
 function savedBuildCell(elem: Element) {
@@ -533,7 +544,6 @@ function retryBuild() {
 
 // Shown once the app has a succeeded build, until dismissed on this browser.
 const nextStepsBuild = computed<Element | undefined>(() => nextStepsDismissed.value || currentPage.value !== 1 || search.value ? undefined : latestSucceededBuild(elements.value) as Element | undefined)
-const nextStepsOutput = computed(() => nextStepsBuild.value ? savedOutputFor(nextStepsBuild.value) : undefined)
 
 function nextStepInstall() {
   track('Build Next Step Clicked', { action: 'install' })
@@ -572,8 +582,13 @@ watch(hasActiveBuild, (active) => {
     return
   refreshTimer = setInterval(() => {
     // An open build view polls its own row: the hidden table only keeps up until that build ends.
-    if (document.visibilityState === 'visible' && !isLoading.value && (!openedRow.value || isBuildActive(openedRow.value.status)))
-      void getData(true)
+    if (polling || document.visibilityState !== 'visible' || isLoading.value || (openedRow.value && !isBuildActive(openedRow.value.status)))
+      return
+    // One poll at a time: a slower answer must not be superseded by the next tick forever.
+    polling = true
+    void getData(true).finally(() => {
+      polling = false
+    })
   }, REFRESH_MS)
 })
 
@@ -739,7 +754,7 @@ watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
             <IconSmartphone class="h-4 w-4" />
             {{ openingJobs.includes(openedRow?.builder_job_id ?? '') ? t('simulator-starting') : t('open-in-simulator') }}
           </button>
-          <p v-else-if="openedRow && savedOutputFor(openedRow)?.kind === 'ios_ipa'" class="self-center text-sm text-slate-500 dark:text-slate-400" data-test="build-detail-simulator-unavailable">
+          <p v-else-if="openedRow && hasCurrentIpa(openedRow)" class="self-center text-sm text-slate-500 dark:text-slate-400" data-test="build-detail-simulator-unavailable">
             {{ t('simulator-not-configured-hint') }}
           </p>
         </template>
@@ -776,7 +791,7 @@ watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
               {{ t('build-next-steps-install') }}
             </button>
           </div>
-          <div v-if="nextStepsOutput?.kind === 'ios_ipa'" class="flex flex-col items-start gap-2 p-4 border rounded-lg border-slate-200 dark:border-white/10">
+          <div v-if="hasCurrentIpa(nextStepsBuild)" class="flex flex-col items-start gap-2 p-4 border rounded-lg border-slate-200 dark:border-white/10">
             <p class="text-sm text-slate-600 dark:text-slate-300">
               {{ simulatorConfigured === false ? t('simulator-not-configured-hint') : t('build-next-steps-simulator-hint') }}
             </p>

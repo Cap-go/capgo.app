@@ -1,5 +1,5 @@
 // Statuses a build can leave on its own: the builds table refreshes while one is listed.
-const ACTIVE_STATUSES = new Set(['pending', 'queued', 'running', 'in_progress'])
+const ACTIVE_STATUSES = new Set(['pending', 'queued', 'running', 'building', 'uploading', 'in_progress'])
 
 export function isBuildActive(status: string | null | undefined) {
   return !!status && ACTIVE_STATUSES.has(status)

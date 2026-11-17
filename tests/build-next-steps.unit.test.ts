@@ -5,7 +5,7 @@ import { dismissBuildNextSteps, isBuildActive, isBuildNextStepsDismissed, latest
 const NOW = Date.parse('2026-11-17T12:00:00Z')
 
 describe('isBuildActive', () => {
-  it.each(['pending', 'running', 'in_progress', 'queued'])('keeps refreshing while a build is %s', (status) => {
+  it.each(['pending', 'queued', 'running', 'building', 'uploading', 'in_progress'])('keeps refreshing while a build is %s', (status) => {
     expect(isBuildActive(status)).toBe(true)
   })
 
