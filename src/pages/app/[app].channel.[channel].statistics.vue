@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import type { Database } from '~/types/database.types'
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import LiveReleaseDashboard from '~/components/dashboard/LiveReleaseDashboard.vue'
 import EmptyState from '~/components/EmptyState.vue'
+import { useChannelRecord } from '~/composables/useChannelRecord'
 import { useConsole } from '~/services/console'
-import { useAppDetailStore } from '~/stores/appDetail'
 import { useDisplayStore } from '~/stores/display'
 
 // Same screen as Observe > Live release, locked to this channel.
@@ -18,40 +18,15 @@ interface Channel {
 const route = useRoute('/app/[app].channel.[channel].statistics')
 const router = useRouter()
 const displayStore = useDisplayStore()
-const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
 const capgo = useConsole()
 
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
-const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
-
-// Each channel read gets a generation: only the newest read of a page that is
-// still mounted applies (a background refresh must not overwrite a newer forced
-// read, nor another channel's page after navigation).
-let channelReadGeneration = 0
-onBeforeUnmount(() => {
-  channelReadGeneration++
-})
-
-async function getChannel(force = false) {
-  if (!id.value)
-    return
-  const generation = ++channelReadGeneration
-
-  if (!force && appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
-    channel.value = appDetailStore.currentChannel as any
-    if (channel.value?.name)
-      displayStore.setChannelName(String(channel.value.id), channel.value.name)
-    displayStore.NavTitle = channel.value?.name ?? t('channel')
-    // Render the cached row at once, then refresh it: the bundle may have been
-    // changed since (bundle page, CLI, API or a teammate).
-    void getChannel(true)
-    return
-  }
-
-  try {
+// Cached row first, then a background refresh; stale reads never apply (see useChannelRecord).
+const { channel, load: loadChannel, beginNavigation } = useChannelRecord<Database['public']['Tables']['channels']['Row'] & Channel>({
+  read: async (channelId) => {
     const { data, error } = await capgo
       .from('channels')
       .select(`
@@ -82,37 +57,31 @@ async function getChannel(force = false) {
           android,
           updated_at
         `)
-      .eq('id', id.value)
+      .eq('id', channelId)
       .single()
-
     if (error) {
       console.error('no channel', error)
-      return
+      return null
     }
-    // A newer read (or leaving the page) superseded this one.
-    if (generation !== channelReadGeneration)
-      return
+    return data
+  },
+})
 
-    channel.value = data as unknown as Database['public']['Tables']['channels']['Row'] & Channel
-    appDetailStore.setChannel(id.value, channel.value)
-
-    if (channel.value?.name)
-      displayStore.setChannelName(String(channel.value.id), channel.value.name)
-    displayStore.NavTitle = channel.value?.name ?? t('channel')
-  }
-  catch (error) {
-    console.error(error)
-  }
+async function getChannel(force = false) {
+  await loadChannel(id.value, force)
 }
 
 // Load on navigation only: a watchEffect would also track the cached store
 // channel read inside getChannel and refetch every time the refresh stores it.
 watch(() => route.path, async () => {
   if (route.path.includes('/channel/') && route.path.includes('/statistics')) {
+    const isCurrent = beginNavigation()
     loading.value = true
     packageId.value = route.params.app as string
     id.value = Number(route.params.channel as string)
     await getChannel()
+    if (!isCurrent())
+      return
     loading.value = false
 
     if (!channel.value?.name)

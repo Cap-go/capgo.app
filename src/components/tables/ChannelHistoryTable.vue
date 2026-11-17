@@ -3,9 +3,7 @@ import type { TableColumn, TableSort } from '~/components/comp_def'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import { confirmChannelChange } from '~/composables/useChannelChangeConfirm'
-import { invalidateChannelImpact } from '~/services/channelImpact'
-import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { confirmAndRollbackChannel } from '~/services/channelRollback'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { createHistoryContextLoader } from '~/services/historyContext'
@@ -431,44 +429,21 @@ async function handleRollback(item: HistoryEntry) {
 
   const bundle = item.bundle
   // Same impact confirm as setting a bundle: who gets it and why the others won't.
-  const result = await confirmChannelChange({
+  const rolledBack = await confirmAndRollbackChannel({
     appId,
     channelId,
     channelName: channelName.value,
-    action: 'set',
     bundle: { id: bundle.id, name: bundle.name },
     currentBundleName: currentVersionName.value,
-    stopsRolloutTarget: rolloutTargetName.value,
-    title: t('rollback-to-version'),
-    confirmText: t('rollback'),
+    rolloutTargetName: rolloutTargetName.value,
+    stillSameChannel,
   })
-  if (!result.confirmed || !stillSameChannel())
+  if (!rolledBack)
     return
-  try {
-    const { error } = await capgo
-      .from('channels')
-      .update({ version: bundle.id })
-      .eq('id', channelId)
-
-    if (error) {
-      console.error('Error rolling back version:', error)
-      toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
-      return
-    }
-
-    invalidateChannelImpact(channelId)
-    toast.success(t('rollback-success'))
-    if (!stillSameChannel())
-      return
-    currentVersionId.value = bundle.id
-    currentVersionName.value = bundle.name
-    rolloutTargetName.value = null
-    fetchHistory()
-  }
-  catch (error) {
-    console.error('Error rolling back version:', error)
-    toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
-  }
+  currentVersionId.value = bundle.id
+  currentVersionName.value = bundle.name
+  rolloutTargetName.value = null
+  fetchHistory()
 }
 
 watch([() => props.channelId, () => props.appId], () => {

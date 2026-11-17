@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { OrganizationRole } from '~/stores/organization'
 import type { Database } from '~/types/database.types'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -10,11 +10,11 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
+import { useChannelRecord } from '~/composables/useChannelRecord'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { withBuiltinChannelVersion } from '~/services/versions'
-import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
@@ -29,7 +29,6 @@ const router = useRouter()
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
-const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
 const capgo = useConsole()
 const packageId = ref<string>('')
@@ -37,7 +36,49 @@ const id = ref<number>(0)
 const loading = ref(true)
 // Whether any device is forced to this channel; the table pages them through the API.
 const hasDevices = ref(false)
-const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
+// Cached row first, then a background refresh; stale reads never apply (see useChannelRecord).
+const { channel, load: loadChannel, beginNavigation } = useChannelRecord<Database['public']['Tables']['channels']['Row'] & Channel>({
+  read: async (channelId) => {
+    const { data, error } = await capgo
+      .from('channels')
+      .select(`
+          id,
+          name,
+          public,
+          owner_org,
+          version:app_versions!channels_version_fkey(
+            id,
+            name,
+            app_id,
+            created_at,
+            min_update_version,
+            storage_provider,
+            link,
+            comment
+          ),
+          created_at,
+          app_id,
+          allow_emulator,
+          allow_device,
+          allow_dev,
+          allow_prod,
+          allow_device_self_set,
+          disable_auto_update_under_native,
+          disable_auto_update,
+          ios,
+          android,
+          updated_at
+        `)
+      .eq('id', channelId)
+      .single()
+    if (error) {
+      console.error('no channel', error)
+      return null
+    }
+    return data
+  },
+  normalize: row => withBuiltinChannelVersion(row) as any,
+})
 const deviceIdInput = ref('')
 const deviceIdErrors = computed(() => validateField(deviceIdInput.value, [
   rules.required(t('device-id')),
@@ -209,84 +250,8 @@ async function getDeviceIds() {
   }
 }
 
-// Each channel read gets a generation: only the newest read of a page that is
-// still mounted applies (a background refresh must not overwrite a newer forced
-// read, nor another channel's page after navigation).
-let channelReadGeneration = 0
-onBeforeUnmount(() => {
-  channelReadGeneration++
-})
-
 async function getChannel(force = false) {
-  if (!id.value)
-    return
-  const generation = ++channelReadGeneration
-
-  // Check if we already have this channel in the store
-  if (!force && appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
-    channel.value = withBuiltinChannelVersion(appDetailStore.currentChannel as any) as any
-    if (channel.value?.name)
-      displayStore.setChannelName(String(channel.value.id), channel.value.name)
-    displayStore.NavTitle = channel.value?.name ?? t('channel')
-    // Render the cached row at once, then refresh it: the bundle may have been
-    // changed since (bundle page, CLI, API or a teammate).
-    void getChannel(true)
-    return
-  }
-
-  try {
-    const { data, error } = await capgo
-      .from('channels')
-      .select(`
-          id,
-          name,
-          public,
-          owner_org,
-          version:app_versions!channels_version_fkey(
-            id,
-            name,
-            app_id,
-            created_at,
-            min_update_version,
-            storage_provider,
-            link,
-            comment
-          ),
-          created_at,
-          app_id,
-          allow_emulator,
-          allow_device,
-          allow_dev,
-          allow_prod,
-          allow_device_self_set,
-          disable_auto_update_under_native,
-          disable_auto_update,
-          ios,
-          android,
-          updated_at
-        `)
-      .eq('id', id.value)
-      .single()
-    if (error) {
-      console.error('no channel', error)
-      return
-    }
-    // A newer read (or leaving the page) superseded this one.
-    if (generation !== channelReadGeneration)
-      return
-
-    channel.value = withBuiltinChannelVersion(data as any) as unknown as Database['public']['Tables']['channels']['Row'] & Channel
-
-    // Store in appDetailStore
-    appDetailStore.setChannel(id.value, channel.value)
-
-    if (channel.value?.name)
-      displayStore.setChannelName(String(channel.value.id), channel.value.name)
-    displayStore.NavTitle = channel.value?.name ?? t('channel')
-  }
-  catch (error) {
-    console.error(error)
-  }
+  await loadChannel(id.value, force)
 }
 
 async function reload() {
@@ -298,11 +263,14 @@ async function reload() {
 // channel read inside getChannel and refetch every time the refresh stores it.
 watch(() => route.path, async () => {
   if (route.path.includes('/channel/') && route.path.includes('/devices')) {
+    const isCurrent = beginNavigation()
     loading.value = true
     packageId.value = route.params.app as string
     id.value = Number(route.params.channel as string)
     await getChannel()
     await getDeviceIds()
+    if (!isCurrent())
+      return
     loading.value = false
     if (!channel.value?.name)
       displayStore.NavTitle = t('channel')
@@ -310,7 +278,9 @@ watch(() => route.path, async () => {
 
     // Load role
     await organizationStore.awaitInitialLoad()
-    role.value = await organizationStore.getCurrentRoleForApp(packageId.value)
+    const appRole = await organizationStore.getCurrentRoleForApp(packageId.value)
+    if (isCurrent())
+      role.value = appRole
   }
 }, { immediate: true })
 </script>

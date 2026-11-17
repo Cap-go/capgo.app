@@ -4,7 +4,7 @@ import type { BundlePickerRow } from '~/services/bundleColumns'
 import type { Database } from '~/types/database.types'
 import { greaterOrEqual, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -19,6 +19,7 @@ import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
 import { confirmChannelChange } from '~/composables/useChannelChangeConfirm'
+import { useChannelRecord } from '~/composables/useChannelRecord'
 import { BUNDLE_PICKER_COLUMNS } from '~/services/bundleColumns'
 import { invalidateChannelImpact, warmChannelImpactCache } from '~/services/channelImpact'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
@@ -27,7 +28,6 @@ import { formatDate, formatLocalDate } from '~/services/date'
 import { findIncompatibleNativePackages } from '~/services/nativePackageCompatibility'
 import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/versions'
-import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { createChannelRolloutConfirmFlows, formatRolloutCacheTtlDisplay, formatRolloutCacheTtlHuman, isRolloutPercentageDraftChanged, parseRolloutCacheTtlSeconds } from '~/utils/channelRolloutConfirmFlows'
@@ -96,13 +96,77 @@ const route = useRoute('/app/[app].channel.[channel]')
 const router = useRouter()
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
-const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
 const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
-const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
+// Cached row first, then a background refresh; stale reads never apply (see useChannelRecord).
+const { channel, load: loadChannel, beginNavigation } = useChannelRecord<Database['public']['Tables']['channels']['Row'] & Channel>({
+  read: async (channelId) => {
+    const { data, error } = await capgo
+      .from('channels')
+      .select(`
+          id,
+          name,
+          public,
+          owner_org,
+          version:app_versions!channels_version_fkey(
+            id,
+            name,
+            app_id,
+            created_at,
+            min_update_version,
+            storage_provider,
+            link,
+            comment
+          ),
+          rollout_version,
+          rollout_percentage_bps,
+          rollout_enabled,
+          rollout_id,
+          rollout_paused_at,
+          rollout_pause_reason,
+          rollout_cache_ttl_seconds,
+          paused_at,
+          auto_pause_enabled,
+          auto_pause_window_minutes,
+          auto_pause_failure_rate_bps,
+          auto_pause_confidence,
+          auto_pause_min_attempts,
+          auto_pause_min_failures,
+          auto_pause_action,
+          auto_pause_cooldown_minutes,
+          auto_pause_last_triggered_at,
+          rollout_version_info:app_versions!channels_rollout_version_fkey(
+            id,
+            name
+          ),
+          created_at,
+          app_id,
+          allow_emulator,
+          allow_device,
+          allow_dev,
+          allow_prod,
+          allow_device_self_set,
+          disable_auto_update_under_native,
+          disable_auto_update,
+          update_package,
+          ios,
+          android,
+          electron,
+          updated_at
+        `)
+      .eq('id', channelId)
+      .single()
+    if (error) {
+      console.error('no channel', error)
+      return null
+    }
+    return data
+  },
+  normalize: row => withBuiltinChannelVersion(row) as any,
+})
 const defaultUploadChannel = ref<string | null>(null)
 const isDefaultUploadChannel = computed(() => !!channel.value?.name && channel.value.name === defaultUploadChannel.value)
 const rolloutConfigured = computed(() => !!channel.value?.rollout_version)
@@ -269,107 +333,8 @@ function openBundle() {
   router.push(`/app/${route.params.app}/bundle/${channel.value.version.id}`)
 }
 
-// Each channel read gets a generation: only the newest read of a page that is
-// still mounted applies (a background refresh must not overwrite a newer forced
-// read, nor another channel's page after navigation).
-let channelReadGeneration = 0
-onBeforeUnmount(() => {
-  channelReadGeneration++
-})
-
 async function getChannel(force = false) {
-  if (!id.value)
-    return
-  const generation = ++channelReadGeneration
-
-  // Check if we already have this channel in the store
-  if (!force && appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
-    channel.value = withBuiltinChannelVersion(appDetailStore.currentChannel as any) as any
-    if (channel.value?.name)
-      displayStore.setChannelName(String(channel.value.id), channel.value.name)
-    displayStore.NavTitle = channel.value?.name ?? t('channel')
-    // Render the cached row at once, then refresh it: the bundle may have been
-    // changed since (bundle page, CLI, API or a teammate).
-    void getChannel(true)
-    return
-  }
-
-  try {
-    const { data, error } = await capgo
-      .from('channels')
-      .select(`
-          id,
-          name,
-          public,
-          owner_org,
-          version:app_versions!channels_version_fkey(
-            id,
-            name,
-            app_id,
-            created_at,
-            min_update_version,
-            storage_provider,
-            link,
-            comment
-          ),
-          rollout_version,
-          rollout_percentage_bps,
-          rollout_enabled,
-          rollout_id,
-          rollout_paused_at,
-          rollout_pause_reason,
-          rollout_cache_ttl_seconds,
-          paused_at,
-          auto_pause_enabled,
-          auto_pause_window_minutes,
-          auto_pause_failure_rate_bps,
-          auto_pause_confidence,
-          auto_pause_min_attempts,
-          auto_pause_min_failures,
-          auto_pause_action,
-          auto_pause_cooldown_minutes,
-          auto_pause_last_triggered_at,
-          rollout_version_info:app_versions!channels_rollout_version_fkey(
-            id,
-            name
-          ),
-          created_at,
-          app_id,
-          allow_emulator,
-          allow_device,
-          allow_dev,
-          allow_prod,
-          allow_device_self_set,
-          disable_auto_update_under_native,
-          disable_auto_update,
-          update_package,
-          ios,
-          android,
-          electron,
-          updated_at
-        `)
-      .eq('id', id.value)
-      .single()
-    if (error) {
-      console.error('no channel', error)
-      return
-    }
-    // A newer read (or leaving the page) superseded this one.
-    if (generation !== channelReadGeneration)
-      return
-
-    channel.value = withBuiltinChannelVersion(data as any) as unknown as Database['public']['Tables']['channels']['Row'] & Channel
-
-    // Store in appDetailStore
-    appDetailStore.setChannel(id.value, channel.value)
-
-    if (channel.value?.name)
-      displayStore.setChannelName(String(channel.value.id), channel.value.name)
-    displayStore.NavTitle = channel.value?.name ?? t('channel')
-  }
-  catch (error) {
-    console.error(error)
-  }
+  await loadChannel(id.value, force)
 }
 
 async function getDefaultUploadChannel() {
@@ -414,19 +379,23 @@ async function saveChannelChanges(update: ChannelUpdate) {
     return false
   }
 
+  // The write, the cache invalidation and the refresh stay on the channel this
+  // change was made for, even if the page switches channel meanwhile.
+  const channelId = id.value
   try {
     const { error } = await capgo
       .from('channels')
       .update(update)
-      .eq('id', id.value)
+      .eq('id', channelId)
     if (error) {
       toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-update-channel'))
       console.error('no channel update', error)
       return false
     }
 
-    invalidateChannelImpact(id.value)
-    await getChannel(true)
+    invalidateChannelImpact(channelId)
+    if (id.value === channelId)
+      await getChannel(true)
     toast.info(t('cloud-replication-delay'))
     return true
   }
@@ -548,10 +517,13 @@ async function askUpdateNotificationAfterBundleChange(targetChannelName?: string
 // channel read inside getChannel and refetch every time the refresh stores it.
 watch(() => route.path, async () => {
   if (route.path.includes('/channel/')) {
+    const isCurrent = beginNavigation()
     loading.value = true
     packageId.value = route.params.app as string
     id.value = Number(route.params.channel as string)
     await Promise.all([getChannel(), getDefaultUploadChannel()])
+    if (!isCurrent())
+      return
     loading.value = false
     if (!channel.value?.name)
       displayStore.NavTitle = t('channel')
@@ -622,7 +594,7 @@ async function handleVersionLink(picked: BundlePickerRow) {
   if (dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management'))
     await dialogStore.closeDialog()
   const appVersion = await loadBundleNativePackagesForLink(picked)
-  if (!appVersion || !channel.value)
+  if (!appVersion || !channel.value || id.value !== confirmedChannelId)
     return
   const rollout = bundleLinkMode.value === 'rollout'
   const previousRolloutVersionId = channel.value.rollout_version
@@ -636,7 +608,8 @@ async function handleVersionLink(picked: BundlePickerRow) {
     toast.error(t('channel-impact-compat-check-failed'))
     return
   }
-  if (!channel.value)
+  // The dialog must describe the channel the save goes to.
+  if (!channel.value || id.value !== confirmedChannelId)
     return
   const result = await confirmChannelChange({
     appId: channel.value.app_id,
