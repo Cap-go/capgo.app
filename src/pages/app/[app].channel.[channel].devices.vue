@@ -37,7 +37,7 @@ const loading = ref(true)
 // Whether any device is forced to this channel; the table pages them through the API.
 const hasDevices = ref(false)
 // Cached row first, then a background refresh; stale reads never apply (see useChannelRecord).
-const { channel, load: loadChannel, beginNavigation } = useChannelRecord<Database['public']['Tables']['channels']['Row'] & Channel>({
+const { channel, load: loadChannel, beginNavigation, isMounted } = useChannelRecord<Database['public']['Tables']['channels']['Row'] & Channel>({
   normalize: row => withBuiltinChannelVersion(row) as any,
 })
 const deviceIdInput = ref('')
@@ -219,10 +219,14 @@ async function getChannel(force = false) {
 }
 
 async function reload() {
-  // A refresh after an edit: keep it on this channel without cancelling the page load.
+  // A refresh after an edit: keep it on this channel without cancelling the
+  // page load, and drop it (count and error toast included) once the page is gone.
   const channelId = id.value
+  const isCurrent = () => isMounted() && id.value === channelId
+  if (!isCurrent())
+    return
   await getChannel()
-  await getDeviceIds(() => id.value === channelId)
+  await getDeviceIds(isCurrent)
 }
 
 // Load on navigation only: a watchEffect would also track the cached store

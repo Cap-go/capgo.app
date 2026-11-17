@@ -91,7 +91,9 @@ export function useChannelRecord<T extends { id: number, name?: string | null }>
   const normalize = options.normalize ?? ((row: any) => row as T)
   let readGeneration = 0
   let navigationGeneration = 0
+  let unmounted = false
   onBeforeUnmount(() => {
+    unmounted = true
     readGeneration++
     navigationGeneration++
   })
@@ -104,7 +106,9 @@ export function useChannelRecord<T extends { id: number, name?: string | null }>
   }
 
   async function load(channelId: number, force = false): Promise<void> {
-    if (!channelId)
+    // A refresh started after an edit can land once the page is gone: it must
+    // not start a read that would then be the newest one and apply.
+    if (!channelId || unmounted)
       return
     const generation = ++readGeneration
     if (!force && appDetailStore.currentChannelId === channelId && appDetailStore.currentChannel) {
@@ -142,5 +146,10 @@ export function useChannelRecord<T extends { id: number, name?: string | null }>
     return () => generation === navigationGeneration
   }
 
-  return { channel, load, beginNavigation }
+  /** False once the page unmounted: for work that is not a navigation (a refresh after an edit). */
+  function isMounted() {
+    return !unmounted
+  }
+
+  return { channel, load, beginNavigation, isMounted }
 }
