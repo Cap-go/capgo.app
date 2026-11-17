@@ -33,19 +33,20 @@ const headline = computed(() => {
   const result = impact.value
   if (!result)
     return ''
-  // Capped data (rare setups or assigned devices left out): say it is an estimate.
-  const approximate = !!response.value?.truncated || !!response.value?.overrides_truncated
+  // More setups than the server evaluates: the evaluated receivers are a lower
+  // bound of the full active population, so say "at least" against the full total.
+  const partial = !!response.value?.truncated
+  const total = partial ? Math.max(response.value?.total_devices ?? 0, result.total_devices) : result.total_devices
+  // Capped assignment lists: counts for assigned devices are estimates.
+  const approximate = !partial && !!response.value?.overrides_truncated
   const values = {
     count: approximate ? `~${fmt(result.receive)}` : fmt(result.receive),
-    total: fmt(result.total_devices),
-    percent: formatImpactPercent(result.receive, result.total_devices),
+    total: fmt(total),
+    percent: formatImpactPercent(result.receive, total),
     bundle: targetName.value,
   }
-  if (result.target.kind === 'builtin')
-    return t('channel-impact-headline-builtin', values)
-  if (isRollout.value)
-    return t('channel-impact-headline-rollout', values)
-  return t('channel-impact-headline-gets', values)
+  const kind = result.target.kind === 'builtin' ? 'builtin' : isRollout.value ? 'rollout' : 'gets'
+  return t(`channel-impact-headline-${kind}${partial ? '-at-least' : ''}`, values)
 })
 
 const rolloutWave = computed(() => {

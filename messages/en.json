@@ -4739,5 +4739,8 @@
   "channel-impact-outcome-blocked-private-channel": "Keeps its bundle: not assigned to this private channel",
   "channel-impact-outcome-blocked-key-mismatch": "Keeps its bundle: different encryption key",
   "channel-impact-compat-check-failed": "Couldn't check this bundle's native packages against the channel, so nothing was changed. Try again.",
-  "channel-impact-outcome-blocked-no-bundle": "Keeps its bundle: cannot download it"
+  "channel-impact-outcome-blocked-no-bundle": "Keeps its bundle: cannot download it",
+  "channel-impact-headline-gets-at-least": "At least {count} of {total} active devices ({percent}) will get {bundle}.",
+  "channel-impact-headline-builtin-at-least": "At least {count} of {total} active devices ({percent}) will go back to the store version.",
+  "channel-impact-headline-rollout-at-least": "At least {count} of {total} active devices ({percent}) can get {bundle} through this rollout."
 }

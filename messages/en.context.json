@@ -4994,5 +4994,8 @@
   "channel-impact-outcome-blocked-private-channel": "Used in Capgo web console areas: components/channel. Role: short status label for a device in a list. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-impact-outcome-blocked-key-mismatch": "Used in Capgo web console areas: components/channel, pages/app. Role: short status label for a device in a list. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-impact-compat-check-failed": "Used in Capgo web console areas: components/channel, pages/app. Role: error toast message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "channel-impact-outcome-blocked-no-bundle": "Used in Capgo web console areas: components/channel. Role: short status label for a device in a list. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "channel-impact-outcome-blocked-no-bundle": "Used in Capgo web console areas: components/channel. Role: short status label for a device in a list. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-impact-headline-gets-at-least": "Used in Capgo web console areas: components/channel. Role: UI sentence (a lower bound: rare device setups were not evaluated). Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-impact-headline-builtin-at-least": "Used in Capgo web console areas: components/channel. Role: UI sentence (a lower bound: rare device setups were not evaluated). Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-impact-headline-rollout-at-least": "Used in Capgo web console areas: components/channel. Role: UI sentence (a lower bound: rare device setups were not evaluated). Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
