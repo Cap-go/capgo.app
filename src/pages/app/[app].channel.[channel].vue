@@ -583,6 +583,15 @@ function servedBundleName(name: string | null | undefined) {
   return name && !isInternalVersionName(name) ? name : null
 }
 
+/**
+ * True while the page still shows the channel a flow started on: the route id
+ * and the loaded row must both match (after A → B → A the route is A again
+ * while the row of B can still be on screen until A reloads).
+ */
+function stillOnChannel(channelId: number) {
+  return id.value === channelId && channel.value?.id === channelId
+}
+
 async function handleVersionLink(picked: BundlePickerRow) {
   if (!channel.value)
     return
@@ -594,7 +603,7 @@ async function handleVersionLink(picked: BundlePickerRow) {
   if (dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management'))
     await dialogStore.closeDialog()
   const appVersion = await loadBundleNativePackagesForLink(picked)
-  if (!appVersion || !channel.value || id.value !== confirmedChannelId)
+  if (!appVersion || !channel.value || !stillOnChannel(confirmedChannelId))
     return
   const rollout = bundleLinkMode.value === 'rollout'
   const previousRolloutVersionId = channel.value.rollout_version
@@ -609,7 +618,7 @@ async function handleVersionLink(picked: BundlePickerRow) {
     return
   }
   // The dialog must describe the channel the save goes to.
-  if (!channel.value || id.value !== confirmedChannelId)
+  if (!channel.value || !stillOnChannel(confirmedChannelId))
     return
   const result = await confirmChannelChange({
     appId: channel.value.app_id,
@@ -629,7 +638,7 @@ async function handleVersionLink(picked: BundlePickerRow) {
       await router.push(compatibility.dependenciesPath)
     return
   }
-  if (id.value !== confirmedChannelId)
+  if (!stillOnChannel(confirmedChannelId))
     return
 
   if (rollout) {
@@ -856,7 +865,7 @@ async function handleUnlink() {
     title: `${t('unlink-bundle')} ${channel.value.version.name}`,
     confirmText: t('continue'),
   })
-  if (!result.confirmed || id.value !== confirmedChannelId)
+  if (!result.confirmed || !stillOnChannel(confirmedChannelId))
     return
   if (await saveChannelChange('version', null))
     await askUpdateNotificationAfterBundleChange()
@@ -897,7 +906,7 @@ async function handleRevert() {
   }
 
   // The page switched channel while the dialog was open: do not save elsewhere.
-  if (id.value !== confirmedChannelId)
+  if (!stillOnChannel(confirmedChannelId))
     return
   const rollbackTo = result.choice === 'previous' ? result.previousBundle : null
   if (result.choice === 'previous' && !rollbackTo)

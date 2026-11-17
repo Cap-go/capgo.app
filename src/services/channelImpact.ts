@@ -82,6 +82,7 @@ export interface ChannelImpactResponse {
   total_devices: number
   truncated: boolean
   overrides_truncated: boolean
+  legacy_self_assignment_devices: number
   samples_included: boolean
   impacts: ChannelImpactResult[]
   generated_at: string

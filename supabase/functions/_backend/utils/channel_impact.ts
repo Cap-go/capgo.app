@@ -1,6 +1,6 @@
 import type { SemVer } from '@std/semver'
 import { greaterOrEqual, greaterThan, lessThan, tryParse } from '@std/semver'
-import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
+import { isLegacyChannelSelfStorePluginVersion, usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, isDeprecatedPluginVersion } from './utils.ts'
 
 /**
@@ -385,6 +385,16 @@ export function summarizeChannelImpact(
     native_versions: nativeVersions,
     samples: pickImpactSamples(evaluated),
   }
+}
+
+/**
+ * Devices whose updater keeps self-assigned channels in the legacy server-side
+ * store (old plugins) instead of channel_devices. That store cannot be read per
+ * device here, so when the app lets devices pick a channel their real channel
+ * is unknown and the preview is an estimate.
+ */
+export function countLegacySelfAssignmentDevices(groups: ChannelImpactDeviceGroup[]) {
+  return groups.reduce((sum, group) => sum + (isLegacyChannelSelfStorePluginVersion(group.plugin_version) ? Math.max(0, Math.round(group.device_count)) : 0), 0)
 }
 
 /** Expected devices in the first wave of a progressive rollout (rounded, never above `receive`). */

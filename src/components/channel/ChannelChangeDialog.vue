@@ -37,8 +37,9 @@ const headline = computed(() => {
   // bound of the full active population, so say "at least" against the full total.
   const partial = !!response.value?.truncated
   const total = partial ? Math.max(response.value?.total_devices ?? 0, result.total_devices) : result.total_devices
-  // Capped assignment lists: counts for assigned devices are estimates.
-  const approximate = !partial && !!response.value?.overrides_truncated
+  // Capped assignment lists, or old updaters whose self-assigned channel cannot
+  // be read: the counts are estimates.
+  const approximate = !partial && (!!response.value?.overrides_truncated || (response.value?.legacy_self_assignment_devices ?? 0) > 0)
   const values = {
     count: approximate ? `~${fmt(result.receive)}` : fmt(result.receive),
     total: fmt(total),

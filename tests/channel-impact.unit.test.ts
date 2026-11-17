@@ -2,7 +2,7 @@ import type { ChannelImpactChannelConfig, ChannelImpactDeviceGroup } from '../su
 import { describe, expect, it } from 'vitest'
 import { buildChannelImpactResponse } from '../supabase/functions/_backend/private/channel_impact.ts'
 import { lintAnalyticsEngineSql } from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
-import { computeRequirement, estimateRolloutReceive, evaluateDeviceOutcome, summarizeChannelImpact } from '../supabase/functions/_backend/utils/channel_impact.ts'
+import { computeRequirement, countLegacySelfAssignmentDevices, estimateRolloutReceive, evaluateDeviceOutcome, summarizeChannelImpact } from '../supabase/functions/_backend/utils/channel_impact.ts'
 import { buildChannelPopulationCFQuery, buildChannelPopulationCountCFQuery, channelImpactWindowStart, isoFromCF, toPopulationGroupsCF } from '../supabase/functions/_backend/utils/channel_impact_population.ts'
 
 const openChannel: ChannelImpactChannelConfig = {
@@ -184,6 +184,7 @@ describe('channel impact summary', () => {
       rollout_bundle: null,
       previous_bundle: { id: 2, name: '1.9.3', min_update_version: null },
       bundles: [{ id: 5, name: '2.0.0', min_update_version: null, deleted: false }],
+      app_allows_self_assignment: true,
     }
     const population = { groups, total_devices: 1000, truncated: false }
     const response = buildChannelImpactResponse('com.example.app', row, population, [{ kind: 'previous' }, { kind: 'builtin' }, { kind: 'bundle', version_id: 5 }], {
@@ -204,6 +205,10 @@ describe('channel impact summary', () => {
     expect(response.impacts[2].rollout_receive).toBe(Math.round(response.impacts[2].receive / 4))
     expect(response.impacts.every(impact => impact.samples.length === 0)).toBe(true)
     expect(response.overrides_truncated).toBe(false)
+    // The test setups use updater 7.20.0, which keeps self-assignments in the legacy store.
+    expect(response.legacy_self_assignment_devices).toBe(1000)
+    expect(buildChannelImpactResponse('com.example.app', { ...row, app_allows_self_assignment: false }, population, [{ kind: 'builtin' }], { includeSamples: false }).legacy_self_assignment_devices).toBe(0)
+    expect(countLegacySelfAssignmentDevices([group({ plugin_version: '7.40.0', device_count: 4 }), group({ plugin_version: '6.30.0', device_count: 3 })])).toBe(3)
     const capped = buildChannelImpactResponse('com.example.app', row, { ...population, overrides_truncated: true }, [{ kind: 'builtin' }], { includeSamples: false })
     expect(capped.overrides_truncated).toBe(true)
   })

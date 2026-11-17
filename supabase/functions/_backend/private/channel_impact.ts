@@ -6,7 +6,7 @@ import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { CacheHelper } from '../utils/cache.ts'
-import { CHANNEL_IMPACT_WINDOW_DAYS, estimateRolloutReceive, summarizeChannelImpact } from '../utils/channel_impact.ts'
+import { CHANNEL_IMPACT_WINDOW_DAYS, countLegacySelfAssignmentDevices, estimateRolloutReceive, summarizeChannelImpact } from '../utils/channel_impact.ts'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -74,6 +74,7 @@ interface ChannelRow {
   rollout_bundle: BundleRef | null
   previous_bundle: BundleRef | null
   bundles: Array<BundleRef & { deleted: boolean }> | null
+  app_allows_self_assignment: boolean
 }
 
 export interface ChannelImpactResult extends ChannelImpactSummary {
@@ -101,6 +102,12 @@ export interface ChannelImpactResponse {
   truncated: boolean
   /** Too many channel_devices assignments to check them all: counts for assigned devices are estimates. */
   overrides_truncated: boolean
+  /**
+   * Devices on updaters that keep self-assigned channels in the legacy server-side
+   * store, which the preview cannot read: their channel may differ (only counted when
+   * the app lets devices pick a channel).
+   */
+  legacy_self_assignment_devices: number
   samples_included: boolean
   impacts: ChannelImpactResult[]
   generated_at: string
@@ -143,7 +150,8 @@ async function readChannelRow(c: Context<MiddlewareKeyVariables>, body: ChannelI
         LIMIT 1) AS previous_bundle,
       (SELECT pg_catalog.json_agg(pg_catalog.json_build_object('id', av.id, 'name', av.name, 'min_update_version', av.min_update_version, 'key_id', av.key_id, 'has_zip', av.r2_path IS NOT NULL OR av.external_url IS NOT NULL, 'deleted', av.deleted))
         FROM public.app_versions av
-        WHERE av.app_id = ch.app_id AND av.id = ANY($3::bigint[])) AS bundles
+        WHERE av.app_id = ch.app_id AND av.id = ANY($3::bigint[])) AS bundles,
+      EXISTS (SELECT 1 FROM public.channels sc WHERE sc.app_id = ch.app_id AND sc.allow_device_self_set) AS app_allows_self_assignment
     FROM public.channels ch
     WHERE ch.id = $1 AND ch.app_id = $2`,
     [body.channel_id, body.app_id, bundleIds],
@@ -242,6 +250,7 @@ export function buildChannelImpactResponse(
     total_devices: population.total_devices,
     truncated: population.truncated,
     overrides_truncated: !!population.overrides_truncated,
+    legacy_self_assignment_devices: row.app_allows_self_assignment ? countLegacySelfAssignmentDevices(population.groups) : 0,
     samples_included: options.includeSamples,
     impacts,
     generated_at: (options.now ?? new Date()).toISOString(),
