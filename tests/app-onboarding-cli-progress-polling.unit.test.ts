@@ -218,5 +218,19 @@ describe('useAppOnboardingCliProgress polling', () => {
     expect(invokeCapgoApiMock.mock.calls.length - calls).toBeLessThanOrEqual(2)
     app.unmount()
   })
+
+  it('restarts polling stopped by the idle limit when a write applies progress', async () => {
+    const { CLI_PROGRESS_POLL_MAX_IDLE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
+    invokeCapgoApiMock.mockResolvedValue({ data: { onboarding: PENDING_ONBOARDING }, error: null })
+    const app = await mountProgress()
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_MAX_IDLE_MS + 60_000)
+    const calls = invokeCapgoApiMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls)
+    lastProgress!.applyOnboarding({ ...PENDING_ONBOARDING, steps: { add_channel: { status: 'done' } } })
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls + 1)
+    app.unmount()
+  })
 })
 

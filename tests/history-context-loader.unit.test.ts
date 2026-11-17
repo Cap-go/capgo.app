@@ -80,4 +80,27 @@ describe('history context loader', () => {
     expect(state.version).toBe('version-of-channel-b')
     expect(state.members).toEqual(['member'])
   })
+
+  it('reloads a scope after another scope wrote its values meanwhile (A -> B -> A)', async () => {
+    const { state, loader, loadCurrentVersion, loadMembers } = setup()
+    await loader.load()
+    expect(state.version).toBe('version-of-channel-a')
+
+    // B: the version lands, the members stay pending.
+    state.scope = 'channel-b'
+    const pendingMembers = deferred<string[]>()
+    loadMembers.mockImplementationOnce(() => pendingMembers.promise)
+    const loadB = loader.load()
+    await Promise.resolve()
+    expect(state.version).toBe('version-of-channel-b')
+
+    // Back to A before B finished: A must reload, not trust its old markers.
+    state.scope = 'channel-a'
+    await loader.load()
+    pendingMembers.resolve(['b-member'])
+    await loadB
+    expect(state.version).toBe('version-of-channel-a')
+    expect(loadCurrentVersion).toHaveBeenCalledTimes(3)
+  })
 })
+

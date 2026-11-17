@@ -197,6 +197,9 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
     pollSoon()
     rawOnboarding.value = value
     reportedOnboarding.value = parseAppOnboarding(value)
+    // A write is progress: restart polling if the idle limit had stopped it.
+    if (!isTerminal.value)
+      startPolling()
   }
   watch(() => toValue(initialOnboarding), (value) => {
     rawOnboarding.value = value

@@ -262,6 +262,10 @@ function clearUsageCaches() {
   cacheByOrgByApp.delete(cacheKey)
 }
 
+// Set when the user asked for the refresh (Reload button): the app list is
+// refetched too, so apps created elsewhere show up. Automatic refreshes keep it.
+let refreshAppCatalogAfterPoll = false
+
 function stopRefreshPolling() {
   touchRefreshStateClock()
   if (refreshPollTimer !== null) {
@@ -269,11 +273,9 @@ function stopRefreshPolling() {
     refreshPollTimer = null
   }
   isRefreshPolling.value = false
+  // A manual catalog refresh applies to the poll it started only.
+  refreshAppCatalogAfterPoll = false
 }
-
-// Set when the user asked for the refresh (Reload button): the app list is
-// refetched too, so apps created elsewhere show up. Automatic refreshes keep it.
-let refreshAppCatalogAfterPoll = false
 
 async function reloadChartsAfterRefresh(options: { refreshAppCatalog?: boolean } = {}) {
   clearUsageCaches()
@@ -294,8 +296,9 @@ async function pollRefreshState() {
       const appSettled = !isChartRefreshInProgress(appState.stats_refresh_requested_at, appState.stats_updated_at)
       const orgCacheReady = isOrgCacheReadyForRefresh(orgState.stats_updated_at, appState.stats_refresh_requested_at)
       if (appSettled && orgCacheReady) {
+        const refreshAppCatalog = refreshAppCatalogAfterPoll
         stopRefreshPolling()
-        await reloadChartsAfterRefresh({ refreshAppCatalog: refreshAppCatalogAfterPoll })
+        await reloadChartsAfterRefresh({ refreshAppCatalog })
         return
       }
     }
@@ -312,8 +315,9 @@ async function pollRefreshState() {
       const orgSettled = !isChartRefreshInProgress(orgState.stats_refresh_requested_at, orgState.stats_updated_at)
       const orgCacheReady = isOrgCacheReadyForRefresh(orgState.stats_updated_at, orgState.stats_refresh_requested_at)
       if (orgSettled && orgCacheReady) {
+        const refreshAppCatalog = refreshAppCatalogAfterPoll
         stopRefreshPolling()
-        await reloadChartsAfterRefresh({ refreshAppCatalog: refreshAppCatalogAfterPoll })
+        await reloadChartsAfterRefresh({ refreshAppCatalog })
         return
       }
     }

@@ -24,11 +24,19 @@ export function createHistoryContextLoader<Member>(options: {
 }): HistoryContextLoader {
   let membersScopeKey = ''
   let versionScopeKey = ''
+  let activeScopeKey = ''
   let generation = 0
 
   return {
     async load(loadOptions = {}) {
       const key = options.scopeKey()
+      // Another scope may have written its values meanwhile (A -> B -> A):
+      // a scope change invalidates both markers.
+      if (key !== activeScopeKey) {
+        activeScopeKey = key
+        membersScopeKey = ''
+        versionScopeKey = ''
+      }
       const loadGeneration = ++generation
       const isCurrent = () => loadGeneration === generation && key === options.scopeKey()
       const needVersion = loadOptions.refreshCurrentVersion === true || versionScopeKey !== key

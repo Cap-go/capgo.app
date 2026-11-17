@@ -137,16 +137,17 @@ BEGIN
   FROM unnest(p_channel_ids, coalesce(p_cutoffs, array_fill(NULL::timestamptz, ARRAY[cardinality(p_channel_ids)])))
     WITH ORDINALITY AS ch(channel_id, cutoff, position)
   CROSS JOIN LATERAL (
-    SELECT h.version_id, h.created_at, h.deployed_at
+    SELECT h.id, h.version_id, h.created_at, h.deployed_at
     FROM public.deploy_history h
     WHERE h.app_id = p_app_id
       AND h.channel_id = ch.channel_id
       AND (p_exclude_version_id IS NULL OR h.version_id <> p_exclude_version_id)
       AND (ch.cutoff IS NULL OR h.created_at < ch.cutoff)
-    ORDER BY h.created_at DESC
+    ORDER BY h.created_at DESC, h.id DESC
     LIMIT p_per_channel
   ) d
-  ORDER BY ch.position, d.created_at DESC;
+  -- Total order (id breaks created_at ties) so callers can page the result.
+  ORDER BY ch.position, d.created_at DESC, d.id DESC;
 END;
 $$;
 
