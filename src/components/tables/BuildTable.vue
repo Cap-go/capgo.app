@@ -553,7 +553,8 @@ function retryBuild() {
 const nextStepsBuild = computed<Element | undefined>(() => nextStepsDismissed.value || currentPage.value !== 1 || search.value ? undefined : latestSucceededBuild(elements.value) as Element | undefined)
 
 // The latest successful build has a file to download now: otherwise the action only opens its details.
-const nextStepsHasFile = computed(() => !!nextStepsBuild.value && savedBuildState(nextStepsBuild.value, savedOutputFor(nextStepsBuild.value), savedBuildNow.value) === 'available')
+// Until the lookup answers, keep the download wording rather than flash "View build details".
+const nextStepsHasFile = computed(() => !!nextStepsBuild.value && (!savedOutputsReady.value || savedBuildState(nextStepsBuild.value, savedOutputFor(nextStepsBuild.value), savedBuildNow.value) === 'available'))
 
 function nextStepInstall() {
   track('Build Next Step Clicked', { action: nextStepsHasFile.value ? 'install' : 'details' })
