@@ -453,13 +453,13 @@ function savedOutputFor(elem: Element) {
   return elem.builder_job_id ? savedOutputs.value[elem.builder_job_id] : undefined
 }
 
-// A simulator button only where it can work: an iOS .ipa, on a server with a simulator host.
 // An iOS .ipa that can still be downloaded: the simulator installs it from that saved file.
 function hasCurrentIpa(elem: Element) {
   const output = savedOutputFor(elem)
   return output?.kind === 'ios_ipa' && savedBuildState(elem, output, savedBuildNow.value) === 'available'
 }
 
+// A simulator button only where it can work: a current .ipa, on a server with a simulator host.
 function canOpenInSimulator(elem: Element) {
   return hasCurrentIpa(elem) && simulatorConfigured.value !== false
 }
