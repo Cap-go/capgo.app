@@ -176,6 +176,7 @@ declare global {
   const useBundleInstallStats: typeof import('./composables/useBundleInstallStats').useBundleInstallStats
   const useCached: typeof import('@vueuse/core').useCached
   const useChannelChangeState: typeof import('./composables/useChannelChangeConfirm').useChannelChangeState
+  const useChannelRecord: typeof import('./composables/useChannelRecord').useChannelRecord
   const useClipboard: typeof import('@vueuse/core').useClipboard
   const useClipboardItems: typeof import('@vueuse/core').useClipboardItems
   const useCloned: typeof import('@vueuse/core').useCloned
@@ -578,6 +579,7 @@ declare module 'vue' {
     readonly useBundleInstallStats: UnwrapRef<typeof import('./composables/useBundleInstallStats')['useBundleInstallStats']>
     readonly useCached: UnwrapRef<typeof import('@vueuse/core')['useCached']>
     readonly useChannelChangeState: UnwrapRef<typeof import('./composables/useChannelChangeConfirm')['useChannelChangeState']>
+    readonly useChannelRecord: UnwrapRef<typeof import('./composables/useChannelRecord')['useChannelRecord']>
     readonly useClipboard: UnwrapRef<typeof import('@vueuse/core')['useClipboard']>
     readonly useClipboardItems: UnwrapRef<typeof import('@vueuse/core')['useClipboardItems']>
     readonly useCloned: UnwrapRef<typeof import('@vueuse/core')['useCloned']>
