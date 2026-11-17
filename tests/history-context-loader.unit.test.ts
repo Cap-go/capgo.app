@@ -102,5 +102,22 @@ describe('history context loader', () => {
     expect(state.version).toBe('version-of-channel-a')
     expect(loadCurrentVersion).toHaveBeenCalledTimes(3)
   })
+
+  it('keeps a pending reload when a page change hits the cache meanwhile', async () => {
+    const { state, loader, loadCurrentVersion } = setup()
+    await loader.load()
+    const pendingVersion = deferred<void>()
+    loadCurrentVersion.mockImplementationOnce(async (isCurrent) => {
+      await pendingVersion.promise
+      if (isCurrent())
+        state.version = 'refreshed'
+      return true
+    })
+    const reload = loader.load({ refreshCurrentVersion: true })
+    await loader.load()
+    pendingVersion.resolve()
+    await reload
+    expect(state.version).toBe('refreshed')
+  })
 })
 

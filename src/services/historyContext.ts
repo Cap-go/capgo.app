@@ -37,12 +37,13 @@ export function createHistoryContextLoader<Member>(options: {
         membersScopeKey = ''
         versionScopeKey = ''
       }
-      const loadGeneration = ++generation
-      const isCurrent = () => loadGeneration === generation && key === options.scopeKey()
       const needVersion = loadOptions.refreshCurrentVersion === true || versionScopeKey !== key
       const needMembers = membersScopeKey !== key
+      // A load with nothing to fetch must not supersede a pending one.
       if (!needVersion && !needMembers)
         return
+      const loadGeneration = ++generation
+      const isCurrent = () => loadGeneration === generation && key === options.scopeKey()
       const [versionLoaded, loadedMembers] = await Promise.all([
         needVersion ? options.loadCurrentVersion(isCurrent) : Promise.resolve(true),
         needMembers ? options.loadMembers() : Promise.resolve(null),
