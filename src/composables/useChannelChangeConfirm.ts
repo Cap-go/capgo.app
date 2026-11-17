@@ -223,7 +223,7 @@ export async function confirmChannelChange(options: ChannelChangeOptions): Promi
   dialogStore.openDialog({
     id: CHANNEL_CHANGE_DIALOG_ID,
     title: titleFor(options),
-    size: '2xl',
+    size: 'xl',
     preventAccidentalClose: true,
     buttons: buildButtons(),
   })

@@ -20,7 +20,7 @@ export type ChannelImpactUpdatePackage = 'all' | 'zip' | 'delta' | 'zip_from_bui
 export const CHANNEL_IMPACT_WINDOW_DAYS = 30
 /** First plugin version that understands the revert-to-builtin response. */
 export const BUILTIN_REVERT_MIN_PLUGIN_VERSION = '6.2.0'
-const MAX_SAMPLES = 5
+const MAX_SAMPLES = 3
 const MAX_NATIVE_VERSIONS = 8
 
 /** One distinct device setup on the channel and how many devices share it. */
@@ -180,6 +180,10 @@ export function evaluateDeviceOutcome(
   if (!native)
     return 'unknown_native'
 
+  // /updates rejects every 4.x updater before looking at the channel.
+  if (parseVersion(device.plugin_version)?.major === 4)
+    return 'plugin_too_old'
+
   const targetName = target.kind === 'builtin' ? 'builtin' : target.name
   if (target.kind === 'bundle' && target.has_zip === false && !canDeliverWithoutZip(device, channel))
     return 'blocked_no_bundle'
@@ -290,30 +294,27 @@ interface EvaluatedGroup extends ChannelImpactDeviceGroup {
 }
 
 /**
- * Pick up to five real devices that show the different things that will
- * happen: the largest setup of each outcome first, then other native builds.
+ * Pick up to three real devices that explain the change: the largest setup
+ * that gets it, the largest that does not (the main reason others won't),
+ * then the largest setup with yet another outcome.
  */
 export function pickImpactSamples(groups: EvaluatedGroup[], max = MAX_SAMPLES): ChannelImpactSample[] {
   const ordered = [...groups].filter(group => group.sample_device_id).sort((a, b) => b.device_count - a.device_count)
   const picked: EvaluatedGroup[] = []
-  const seenOutcomes = new Set<ChannelImpactOutcome>()
-  for (const group of ordered) {
-    if (picked.length >= max)
-      break
-    if (seenOutcomes.has(group.outcome))
-      continue
-    seenOutcomes.add(group.outcome)
-    picked.push(group)
+  const take = (group: EvaluatedGroup | undefined) => {
+    if (group && picked.length < max && !picked.includes(group))
+      picked.push(group)
   }
-  const setupKey = (group: EvaluatedGroup) => `${group.platform}|${group.version_build}|${group.outcome}`
-  const seenSetups = new Set(picked.map(setupKey))
+  take(ordered.find(group => isReceivingOutcome(group.outcome)))
+  take(ordered.find(group => !isReceivingOutcome(group.outcome) && group.outcome !== 'already_on_target'))
   for (const group of ordered) {
-    if (picked.length >= max)
-      break
-    if (picked.includes(group) || seenSetups.has(setupKey(group)))
-      continue
-    seenSetups.add(setupKey(group))
-    picked.push(group)
+    if (!picked.some(item => item.outcome === group.outcome))
+      take(group)
+  }
+  // Fewer distinct outcomes than slots: show other store builds.
+  for (const group of ordered) {
+    if (!picked.some(item => item.platform === group.platform && item.version_build === group.version_build))
+      take(group)
   }
   return picked.map(group => ({
     device_id: group.sample_device_id,

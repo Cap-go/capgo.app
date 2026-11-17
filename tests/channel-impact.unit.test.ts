@@ -140,15 +140,24 @@ describe('channel impact summary', () => {
     expect(mixed.native_versions[0]).toMatchObject({ device_count: 100, receive: 60, outcome: 'receive', mixed: true })
   })
 
-  it.concurrent('picks real example devices covering each distinct outcome first', () => {
+  it.concurrent('picks at most three meaningful example devices', () => {
     const summary = summarizeChannelImpact(groups, { ...openChannel, disable_auto_update: 'major' }, bundle('2.0.0'))
-    expect(summary.samples.length).toBeGreaterThanOrEqual(3)
-    expect(summary.samples.length).toBeLessThanOrEqual(5)
-    const outcomes = summary.samples.map(sample => sample.outcome)
-    expect(outcomes.slice(0, 4)).toEqual(['blocked_major', 'already_on_target', 'receive_below_native', 'unknown_native'])
-    expect(summary.samples[0].device_id).toBe('old-ios')
-    // The fifth example is another setup (Android on the old native build).
-    expect(summary.samples[4]).toMatchObject({ device_id: 'old-android', outcome: 'blocked_major' })
+    expect(summary.samples).toHaveLength(3)
+    // One that gets it (even a small setup), the main blocker, then another outcome.
+    expect(summary.samples.map(sample => sample.device_id)).toEqual(['newer-ios', 'old-ios', 'new-ios'])
+    expect(summary.samples.map(sample => sample.outcome)).toEqual(['receive_below_native', 'blocked_major', 'already_on_target'])
+    // Nobody receives: the main blockers first, other store builds after.
+    const blocked = summarizeChannelImpact([
+      group({ version_build: '1.9.0', device_count: 700, sample_device_id: 'a' }),
+      group({ platform: 'android', version_build: '1.9.0', device_count: 200, sample_device_id: 'b' }),
+      group({ version_build: '1.8.0', device_count: 100, sample_device_id: 'c' }),
+    ], { ...openChannel, disable_auto_update: 'major' }, bundle('2.0.0'))
+    expect(blocked.samples.map(sample => sample.device_id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it.concurrent('treats 4.x updaters like /updates: rejected before any channel gate', () => {
+    expect(evaluateDeviceOutcome(group({ plugin_version: '4.20.0' }), openChannel, bundle('1.4.3'))).toBe('plugin_too_old')
+    expect(evaluateDeviceOutcome(group({ plugin_version: '4.20.0', version_name: '1.4.3' }), openChannel, bundle('1.4.3'))).toBe('plugin_too_old')
   })
 
   it.concurrent('estimates the first wave of a progressive rollout', () => {
