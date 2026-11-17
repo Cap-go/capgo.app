@@ -1179,6 +1179,7 @@
   "capgo-updates-disabled": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "captcha": "Used in Capgo web console areas: pages, pages/settings/account, pages/settings/organization, services. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "captcha-fail": "Used in Capgo web console areas: pages, pages/settings/account, services. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "china-console-suggestion": "Used in Capgo web console areas: components. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "captcha-new-user-org-d-tooltip": "Used in Capgo web console areas: pages/settings/organization. Role: tooltip. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "captcha-not-available": "Used in Capgo web console areas: components/dashboard, pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "captcha-required": "Used in Capgo web console areas: components/dashboard, pages, pages/settings/account, pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
