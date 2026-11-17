@@ -11,6 +11,7 @@ async function openBuilderTask(page: Page, id: string) {
 }
 
 test('chooses a goal, switches plain tabs, preserves instructions and places dismissal at the bottom', async ({ page }) => {
+  await page.clock.install()
   await page.goto(fixture)
   await expect(page.getByRole('heading', { name: 'What would you like to start with?' })).toBeVisible()
   await expect(page.getByRole('tab')).toHaveCount(0)
@@ -22,9 +23,15 @@ test('chooses a goal, switches plain tabs, preserves instructions and places dis
   await expect(page.locator('[data-test="setup-checklist-toggle"]')).toHaveAttribute('aria-expanded', 'true')
   await page.locator('[data-test="app-onboarding-cli-step-add_updater"] button').click()
   await page.getByRole('tab', { name: 'Builder', exact: true }).click()
-  await page.locator('[data-test="builder-platform-android"]').click()
+  await expect(page.locator('[data-test="builder-checklist-waiting"]')).toBeVisible()
+  await page.locator('[data-test="builder-method-terminal"]').click()
   await expect(page.locator('[data-test="builder-checklist-command"]')).toContainText('build init -a ')
-  await expect(page.locator('[data-test="builder-checklist-command"]')).toContainText('--platform android')
+  await expect(page.locator('[data-test="builder-checklist-command"]')).not.toContainText('--platform')
+  await page.evaluate(() => {
+    (window as any).onboardingSetupPreview.state.builderSteps.android.start_setup.status = 'done'
+  })
+  await page.clock.runFor(5000)
+  await expect(page.locator('[data-test="builder-platform-android"]')).toHaveAttribute('aria-pressed', 'true')
   await openBuilderTask(page, 'prepare_keystore')
   await page.getByRole('tab', { name: 'Live Updates', exact: true }).click()
   await expect(page.locator('[data-test="setup-checklist-instructions"] h2')).toHaveText('Install Capgo Updater')
@@ -70,7 +77,8 @@ test('keeps the chooser and tabs usable on a narrow screen', async ({ page }) =>
   await page.getByRole('button', { name: /Live Updates/ }).click()
   await expect(page.getByRole('tab')).toHaveText(['Live Updates', 'Builder'])
   await page.getByRole('tab', { name: 'Builder', exact: true }).click()
-  await page.locator('[data-test="builder-platform-ios"]').click()
+  await page.locator('[data-test="builder-method-terminal"]').click()
+  await expect(page.locator('[data-test="builder-checklist-command"]')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375)
 })
 
@@ -113,6 +121,8 @@ test('preserves inspected tasks across Builder platforms and continues the unfin
     const steps = (window as any).onboardingSetupPreview.state.builderSteps.ios
     steps.choose_destination.status = 'done'
     steps.connect_app_store.status = 'done'
+    // The Android tab appears once that platform has started too.
+    ;(window as any).onboardingSetupPreview.state.builderSteps.android.start_setup.status = 'done'
   })
   await page.clock.runFor(5000)
   await expect(page.locator('[data-test="builder-step-prepare_certificate"]')).toContainText('Current task')
@@ -130,11 +140,12 @@ test('keeps AI setup available for later tasks and copies the active checklist p
       },
     } })
   })
+  await page.clock.install()
   await page.goto(fixture)
   await page.getByRole('button', { name: /Builder Build/ }).click()
-  await page.locator('[data-test="builder-platform-android"]').click()
-  await page.locator('[data-test="builder-checklist-command"]').click()
-  await expect.poll(() => page.evaluate(() => (window as any).copiedSetupText)).toMatch(/@capgo\/cli@latest build init -a .* --platform android$/)
+  await page.locator('[data-test="builder-method-terminal"]').click()
+  await page.locator('[data-test="builder-checklist-command-copy"]').click()
+  await expect.poll(() => page.evaluate(() => (window as any).copiedSetupText)).toMatch(/@capgo\/cli@latest build init -a \S+$/)
   await page.getByRole('tab', { name: 'Live Updates', exact: true }).click()
   await page.locator('[data-test="app-onboarding-command-copy"]').click()
   await expect.poll(() => page.evaluate(() => (window as any).copiedSetupText)).toContain('@capgo/cli@latest i ')
@@ -145,8 +156,12 @@ test('keeps AI setup available for later tasks and copies the active checklist p
   const prompt = await page.evaluate(() => (window as any).copiedSetupText as string)
   expect(prompt).not.toContain('start_capgo_builder_onboarding')
 
+  await page.evaluate(() => {
+    (window as any).onboardingSetupPreview.state.builderSteps.android.start_setup.status = 'done'
+  })
   await page.getByRole('tab', { name: 'Builder', exact: true }).click()
-  await openBuilderTask(page, 'prepare_keystore')
+  await page.locator('[data-test="builder-method-ai"]').click()
+  await openBuilderTask(page, 'connect_google_play')
   const taskActions = page.locator('[data-test="builder-checklist-task-actions"]')
   await expect(taskActions.locator('button, a')).toHaveCount(2)
   await expect(page.locator('[data-test="builder-checklist-ai-setup"]')).toBeVisible()

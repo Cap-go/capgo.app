@@ -6,6 +6,8 @@ export const BUILDER_TODO_LIST_VERSION = '1'
 
 export type BuilderPlatform = keyof typeof BUILDER_STEP_IDS
 export type BuilderStepId = typeof BUILDER_STEP_IDS[BuilderPlatform][number]
+/** How the user runs Builder setup: through their AI assistant (MCP) or the CLI wizard. */
+export type BuilderSetupMethod = 'ai' | 'terminal'
 export type BuilderStepStatus = 'pending' | 'done' | 'skipped' | 'warning'
 
 export interface BuilderOnboardingState {
@@ -59,4 +61,14 @@ export function parseBuilderOnboarding(value: unknown): BuilderOnboardingState {
     selectedPlatform: selectedPlatform === 'ios' || selectedPlatform === 'android' ? selectedPlatform : null,
     steps,
   }
+}
+
+/** Platforms the CLI or the AI assistant has started: any step left `pending`. */
+export function startedBuilderPlatforms(state: BuilderOnboardingState): BuilderPlatform[] {
+  return (['ios', 'android'] as const).filter(platform => Object.values(state.steps[platform]).some(status => status && status !== 'pending'))
+}
+
+/** Hides the API key at the end of the Builder setup command until the user reveals it. */
+export function maskBuilderCommand(command: string): string {
+  return command.replace(/(-a )(\S{3})\S+(\S{4})$/, '$1$2••••••••$3')
 }
