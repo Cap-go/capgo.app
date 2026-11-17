@@ -866,24 +866,27 @@ async function handleUnlink() {
     toast.error(t('no-permission'))
     return
   }
-  dialogStore.openDialog({
+  // Unlinking serves the store version: show who goes back to it first.
+  if (dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management'))
+    await dialogStore.closeDialog()
+  if (!channel.value)
+    return
+  const confirmedChannelId = channel.value.id
+  const result = await confirmChannelChange({
+    appId: channel.value.app_id,
+    channelId: channel.value.id,
+    channelName: channel.value.name,
+    action: 'set',
+    currentBundleName: servedBundleName(channel.value.version?.name),
+    // Clearing the stable bundle resets any configured rollout (channel trigger).
+    stopsRolloutTarget: rolloutConfigured.value ? rolloutTargetName.value : null,
     title: `${t('unlink-bundle')} ${channel.value.version.name}`,
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('continue'),
-        role: 'primary',
-        handler: async () => {
-          if (await saveChannelChange('version', null))
-            await askUpdateNotificationAfterBundleChange()
-        },
-      },
-    ],
+    confirmText: t('continue'),
   })
-  return dialogStore.onDialogDismiss()
+  if (!result.confirmed || id.value !== confirmedChannelId)
+    return
+  if (await saveChannelChange('version', null))
+    await askUpdateNotificationAfterBundleChange()
 }
 
 // Warm the server-side device scan when the pointer reaches a bundle action, so
@@ -1325,6 +1328,8 @@ async function onSelectAutoUpdate(value: Database['public']['Enums']['disable_up
     console.error(error)
   }
   else {
+    // Previews computed under the previous strategy no longer apply.
+    invalidateChannelImpact(id.value)
     toast.info(t('cloud-replication-delay'))
   }
 
