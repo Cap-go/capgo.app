@@ -1,6 +1,8 @@
 import type { Context } from 'hono'
 import type { PgClient } from '../utils/pg.ts'
+import type { RolloutChannelTotals, RolloutChannelWindow } from '../utils/cloudflare_rollout_stats.ts'
 import type { AutoPauseAction } from '../utils/rollout.ts'
+import { readRolloutVersionTotalsCF } from '../utils/cloudflare_rollout_stats.ts'
 import { BRES, createHono, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
@@ -17,6 +19,7 @@ interface RolloutAutoPauseChannel {
   auto_pause_cooldown_minutes: number
   auto_pause_enabled: boolean
   auto_pause_failure_rate_bps: number | null
+  auto_pause_last_checked_at?: string | null
   auto_pause_last_triggered_at: string | null
   rollout_paused_at: string | null
   auto_pause_min_attempts: number | null
@@ -30,7 +33,16 @@ interface RolloutAutoPauseChannel {
 }
 
 export const app = createHono('', version)
-const AUTO_PAUSE_CHANNEL_PAGE_SIZE = 1000
+// Runs every 5 minutes through the queue consumer, which aborts the request
+// after 15 s. Each run checks the channels checked longest ago first, stops
+// starting new work after the time budget, and leaves the rest for the next
+// run (they are then the oldest-checked ones).
+const AUTO_PAUSE_MAX_CHANNELS_PER_RUN = 500
+// One pair of Analytics Engine queries covers up to this many channels of one app.
+const AUTO_PAUSE_CHANNELS_PER_QUERY = 20
+const AUTO_PAUSE_QUERY_CONCURRENCY = 3
+const AUTO_PAUSE_TIME_BUDGET_MS = 9_000
+const AUTO_PAUSE_QUERY_TIMEOUT_MS = 4_000
 
 function normalizeAction(action: string): AutoPauseAction {
   if (action === 'rollback' || action === 'notify')
@@ -87,22 +99,16 @@ async function updateCurrentRolloutChannel(pg: PgClient, channel: RolloutAutoPau
   return (result.rowCount ?? 0) > 0
 }
 
-async function evaluateChannel(c: Context, pg: PgClient, channel: RolloutAutoPauseChannel, now: Date) {
-  const versionName = getRolloutVersionName(channel)
-  if (!versionName)
-    return { skipped: true, reason: 'missing_rollout_version_name' }
+type AutoPausePolicyResult = ReturnType<typeof evaluateAutoPausePolicy>
 
-  const start = getWindowStart(channel.auto_pause_window_minutes, now)
-  const stats = await readStatsVersion(c, channel.app_id, start, now.toISOString(), { id: channel.id, name: channel.name })
-  const totals = stats
-    .filter(row => row.version_name === versionName)
-    .reduce((acc, row) => {
-      acc.installs += Number(row.install ?? 0)
-      acc.failures += Number(row.fail ?? 0)
-      return acc
-    }, { installs: 0, failures: 0 })
+interface ChannelEvaluation {
+  channel: RolloutAutoPauseChannel
+  versionName: string
+  result: AutoPausePolicyResult
+}
 
-  const result = evaluateAutoPausePolicy({
+function evaluatePolicy(channel: RolloutAutoPauseChannel, totals: RolloutChannelTotals, now: Date) {
+  return evaluateAutoPausePolicy({
     action: normalizeAction(channel.auto_pause_action),
     confidence: Number(channel.auto_pause_confidence ?? 0.95),
     cooldownMinutes: channel.auto_pause_cooldown_minutes ?? 60,
@@ -115,14 +121,54 @@ async function evaluateChannel(c: Context, pg: PgClient, channel: RolloutAutoPau
     minFailures: channel.auto_pause_min_failures,
     now,
   })
+}
 
-  if (!result.shouldTrigger) {
-    const updated = await updateCurrentRolloutChannel(pg, channel, { auto_pause_last_checked_at: now.toISOString() })
-    if (!updated)
-      return { skipped: true, reason: 'stale_rollout_state' }
-    return { triggered: false, reason: result.reason, result }
+/** Install and fail totals of each channel's rollout version inside its window. */
+async function readChannelTotals(c: Context, windows: RolloutChannelWindow[], now: Date): Promise<RolloutChannelTotals[] | null> {
+  if (c.env.VERSION_USAGE) {
+    return readRolloutVersionTotalsCF(c, windows, now.toISOString(), {
+      signal: AbortSignal.timeout(AUTO_PAUSE_QUERY_TIMEOUT_MS),
+    })
   }
+  // Postgres fallback (self-hosted, local): one read per channel, as before.
+  const totals: RolloutChannelTotals[] = []
+  for (const window of windows) {
+    const stats = await readStatsVersion(c, window.appId, window.start, now.toISOString(), window.channel)
+    totals.push(stats
+      .filter(row => row.version_name === window.versionName)
+      .reduce((acc, row) => {
+        acc.installs += Number(row.install ?? 0)
+        acc.failures += Number(row.fail ?? 0)
+        return acc
+      }, { installs: 0, failures: 0 }))
+  }
+  return totals
+}
 
+/**
+ * Stamps auto_pause_last_checked_at on every channel that did not trigger, in
+ * one statement. Channels whose rollout changed since they were loaded are
+ * left alone, like updateCurrentRolloutChannel. Returns the stamped ids.
+ */
+async function stampCheckedChannels(pg: PgClient, channels: RolloutAutoPauseChannel[], now: Date) {
+  if (channels.length === 0)
+    return new Set<number>()
+  const result = await pg.query<{ id: number | string }>(
+    `UPDATE public.channels ch
+    SET auto_pause_last_checked_at = $1::timestamptz
+    FROM ROWS FROM (pg_catalog.unnest($2::bigint[]), pg_catalog.unnest($3::bigint[])) AS checked(id, rollout_version)
+    WHERE ch.id = checked.id
+      AND ch.rollout_version = checked.rollout_version
+      AND ch.rollout_enabled = true
+      AND ch.rollout_percentage_bps > 0
+      AND ch.rollout_paused_at IS NULL
+    RETURNING ch.id`,
+    [now.toISOString(), channels.map(channel => channel.id), channels.map(channel => channel.rollout_version)],
+  )
+  return new Set(result.rows.map(row => Number(row.id)))
+}
+
+async function triggerChannel(c: Context, pg: PgClient, { channel, versionName, result }: ChannelEvaluation, now: Date) {
   const reason = buildReason(channel, versionName, result)
   const basePatch = {
     auto_pause_last_checked_at: now.toISOString(),
@@ -172,54 +218,170 @@ async function evaluateChannel(c: Context, pg: PgClient, channel: RolloutAutoPau
   return { triggered: true, reason, result }
 }
 
-async function loadAutoPauseChannels(pg: Parameters<typeof queryJson>[0]) {
-  const channels: RolloutAutoPauseChannel[] = []
-  let page = 0
+interface ChunkOutcome {
+  checked: number
+  triggered: number
+}
 
-  while (true) {
-    const from = page * AUTO_PAUSE_CHANNEL_PAGE_SIZE
-    let pageRows: RolloutAutoPauseChannel[]
+/** Evaluates up to AUTO_PAUSE_CHANNELS_PER_QUERY channels of one app with one pair of Analytics Engine queries. */
+async function evaluateChannelChunk(c: Context, pg: PgClient, channels: RolloutAutoPauseChannel[], now: Date): Promise<ChunkOutcome> {
+  const candidates: Array<{ channel: RolloutAutoPauseChannel, versionName: string }> = []
+  for (const channel of channels) {
+    const versionName = getRolloutVersionName(channel)
+    if (versionName)
+      candidates.push({ channel, versionName })
+  }
+  // Channels without a version name were counted as checked and never stamped.
+  const outcome: ChunkOutcome = { checked: channels.length - candidates.length, triggered: 0 }
+  if (candidates.length === 0)
+    return outcome
+
+  const windows = candidates.map(({ channel, versionName }) => ({
+    appId: channel.app_id,
+    channel: { id: channel.id, name: channel.name },
+    versionName,
+    start: getWindowStart(channel.auto_pause_window_minutes, now),
+  }))
+  const totals = await readChannelTotals(c, windows, now)
+  if (!totals) {
+    // Analytics Engine failed or timed out: leave these channels unstamped so
+    // the next run (oldest-checked first) evaluates them again.
+    cloudlog({ requestId: c.get('requestId'), message: 'Rollout auto-pause deferred channels after a stats read failure', channelIds: channels.map(channel => channel.id) })
+    return { checked: 0, triggered: 0 }
+  }
+
+  const untriggered: RolloutAutoPauseChannel[] = []
+  const toTrigger: ChannelEvaluation[] = []
+  candidates.forEach(({ channel, versionName }, index) => {
+    const result = evaluatePolicy(channel, totals[index]!, now)
+    if (result.shouldTrigger)
+      toTrigger.push({ channel, versionName, result })
+    else
+      untriggered.push(channel)
+  })
+
+  try {
+    const stamped = await stampCheckedChannels(pg, untriggered, now)
+    outcome.checked += untriggered.length
+    const stale = untriggered.filter(channel => !stamped.has(Number(channel.id)))
+    if (stale.length > 0)
+      cloudlog({ requestId: c.get('requestId'), message: 'Rollout auto-pause skipped stale channels', channelIds: stale.map(channel => channel.id) })
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Rollout auto-pause check stamp failed', channelIds: untriggered.map(channel => channel.id), error })
+  }
+
+  for (const evaluation of toTrigger) {
     try {
-      pageRows = await queryJson<RolloutAutoPauseChannel>(
-        pg,
-        `SELECT
-          ch.id,
-          ch.name,
-          ch.app_id,
-          ch.owner_org,
-          ch.rollout_version,
-          ch.auto_pause_enabled,
-          ch.auto_pause_window_minutes,
-          ch.auto_pause_failure_rate_bps,
-          ch.auto_pause_confidence,
-          ch.auto_pause_min_attempts,
-          ch.auto_pause_min_failures,
-          ch.auto_pause_action,
-          ch.auto_pause_cooldown_minutes,
-          ch.auto_pause_last_triggered_at,
-          ch.rollout_paused_at,
-          (SELECT json_build_object('name', av.name) FROM public.app_versions av WHERE av.id = ch.rollout_version) AS rollout_version_info
-        FROM public.channels ch
-        WHERE ch.rollout_enabled = true
-          AND ch.auto_pause_enabled = true
-          AND ch.rollout_percentage_bps > 0
-          AND ch.rollout_version IS NOT NULL
-          AND ch.rollout_paused_at IS NULL
-        ORDER BY ch.id ASC
-        LIMIT $1 OFFSET $2`,
-        [AUTO_PAUSE_CHANNEL_PAGE_SIZE, from],
-      )
+      const triggered = await triggerChannel(c, pg, evaluation, now)
+      outcome.checked += 1
+      if ('triggered' in triggered && triggered.triggered)
+        outcome.triggered += 1
     }
     catch (error) {
-      return { data: null, error }
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Rollout auto-pause channel evaluation failed', channelId: evaluation.channel.id, appId: evaluation.channel.app_id, error })
     }
+  }
+  return outcome
+}
 
-    channels.push(...pageRows)
+/**
+ * Chunks of at most `size` channels of one app, in first-seen order. One app
+ * per Analytics Engine query keeps each app at the sample rate it gets alone.
+ */
+function chunkChannels(channels: RolloutAutoPauseChannel[], size: number) {
+  const byApp = new Map<string, RolloutAutoPauseChannel[]>()
+  for (const channel of channels) {
+    const appChannels = byApp.get(channel.app_id) ?? []
+    appChannels.push(channel)
+    byApp.set(channel.app_id, appChannels)
+  }
+  const chunks: RolloutAutoPauseChannel[][] = []
+  for (const appChannels of byApp.values()) {
+    for (let index = 0; index < appChannels.length; index += size)
+      chunks.push(appChannels.slice(index, index + size))
+  }
+  return chunks
+}
 
-    if (pageRows.length < AUTO_PAUSE_CHANNEL_PAGE_SIZE)
-      return { data: channels, error: null }
+interface RunOptions {
+  chunkSize?: number
+  concurrency?: number
+  timeBudgetMs?: number
+  clock?: () => number
+}
 
-    page += 1
+/**
+ * Evaluates chunks with bounded concurrency and stops starting new chunks once
+ * the time budget is spent. Unstarted channels keep their old
+ * auto_pause_last_checked_at, so the next run takes them first.
+ */
+async function evaluateChannels(c: Context, pg: PgClient, channels: RolloutAutoPauseChannel[], now: Date, options: RunOptions = {}) {
+  const clock = options.clock ?? Date.now
+  const startedAt = clock()
+  const chunks = chunkChannels(channels, options.chunkSize ?? AUTO_PAUSE_CHANNELS_PER_QUERY)
+  const timeBudgetMs = options.timeBudgetMs ?? AUTO_PAUSE_TIME_BUDGET_MS
+  const totals = { checked: 0, triggered: 0, deferred: 0 }
+  let cursor = 0
+
+  async function worker() {
+    while (cursor < chunks.length) {
+      if (clock() - startedAt >= timeBudgetMs)
+        return
+      const chunk = chunks[cursor++]!
+      try {
+        const outcome = await evaluateChannelChunk(c, pg, chunk, now)
+        totals.checked += outcome.checked
+        totals.triggered += outcome.triggered
+      }
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Rollout auto-pause chunk evaluation failed', channelIds: chunk.map(channel => channel.id), error })
+      }
+    }
+  }
+
+  const workerCount = Math.min(Math.max(1, options.concurrency ?? AUTO_PAUSE_QUERY_CONCURRENCY), chunks.length)
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  totals.deferred = chunks.slice(cursor).reduce((count, chunk) => count + chunk.length, 0)
+  return totals
+}
+
+async function loadAutoPauseChannels(pg: Parameters<typeof queryJson>[0], limit = AUTO_PAUSE_MAX_CHANNELS_PER_RUN) {
+  try {
+    const rows = await queryJson<RolloutAutoPauseChannel>(
+      pg,
+      `SELECT
+        ch.id,
+        ch.name,
+        ch.app_id,
+        ch.owner_org,
+        ch.rollout_version,
+        ch.auto_pause_enabled,
+        ch.auto_pause_window_minutes,
+        ch.auto_pause_failure_rate_bps,
+        ch.auto_pause_confidence,
+        ch.auto_pause_min_attempts,
+        ch.auto_pause_min_failures,
+        ch.auto_pause_action,
+        ch.auto_pause_cooldown_minutes,
+        ch.auto_pause_last_checked_at,
+        ch.auto_pause_last_triggered_at,
+        ch.rollout_paused_at,
+        (SELECT json_build_object('name', av.name) FROM public.app_versions av WHERE av.id = ch.rollout_version) AS rollout_version_info
+      FROM public.channels ch
+      WHERE ch.rollout_enabled = true
+        AND ch.auto_pause_enabled = true
+        AND ch.rollout_percentage_bps > 0
+        AND ch.rollout_version IS NOT NULL
+        AND ch.rollout_paused_at IS NULL
+      ORDER BY ch.auto_pause_last_checked_at ASC NULLS FIRST, ch.id ASC
+      LIMIT $1`,
+      [limit],
+    )
+    return { data: rows, error: null }
+  }
+  catch (error) {
+    return { data: null, error }
   }
 }
 
@@ -236,22 +398,11 @@ app.post('/', middlewareAPISecret, async (c) => {
     }
 
     const channels = data ?? []
-    let triggered = 0
-    let checked = 0
+    const { checked, triggered, deferred } = await evaluateChannels(c, pg, channels, now)
+    if (deferred > 0 || channels.length >= AUTO_PAUSE_MAX_CHANNELS_PER_RUN)
+      cloudlog({ requestId: c.get('requestId'), message: 'Rollout auto-pause left channels for the next run', loaded: channels.length, deferred })
 
-    for (const channel of channels) {
-      try {
-        const evaluation = await evaluateChannel(c, pg, channel, now)
-        checked += 1
-        if ('triggered' in evaluation && evaluation.triggered)
-          triggered += 1
-      }
-      catch (error) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'Rollout auto-pause channel evaluation failed', channelId: channel.id, appId: channel.app_id, error })
-      }
-    }
-
-    return c.json({ ...BRES, checked, triggered })
+    return c.json({ ...BRES, checked, triggered, deferred })
   }
   finally {
     closeClient(c, pg)
@@ -260,6 +411,7 @@ app.post('/', middlewareAPISecret, async (c) => {
 
 export const __rolloutAutoPauseTestUtils__ = {
   buildReason,
+  evaluateChannels,
   getRolloutVersionName,
   getWindowStart,
   loadAutoPauseChannels,
