@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(25);
+SELECT plan(27);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -333,6 +333,30 @@ SELECT
             WHERE message->'payload'->>'appId' = (SELECT live_app FROM gbh_ctx)
         ),
         'stats_jobs queues an app that stores bundles without other activity'
+    );
+
+-- Deleting an app closes its open bundle lifetimes, so a recreated app ID is
+-- not billed for them; an already closed lifetime is left as is.
+INSERT INTO public.apps (app_id, icon_url, name, owner_org, user_id)
+SELECT 'com.test.gbhours.close', '', 'GB hours close', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid FROM gbh_ctx;
+INSERT INTO public.version_meta (timestamp, app_id, version_id, size) VALUES
+('2026-01-01 00:00:00', 'com.test.gbhours.close', 9100001, 500),
+('2026-01-01 00:00:00', 'com.test.gbhours.close', 9100002, 700),
+('2026-01-02 00:00:00', 'com.test.gbhours.close', 9100002, -700);
+DELETE FROM public.apps WHERE app_id = 'com.test.gbhours.close';
+
+SELECT
+    is(
+        (SELECT array_agg(size ORDER BY version_id) FROM public.version_meta WHERE app_id = 'com.test.gbhours.close' AND size < 0),
+        ARRAY[-500, -700]::bigint[],
+        'deleting an app closes its open bundle lifetimes'
+    );
+
+SELECT
+    ok(
+        (SELECT timestamp FROM public.version_meta WHERE app_id = 'com.test.gbhours.close' AND version_id = 9100001 AND size < 0)
+        > TIMESTAMP '2026-01-02 00:00:00',
+        'the lifetime closes at the deletion time'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.

@@ -94,7 +94,8 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
   catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'error inserting deleted_apps', error, app_id: record.app_id })
   }
-  // Storage is billed in GB-hours: record the hours since the last stats refresh up to the deletion.
+  // Storage is billed in GB-hours: record the hours since the last stats refresh up to the deletion
+  // (the time close_app_storage_lifetimes closed the bundles, not this handler's clock).
   // cron_stat_app no longer refreshes the app once it is gone.
   try {
     pg ??= await getPgClient(c)

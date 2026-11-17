@@ -308,6 +308,50 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- 2e. Close bundle lifetimes when an app is deleted
+-- ---------------------------------------------------------------------------
+-- Byte-hours are rebuilt from version_meta (a positive event when a bundle is
+-- stored, a negative one when it is removed). Deleting an app through the API
+-- removes app_versions_meta before app_versions, so the version delete path
+-- cannot emit the negative events and the bundles stay "stored": a recreated
+-- app ID would be billed for them. Close every still-open lifetime of the app
+-- at the deletion (the transaction time, like version_meta's default). This
+-- also records when the app was deleted: on_app_delete finalizes the deleted
+-- app's hours up to its latest closing event, whatever the queue delay.
+CREATE OR REPLACE FUNCTION public.close_app_storage_lifetimes()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+BEGIN
+  INSERT INTO public.version_meta (app_id, version_id, size)
+  SELECT added.app_id, added.version_id, -added.size
+  FROM public.version_meta added
+  WHERE added.app_id = OLD.app_id
+    AND added.size > 0
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.version_meta removed
+      WHERE removed.app_id = added.app_id
+        AND removed.version_id = added.version_id
+        AND removed.size < 0
+    )
+  ON CONFLICT DO NOTHING;
+  RETURN OLD;
+END;
+$$;
+
+ALTER FUNCTION public.close_app_storage_lifetimes() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.close_app_storage_lifetimes() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.close_app_storage_lifetimes() FROM anon, authenticated;
+
+DROP TRIGGER IF EXISTS close_app_storage_lifetimes ON public.apps;
+CREATE TRIGGER close_app_storage_lifetimes
+AFTER DELETE ON public.apps
+FOR EACH ROW EXECUTE FUNCTION public.close_app_storage_lifetimes();
+
+-- ---------------------------------------------------------------------------
 -- 3. Org billing metrics read storage from byte-hours
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.calculate_org_metrics_cache_entry(

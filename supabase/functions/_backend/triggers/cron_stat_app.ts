@@ -530,14 +530,32 @@ export function deletedAppOwnedSince(record: DeletedAppRecord): string | null {
 }
 
 /**
+ * When the app was deleted: close_app_storage_lifetimes closes every open bundle lifetime at the
+ * deletion, so the latest closing event is the deletion time. Falls back to `fallback` (the
+ * handler's clock) when the app had no bundle to close.
+ */
+async function readAppDeletedAt(pg: PgClient, appId: string, fallback: string): Promise<string> {
+  const { rows } = await pg.query<{ deleted_at: string | Date | null }>(
+    `SELECT max(timestamp) AS deleted_at
+     FROM public.version_meta
+     WHERE app_id = $1
+       AND size < 0
+       AND timestamp <= $2::timestamp`,
+    [appId, fallback],
+  )
+  return toIsoTimestamp(rows[0]?.deleted_at) ?? fallback
+}
+
+/**
  * Records a deleted app's storage hours from its last refresh up to the deletion, in its owner's
  * billing cycle: cron_stat_app skips apps that no longer exist, so that interval would be lost.
  */
-export async function finalizeDeletedAppStorageHourly(c: Context, pg: PgClient, record: DeletedAppRecord, deletedAt: string) {
+export async function finalizeDeletedAppStorageHourly(c: Context, pg: PgClient, record: DeletedAppRecord, processedAt: string) {
   if (!record.owner_org)
     return null
   const writtenAt = new Date().toISOString()
-  const events = await readVersionMetaStorageRows(pg, record.app_id, deletedAt)
+  const deletedAt = await readAppDeletedAt(pg, record.app_id, processedAt)
+  const events = await readVersionMetaStorageRows(pg, record.app_id, processedAt)
   const cycle = await readCycleBefore(pg, record.owner_org, deletedAt)
   if (!cycle?.cycle_start || !cycle.cycle_end)
     return null

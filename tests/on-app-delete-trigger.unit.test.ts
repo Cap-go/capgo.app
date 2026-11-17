@@ -90,13 +90,19 @@ describe('on_app_delete trigger', () => {
     expect(statements.filter(sql => sql.startsWith('DELETE FROM public.'))).toHaveLength(9)
   })
 
-  it('records the storage hours from the last refresh up to the deletion', async () => {
+  it('records the storage hours from the last refresh up to the deletion time', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-01-10T12:00:00.000Z'))
     try {
       pgQuery.mockImplementation(async (sql: string) => {
+        // close_app_storage_lifetimes closed the bundle when the app was deleted, at 06:00.
+        if (sql.includes('max(timestamp) AS deleted_at'))
+          return { rows: [{ deleted_at: '2026-01-10T06:00:00.000Z' }], rowCount: 1 } as any
         if (sql.includes('FROM public.version_meta'))
-          return { rows: [{ timestamp: '2026-01-10T00:00:00.000Z', version_id: 1, size: 100 }], rowCount: 1 } as any
+          return { rows: [
+            { timestamp: '2026-01-10T00:00:00.000Z', version_id: 1, size: 100 },
+            { timestamp: '2026-01-10T06:00:00.000Z', version_id: 1, size: -100 },
+          ], rowCount: 2 } as any
         if (sql.includes('billing_cycle_for_anchor'))
           return { rows: [{ cycle_start: '2026-01-01T00:00:00.000Z', cycle_end: '2026-02-01T00:00:00.000Z' }], rowCount: 1 } as any
         return { rows: [], rowCount: 0 }
@@ -121,8 +127,9 @@ describe('on_app_delete trigger', () => {
       const replace = pgQuery.mock.calls.find(([sql]) => sql.includes('replace_app_storage_hourly'))
       // Whole-cycle segment: the app existed since the cycle start.
       expect(replace?.[1]?.slice(0, 7)).toEqual(['com.test.delete', 'org-1', '2026-01-01', '2026-02-01', '2026-02-01', '2026-01-01T00:00:00.000Z', true])
-      // 100 bytes for the 12 hours between the upload and the deletion.
-      expect(JSON.parse(replace?.[1]?.[7] as string)).toEqual([{ cycle_start: '2026-01-01', date: '2026-01-10', storage_byte_hours: 1200 }])
+      // 100 bytes for the 6 hours between the upload and the deletion, not up to the handler's
+      // clock (12:00): the queue delay is not billed.
+      expect(JSON.parse(replace?.[1]?.[7] as string)).toEqual([{ cycle_start: '2026-01-01', date: '2026-01-10', storage_byte_hours: 600 }])
     }
     finally {
       pgQuery.mockReset()
