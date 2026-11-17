@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   executeSQL,
   getSupabaseClient,
+  BASE_URL,
   ORG_ID,
   POSTGRES_URL,
   resetAndSeedAppData,
@@ -169,14 +170,15 @@ describe('app transfer security', () => {
         p_new_org_id: destinationOrgId,
       }).then(result => result)
 
-      // The transfer reaches the app row and blocks on the refresh's lock: a backend waits on an
-      // ungranted lock, and the transfer has not answered while the lock is held.
+      // The transfer reaches the app row and blocks on this refresh's lock: a backend running
+      // transfer_app is blocked by this connection, and the transfer has not answered meanwhile.
       let waiting = false
       for (let attempt = 0; attempt < 100 && !waiting; attempt++) {
         const { rows } = await refresh.query<{ waiting: boolean }>(
           `SELECT EXISTS (
-             SELECT 1 FROM pg_catalog.pg_locks
-             WHERE NOT granted AND pid <> pg_catalog.pg_backend_pid()
+             SELECT 1 FROM pg_catalog.pg_stat_activity activity
+             WHERE pg_catalog.pg_backend_pid() = ANY (pg_catalog.pg_blocking_pids(activity.pid))
+               AND activity.query ILIKE '%transfer_app%'
            ) AS waiting`,
         )
         waiting = rows[0]?.waiting ?? false
@@ -243,6 +245,31 @@ describe('app transfer security', () => {
     expect(transferredAt).toBeGreaterThan(refreshWrittenAt)
     expect(transferredAt).toBeGreaterThan(Date.parse(watermark.written_at))
     expect(transferredAt).toBeGreaterThan(refreshCommittingAt)
+
+    // The new owner's refresh then finalizes the former owner exactly up to the transfer, and the
+    // new owner accrues nothing before it.
+    const refreshResponse = await fetch(`${BASE_URL}/triggers/cron_stat_app`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apisecret': 'testsecret' },
+      body: JSON.stringify({ appId, orgId: destinationOrgId }),
+    })
+    expect(refreshResponse.status, await refreshResponse.clone().text()).toBe(200)
+    const watermarks = await executeSQL<{ owner_org: string, calculated_until: string }>(
+      `SELECT owner_org, max(calculated_until)::text AS calculated_until
+       FROM public.daily_storage_hourly_refreshes
+       WHERE app_id = $1
+       GROUP BY owner_org`,
+      [appId],
+    )
+    const formerFinalizedUntil = watermarks.find(row => row.owner_org === ORG_ID)?.calculated_until
+    expect(formerFinalizedUntil && Date.parse(formerFinalizedUntil)).toBe(transferredAt)
+    const newOwnerRows = await executeSQL<{ before_transfer: number }>(
+      `SELECT count(*)::int AS before_transfer
+       FROM public.daily_storage_hourly
+       WHERE app_id = $1 AND owner_org = $2::uuid AND date < ($3::timestamptz AT TIME ZONE 'UTC')::date`,
+      [appId, destinationOrgId, new Date(transferredAt).toISOString()],
+    )
+    expect(newOwnerRows[0].before_transfer).toBe(0)
     expect(versionRows.length).toBeGreaterThan(0)
     expect(versionRows.every(version => version.owner_org === destinationOrgId)).toBe(true)
   })
