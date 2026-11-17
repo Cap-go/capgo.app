@@ -113,6 +113,8 @@ export async function readCappedBytes(stream: ReadableStream<Uint8Array>, maxByt
 const SIMULATOR_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const SAVED_IPA_MAX_BYTES = 512 * 1024 * 1024
 const SAVED_IPA_TRANSFER_MS = 60_000
+// Upload, install and first launch of the app on an emulated device.
+const SAVED_IPA_INSTALL_MS = 180_000
 
 export function savedIpaContentLength(header: string | null): number | undefined {
   if (!header)
@@ -123,21 +125,16 @@ export function savedIpaContentLength(header: string | null): number | undefined
   return length
 }
 
-export function multipartIpaStream(body: ReadableStream<Uint8Array>, boundary: string, maxBytes = SAVED_IPA_MAX_BYTES): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder()
+// The saved IPA as the raw request body, capped at maxBytes. The simulator host's firewall answers
+// large multipart uploads with a challenge page instead of passing them on; a raw body passes.
+export function ipaUploadStream(body: ReadableStream<Uint8Array>, maxBytes = SAVED_IPA_MAX_BYTES): ReadableStream<Uint8Array> {
   let sent = 0
   return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(`--${boundary}\r\nContent-Disposition: form-data; name="ipa"; filename="app.ipa"\r\nContent-Type: application/octet-stream\r\n\r\n`))
-    },
     transform(chunk, controller) {
       sent += chunk.byteLength
       if (sent > maxBytes)
         throw new Error('The saved build is too large to install.')
       controller.enqueue(chunk)
-    },
-    flush(controller) {
-      controller.enqueue(encoder.encode(`\r\n--${boundary}--\r\n`))
     },
   }))
 }
@@ -290,22 +287,29 @@ async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: strin
     await file.body.cancel()
     throw new Error('The saved build is too large to install.')
   }
-  const boundary = `capgo-${crypto.randomUUID()}`
   const installUrl = new URL('api/install', sessionUrl.endsWith('/') ? sessionUrl : `${sessionUrl}/`)
   const init: RequestInit & { duplex?: 'half' } = {
     method: 'POST',
     headers: {
       'authorization': `Bearer ${accessKey}`,
-      'content-type': `multipart/form-data; boundary=${boundary}`,
+      'content-type': 'application/octet-stream',
     },
-    body: multipartIpaStream(file.body, boundary),
+    body: ipaUploadStream(file.body),
     duplex: 'half',
-    signal: AbortSignal.timeout(SAVED_IPA_TRANSFER_MS),
+    signal: AbortSignal.timeout(SAVED_IPA_INSTALL_MS),
   }
   const response = await fetch(installUrl, init)
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    throw new Error(text.slice(0, 300) || 'The simulator could not install the build.')
+    const reason = (() => {
+      try {
+        return (JSON.parse(text) as { error?: string }).error
+      }
+      catch {
+        return undefined
+      }
+    })()
+    throw new Error((reason || text).slice(0, 300) || 'The simulator could not install the build.')
   }
 }
 

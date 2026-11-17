@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, multipartIpaStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, SIMULATOR_STOPPED_MESSAGE, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorListItem, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, ipaUploadStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, SIMULATOR_STOPPED_MESSAGE, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorListItem, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
 import { deviceStopTime } from '../supabase/functions/_backend/public/build/simulator_host.ts'
 
 describe('simulator sessions', () => {
@@ -145,10 +145,10 @@ describe('simulator sessions', () => {
     expect(savedIpaContentLength(null)).toBeUndefined()
     expect(savedIpaContentLength(String(SAVED_IPA_MAX_BYTES))).toBe(SAVED_IPA_MAX_BYTES)
     expect(savedIpaContentLength(String(SAVED_IPA_MAX_BYTES + 1))).toBeGreaterThan(SAVED_IPA_MAX_BYTES)
-    const text = new TextDecoder().decode(await new Response(multipartIpaStream(new Blob(['ipa']).stream(), 'bound')).arrayBuffer())
-    expect(text.startsWith('--bound\r\nContent-Disposition: form-data; name="ipa"; filename="app.ipa"\r\n')).toBe(true)
-    expect(text.endsWith('ipa\r\n--bound--\r\n')).toBe(true)
-    await expect(new Response(multipartIpaStream(new Blob([new Uint8Array(8)]).stream(), 'bound', 4)).arrayBuffer()).rejects.toThrow('too large')
+    // The raw IPA, not a multipart form: the simulator host challenges large multipart uploads.
+    const text = new TextDecoder().decode(await new Response(ipaUploadStream(new Blob(['ipa']).stream())).arrayBuffer())
+    expect(text).toBe('ipa')
+    await expect(new Response(ipaUploadStream(new Blob([new Uint8Array(8)]).stream(), 4)).arrayBuffer()).rejects.toThrow('too large')
     const chunks = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array(3))
@@ -156,6 +156,6 @@ describe('simulator sessions', () => {
         controller.close()
       },
     })
-    await expect(new Response(multipartIpaStream(chunks, 'bound', 4)).arrayBuffer()).rejects.toThrow('too large')
+    await expect(new Response(ipaUploadStream(chunks, 4)).arrayBuffer()).rejects.toThrow('too large')
   })
 })
