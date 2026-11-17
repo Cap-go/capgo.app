@@ -69,7 +69,7 @@ async function refreshPendingOnboardingApp() {
   // of querying the apps table on every route change. An app registered
   // outside this session (CLI or AI agent) shows up within that window.
   const storeApps = organizationStore.getFreshOrgApps(singleOrganization.gid, ONBOARDING_APPS_MAX_AGE_MS)
-  let data: { app_id: string, need_onboarding: boolean, onboarding?: OrganizationApp['onboarding'] }[] | null
+  let data: Pick<OrganizationApp, 'app_id' | 'need_onboarding' | 'onboarding'>[] | null
   if (storeApps) {
     data = storeApps.slice(0, 2)
   }

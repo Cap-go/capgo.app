@@ -6,6 +6,7 @@ import { toast } from 'vue-sonner'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
+import { createHistoryContextLoader } from '~/services/historyContext'
 import { checkPermissions } from '~/services/permissions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
@@ -223,46 +224,21 @@ async function openDetails(item: HistoryEntry) {
   selectedEntry.value = null
 }
 
-// Members only depend on the organization and channel: load them once per
-// scope instead of on every page or search change. The current bundle is also
-// kept per scope, but an explicit reload refetches it (it can change from the
-// CLI or another browser while the page is open). Each part is cached only
-// after it loaded, and results of a superseded scope are dropped.
-let membersScopeKey = ''
-let versionScopeKey = ''
-let historyContextGeneration = 0
-function historyScopeKey() {
-  return JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null])
-}
-async function loadHistoryContext(options: { refreshCurrentVersion?: boolean } = {}) {
-  const key = historyScopeKey()
-  const generation = ++historyContextGeneration
-  const isCurrent = () => generation === historyContextGeneration && key === historyScopeKey()
-  const needVersion = options.refreshCurrentVersion === true || versionScopeKey !== key
-  const needMembers = membersScopeKey !== key
-  if (!needVersion && !needMembers)
-    return
-  const [versionLoaded, loadedMembers] = await Promise.all([
-    needVersion ? fetchCurrentVersion(isCurrent) : Promise.resolve(true),
-    needMembers ? organizationStore.getMembers() : Promise.resolve(null),
-  ])
-  if (!isCurrent())
-    return
-  if (needVersion && versionLoaded)
-    versionScopeKey = key
-  if (loadedMembers) {
-    members.value = loadedMembers
-    // An empty list means the members request failed: retry on the next load.
-    if (loadedMembers.length > 0)
-      membersScopeKey = key
-  }
-}
+// Members and the current bundle load once per scope (see historyContext.ts).
+const historyContext = createHistoryContextLoader({
+  scopeKey: () => JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null]),
+  loadCurrentVersion: fetchCurrentVersion,
+  loadMembers: () => organizationStore.getMembers(),
+  applyMembers: (loaded) => {
+    members.value = loaded
+  },
+})
 
 async function fetchHistory(options: { refreshCurrentVersion?: boolean } = {}) {
   loading.value = true
   try {
     historyEntries.value = []
-    await loadHistoryContext(options)
+    await historyContext.load(options)
 
     // Without a search, page audit rows in the database: each meaningful row maps to
     // one or two entries. Searching matches derived text (bundle names, labels,

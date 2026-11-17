@@ -48,12 +48,15 @@ export function splitUpdateStatsWindow(start: string, end: string, maxDays = UPD
   return windows
 }
 
+/** A bigint sum: a number, or a string when it is too large for JSON numbers. */
+type DailyCountValue = number | string | null
+
 export interface UpdateDailyCountRow {
   app_id: string
   date: string
-  install_count: number | string | null
-  fail_count: number | string | null
-  get_count: number | string | null
+  install_count: DailyCountValue
+  fail_count: DailyCountValue
+  get_count: DailyCountValue
 }
 
 export interface DailyVersionStat {

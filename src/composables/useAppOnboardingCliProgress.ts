@@ -157,7 +157,10 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
           startPolling()
       }
       if (data) {
-        const snapshot = JSON.stringify([data.onboarding, data.hasChannel ?? null])
+        // The endpoint only reports hasChannel on some polls: an omitted value
+        // means unchanged, not progress.
+        const reportedHasChannel = typeof data.hasChannel === 'boolean' ? data.hasChannel : hasChannel.value
+        const snapshot = JSON.stringify([data.onboarding, reportedHasChannel])
         if (snapshot !== lastSnapshot) {
           if (lastSnapshot !== undefined)
             pollSoon()

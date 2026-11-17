@@ -201,4 +201,22 @@ describe('useAppOnboardingCliProgress polling', () => {
     expect(invokeCapgoApiMock).toHaveBeenCalledTimes(calls + 1)
     app.unmount()
   })
+
+  it('still backs off when the endpoint omits the channel state on most polls', async () => {
+    const { CLI_PROGRESS_POLL_FAST_PHASE_MS } = await import('../src/composables/useAppOnboardingCliProgress')
+    // Like private/onboarding_progress: hasChannel only on the initial request and every fifth poll.
+    invokeCapgoApiMock.mockImplementation(async (_path: string, options: { body: { N: number, initial: boolean } }) => ({
+      data: options.body.initial || options.body.N % 5 === 0
+        ? { onboarding: PENDING_ONBOARDING, hasChannel: false }
+        : { onboarding: PENDING_ONBOARDING },
+      error: null,
+    }))
+    const app = await mountProgress()
+    await vi.advanceTimersByTimeAsync(CLI_PROGRESS_POLL_FAST_PHASE_MS + 5 * 60_000)
+    const calls = invokeCapgoApiMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(invokeCapgoApiMock.mock.calls.length - calls).toBeLessThanOrEqual(2)
+    app.unmount()
+  })
 })
+

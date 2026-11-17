@@ -8,6 +8,13 @@ import { useOrganizationStore } from './organization'
 /** Reuse the organization store's app catalog only while it is this recent. */
 const ORG_STORE_APPS_MAX_AGE_MS = 5 * 60_000
 
+/** Same order as the apps query (`order('app_id')`). */
+function compareAppIds(a: { app_id: string }, b: { app_id: string }) {
+  if (a.app_id === b.app_id)
+    return 0
+  return a.app_id < b.app_id ? -1 : 1
+}
+
 export const useDashboardAppsStore = defineStore('dashboardApps', () => {
   const apps = ref<{ app_id: string, name: string | null }[]>([])
   const isLoading = ref(false)
@@ -69,7 +76,7 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
     if (storeApps) {
       apps.value = storeApps
         .map(app => ({ app_id: app.app_id, name: app.name }))
-        .sort((a, b) => (a.app_id < b.app_id ? -1 : a.app_id > b.app_id ? 1 : 0))
+        .sort(compareAppIds)
       isLoaded.value = true
       const display = useDisplayStore()
       display.setAppNameResolver(appId => appNames.value[appId])
