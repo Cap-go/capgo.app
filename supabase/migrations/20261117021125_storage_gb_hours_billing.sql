@@ -282,7 +282,9 @@ GRANT EXECUTE ON FUNCTION public.get_org_storage_usage(uuid) TO authenticated, s
 -- apps with recent uploads, MAU, device usage or bandwidth, so an app that
 -- keeps bundles but has no other activity stopped accruing billed hours. Such
 -- apps of billable orgs (active subscription or usage credits) are queued too,
--- at most once a day.
+-- at most once a day: while they store a bundle, and once more after a bundle
+-- event (such as the last bundle's removal) newer than their last refresh, so
+-- the hours up to that removal are recorded.
 CREATE OR REPLACE FUNCTION public.process_cron_stats_jobs()
 RETURNS void
 LANGUAGE plpgsql
@@ -328,11 +330,19 @@ BEGIN
       WHERE (si.status = 'succeeded' OR o.has_usage_credits)
         AND (s.stats_updated_at IS NULL
           OR s.stats_updated_at < pg_catalog.timezone('UTC', pg_catalog.now()) - INTERVAL '20 hours')
-        AND EXISTS (
-          SELECT 1
-          FROM public.app_versions stored
-          WHERE stored.app_id = a.app_id
-            AND stored.deleted = false
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM public.app_versions stored
+            WHERE stored.app_id = a.app_id
+              AND stored.deleted = false
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM public.version_meta event
+            WHERE event.app_id = a.app_id
+              AND (s.stats_updated_at IS NULL OR event.timestamp > s.stats_updated_at)
+          )
         )
     )
     SELECT DISTINCT
@@ -396,6 +406,43 @@ DROP TRIGGER IF EXISTS close_app_storage_lifetimes ON public.apps;
 CREATE TRIGGER close_app_storage_lifetimes
 AFTER DELETE ON public.apps
 FOR EACH ROW EXECUTE FUNCTION public.close_app_storage_lifetimes();
+
+-- Same for one bundle hard-deleted on its own (cron_clear_versions removes a
+-- bundle whose R2 object is gone): the app_versions_meta cascade removes its
+-- size before on_version_delete runs, so that path cannot close it either.
+CREATE OR REPLACE FUNCTION public.close_version_storage_lifetime()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+BEGIN
+  INSERT INTO public.version_meta (app_id, version_id, size)
+  SELECT added.app_id, added.version_id, -added.size
+  FROM public.version_meta added
+  WHERE added.app_id = OLD.app_id
+    AND added.version_id = OLD.id
+    AND added.size > 0
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.version_meta removed
+      WHERE removed.app_id = added.app_id
+        AND removed.version_id = added.version_id
+        AND removed.size < 0
+    )
+  ON CONFLICT DO NOTHING;
+  RETURN OLD;
+END;
+$$;
+
+ALTER FUNCTION public.close_version_storage_lifetime() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.close_version_storage_lifetime() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.close_version_storage_lifetime() FROM anon, authenticated;
+
+DROP TRIGGER IF EXISTS close_version_storage_lifetime ON public.app_versions;
+CREATE TRIGGER close_version_storage_lifetime
+AFTER DELETE ON public.app_versions
+FOR EACH ROW EXECUTE FUNCTION public.close_version_storage_lifetime();
 
 -- ---------------------------------------------------------------------------
 -- 2f. Trigger messages carry when the change happened

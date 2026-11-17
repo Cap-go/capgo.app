@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(30);
+SELECT plan(32);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -408,6 +408,41 @@ SELECT
         (SELECT timestamp FROM public.version_meta WHERE app_id = 'com.test.gbhours.close' AND version_id = 9100001 AND size < 0)
         > TIMESTAMP '2026-01-02 00:00:00',
         'the lifetime closes at the deletion time'
+    );
+
+-- Hard-deleting one bundle closes its lifetime too.
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider)
+SELECT 9100101, live_app, '9.9.9', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2' FROM gbh_ctx;
+INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+SELECT '2026-01-03 00:00:00', live_app, 9100101, 321 FROM gbh_ctx;
+DELETE FROM public.app_versions WHERE id = 9100101;
+
+SELECT
+    is(
+        (SELECT size FROM public.version_meta WHERE version_id = 9100101 AND size < 0),
+        -321::bigint,
+        'hard-deleting a bundle closes its storage lifetime'
+    );
+
+-- stats_jobs refreshes an idle app once more after its last bundle is removed.
+INSERT INTO public.apps (app_id, icon_url, name, owner_org, user_id)
+SELECT 'com.test.gbhours.lastbundle', '', 'GB hours last bundle', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid FROM gbh_ctx;
+INSERT INTO public.app_stats_refresh_state (app_id, owner_org, stats_updated_at)
+SELECT 'com.test.gbhours.lastbundle', org_id, pg_catalog.timezone('UTC', now()) - interval '2 days' FROM gbh_ctx
+ON CONFLICT (app_id) DO UPDATE SET stats_updated_at = EXCLUDED.stats_updated_at, stats_refresh_requested_at = NULL;
+INSERT INTO public.version_meta (timestamp, app_id, version_id, size) VALUES
+(pg_catalog.timezone('UTC', now()) - interval '40 days', 'com.test.gbhours.lastbundle', 9100201, 100),
+(pg_catalog.timezone('UTC', now()) - interval '1 day', 'com.test.gbhours.lastbundle', 9100201, -100);
+DELETE FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' = 'com.test.gbhours.lastbundle';
+SELECT public.process_cron_stats_jobs();
+
+SELECT
+    ok(
+        EXISTS (
+            SELECT 1 FROM pgmq.q_cron_stat_app
+            WHERE message->'payload'->>'appId' = 'com.test.gbhours.lastbundle'
+        ),
+        'stats_jobs refreshes an idle app after its last bundle was removed'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.
