@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(42);
+SELECT plan(45);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -600,6 +600,39 @@ SELECT
     ok(
         NOT EXISTS (SELECT 1 FROM public.version_meta WHERE version_id = 9100303 AND size < 0),
         'a live bundle stays open'
+    );
+
+-- Live bundles with a known size but no upload event get one; deleted ones do not.
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider, deleted)
+SELECT 9100304, live_app, '9.9.6', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', false FROM gbh_ctx
+UNION ALL
+SELECT 9100305, live_app, '9.9.5', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', true FROM gbh_ctx;
+INSERT INTO public.app_versions_meta (id, app_id, checksum, size, created_at)
+SELECT 9100304, live_app, 'backfill-live', 700, TIMESTAMPTZ '2026-01-03 00:00:00+00' FROM gbh_ctx
+UNION ALL
+SELECT 9100305, live_app, 'backfill-deleted', 800, TIMESTAMPTZ '2026-01-03 00:00:00+00' FROM gbh_ctx
+UNION ALL
+SELECT 9100303, live_app, 'backfill-existing', 600, TIMESTAMPTZ '2026-01-03 00:00:00+00' FROM gbh_ctx;
+SELECT public.backfill_missing_storage_lifetimes();
+
+SELECT
+    is(
+        (SELECT array_agg(ARRAY[timestamp::text, size::text]) FROM public.version_meta WHERE version_id = 9100304),
+        ARRAY[ARRAY['2026-01-03 00:00:00', '700']],
+        'a live bundle missing its upload event gets one at its metadata time'
+    );
+
+SELECT
+    ok(
+        NOT EXISTS (SELECT 1 FROM public.version_meta WHERE version_id = 9100305),
+        'a deleted bundle gets no upload event'
+    );
+
+SELECT
+    is(
+        (SELECT count(*)::int FROM public.version_meta WHERE version_id = 9100303 AND size > 0),
+        1,
+        'a bundle with an upload event keeps only that one'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.

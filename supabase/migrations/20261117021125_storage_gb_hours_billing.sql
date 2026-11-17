@@ -820,6 +820,48 @@ GRANT EXECUTE ON FUNCTION public.close_orphaned_storage_lifetimes() TO service_r
 
 SELECT public.close_orphaned_storage_lifetimes();
 
+-- Live bundles whose size is known (app_versions_meta) but whose upload event
+-- was never written to version_meta: the snapshot billing read the size, so a
+-- failed event write was harmless, but byte-hours accrue only from that event.
+-- Each one gets its upload event at the metadata time (else the version's
+-- creation), so its storage keeps being billed. Idempotent.
+CREATE OR REPLACE FUNCTION public.backfill_missing_storage_lifetimes()
+RETURNS bigint
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+  WITH added AS (
+    INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+    SELECT
+      pg_catalog.timezone('UTC', LEAST(COALESCE(meta.created_at, versions.created_at, pg_catalog.now()), pg_catalog.now())),
+      versions.app_id,
+      versions.id,
+      meta.size
+    FROM public.app_versions versions
+    JOIN public.app_versions_meta meta ON meta.id = versions.id
+    WHERE NOT versions.deleted
+      AND meta.size > 0
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.version_meta existing
+        WHERE existing.app_id = versions.app_id
+          AND existing.version_id = versions.id
+          AND existing.size > 0
+      )
+    ON CONFLICT DO NOTHING
+    RETURNING 1
+  )
+  SELECT count(*) FROM added
+$$;
+
+ALTER FUNCTION public.backfill_missing_storage_lifetimes() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.backfill_missing_storage_lifetimes() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.backfill_missing_storage_lifetimes() FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.backfill_missing_storage_lifetimes() TO service_role;
+
+SELECT public.backfill_missing_storage_lifetimes();
+
 -- ---------------------------------------------------------------------------
 -- 3. Org billing metrics read storage from byte-hours
 -- ---------------------------------------------------------------------------
