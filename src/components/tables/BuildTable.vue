@@ -19,7 +19,7 @@ import { dismissBuildNextSteps, isBuildActive, isBuildNextStepsDismissed, latest
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { rememberSimulator, simulatorConfigured, simulatorEpoch } from '~/services/simulatorSessions'
+import { noteSimulatorStartError, rememberSimulator, simulatorConfigured, simulatorEpoch } from '~/services/simulatorSessions'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
@@ -356,6 +356,9 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean, silen
   // Auto-refresh only asks the builder again when a build newly succeeded.
   if (silent && key === savedOutputsKey)
     return
+  // Newly succeeded builds stay "unknown" until the lookup answers, never "not saved".
+  if (key !== savedOutputsKey)
+    savedOutputsReady.value = false
   if (jobIds.length === 0) {
     savedOutputs.value = {}
     savedOutputsReady.value = true
@@ -409,8 +412,10 @@ async function openSavedBuild(jobId: string) {
       body: JSON.stringify({ app_id: appId, platform: 'ios', build_job_id: jobId }),
     })
     const payload = await response.json() as { message?: string, error?: string, data?: { id?: string, url?: string, install_error?: string | null } }
-    if (!response.ok)
+    if (!response.ok) {
+      noteSimulatorStartError(payload)
       throw new Error(payload.message || payload.error || t('simulator-did-not-start'))
+    }
     const url = payload.data?.url || ''
     if (payload.data?.id && epoch === simulatorEpoch())
       rememberSimulator(appId, { id: payload.data.id, url })
@@ -458,7 +463,7 @@ function savedBuildCell(elem: Element) {
       'href': output?.url,
       'target': '_blank',
       'rel': 'noopener',
-      'class': 'd-btn d-btn-xs d-btn-primary gap-1 text-white',
+      'class': 'd-btn d-btn-xs d-btn-primary gap-1',
       'data-test': 'saved-build-download',
       'onClick': (event: Event) => {
         event.stopPropagation()
@@ -503,6 +508,13 @@ function openBuild(elem: Element) {
 function closeBuild() {
   openedBuild.value = null
   void getData(true)
+}
+
+function detailSimulator() {
+  const jobId = openedBuild.value?.builder_job_id
+  track('Build Next Step Clicked', { action: 'simulator', source: 'detail' })
+  if (jobId)
+    void openSavedBuild(jobId)
 }
 
 function retryBuild() {
@@ -550,7 +562,8 @@ watch(hasActiveBuild, (active) => {
   if (!active)
     return
   refreshTimer = setInterval(() => {
-    if (document.visibilityState === 'visible' && !isLoading.value)
+    // The open build view polls its own row: the hidden table waits.
+    if (document.visibilityState === 'visible' && !isLoading.value && !openedBuild.value)
       void getData(true)
   }, REFRESH_MS)
 })
@@ -702,6 +715,7 @@ watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
         @close="closeBuild"
         @done="closeBuild"
         @retry="retryBuild"
+        @download="track('Build Next Step Clicked', { action: 'download', source: 'detail' })"
       >
         <template #success-actions>
           <button
@@ -710,7 +724,7 @@ watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
             class="d-btn d-btn-outline gap-2"
             :disabled="openingJobs.includes(openedBuild.builder_job_id ?? '')"
             data-test="build-detail-simulator"
-            @click="track('Build Next Step Clicked', { action: 'simulator', source: 'detail' }); openSavedBuild(openedBuild.builder_job_id ?? '')"
+            @click="detailSimulator"
           >
             <IconSmartphone class="h-4 w-4" />
             {{ openingJobs.includes(openedBuild.builder_job_id ?? '') ? t('simulator-starting') : t('open-in-simulator') }}
@@ -747,7 +761,7 @@ watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
             <p class="text-sm text-slate-600 dark:text-slate-300">
               {{ t('build-next-steps-install-hint') }}
             </p>
-            <button type="button" class="mt-auto text-white d-btn d-btn-sm d-btn-primary gap-2" data-test="build-next-steps-install" @click="nextStepInstall">
+            <button type="button" class="mt-auto d-btn d-btn-sm d-btn-primary gap-2" data-test="build-next-steps-install" @click="nextStepInstall">
               <IconDownload class="w-4 h-4" />
               {{ t('build-next-steps-install') }}
             </button>

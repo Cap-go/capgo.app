@@ -32,7 +32,7 @@ const props = defineProps<{
   // Show a back control that leaves the live page while the build runs.
   closable?: boolean
 }>()
-const emit = defineEmits<{ retry: [], done: [], close: [] }>()
+const emit = defineEmits<{ retry: [], done: [], close: [], download: [] }>()
 
 const POLL_MS = 3000
 const HEARTBEAT_MS = 2000
@@ -357,7 +357,7 @@ onUnmounted(stop)
             {{ downloadUrl ? t('build-live-success-download') : !outputsChecked ? '' : outputsUnknown ? t('build-live-success-output-unknown') : platform === 'ios' ? t('build-live-success-store-ios') : t('build-live-success-store-android') }}
           </p>
           <div class="mt-5 flex flex-wrap gap-3">
-            <a v-if="downloadUrl" class="d-btn d-btn-primary gap-2" :href="downloadUrl" target="_blank" rel="noopener noreferrer">
+            <a v-if="downloadUrl" class="d-btn d-btn-primary gap-2" :href="downloadUrl" target="_blank" rel="noopener noreferrer" data-test="build-live-download" @click="emit('download')">
               <IconDownload class="h-4 w-4" />
               {{ t('build-live-download') }}
             </a>

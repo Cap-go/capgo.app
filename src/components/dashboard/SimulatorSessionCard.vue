@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import IconSmartphone from '~icons/lucide/smartphone'
 import { defaultApiHost, useConsole } from '../../services/console'
 import { formatLocalDateTime } from '../../services/date'
-import { applySimulatorList, forgetSimulator, formatSimulatorDuration, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorConfigured, simulatorEpoch } from '../../services/simulatorSessions'
+import { applySimulatorList, forgetSimulator, formatSimulatorDuration, noteSimulatorStartError, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorConfigured, simulatorEpoch } from '../../services/simulatorSessions'
 
 const props = defineProps<{ appId: string }>()
 const { t } = useI18n()
@@ -132,8 +132,10 @@ async function start(platform: 'ios' | 'android') {
       body: JSON.stringify({ app_id: props.appId, platform }),
     })
     const payload = await response.json().catch(() => undefined) as { data?: { id?: string, url?: string }, message?: string, error?: string } | undefined
-    if (!response.ok)
+    if (!response.ok) {
+      noteSimulatorStartError(payload)
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-start'))
+    }
     const id = payload?.data?.id
     if (id)
       rememberSimulator(props.appId, { id, url: payload.data?.url || '' }, epoch)

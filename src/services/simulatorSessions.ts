@@ -9,6 +9,12 @@ export interface RunningSimulator {
 // Null until known (older API): the buttons stay.
 export const simulatorConfigured = ref<boolean | null>(null)
 
+// A start refused for a missing simulator host also settles it, before any list answered.
+export function noteSimulatorStartError(payload: { error?: string } | undefined) {
+  if (payload?.error === 'simulator_not_configured')
+    simulatorConfigured.value = false
+}
+
 const sessionsByApp = reactive<Record<string, RunningSimulator[]>>({})
 let sessionEpoch = 0
 

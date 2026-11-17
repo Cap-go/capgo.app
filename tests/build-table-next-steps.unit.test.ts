@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, defineComponent, h } from 'vue'
 import BuildTable from '../src/components/tables/BuildTable.vue'
+import { simulatorConfigured } from '../src/services/simulatorSessions'
 
 const mocks = vi.hoisted(() => ({ builds: [] as any[], buildQueries: 0, sendEvent: vi.fn(), push: vi.fn() }))
 vi.mock('../src/services/capgoApi', () => ({ invokeCapgoApi: vi.fn(async () => ({ data: { canEnable: true }, error: null })) }))
@@ -76,6 +77,7 @@ afterEach(() => {
   cleanups.splice(0).forEach(cleanup => cleanup())
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  simulatorConfigured.value = null
 })
 
 describe('builds table after a successful build', () => {
@@ -123,6 +125,50 @@ describe('builds table after a successful build', () => {
     await vi.waitFor(() => expect(mocks.buildQueries).toBe(before + 1))
     await vi.waitFor(() => expect(host.querySelector('[data-test="build-next-steps"]')).not.toBeNull())
     vi.advanceTimersByTime(30_000)
+    await new Promise(resolve => setTimeout(resolve, 0))
     expect(mocks.buildQueries).toBe(before + 1)
+  })
+
+  it('pauses the table refresh while a build view is open', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    mocks.builds = [running]
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    ;(host.querySelector('[data-test="row-b2"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="live"]')).not.toBeNull())
+    const before = mocks.buildQueries
+    vi.advanceTimersByTime(30_000)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(mocks.buildQueries).toBe(before)
+  })
+
+  it('does not call a newly succeeded build unsaved before its lookup answers', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    mocks.builds = [running]
+    let answer: (response: Response) => void = () => {}
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => {
+      answer = resolve
+    })))
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    mocks.builds = [{ ...running, status: 'succeeded' }]
+    vi.advanceTimersByTime(10_000)
+    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled())
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(host.querySelector('[data-test="saved-build-not-saved"]')).toBeNull()
+    answer(new Response(JSON.stringify({ outputs: {} }), { status: 200 }))
+    await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-not-saved"]')).not.toBeNull())
+  })
+
+  it('stops offering the simulator once the server says it has none', async () => {
+    mocks.builds = [succeeded]
+    vi.stubGlobal('open', vi.fn(() => ({ close: vi.fn(), location: { replace: vi.fn() } })))
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="build-next-steps-simulator"]')).not.toBeNull())
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ error: 'simulator_not_configured', message: 'Simulator is not configured.' }), { status: 503 }))
+    ;(host.querySelector('[data-test="build-next-steps-simulator"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="build-next-steps-simulator"]')).toBeNull())
+    expect(host.querySelector('[data-test="saved-build-simulator"]')).toBeNull()
+    expect(host.textContent).toContain('simulator-not-configured-hint')
   })
 })
