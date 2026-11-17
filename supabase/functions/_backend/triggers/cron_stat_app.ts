@@ -752,52 +752,6 @@ export function appStorageOwnership(record: AppOwnershipRecord): StorageOwnershi
 }
 
 /**
- * When the app was deleted, for messages queued before they carried `occurred_at`:
- * close_app_storage_lifetimes closes every open bundle lifetime at the deletion, so the latest
- * closing event is the deletion time. Falls back to `fallback` (the handler's clock) when the app
- * had no bundle to close. Only events of the deleted incarnation count: from its creation
- * (`createdAt`) until the app ID was created again (a live app, or one in deleted_apps) or, at the
- * latest, until messages started carrying occurred_at (trigger_occurred_at_since): such a message
- * was queued before. The handler's clock is capped there too.
- */
-export async function readAppDeletedAt(pg: PgClient, appId: string, createdAt: string | Date | null | undefined, fallback: string): Promise<string> {
-  const { rows } = await pg.query<{ deleted_at: string | Date | null }>(
-    `WITH incarnation AS (
-       SELECT pg_catalog.timezone('UTC', COALESCE($3::timestamptz, '-infinity'::timestamptz)) AS created_at
-     ),
-     recreated AS (
-       SELECT pg_catalog.timezone('UTC', apps.created_at) AS at
-       FROM public.apps, incarnation
-       WHERE apps.app_id = $1
-         AND pg_catalog.timezone('UTC', apps.created_at) > incarnation.created_at
-       UNION ALL
-       SELECT pg_catalog.timezone('UTC', deleted_apps.created_at)
-       FROM public.deleted_apps, incarnation
-       WHERE deleted_apps.app_id = $1
-         AND pg_catalog.timezone('UTC', deleted_apps.created_at) > incarnation.created_at
-     ),
-     bound AS (
-       -- A message without occurred_at was queued, so its deletion happened, before messages
-       -- carried it: a later app with this ID, even deleted and not yet in deleted_apps, is after.
-       SELECT LEAST($2::timestamp, (SELECT min(recreated.at) FROM recreated), public.trigger_occurred_at_since()) AS at
-     )
-     SELECT COALESCE(
-       (
-         SELECT max(event.timestamp)
-         FROM public.version_meta event, bound, incarnation
-         WHERE event.app_id = $1
-           AND event.size < 0
-           AND event.timestamp >= incarnation.created_at
-           AND event.timestamp <= bound.at
-       ),
-       (SELECT bound.at FROM bound)
-     ) AT TIME ZONE 'UTC' AS deleted_at`,
-    [appId, fallback, createdAt == null ? null : new Date(createdAt).toISOString()],
-  )
-  return toIsoTimestamp(rows[0]?.deleted_at) ?? fallback
-}
-
-/**
  * Records a deleted app's storage hours from its last refresh up to the deletion, in its owner's
  * billing cycle: cron_stat_app skips apps that no longer exist, so that interval would be lost.
  */
@@ -805,15 +759,20 @@ export async function finalizeDeletedAppStorageHourly(
   c: Context,
   pg: PgClient,
   record: DeletedAppRecord,
-  processedAt: string,
   occurredAt?: string | null,
 ) {
   if (!record.owner_org)
     return null
+  // The trigger event's time is the deletion. A message without it was queued before messages
+  // carried it: nothing tells its events from those of a later app with the same ID (which can
+  // also be deleted already and not yet in deleted_apps), so it is not finalized rather than
+  // billing another incarnation's bundles to this one.
+  if (!occurredAt) {
+    cloudlog({ requestId: c.get('requestId'), message: 'skip storage finalization of a deletion without occurred_at', app_id: record.app_id })
+    return null
+  }
   const writtenAt = new Date().toISOString()
-  // The trigger event's time is the deletion. Older messages have none: fall back to the latest
-  // lifetime closed by close_app_storage_lifetimes.
-  const deletedAt = occurredAt ?? await readAppDeletedAt(pg, record.app_id, record.created_at, processedAt)
+  const deletedAt = occurredAt
   const deletedAtMs = parseTimestampMs(deletedAt)
   // Only events up to the deletion: a recreated app ID's events belong to the new incarnation.
   const events = await readVersionStorageLifetimes(pg, record.app_id, new Date(deletedAtMs + 1).toISOString())

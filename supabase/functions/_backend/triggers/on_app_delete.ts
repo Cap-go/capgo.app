@@ -191,7 +191,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
   if (pass === 0) {
     const pg = await getPgClient(c)
     try {
-      await finalizeDeletedAppStorageHourly(c, pg, record, new Date().toISOString(), c.get('webhookOccurredAt'))
+      await finalizeDeletedAppStorageHourly(c, pg, record, c.get('webhookOccurredAt'))
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'error finalizing deleted app storage hours', error, app_id: record.app_id })

@@ -3,7 +3,6 @@ import { afterAll, describe, expect, it } from 'vitest'
 import {
   calculateStorageHourlyRows,
   calculateStorageHourlyRowsFromLifetimes,
-  readAppDeletedAt,
   VERSION_STORAGE_LIFETIMES_SQL,
   versionStorageLifetimesFromRows,
 } from '../supabase/functions/_backend/triggers/cron_stat_app.ts'
@@ -105,52 +104,5 @@ describe('cron_stat_app storage lifetimes SQL fold', () => {
     const restored = calculateStorageHourlyRows(events.filter(event => Number(event.version_id) === 11), options)
     const restoredByteHours = restored.rows.reduce((sum, row) => sum + Number(row.storage_byte_hours), 0)
     expect(restoredByteHours).toBe(1100 * (3 * 24 + 12 * 24 + 5))
-  })
-})
-
-describe('deletion time of a legacy app deletion message', () => {
-  const reusedAppId = `com.storage.reuse.${randomUUID().slice(0, 8)}`
-  const pg = { query: async (text: string, values?: unknown[]) => ({ rows: await executeSQL(text, values) }) } as any
-
-  afterAll(async () => {
-    await executeSQL('DELETE FROM public.version_meta WHERE app_id = $1', [reusedAppId])
-    await executeSQL('DELETE FROM public.deleted_apps WHERE app_id = $1', [reusedAppId])
-  })
-
-  it('only uses events of the deleted incarnation, even after the reused app ID was deleted too', async () => {
-    // A (created 01-01) removed a bundle on 01-03 and was deleted. B recreated the app ID on 01-05,
-    // removed a bundle on 01-08 and was deleted as well: no live app row is left to bound A.
-    await executeSQL(
-      `INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
-       VALUES ('2026-01-03 00:00', $1, 1, -5), ('2026-01-08 00:00', $1, 2, -5)`,
-      [reusedAppId],
-    )
-    await executeSQL(
-      `INSERT INTO public.deleted_apps (app_id, created_at, owner_org)
-       VALUES ($1, '2026-01-05 00:00+00', $2::uuid)`,
-      [reusedAppId, ownerOrg],
-    )
-    const handlerClock = '2026-11-17T00:00:00.000Z'
-
-    expect(await readAppDeletedAt(pg, reusedAppId, '2026-01-01T00:00:00.000Z', handlerClock)).toBe('2026-01-03T00:00:00.000Z')
-    expect(await readAppDeletedAt(pg, reusedAppId, '2026-01-05T00:00:00.000Z', handlerClock)).toBe('2026-01-08T00:00:00.000Z')
-
-    // Without a removal of its own, A's deletion is capped at B's creation, not the handler's clock.
-    await executeSQL('DELETE FROM public.version_meta WHERE app_id = $1 AND version_id = 1', [reusedAppId])
-    expect(await readAppDeletedAt(pg, reusedAppId, '2026-01-01T00:00:00.000Z', handlerClock)).toBe('2026-01-05T00:00:00.000Z')
-  })
-
-  it('ignores a later app deleted after messages carried occurred_at, before it is in deleted_apps', async () => {
-    await executeSQL('DELETE FROM public.version_meta WHERE app_id = $1', [reusedAppId])
-    await executeSQL('DELETE FROM public.deleted_apps WHERE app_id = $1', [reusedAppId])
-    // A removed a bundle on 01-03 and was deleted before messages carried occurred_at. C recreated
-    // the app ID since, removed a bundle now and was deleted, but its handler has not recorded it.
-    await executeSQL(
-      `INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
-       VALUES ('2026-01-03 00:00', $1, 1, -5), (pg_catalog.timezone('UTC', pg_catalog.clock_timestamp()), $1, 3, -5)`,
-      [reusedAppId],
-    )
-    const handlerClock = new Date(Date.now() + 60_000).toISOString()
-    expect(await readAppDeletedAt(pg, reusedAppId, '2026-01-01T00:00:00.000Z', handlerClock)).toBe('2026-01-03T00:00:00.000Z')
   })
 })

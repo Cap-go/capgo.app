@@ -117,7 +117,7 @@ function sendTrigger(extra: Record<string, unknown> = {}) {
   return app.request('http://local/', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'DELETE', table: 'apps', schema: 'public', record: null, old_record: record, ...extra }),
+    body: JSON.stringify({ type: 'DELETE', table: 'apps', schema: 'public', record: null, old_record: record, occurred_at: '2026-01-02T00:00:00.000Z', ...extra }),
   })
 }
 
@@ -302,9 +302,6 @@ describe('on_app_delete trigger', () => {
     vi.setSystemTime(new Date('2026-01-10T12:00:00.000Z'))
     try {
       pgQuery.mockImplementation(async (sql: string) => {
-        // close_app_storage_lifetimes closed the bundle when the app was deleted, at 06:00.
-        if (sql.includes('WITH incarnation AS'))
-          return { rows: [{ deleted_at: '2026-01-10T06:00:00.000Z' }], rowCount: 1 } as any
         if (sql.includes('FROM public.version_meta'))
           return { rows: [
             { timestamp: '2026-01-10T00:00:00.000Z', version_id: 1, size: 100 },
@@ -321,6 +318,8 @@ describe('on_app_delete trigger', () => {
         body: JSON.stringify({
           type: 'DELETE',
           table: 'apps',
+          // The deletion, at 06:00; the handler runs at 12:00.
+          occurred_at: '2026-01-10T06:00:00.000Z',
           record: {
             app_id: 'com.test.delete',
             owner_org: 'org-1',
@@ -347,6 +346,17 @@ describe('on_app_delete trigger', () => {
     }
   })
 
+  it('does not finalize storage for a message queued before it carried occurred_at', async () => {
+    const response = await sendTrigger({ occurred_at: undefined })
+
+    expect(response.status).toBe(200)
+    const statements = sqlStatements()
+    // No storage hours: nothing tells this deletion's events from a later app with the same ID.
+    expect(statements.some(sql => sql.includes('version_meta') || sql.includes('replace_app_storage_hourly'))).toBe(false)
+    // The deletion is still recorded and cleaned up.
+    expect(statements.some(sql => sql.includes('record_app_deletion_once'))).toBe(true)
+  })
+
   it('fails the job without recording deleted_apps when storage finalization fails', async () => {
     pgQuery.mockImplementation(async (sql: string) => {
       if (sql.includes('FROM public.version_meta'))
@@ -360,6 +370,7 @@ describe('on_app_delete trigger', () => {
         body: JSON.stringify({
           type: 'DELETE',
           table: 'apps',
+          occurred_at: '2026-01-10T06:00:00.000Z',
           record: {
             app_id: 'com.test.delete',
             owner_org: 'org-1',
@@ -385,8 +396,6 @@ describe('on_app_delete trigger', () => {
     vi.setSystemTime(new Date('2026-02-01T12:00:00.000Z'))
     try {
       pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
-        if (sql.includes('WITH incarnation AS'))
-          return { rows: [{ deleted_at: '2026-02-01T06:00:00.000Z' }], rowCount: 1 } as any
         if (sql.includes('FROM public.version_meta'))
           return { rows: [
             { timestamp: '2026-01-31T00:00:00.000Z', version_id: 1, size: 100 },
@@ -407,6 +416,7 @@ describe('on_app_delete trigger', () => {
         body: JSON.stringify({
           type: 'DELETE',
           table: 'apps',
+          occurred_at: '2026-02-01T06:00:00.000Z',
           record: { app_id: 'com.test.delete', owner_org: 'org-1', created_at: '2026-01-01T00:00:00.000Z', transfer_history: [] },
         }),
       })
@@ -434,8 +444,6 @@ describe('on_app_delete trigger', () => {
     vi.setSystemTime(new Date('2026-01-12T00:00:00.000Z'))
     try {
       pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
-        if (sql.includes('WITH incarnation AS'))
-          throw new Error('the event time must be used, not the closing events')
         if (sql.includes('FROM public.version_meta')) {
           const until = Date.parse(String(params?.[1]))
           const all = [
