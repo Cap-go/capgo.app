@@ -1,7 +1,7 @@
 import type { BuiltSnippet } from './catalog.ts'
 import { createHash } from 'node:crypto'
 import { SNIPPET_ZONE_ID, validateSnippets } from './catalog.ts'
-import { includeCustomDomains, validateCustomDomains } from './custom-domains.ts'
+import { includeCustomDomainRouting } from './custom-domains.ts'
 
 type Fetcher = (url: string, init?: RequestInit) => Promise<Response>
 interface Rule { snippet_name: string, expression: string, enabled: boolean, description?: string }
@@ -9,17 +9,15 @@ interface Envelope<T> { success: boolean, result: T, result_info?: { total_pages
 interface Options {
   token: string
   snippets: readonly BuiltSnippet[]
-  customDomains?: readonly string[]
   apply?: boolean
   fetcher?: Fetcher
   log?: (message: string) => void
 }
 
-export async function deploySnippets({ token, snippets, customDomains, apply = false, fetcher = fetch, log = console.log }: Options) {
+export async function deploySnippets({ token, snippets, apply = false, fetcher = fetch, log = console.log }: Options) {
   if (!token)
     throw new Error('Set CLOUDFLARE_API_TOKEN with Zone / Snippets / Edit for capgo.app')
   validateSnippets(snippets)
-  if (customDomains) validateCustomDomains(customDomains)
   const base = `https://api.cloudflare.com/client/v4/zones/${SNIPPET_ZONE_ID}/snippets`
   async function request(path: string, init: RequestInit = {}) {
     const response = await fetcher(`${base}${path}`, {
@@ -82,15 +80,15 @@ export async function deploySnippets({ token, snippets, customDomains, apply = f
     throw new Error('Live snippet inventory differs from the catalog; reconcile it before deploying (no writes made)')
   const beforeRules = await rules()
   const desiredRules = beforeRules.map(rule => ({ ...rule }))
-  let addedDomains = 0
-  if (customDomains) {
+  let routingChanged = false
+  if (snippets.some(snippet => snippet.name === 'plugin_load_balancer')) {
     const pluginRules = desiredRules.filter(rule => rule.snippet_name === 'plugin_load_balancer')
     if (pluginRules.length !== 1 || !pluginRules[0].enabled)
       throw new Error('Expected one enabled plugin_load_balancer rule before reconciling custom domains')
-    const plan = includeCustomDomains(pluginRules[0].expression, customDomains)
+    const plan = includeCustomDomainRouting(pluginRules[0].expression)
     pluginRules[0].expression = plan.expression
-    addedDomains = plan.added
-    log(`Production custom domains: ${customDomains.length} checked, ${addedDomains} missing from snippet routing`)
+    routingChanged = plan.changed
+    log(`Custom-domain routing: ${routingChanged ? 'stable predicate missing' : 'stable predicate present'}`)
   }
   // Read all modules before the first write, so inventory or format failures cannot partially deploy.
   const current = await Promise.all(snippets.map(snippet => content(snippet.name)))
@@ -113,11 +111,11 @@ export async function deploySnippets({ token, snippets, customDomains, apply = f
   }
   if (JSON.stringify(await rules()) !== JSON.stringify(beforeRules))
     throw new Error('Snippet routing rules changed during deployment; inspect the concurrent change')
-  if (addedDomains && apply) {
+  if (routingChanged && apply) {
     await json('/snippet_rules', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rules: desiredRules }) })
     if (JSON.stringify(await rules()) !== JSON.stringify(desiredRules))
       throw new Error('Custom-domain routing verification failed; inspect the live snippet rules')
-    log(`Custom-domain routing: ${addedDomains} hosts added and verified`)
+    log('Custom-domain routing: stable predicate added and verified')
   }
-  log(`${apply ? 'Deployed' : 'Dry run checked'} ${snippets.length} snippets; ${addedDomains && apply ? 'custom-domain routing verified' : 'routing rules unchanged'}`)
+  log(`${apply ? 'Deployed' : 'Dry run checked'} ${snippets.length} snippets; ${routingChanged ? (apply ? 'custom-domain routing verified' : 'would add stable custom-domain routing') : 'routing rules unchanged'}`)
 }
