@@ -3,6 +3,7 @@ import type { ChannelImpactOutcome, ChannelImpactPlatform } from '~/services/cha
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconWarning from '~icons/lucide/alert-triangle'
+import IconRollout from '~icons/lucide/split'
 import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
 import IconElectron from '~icons/mdi/electron-framework'
@@ -29,10 +30,11 @@ function fmt(value: number) {
   return value.toLocaleString()
 }
 
-const headline = computed(() => {
+/** Device counts shared by both headlines. */
+const counts = computed(() => {
   const result = impact.value
   if (!result)
-    return ''
+    return null
   // More setups than the server evaluates: the evaluated receivers are a lower
   // bound of the full active population, so say "at least" against the full total.
   const partial = !!response.value?.truncated
@@ -40,26 +42,56 @@ const headline = computed(() => {
   // Capped assignment lists, or old updaters whose self-assigned channel cannot
   // be read: the counts are estimates.
   const approximate = !partial && (!!response.value?.overrides_truncated || (response.value?.legacy_self_assignment_devices ?? 0) > 0)
-  const values = {
-    count: approximate ? `~${fmt(result.receive)}` : fmt(result.receive),
-    total: fmt(total),
-    percent: formatImpactPercent(result.receive, total),
-    bundle: targetName.value,
-  }
-  const kind = result.target.kind === 'builtin' ? 'builtin' : isRollout.value ? 'rollout' : 'gets'
-  return t(`channel-impact-headline-${kind}${partial ? '-at-least' : ''}`, values)
+  return { partial, approximate, total, receive: result.receive }
 })
 
-const rolloutWave = computed(() => {
+/** Set, promote, revert: who switches at their next update check. */
+const headline = computed(() => {
   const result = impact.value
-  if (!isRollout.value || !result?.receive)
+  const c = counts.value
+  if (!result || !c)
     return ''
-  if (!options.value?.rolloutPercentageBps)
-    return t('channel-impact-rollout-zero')
-  return t('channel-impact-rollout-wave', {
-    percent: formatImpactPercent(options.value.rolloutPercentageBps, 10000),
-    count: fmt(result.rollout_receive ?? 0),
-  })
+  const values = {
+    count: c.approximate ? `~${fmt(c.receive)}` : fmt(c.receive),
+    total: fmt(c.total),
+    percent: formatImpactPercent(c.receive, c.total),
+    bundle: targetName.value,
+  }
+  const kind = result.target.kind === 'builtin' ? 'builtin' : 'gets'
+  return t(`channel-impact-headline-${kind}${c.partial ? '-at-least' : ''}`, values)
+})
+
+const rolloutBps = computed(() => options.value?.rolloutPercentageBps ?? 0)
+
+/**
+ * Rollout: who gets the bundle first at this percentage, and how many devices
+ * could take it at all. Everyone else keeps the stable bundle.
+ */
+const rolloutHeadline = computed(() => {
+  const result = impact.value
+  const c = counts.value
+  if (!isRollout.value || !result || !c)
+    return null
+  let eligible = fmt(c.receive)
+  if (c.partial)
+    eligible = `${eligible}+`
+  else if (c.approximate)
+    eligible = `~${eligible}`
+  const values = {
+    bundle: targetName.value,
+    percent: formatImpactPercent(rolloutBps.value, 10000),
+    eligible,
+    total: fmt(c.total),
+  }
+  if (!c.receive)
+    return { main: t('channel-impact-rollout-none-eligible', values), detail: '' }
+  if (!rolloutBps.value)
+    return { main: t('channel-impact-rollout-zero-main', values), detail: t('channel-impact-rollout-zero-detail', values) }
+  const first = result.rollout_receive ?? 0
+  return {
+    main: t('channel-impact-rollout-first', { ...values, count: fmt(first) }, first),
+    detail: t('channel-impact-rollout-share-detail', values),
+  }
 })
 
 // The update strategy is the usual reason a new major does not reach most devices.
@@ -107,6 +139,11 @@ const toneChip: Record<OutcomeTone, string> = {
 function outcomeLabel(outcome: ChannelImpactOutcome) {
   const result = impact.value
   const bundle = result?.target.name ?? ''
+  // A rollout only picks a share of the devices that can take the bundle.
+  if (isRollout.value && outcome === 'receive')
+    return t('channel-impact-outcome-rollout-eligible')
+  if (isRollout.value && outcome === 'receive_below_native')
+    return t('channel-impact-outcome-rollout-eligible-below-native')
   if (outcome === 'already_on_target')
     return result?.target.kind === 'builtin' ? t('channel-impact-outcome-already-builtin') : t('channel-impact-outcome-already', { bundle })
   return t(`channel-impact-outcome-${outcome.replaceAll('_', '-')}`, { bundle, native: result?.requirement?.native ?? '' })
@@ -137,6 +174,30 @@ function deviceLink(deviceId: string) {
 function bundleOnDevice(versionName: string, versionBuild: string) {
   return versionName === versionBuild ? t('channel-impact-store-version') : versionName
 }
+
+/**
+ * What the change does to the channel's progressive rollout, on its own line.
+ * Setting the rollout's own bundle as stable is the expected outcome (neutral);
+ * dropping or replacing another rollout target is a side effect (amber).
+ */
+const rolloutNote = computed(() => {
+  const opts = options.value
+  if (!opts)
+    return null
+  if (opts.replacesRolloutTarget) {
+    // A new rollout target clears the rollout pause (channel trigger).
+    const key = response.value?.channel.rollout.paused ? 'channel-impact-rollout-replaces-paused' : 'channel-impact-rollout-replaces'
+    return { warn: true, text: t(key, { bundle: opts.replacesRolloutTarget }) }
+  }
+  if (!opts.stopsRolloutTarget)
+    return null
+  const nextBundle = isRevert.value
+    ? (state.choice === 'previous' ? previousBundle.value?.name : null)
+    : opts.bundle?.name
+  if (nextBundle && nextBundle === opts.stopsRolloutTarget)
+    return { warn: false, text: t('channel-impact-rollout-promoted', { bundle: nextBundle }) }
+  return { warn: true, text: t('channel-impact-rollout-canceled', { bundle: opts.stopsRolloutTarget }) }
+})
 
 function choose(choice: 'previous' | 'builtin') {
   setRevertChoice(choice)
@@ -195,22 +256,31 @@ function choose(choice: 'previous' | 'builtin') {
             <span class="block text-sm text-slate-600 dark:text-slate-400">{{ t('channel-revert-option-builtin-desc') }}</span>
           </span>
         </label>
-        <p v-if="options.stopsRolloutTarget" class="text-xs text-amber-700 dark:text-amber-300">
-          {{ t('revert-to-builtin-confirm-rollout', { target: options.stopsRolloutTarget }) }}
-        </p>
       </fieldset>
 
-      <!-- Set / promote / rollout: what the channel serves now -->
+      <!-- Rollout: what devices outside the rollout keep -->
+      <p v-else-if="isRollout" class="text-sm text-slate-600 dark:text-slate-300">
+        {{ options.currentBundleName
+          ? t('channel-impact-rollout-others', { channel: options.channelName, bundle: options.currentBundleName })
+          : t('channel-impact-rollout-others-builtin', { channel: options.channelName }) }}
+      </p>
+
+      <!-- Set / promote: what the channel serves now -->
       <p v-else class="text-sm text-slate-600 dark:text-slate-300">
         {{ options.currentBundleName
           ? t('channel-impact-current', { channel: options.channelName, bundle: options.currentBundleName })
           : t('channel-impact-current-builtin', { channel: options.channelName }) }}
-        <span v-if="options.replacesRolloutTarget" class="text-amber-700 dark:text-amber-300">
-          {{ t('channel-impact-rollout-replaces', { bundle: options.replacesRolloutTarget }) }}
-        </span>
-        <span v-if="options.stopsRolloutTarget" class="text-amber-700 dark:text-amber-300">
-          {{ t('revert-to-builtin-confirm-rollout', { target: options.stopsRolloutTarget }) }}
-        </span>
+      </p>
+
+      <!-- What happens to the progressive rollout, on its own line -->
+      <p
+        v-if="rolloutNote"
+        class="flex items-start gap-2 text-sm"
+        :class="rolloutNote.warn ? 'text-amber-800 dark:text-amber-200' : 'text-slate-600 dark:text-slate-300'"
+        data-test="channel-change-rollout-note"
+      >
+        <IconRollout class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+        <span class="min-w-0">{{ rolloutNote.text }}</span>
       </p>
 
       <!-- Native package compatibility, in one short block -->
@@ -252,8 +322,17 @@ function choose(choice: 'previous' | 'builtin') {
           <p v-if="response?.channel.paused" class="text-sm text-amber-800 dark:text-amber-200">
             {{ t('channel-impact-paused') }}
           </p>
-          <p class="text-sm text-slate-700 dark:text-slate-200" data-test="channel-impact-headline">
-            <span class="font-semibold text-slate-900 dark:text-white">{{ headline }}</span>{{ rolloutWave ? ` ${rolloutWave}` : '' }}
+          <!-- Rollout: the first wave, then how many could take it -->
+          <div v-if="rolloutHeadline" class="space-y-0.5" data-test="channel-impact-headline">
+            <p class="text-sm font-semibold text-slate-900 dark:text-white">
+              {{ rolloutHeadline.main }}
+            </p>
+            <p v-if="rolloutHeadline.detail" class="text-sm text-slate-600 dark:text-slate-300">
+              {{ rolloutHeadline.detail }}
+            </p>
+          </div>
+          <p v-else class="text-sm font-semibold text-slate-900 dark:text-white" data-test="channel-impact-headline">
+            {{ headline }}
           </p>
           <p v-if="strategyHint" class="text-sm text-violet-800 dark:text-violet-200" data-test="channel-impact-strategy">
             {{ strategyHint }}

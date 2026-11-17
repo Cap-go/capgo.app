@@ -143,7 +143,7 @@ test.describe('channel pause and revert are saved (isolated app)', () => {
 
     // Revert sends devices to the store version and stops the rollout.
     await bundleRow.locator('[data-test="channel-revert-builtin"]').click()
-    await expect(page.getByText('The progressive rollout to 1.360.0 is stopped as well.', { exact: false })).toBeVisible({ timeout: 15000 })
+    await expect(page.locator('[data-test="channel-change-rollout-note"]')).toHaveText('Cancels the progressive rollout of 1.360.0.', { timeout: 15000 })
     await page.locator('[data-test="channel-revert-choice-builtin"]').click()
     await confirmAndSkipNotification(page, 'Revert this channel?', 'Revert to store version')
     await expect(bundleRow).toContainText('Store version (embedded in the app)', { timeout: 15000 })

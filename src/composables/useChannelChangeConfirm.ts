@@ -2,7 +2,7 @@ import type { ChannelImpactBundleRef, ChannelImpactResponse, ChannelImpactResult
 import type { DialogV2Button } from '~/stores/dialogv2'
 import { computed, reactive, watch } from 'vue'
 import { i18n } from '~/modules/i18n'
-import { fetchChannelImpact } from '~/services/channelImpact'
+import { fetchChannelImpact, formatImpactPercent } from '~/services/channelImpact'
 import { useDialogV2Store } from '~/stores/dialogv2'
 
 /**
@@ -147,7 +147,9 @@ function titleFor(options: ChannelChangeOptions) {
     case 'promote':
       return t('channel-impact-title-promote', values)
     case 'rollout':
-      return t('channel-impact-title-rollout', values)
+      return options.rolloutPercentageBps
+        ? t('channel-impact-title-rollout', { ...values, percent: formatImpactPercent(options.rolloutPercentageBps, 10000) })
+        : t('channel-impact-title-rollout-zero', values)
     default:
       return t('channel-impact-title-set', values)
   }
@@ -168,7 +170,7 @@ function confirmLabel(options: ChannelChangeOptions, choice: RevertChoice | null
   if (options.action === 'promote')
     return t('promote')
   if (options.action === 'rollout')
-    return t('channel-impact-confirm-rollout')
+    return options.rolloutPercentageBps ? t('channel-impact-confirm-rollout-start') : t('channel-impact-confirm-rollout')
   return t('set-bundle')
 }
 
