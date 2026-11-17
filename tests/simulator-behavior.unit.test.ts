@@ -1,7 +1,9 @@
 import type { Context } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-async function defaultPgQuery(sql: string, params?: unknown[]) {
+type PgQueryResult = { rowCount: number, rows: Record<string, unknown>[] }
+
+async function defaultPgQuery(sql: string, params?: unknown[]): Promise<PgQueryResult> {
   pgState.queries.push(sql)
   pgState.queryParams.push(params ?? [])
   if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK')
