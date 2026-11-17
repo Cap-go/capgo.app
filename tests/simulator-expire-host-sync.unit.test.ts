@@ -69,7 +69,7 @@ const liveRow = {
 const dueDeviceRow = { id: sessionId, emulator_id: 'emu-1', device_stopped_at: null }
 
 function dueQueryHonorsSkipList(sql: string): boolean {
-  return sql.includes('NOT (id = ANY(') && sql.includes('$2::uuid[]')
+  return sql.includes('NOT (id = ANY(') && sql.includes('$2')
 }
 
 function mockExpireSimulatorSessions(sql: string, params?: unknown[]): PgQueryResult | null {
@@ -312,6 +312,27 @@ describe('simulator host sync edge cases', () => {
     for (const id of pendingIds.slice(4))
       expect(result.hostUnreachableSessionIds).toContain(id)
     expect(result.synced).toBeLessThanOrEqual(4)
+  })
+
+  it('treats a running host session without lastActivityAt as unconfirmed', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      data: {
+        id: 'emu-1',
+        url: 'https://host.test/s/x/',
+        status: 'running',
+      },
+    }), { status: 200 })))
+    pgState.query.mockImplementation(async (sql: string): Promise<PgQueryResult> => {
+      pgState.queries.push(sql)
+      if (sql.includes('owner_org = $1::uuid') && sql.includes('emulator_id IS NOT NULL'))
+        return { rowCount: 1, rows: [{ ...liveRow }] }
+      return { rowCount: 0, rows: [] }
+    })
+    const { syncInProgressSimulatorSessionsForOrgFromHost } = await import('../supabase/functions/_backend/public/build/simulator.ts')
+    const result = await syncInProgressSimulatorSessionsForOrgFromHost(context, orgId)
+    expect(result.synced).toBe(0)
+    expect(result.hostUnreachableSessionIds).toContain(sessionId)
+    expect(pgState.queries.some(query => query.includes('last_activity_at = $2'))).toBe(false)
   })
 
   it('does not settle a session when host GET returns 409', async () => {
