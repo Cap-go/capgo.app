@@ -22,6 +22,7 @@ tests/files-tus-multipart-10024.test.ts
 tests/groups-rls.test.ts
 tests/hashed-apikey-rls.test.ts
 tests/invite-role-escalation-guards.test.ts
+tests/invoice-email-queue.test.ts
 tests/is-admin-functions.test.ts
 tests/manifest-deletion.test.ts
 tests/mfa-email-otp-trigger.test.ts
