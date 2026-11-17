@@ -716,6 +716,7 @@ watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
         @done="closeBuild"
         @retry="retryBuild"
         @download="track('Build Next Step Clicked', { action: 'download', source: 'detail' })"
+        @finished="getData(true)"
       >
         <template #success-actions>
           <button

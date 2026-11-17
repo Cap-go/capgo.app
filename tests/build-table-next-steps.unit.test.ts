@@ -15,7 +15,11 @@ vi.mock('../src/stores/dialogv2', () => ({ useDialogV2Store: () => ({}) }))
 vi.mock('../src/stores/organization', () => ({ useOrganizationStore: () => ({ currentOrganization: { gid: 'org' }, getOrgByAppId: () => ({ paying: true }), getAppByAppId: () => ({}), awaitInitialLoad: async () => {} }) }))
 vi.mock('../src/components/dashboard/BuildLiveProgress.vue', () => ({ default: defineComponent({
   props: { buildId: String, platform: String },
-  setup: props => () => h('div', { 'data-test': 'live', 'data-build': props.buildId, 'data-platform': props.platform }),
+  emits: ['finished'],
+  setup: (props, { emit, slots }) => () => h('div', { 'data-test': 'live', 'data-build': props.buildId, 'data-platform': props.platform }, [
+    h('button', { 'data-test': 'live-finish', 'onClick': () => emit('finished', 'success') }),
+    slots['success-actions']?.(),
+  ]),
 }) }))
 vi.mock('../src/services/console', () => ({
   defaultApiHost: 'https://api.example.test',
@@ -170,5 +174,18 @@ describe('builds table after a successful build', () => {
     await vi.waitFor(() => expect(host.querySelector('[data-test="build-next-steps-simulator"]')).toBeNull())
     expect(host.querySelector('[data-test="saved-build-simulator"]')).toBeNull()
     expect(host.textContent).toContain('simulator-not-configured-hint')
+  })
+
+  it('offers the simulator once a build watched in its view succeeds', async () => {
+    mocks.builds = [{ ...running, platform: 'ios' }]
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: mocks.builds[0].status === 'succeeded' ? { job_2: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } } : {} }), { status: 200 })))
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    ;(host.querySelector('[data-test="row-b2"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="live"]')).not.toBeNull())
+    expect(host.querySelector('[data-test="build-detail-simulator"]')).toBeNull()
+    mocks.builds = [{ ...running, platform: 'ios', status: 'succeeded' }]
+    ;(host.querySelector('[data-test="live-finish"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="build-detail-simulator"]')).not.toBeNull())
   })
 })

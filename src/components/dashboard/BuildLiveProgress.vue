@@ -32,7 +32,7 @@ const props = defineProps<{
   // Show a back control that leaves the live page while the build runs.
   closable?: boolean
 }>()
-const emit = defineEmits<{ retry: [], done: [], close: [], download: [] }>()
+const emit = defineEmits<{ retry: [], done: [], close: [], download: [], finished: [outcome: 'success' | 'failure'] }>()
 
 const POLL_MS = 3000
 const HEARTBEAT_MS = 2000
@@ -277,6 +277,7 @@ watch(() => row.value?.builder_job_id, (jobId) => {
 watch(outcome, (value) => {
   if (!value)
     return
+  emit('finished', value)
   endedAt.value ??= Date.now()
   if (seenRunning) {
     const cancelled = [live.value.status, row.value?.status].some(s => /^cancel/i.test(s ?? ''))
