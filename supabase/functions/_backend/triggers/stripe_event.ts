@@ -1,3 +1,4 @@
+import { queueInvoiceEmail } from '../utils/invoice_email.ts'
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { MiddlewareKeyVariablesStripe } from '../utils/hono_middleware_stripe.ts'
@@ -1979,6 +1980,7 @@ async function handleInvoiceStripeEvent(
   stripeData: StripeData,
   customer: StripeInfoRow,
 ) {
+  await queueInvoiceEmail(c, org.id, getWebhookBillingAccount(c), stripeEvent)
   if (await handleAutoTopUpInvoicePaid(c, stripeEvent, org.id))
     return c.json(BRES)
   await recoverOpenAIFirstPaymentFromInvoice(c, org, stripeEvent, customer)

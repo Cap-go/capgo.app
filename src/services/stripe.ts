@@ -461,3 +461,11 @@ export function getBillingDiscounts(orgId: string) {
 export function getInvoiceDocument(orgId: string, invoiceId: string) {
   return callBilling<InvoiceDocument>('invoice-document', { orgId, invoiceId })
 }
+
+export function getInvoiceEmailPreferences(orgId: string) {
+  return callBilling<import('../../supabase/functions/shared/invoice-email').InvoiceEmailPreferences>('invoice-email', { orgId })
+}
+
+export function updateInvoiceEmailPreferences(orgId: string, preferences: { enabled: boolean, recipients: string[] }) {
+  return callBilling<{ enabled: boolean, recipients: string[] }>('invoice-email/update', { orgId, preferences })
+}

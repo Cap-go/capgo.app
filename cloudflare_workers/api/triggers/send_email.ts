@@ -1,3 +1,4 @@
+import { sendInvoiceEmail } from './invoice_email.ts'
 import type { Context } from 'hono'
 import type { GoTrueSendEmailEvent } from '../../../supabase/functions/_backend/utils/auth_email.ts'
 import type { MiddlewareKeyVariables } from '../../../supabase/functions/_backend/utils/hono.ts'
@@ -33,9 +34,20 @@ async function handleOrgInvitationBentoSync(c: Context<MiddlewareKeyVariables>, 
 }
 
 app.post('/', middlewareAPISecret, async (c) => {
-  const body = await parseBody<GoTrueSendEmailEvent & { org_invitation_id?: unknown, org_invitation_bento_sync?: unknown }>(c)
+  const body = await parseBody<GoTrueSendEmailEvent & { invoice_delivery_id?: unknown, org_invitation_id?: unknown, org_invitation_bento_sync?: unknown }>(c)
   if (body && typeof body === 'object' && Object.hasOwn(body, 'org_invitation_bento_sync'))
     return handleOrgInvitationBentoSync(c, body.org_invitation_bento_sync)
+
+  if (body && typeof body === 'object' && Object.hasOwn(body, 'invoice_delivery_id')) {
+    const id = z.uuid().safeParse(body.invoice_delivery_id)
+    if (!id.success)
+      throw simpleError('invalid_payload', 'Invalid invoice email payload')
+    const delivery = sendInvoiceEmail(c, id.data)
+    if (getRuntimeKey() === 'workerd')
+      c.executionCtx.waitUntil(delivery.catch(() => {}))
+    await delivery
+    return c.json(BRES)
+  }
 
   const emailBinding = c.env?.AUTH_EMAIL
   if (!emailBinding)

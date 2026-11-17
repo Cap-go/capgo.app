@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   userId: 'user_example' as string | null,
   org: vi.fn(), permission: vi.fn(), context: vi.fn(),
-  invoice: vi.fn(), discounts: vi.fn(), profile: vi.fn(), update: vi.fn(), add: vi.fn(), remove: vi.fn(),
+  emailPreferences: vi.fn(), saveEmailPreferences: vi.fn(), invoice: vi.fn(), discounts: vi.fn(), profile: vi.fn(), update: vi.fn(), add: vi.fn(), remove: vi.fn(),
 }))
 vi.mock('../supabase/functions/_backend/utils/hono_jwt.ts', () => ({
   middlewareAuth: async (c: any, next: () => Promise<void>) => {
@@ -25,9 +25,12 @@ vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile.ts', () => 
 }))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_discounts.ts', () => ({ getBillingDiscounts: mocks.discounts }))
 vi.mock('../supabase/functions/_backend/utils/invoice_document.ts', async (importOriginal) => ({ ...await importOriginal<typeof import('../supabase/functions/_backend/utils/invoice_document.ts')>(), getInvoiceDocument: mocks.invoice }))
+vi.mock('../supabase/functions/_backend/utils/invoice_email.ts', () => ({ getInvoiceEmailPreferences: mocks.emailPreferences, updateInvoiceEmailPreferences: mocks.saveEmailPreferences }))
 const { app } = await import('../supabase/functions/_backend/private/stripe_billing')
 app.onError((_err, c) => c.json({ error: 'rejected' }, 400))
 const operations = [
+  { path: 'invoice-email', permission: 'org.read_billing', action: mocks.emailPreferences },
+  { path: 'invoice-email/update', permission: 'org.update_billing', action: mocks.saveEmailPreferences },
   { path: 'invoice-document', permission: 'org.read_invoices', action: mocks.invoice },
   { path: 'discounts', permission: 'org.read_billing', action: mocks.discounts },
   { path: 'profile', permission: 'org.read_billing', action: mocks.profile },
@@ -68,6 +71,10 @@ describe.each(operations)('$path authorization', ({ path, permission, action }) 
   it('uses the server-resolved customer and account, ignoring client-supplied replacements', async () => {
     expect((await request(path, { customerId: 'cus_other', billingAccount: 'ee', taxIdId: 'txi_example' })).status).toBe(200)
     expect(mocks.context).toHaveBeenCalledWith(expect.anything(), 'cus_resolved')
+    if (path.startsWith('invoice-email')) {
+      expect(action.mock.calls[0][1]).toBe('org_example')
+      return
+    }
     expect(action.mock.calls[0][path === 'discounts' ? 1 : 0]).toEqual({ customerId: 'cus_resolved', billingAccount: 'us' })
   })
 })

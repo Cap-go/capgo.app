@@ -40,6 +40,7 @@ declare module 'vue' {
     AuditLogTable: typeof import('./components/tables/AuditLogTable.vue')['default']
     AuthPageShell: typeof import('./components/auth/AuthPageShell.vue')['default']
     Banner: typeof import('./components/Banner.vue')['default']
+    BillingInvoiceEmails: typeof import('./components/billing/BillingInvoiceEmails.vue')['default']
     BillingInvoices: typeof import('./components/billing/BillingInvoices.vue')['default']
     BillingModal: typeof import('./components/billing/BillingModal.vue')['default']
     BillingProfileSection: typeof import('./components/billing/BillingProfileSection.vue')['default']

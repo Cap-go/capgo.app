@@ -1,3 +1,4 @@
+import { getInvoiceEmailPreferences, updateInvoiceEmailPreferences } from '../utils/invoice_email.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
@@ -275,4 +276,17 @@ app.post('/invoice-document', middlewareAuth, async (c) => {
     throw simpleError('not_authorized', 'Not authorized')
   c.header('Cache-Control', 'private, no-store')
   return c.json(await getInvoiceDocument(ctx, body.invoiceId))
+})
+
+app.post('/invoice-email', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.read_billing')
+  c.header('Cache-Control', 'private, no-store')
+  return c.json(await getInvoiceEmailPreferences(c, body.orgId!, ctx))
+})
+
+app.post('/invoice-email/update', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { preferences?: unknown }>(c)
+  await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  return c.json(await updateInvoiceEmailPreferences(c, body.orgId!, body.preferences))
 })

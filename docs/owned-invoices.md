@@ -113,7 +113,42 @@ organization selector. New PDF payment links include the authorized org ID.
 ## Rollout
 
 Merge and deploy the API and frontend together. Verify a billing-admin download
-and an unauthorized request in the deployed environment. This PR does not
-change invoice email delivery settings or send emails. Review any Stripe invoice
+and an unauthorized request in the deployed environment. This PR adds automatic invoice emails enabled by default after deployment. Review any Stripe invoice
 email shutdown separately after the replacement is deployed, so customers do
 not lose their existing invoice delivery before the new download is available.
+
+
+## Paid invoice emails
+
+Organization billing settings include **Invoice emails**, enabled by default.
+An empty recipient list uses the invoice billing email, falling back to the
+organization management email. Users with `org.update_billing` can turn delivery
+off or choose up to five mailboxes; addresses are syntax-checked and deduplicated,
+with no verification or Capgo membership requirement. Reading settings requires
+`org.read_billing`.
+
+Confirmed paid invoices with a positive paid amount enqueue the Capgo PDF as an
+attachment, including monthly/yearly subscriptions, credit purchases and auto
+top-ups. Zero-value trial invoices and unpaid invoices do not send emails.
+Recipients receive separate messages, without disclosing the other addresses.
+The PDF uses the same layout and billing-detail correction rules as downloads.
+
+A durable delivery decision is unique per Stripe entity and invoice, covering
+both `invoice.paid` and `invoice.payment_succeeded`. It snapshots the recipients
+at payment time and records opt-outs so webhook replay cannot resend an old
+invoice after settings change. The sender also honors an opt-out while queued.
+Partial provider acceptances are committed before retrying failures; already
+accepted recipients are skipped. Provider acceptance followed by a process crash
+or failed database commit can still produce a duplicate (at-least-once delivery).
+Acceptance does not prove inbox delivery. Preparation is bounded to 20 seconds,
+provider calls run in parallel with an 8-second bound, and SQL/lock waits are
+bounded to 2 seconds in the sender. A timed-out preparation cannot send later;
+a provider timeout is an uncertain outcome and may duplicate on retry. Delivery uses the existing `send_email`
+queue and its maximum five attempts, without a new cron or queue.
+
+Deploy the migration before the API Worker and console. The Worker uses the
+existing Cloudflare `AUTH_EMAIL` binding and fetches bundled invoice fonts from
+`WEBAPP_URL`; deploy those console assets before enabling the new sender. After
+verifying a paid invoice delivery in each Stripe entity, disable Stripe's
+successful-payment/invoice emails to avoid duplicate customer messages. This PR
+does not change those live Stripe email settings or eliminate Stripe invoice fees.

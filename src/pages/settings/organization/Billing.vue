@@ -8,6 +8,7 @@ import { toast } from 'vue-sonner'
 import IconCard from '~icons/heroicons/credit-card'
 import IconExclamationTriangle from '~icons/heroicons/exclamation-triangle'
 import IconShieldCheck from '~icons/heroicons/shield-check'
+import BillingInvoiceEmails from '~/components/billing/BillingInvoiceEmails.vue'
 import BillingInvoices from '~/components/billing/BillingInvoices.vue'
 import BillingProfileSection from '~/components/billing/BillingProfileSection.vue'
 import BillingSubscriptionDiscounts from '~/components/billing/BillingSubscriptionDiscounts.vue'
@@ -547,6 +548,8 @@ onMounted(async () => {
         </div>
 
         <BillingProfileSection :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
+
+        <BillingInvoiceEmails :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
 
         <BillingInvoices :key="orgId" :org-id="orgId" :invoices="invoices" />
       </template>

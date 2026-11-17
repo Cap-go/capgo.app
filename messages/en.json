@@ -4625,5 +4625,15 @@
   "billing-discount-percent": "{amount}% off",
   "billing-discount-amount": "{amount} off",
   "billing-discount-active": "Active discount",
-  "billing-discount-ends": "Ends {date}"
+  "billing-discount-ends": "Ends {date}",
+  "invoice-emails-heading": "Invoice emails",
+  "invoice-emails-description": "Receive a PDF invoice automatically after each payment, including subscriptions and credits.",
+  "invoice-emails-enabled": "Email invoices after payment",
+  "invoice-emails-recipients": "Recipients",
+  "invoice-emails-help": "Enter up to 5 email addresses, one per line. Leave blank to use your billing email: {email}. No verification is required.",
+  "invoice-emails-save": "Save invoice emails",
+  "invoice-emails-saved": "Invoice email settings saved.",
+  "invoice-emails-invalid": "Enter up to 5 valid email addresses.",
+  "invoice-emails-load-error": "Could not load invoice email settings.",
+  "invoice-emails-save-error": "Could not save invoice email settings. Please try again."
 }

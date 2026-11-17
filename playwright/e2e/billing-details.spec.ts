@@ -20,6 +20,7 @@ type Call = { path: string, body: Record<string, unknown>, authorization: string
 async function openBilling(page: Page, options: { discounted?: boolean, rejectUpdate?: boolean, noSubscription?: boolean } = {}) {
   const calls: Call[] = []
   let profile = { ...structuredClone(details), taxIds: [] as { id: string, type: string, value: string, status: string }[] }
+  let emailPreferences = { enabled: true, recipients: [] as string[], defaultEmail: details.email }
   const discounts = options.discounted ? [currentDiscount] : []
   let orgId = ''
   function capture(route: Route, path: string) {
@@ -37,6 +38,12 @@ async function openBilling(page: Page, options: { discounted?: boolean, rejectUp
       publishableKey: '', card: null, backupCard: null, invoices: [], openInvoice: null, trialPlan: null,
       subscription: options.noSubscription ? null : { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: '2030-01-01T00:00:00Z' },
     }))
+  })
+  await page.route('**/private/stripe_billing/invoice-email', route => route.fulfill(json(emailPreferences)))
+  await page.route('**/private/stripe_billing/invoice-email/update', (route) => {
+    const body = capture(route, 'invoice-email/update')
+    emailPreferences = { ...emailPreferences, ...body.preferences as { enabled: boolean, recipients: string[] } }
+    return route.fulfill(json(emailPreferences))
   })
   await page.route('**/private/stripe_billing/profile', route => route.fulfill(json(profile)))
   await page.route('**/private/stripe_billing/profile/update', (route) => {
@@ -158,4 +165,25 @@ test.describe('Billing details, tax IDs and applied discounts', () => {
     await expect(page.locator('[data-test="billing-profile-details"]')).toContainText('Example Company')
     expect(calls).toHaveLength(1)
   })
+})
+
+
+test('saves five invoice mailboxes and persists an opt-out after reload', async ({ page }) => {
+  const { calls, getOrgId } = await openBilling(page)
+  const section = page.locator('[data-test="invoice-emails"]')
+  const toggle = section.getByRole('checkbox')
+  await expect(toggle).toBeChecked()
+  const recipients = Array.from({ length: 5 }, (_, i) => `account${i}@example.com`)
+  await section.getByRole('textbox').fill(recipients.join('\n'))
+  await section.getByRole('button', { name: 'Save invoice emails' }).click()
+  await expect(section.getByRole('status')).toContainText('saved')
+  const call = calls.find(call => call.path === 'invoice-email/update')!
+  expectScopedCall(call, getOrgId())
+  expect(call.body.preferences).toEqual({ enabled: true, recipients })
+  await toggle.uncheck()
+  await section.getByRole('button', { name: 'Save invoice emails' }).click()
+  await expect(section.getByRole('status')).toContainText('saved')
+  await page.reload()
+  await expect(page.locator('[data-test="invoice-emails"]').getByRole('checkbox')).not.toBeChecked()
+  await expect(page.locator('[data-test="invoice-emails"]').getByRole('textbox')).toHaveValue(recipients.join('\n'))
 })
