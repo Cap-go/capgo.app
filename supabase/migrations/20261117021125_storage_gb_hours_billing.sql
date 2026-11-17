@@ -754,6 +754,73 @@ BEFORE INSERT OR UPDATE OF created_at, transfer_history ON public.apps
 FOR EACH ROW EXECUTE FUNCTION public.guard_apps_ownership_history();
 
 -- ---------------------------------------------------------------------------
+-- 2i. Close lifetimes of bundles already deleted before this migration
+-- ---------------------------------------------------------------------------
+-- The triggers above close lifetimes from now on. Bundles deleted earlier can
+-- still have an open (positive-only) lifetime in version_meta: soft-deleted
+-- versions whose removal event was never written, and hard-deleted versions
+-- whose app_versions_meta size cascaded away before the removal event could
+-- be recorded. Byte-hours would bill them forever. Each one is closed at the
+-- best known deletion time: the version's deleted_at (else updated_at), the
+-- deleted app's time, or, when unknown, its upload (no further hours, as the
+-- previous snapshot billing never billed a deleted bundle). Idempotent.
+CREATE OR REPLACE FUNCTION public.close_orphaned_storage_lifetimes()
+RETURNS bigint
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+  WITH open_lifetimes AS (
+    SELECT added.app_id, added.version_id, added.size, added.timestamp AS added_at
+    FROM public.version_meta added
+    WHERE added.size > 0
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.version_meta removed
+        WHERE removed.app_id = added.app_id
+          AND removed.version_id = added.version_id
+          AND removed.size < 0
+      )
+  ),
+  orphaned AS (
+    SELECT
+      open_lifetimes.app_id,
+      open_lifetimes.version_id,
+      open_lifetimes.size,
+      open_lifetimes.added_at,
+      CASE
+        WHEN versions.id IS NOT NULL THEN
+          LEAST(COALESCE(versions.deleted_at, versions.updated_at), pg_catalog.now())
+        WHEN apps.app_id IS NULL THEN
+          (SELECT max(deleted_apps.deleted_at) FROM public.deleted_apps WHERE deleted_apps.app_id = open_lifetimes.app_id)
+      END AS deleted_at
+    FROM open_lifetimes
+    LEFT JOIN public.app_versions versions ON versions.id = open_lifetimes.version_id
+    LEFT JOIN public.apps apps ON apps.app_id = open_lifetimes.app_id
+    WHERE versions.id IS NULL OR versions.deleted
+  ),
+  closed AS (
+    INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+    SELECT
+      GREATEST(orphaned.added_at, COALESCE(pg_catalog.timezone('UTC', orphaned.deleted_at), orphaned.added_at)),
+      orphaned.app_id,
+      orphaned.version_id,
+      -orphaned.size
+    FROM orphaned
+    ON CONFLICT DO NOTHING
+    RETURNING 1
+  )
+  SELECT count(*) FROM closed
+$$;
+
+ALTER FUNCTION public.close_orphaned_storage_lifetimes() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.close_orphaned_storage_lifetimes() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.close_orphaned_storage_lifetimes() FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.close_orphaned_storage_lifetimes() TO service_role;
+
+SELECT public.close_orphaned_storage_lifetimes();
+
+-- ---------------------------------------------------------------------------
 -- 3. Org billing metrics read storage from byte-hours
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.calculate_org_metrics_cache_entry(

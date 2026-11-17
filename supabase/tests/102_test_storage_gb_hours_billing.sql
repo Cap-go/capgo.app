@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(39);
+SELECT plan(42);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -565,6 +565,41 @@ SELECT
     lives_ok(
         $$UPDATE public.apps SET created_at = created_at - interval '1 second' WHERE app_id = 'com.test.gbhours.live'$$,
         'the backend can still correct an app creation time'
+    );
+
+-- Lifetimes of bundles deleted before the billing switch are closed.
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider, deleted, deleted_at)
+SELECT 9100301, live_app, '9.9.8', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', true, TIMESTAMPTZ '2026-01-05 00:00:00+00' FROM gbh_ctx;
+INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+SELECT TIMESTAMP '2026-01-02 00:00:00', live_app, 9100301, 400 FROM gbh_ctx
+UNION ALL
+-- A hard-deleted bundle (no app_versions row), deletion time unknown.
+SELECT TIMESTAMP '2026-01-02 00:00:00', live_app, 9100302, 500 FROM gbh_ctx
+UNION ALL
+-- A live bundle stays open.
+SELECT TIMESTAMP '2026-01-02 00:00:00', live_app, 9100303, 600 FROM gbh_ctx;
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider)
+SELECT 9100303, live_app, '9.9.7', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2' FROM gbh_ctx;
+SELECT public.close_orphaned_storage_lifetimes();
+
+SELECT
+    is(
+        (SELECT timestamp FROM public.version_meta WHERE version_id = 9100301 AND size < 0),
+        TIMESTAMP '2026-01-05 00:00:00',
+        'a soft-deleted bundle closes at its deletion time'
+    );
+
+SELECT
+    is(
+        (SELECT timestamp FROM public.version_meta WHERE version_id = 9100302 AND size < 0),
+        TIMESTAMP '2026-01-02 00:00:00',
+        'a hard-deleted bundle with no known deletion time closes at its upload'
+    );
+
+SELECT
+    ok(
+        NOT EXISTS (SELECT 1 FROM public.version_meta WHERE version_id = 9100303 AND size < 0),
+        'a live bundle stays open'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.
