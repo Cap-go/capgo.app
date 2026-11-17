@@ -9,6 +9,7 @@ import { apikeyPrincipal, withRlsTransaction } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
+import { expireSimulatorSessions } from '../build/concurrency.ts'
 
 const STORAGE_LIST_PAGE_SIZE = 100
 const STORAGE_REMOVE_BATCH_SIZE = 1000
@@ -127,6 +128,13 @@ async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, 
 
     // Delete versions (last) - needs admin because no DELETE policy for anon role
     await deleteAppRows(c, pg, 'app_versions', appId, false)
+
+    // A simulator whose device stopped by itself is billed up to that stop: settle it now, before the
+    // apps delete trigger settles the sessions still open at the current time.
+    if (app?.owner_org) {
+      await expireSimulatorSessions(c, app.owner_org)
+        .catch(error => cloudlogErr({ requestId: c.get('requestId'), message: 'error settling simulator sessions', error, app_id: appId }))
+    }
 
     // Finally delete the app - needs admin because no DELETE policy for anon role
     try {

@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   cloudlog: vi.fn(),
   cloudlogErr: vi.fn(),
   deleteObjectsWithPrefix: vi.fn(),
+  expireSimulatorSessions: vi.fn(),
   list: vi.fn(),
   remove: vi.fn(),
   removeImageFolder: vi.fn(),
@@ -12,6 +13,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../supabase/functions/_backend/utils/image_storage.ts', () => ({
   removeImageFolder: (...args: unknown[]) => mocks.removeImageFolder(...args),
+}))
+
+vi.mock('../supabase/functions/_backend/public/build/concurrency.ts', () => ({
+  expireSimulatorSessions: (...args: unknown[]) => mocks.expireSimulatorSessions(...args),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
@@ -76,6 +81,7 @@ describe('app delete storage cleanup', () => {
     mocks.remove.mockResolvedValue({ data: [], error: null })
     mocks.list.mockResolvedValue({ data: [], error: null })
     mocks.removeImageFolder.mockResolvedValue(0)
+    mocks.expireSimulatorSessions.mockResolvedValue(undefined)
   })
 
   it('leaves R2 cleanup to on_app_delete and paginates the legacy apps bucket', async () => {
@@ -114,5 +120,35 @@ describe('app delete storage cleanup', () => {
     expect(response.status).toBe(200)
     expect(mocks.remove).not.toHaveBeenCalled()
     expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'error deleting legacy user-scoped app storage' }))
+  })
+
+  it('settles simulator sessions whose device stopped before the app delete settles the rest', async () => {
+    const order: string[] = []
+    mocks.expireSimulatorSessions.mockImplementation(async () => {
+      order.push('settle')
+    })
+    pgClient.query.mockImplementation(async (text: string) => {
+      if (text.includes('SELECT owner_org FROM public.apps'))
+        return { rows: [{ row: { owner_org: ORG_ID } }] }
+      if (text.startsWith('DELETE FROM public.apps'))
+        order.push('delete app')
+      return { rows: [] }
+    })
+
+    const response = await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
+
+    expect(response.status).toBe(200)
+    expect(mocks.expireSimulatorSessions).toHaveBeenCalledWith(expect.anything(), ORG_ID)
+    expect(order).toEqual(['settle', 'delete app'])
+  })
+
+  it('still deletes the app when simulator settlement fails', async () => {
+    mocks.expireSimulatorSessions.mockRejectedValue(new Error('host down'))
+
+    const response = await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
+
+    expect(response.status).toBe(200)
+    expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'error settling simulator sessions' }))
+    expect(pgClient.query).toHaveBeenCalledWith('DELETE FROM public.apps WHERE app_id = $1', [APP_ID])
   })
 })

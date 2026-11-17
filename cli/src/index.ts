@@ -1845,7 +1845,7 @@ Example: npx @capgo/cli@latest mcp`)
 
 const simulator = program
   .command('simulator')
-  .description('Start a cloud simulator. A running simulator uses one builder slot and build minutes.')
+  .description('Start a cloud simulator. A running simulator uses one builder slot and counts as build time. It stops by itself after 5 minutes without input.')
 
 simulator
   .command('start [appId]')

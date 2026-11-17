@@ -44,7 +44,7 @@ app.post('/capacity', async (c) => {
 
 const uploadWriteMiddleware = middlewareKey(['all', 'write'])
 
-// POST /build/simulator - Start a simulator. It uses one builder slot and build minutes.
+// POST /build/simulator - Start a simulator. It uses one builder slot and build minutes, and stops after a few minutes without input.
 app.post('/simulator', middlewareKey(['all', 'write']), async (c) => {
   const body = await getBodyOrQuery<SimulatorBody>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
