@@ -228,8 +228,9 @@ async function customDeviceOverwritePart5(
   reload()
 }
 
-async function getDeviceIds() {
-  if (!channel.value)
+/** Counts forced devices; applies the result only while `isCurrent()` (same channel, page still open). */
+async function getDeviceIds(isCurrent: () => boolean = () => true) {
+  if (!channel.value || !isCurrent())
     return
   try {
     const { count, error } = await capgo
@@ -240,10 +241,12 @@ async function getDeviceIds() {
     // A failed check must not pretend the channel has no forced devices.
     if (error) {
       console.error('Cannot check forced devices', error)
-      toast.error(t('something-went-wrong-try-again-later'))
+      if (isCurrent())
+        toast.error(t('something-went-wrong-try-again-later'))
       return
     }
-    hasDevices.value = (count ?? 0) > 0
+    if (isCurrent())
+      hasDevices.value = (count ?? 0) > 0
   }
   catch (error) {
     console.error(error)
@@ -255,8 +258,10 @@ async function getChannel(force = false) {
 }
 
 async function reload() {
+  // A refresh after an edit: keep it on this channel without cancelling the page load.
+  const channelId = id.value
   await getChannel()
-  await getDeviceIds()
+  await getDeviceIds(() => id.value === channelId)
 }
 
 // Load on navigation only: a watchEffect would also track the cached store
@@ -268,7 +273,7 @@ watch(() => route.path, async () => {
     packageId.value = route.params.app as string
     id.value = Number(route.params.channel as string)
     await getChannel()
-    await getDeviceIds()
+    await getDeviceIds(isCurrent)
     if (!isCurrent())
       return
     loading.value = false
