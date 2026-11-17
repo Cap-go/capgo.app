@@ -37,7 +37,8 @@ So a plan with `storage` = 2 GB includes 2 GB x hours-in-cycle GB-hours.
 Deleting bundles stops new hours from accruing but never removes hours already
 used in the cycle, and the billed value only grows during a cycle.
 Restoring a deleted bundle starts billing it again from the restore (a new
-`version_meta.lifetime`); the time it spent deleted is not billed.
+`version_meta.lifetime`, opened in the restoring transaction); the time it spent
+deleted is not billed.
 
 Rows are keyed by `(app_id, owner_org, cycle_start, date)` and a refresh only
 replaces its own org's rows of its own cycle:

@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(62);
+SELECT plan(63);
 
 -- Storage is billed in GB-hours from daily_storage_hourly only.
 
@@ -798,27 +798,29 @@ SELECT
         'an upload event of a bundle still deleted starts no new lifetime'
     );
 
+SELECT set_config('gbh.before_restore', pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())::text, true);
 UPDATE public.app_versions SET deleted = false WHERE id = 9100310;
 SELECT set_config('gbh.after_restore', pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())::text, true);
--- The restored object's Last-Modified is still the original upload.
-SELECT
-    ok(
-        public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100310, 500, TIMESTAMPTZ '2026-01-02 00:00:00+00'),
-        'the upload event of a restored bundle is recorded'
-    );
 
 SELECT
     is(
         (SELECT array_agg(ARRAY[lifetime::text, size::text] ORDER BY lifetime, size) FROM public.version_meta WHERE version_id = 9100310),
         ARRAY[ARRAY['0', '-500'], ARRAY['0', '500'], ARRAY['1', '500']],
-        'in a new lifetime, keeping the first one closed'
+        'a restore opens a new lifetime in its transaction, keeping the first one closed'
     );
 
 SELECT
     ok(
         (SELECT timestamp FROM public.version_meta WHERE version_id = 9100310 AND lifetime = 1)
-        >= (SELECT timestamp FROM public.version_meta WHERE version_id = 9100310 AND lifetime = 0 AND size < 0),
+        BETWEEN current_setting('gbh.before_restore')::timestamp AND current_setting('gbh.after_restore')::timestamp,
         'starting at the restore, not at the original upload'
+    );
+
+-- The restored object's Last-Modified is still the original upload.
+SELECT
+    ok(
+        NOT public.upsert_version_meta((SELECT live_app FROM gbh_ctx), 9100310, 500, TIMESTAMPTZ '2026-01-02 00:00:00+00'),
+        'the restore job then finds the lifetime open and records nothing'
     );
 
 SELECT
@@ -834,6 +836,25 @@ SELECT
         (SELECT array_agg(ARRAY[lifetime::text, size::text] ORDER BY lifetime, size) FROM public.version_meta WHERE version_id = 9100310),
         ARRAY[ARRAY['0', '-500'], ARRAY['0', '500'], ARRAY['1', '-500'], ARRAY['1', '500']],
         'deleting it again closes the restored lifetime'
+    );
+
+-- A bundle restored before the migration (closed lifetime, live again, size
+-- known) gets a new lifetime from the backfill.
+INSERT INTO public.app_versions (id, app_id, name, owner_org, user_id, storage_provider, updated_at)
+SELECT 9100311, live_app, '9.8.9', org_id, '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'r2', TIMESTAMPTZ '2026-01-08 00:00:00+00' FROM gbh_ctx;
+INSERT INTO public.app_versions_meta (id, app_id, checksum, size)
+SELECT 9100311, live_app, 'restored', 600 FROM gbh_ctx;
+INSERT INTO public.version_meta (timestamp, app_id, version_id, size)
+SELECT TIMESTAMP '2026-01-02 00:00:00', live_app, 9100311, 600 FROM gbh_ctx
+UNION ALL
+SELECT TIMESTAMP '2026-01-05 00:00:00', live_app, 9100311, -600 FROM gbh_ctx;
+SELECT public.backfill_missing_storage_lifetimes();
+
+SELECT
+    is(
+        (SELECT array_agg(ARRAY[lifetime::text, size::text, timestamp::text] ORDER BY lifetime, size) FROM public.version_meta WHERE version_id = 9100311),
+        ARRAY[ARRAY['0', '-600', '2026-01-05 00:00:00'], ARRAY['0', '600', '2026-01-02 00:00:00'], ARRAY['1', '600', '2026-01-08 00:00:00']],
+        'a bundle restored before the migration is stored again from its restore'
     );
 
 -- The snapshot pipeline is gone and the helper is internal.

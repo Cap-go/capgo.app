@@ -644,6 +644,51 @@ FOR EACH ROW
 WHEN (NEW.deleted AND NOT OLD.deleted)
 EXECUTE FUNCTION public.close_soft_deleted_version_storage_lifetime();
 
+-- A restored bundle is stored again from the restore, in the next lifetime,
+-- in the restoring transaction: its upload job can run after a second
+-- deletion, when the bundle is no longer live. The size is the one its last
+-- lifetime was billed for. Nothing happens unless that lifetime is closed.
+CREATE OR REPLACE FUNCTION public.open_restored_version_storage_lifetime()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+BEGIN
+  INSERT INTO public.version_meta (timestamp, app_id, version_id, size, lifetime)
+  SELECT
+    -- The restore's statement time, never before the removal it reopens.
+    GREATEST(latest.removed_at, pg_catalog.timezone('UTC', pg_catalog.clock_timestamp())),
+    NEW.app_id, NEW.id, latest.size, latest.lifetime + 1
+  FROM (
+    SELECT
+      event.lifetime,
+      (pg_catalog.array_agg(event.size ORDER BY event.timestamp) FILTER (WHERE event.size > 0))[1] AS size,
+      pg_catalog.min(event.timestamp) FILTER (WHERE event.size < 0) AS removed_at
+    FROM public.version_meta event
+    WHERE event.app_id = NEW.app_id
+      AND event.version_id = NEW.id
+    GROUP BY event.lifetime
+    ORDER BY event.lifetime DESC
+    LIMIT 1
+  ) latest
+  WHERE latest.size IS NOT NULL
+    AND latest.removed_at IS NOT NULL
+  ON CONFLICT DO NOTHING;
+  RETURN NEW;
+END;
+$$;
+ALTER FUNCTION public.open_restored_version_storage_lifetime() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.open_restored_version_storage_lifetime() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.open_restored_version_storage_lifetime() FROM anon, authenticated;
+
+DROP TRIGGER IF EXISTS open_restored_version_storage_lifetime ON public.app_versions;
+CREATE TRIGGER open_restored_version_storage_lifetime
+AFTER UPDATE OF deleted ON public.app_versions
+FOR EACH ROW
+WHEN (OLD.deleted AND NOT NEW.deleted)
+EXECUTE FUNCTION public.open_restored_version_storage_lifetime();
+
 -- ---------------------------------------------------------------------------
 -- 2f. Trigger messages carry when the change happened
 -- ---------------------------------------------------------------------------
@@ -980,6 +1025,10 @@ SELECT public.close_orphaned_storage_lifetimes();
 -- failed event write was harmless, but byte-hours accrue only from that event.
 -- Each one gets its upload event at the metadata time (else the version's
 -- creation), so its storage keeps being billed. Idempotent.
+-- Live bundles restored before this migration kept their closed lifetime (one
+-- upload and one removal event per bundle back then): each one whose size is
+-- known again gets a new lifetime from its restore (its last update, never
+-- before the removal).
 CREATE OR REPLACE FUNCTION public.backfill_missing_storage_lifetimes()
 RETURNS bigint
 LANGUAGE sql
@@ -1006,8 +1055,37 @@ AS $$
       )
     ON CONFLICT DO NOTHING
     RETURNING 1
+  ),
+  latest AS (
+    SELECT DISTINCT ON (event.app_id, event.version_id)
+      event.app_id,
+      event.version_id,
+      event.lifetime,
+      pg_catalog.bool_or(event.size > 0) OVER lifetime_events AS has_upload,
+      pg_catalog.min(event.timestamp) FILTER (WHERE event.size < 0) OVER lifetime_events AS removed_at
+    FROM public.version_meta event
+    WINDOW lifetime_events AS (PARTITION BY event.app_id, event.version_id, event.lifetime)
+    ORDER BY event.app_id, event.version_id, event.lifetime DESC
+  ),
+  reopened AS (
+    INSERT INTO public.version_meta (timestamp, app_id, version_id, size, lifetime)
+    SELECT
+      GREATEST(latest.removed_at, pg_catalog.timezone('UTC', LEAST(versions.updated_at, pg_catalog.now()))),
+      versions.app_id,
+      versions.id,
+      meta.size,
+      latest.lifetime + 1
+    FROM public.app_versions versions
+    JOIN public.app_versions_meta meta ON meta.id = versions.id
+    JOIN latest ON latest.app_id = versions.app_id AND latest.version_id = versions.id
+    WHERE NOT versions.deleted
+      AND meta.size > 0
+      AND latest.has_upload
+      AND latest.removed_at IS NOT NULL
+    ON CONFLICT DO NOTHING
+    RETURNING 1
   )
-  SELECT count(*) FROM added
+  SELECT (SELECT count(*) FROM added) + (SELECT count(*) FROM reopened)
 $$;
 
 ALTER FUNCTION public.backfill_missing_storage_lifetimes() OWNER TO postgres;
