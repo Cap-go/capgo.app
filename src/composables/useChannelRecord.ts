@@ -43,6 +43,7 @@ const CHANNEL_PAGE_COLUMNS = `
     ),
     created_at,
     app_id,
+    bundle_alert_enabled,
     allow_emulator,
     allow_device,
     allow_dev,

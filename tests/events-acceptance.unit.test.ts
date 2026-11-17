@@ -364,7 +364,7 @@ describe('queue persistence boundary', () => {
   it('skips the incompatible-bundle email for a non-default channel', async () => {
     from.mockImplementation((table: string) => {
       if (table === 'apps')
-        return [{ owner_org: 'org-a', name: 'Example app', default_upload_channel: 'production', bundle_incompatible_alert: 'default' }]
+        return [{ owner_org: 'org-a', name: 'Example app', default_upload_channel: 'staging', bundle_incompatible_alert: 'default' }]
       if (table === 'orgs')
         return [{ id: 'org-a', name: 'Example org' }]
       return []
@@ -383,7 +383,9 @@ describe('queue persistence boundary', () => {
   it('still emails the incompatible-bundle warning for the default channel and for every channel when opted in', async () => {
     from.mockImplementation((table: string) => {
       if (table === 'apps')
-        return [{ owner_org: 'org-a', name: 'Example app', default_upload_channel: 'production', bundle_incompatible_alert: 'default' }]
+        return [{ owner_org: 'org-a', name: 'Example app', default_upload_channel: 'staging', bundle_incompatible_alert: 'default' }]
+      if (table === 'channels')
+        return [{ default_download: true }]
       if (table === 'orgs')
         return [{ id: 'org-a', name: 'Example org' }]
       return []
@@ -391,14 +393,14 @@ describe('queue persistence boundary', () => {
     const onDefault = await request({
       event: 'Bundle Incompatible',
       org_id: 'org-a',
-      tags: { app_id: 'com.example.queue', channel: 'production', channel_overwritten: true, version_new_name: '1.2.0', version_old_name: '1.1.0' },
+      tags: { app_id: 'com.example.queue', source: 'promotion', channel: 'production', channel_overwritten: true, version_new_name: '1.2.0', version_old_name: '1.1.0' },
     })
     expect(onDefault.status).toBe(200)
     expect(sendTracking.mock.calls[0][1].bento).toMatchObject({ event: 'bundle_incompatible', data: { channel: 'production' } })
 
     from.mockImplementation((table: string) => {
       if (table === 'apps')
-        return [{ owner_org: 'org-a', name: 'Example app', default_upload_channel: 'production', bundle_incompatible_alert: 'all' }]
+        return [{ owner_org: 'org-a', name: 'Example app', default_upload_channel: 'staging', bundle_incompatible_alert: 'all' }]
       if (table === 'orgs')
         return [{ id: 'org-a', name: 'Example org' }]
       return []
@@ -411,6 +413,26 @@ describe('queue persistence boundary', () => {
     })
     expect(onAll.status).toBe(200)
     expect(sendTracking.mock.calls[1][1].bento).toMatchObject({ event: 'bundle_incompatible', data: { channel: 'staging' } })
+  })
+
+  it('suppresses promotion mail when the destination strategy protects the previous native version', async () => {
+    from.mockImplementation((table: string) => {
+      if (table === 'apps')
+        return [{ owner_org: 'org-a', name: 'Example', bundle_incompatible_alert: 'default' }]
+      if (table === 'channels')
+        return [{ default_download: true, disable_auto_update: 'version_number' }]
+      if (table === 'app_versions')
+        return [{ id: 2, min_update_version: '2.0.0' }]
+      return []
+    })
+    const response = await request({
+      event: 'Bundle Incompatible',
+      org_id: 'org-a',
+      tags: { source: 'promotion', app_id: 'com.example.queue', channel: 'production', channel_overwritten: true, version_new_name: '2.1.0', version_old_name: '1.1.0' },
+    })
+    expect(response.status).toBe(200)
+    expect(queueSend.mock.calls[1][0].payload.tags.outcome).toBe('skipped_protected_promotion')
+    expect(sendTracking.mock.calls[0][1].bento).toBeUndefined()
   })
 
   it('queues the existing derived email outcome with stable identity and the same frozen time', async () => {

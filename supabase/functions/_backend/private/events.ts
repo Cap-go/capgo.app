@@ -429,7 +429,7 @@ async function trackBundleIncompatibleEmail(
   }, input.identity)
 }
 
-async function lookupChannelUpdateStrategy(
+async function lookupChannelAlertSettings(
   db: CallerDb,
   appId: string,
   channelName: string | undefined,
@@ -437,8 +437,8 @@ async function lookupChannelUpdateStrategy(
   if (!channelName)
     return null
   // `.maybeSingle()` with the error ignored: zero, several rows or a failure all read as null.
-  const { data: channelRow } = await single<{ disable_auto_update: string | null }>(db, 'SELECT disable_auto_update FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2', [appId, channelName])
-  return channelRow?.disable_auto_update ?? null
+  const { data: channelRow } = await single<{ disable_auto_update: string | null, default_download: boolean, bundle_alert_enabled: boolean | null }>(db, 'SELECT disable_auto_update, public AND (ios OR android OR electron) AS default_download, bundle_alert_enabled FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2', [appId, channelName])
+  return channelRow
 }
 
 async function lookupVersionMinUpdate(
@@ -489,9 +489,9 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
   }
 
-  const appResult = await single<{ name: string, default_upload_channel: string, bundle_incompatible_alert: string }>(
+  const appResult = await single<{ name: string, bundle_incompatible_alert: string }>(
     db,
-    'SELECT name, default_upload_channel, bundle_incompatible_alert FROM public.apps WHERE app_id = $1 LIMIT 2',
+    'SELECT name, bundle_incompatible_alert FROM public.apps WHERE app_id = $1 LIMIT 2',
     [appId],
   )
   if (appResult.error || !appResult.data) {
@@ -499,12 +499,11 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
   }
 
-  // Default is the default upload channel. Staging and other channels stay quiet
-  // unless the app opts into every channel.
+  const channelSettings = await lookupChannelAlertSettings(db, appId, incompatibleChannel)
   if (!isBundleIncompatibleAlertForChannel({
     alert: appResult.data.bundle_incompatible_alert,
-    channel: incompatibleChannel,
-    defaultChannel: appResult.data.default_upload_channel,
+    isDefaultDownload: channelSettings?.default_download === true,
+    override: channelSettings?.bundle_alert_enabled,
   })) {
     await trackBundleIncompatibleEmail(c, {
       ...emailBase,
@@ -515,7 +514,7 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
   }
 
-  const updateStrategy = await lookupChannelUpdateStrategy(db, appId, incompatibleChannel)
+  const updateStrategy = channelSettings?.disable_auto_update ?? null
   const versionNewName = optionalNonEmptyTagString(tags.version_new_name)
   const versionOldName = optionalTagString(tags.version_old_name)
   const { versionNewId, minUpdateVersion } = await lookupVersionMinUpdate(db, appId, versionNewName)
@@ -528,6 +527,11 @@ async function buildBundleIncompatibleBentoEvent(
     versionNewName,
     minUpdateVersion,
   })
+
+  if (gatedByStrategy && tags.source === 'promotion') {
+    await trackBundleIncompatibleEmail(c, { ...emailBase, incompatibilityAccepted: false, gatedByStrategy, updateStrategy, outcome: 'skipped_protected_promotion' })
+    return undefined
+  }
 
   const orgResult = await single<{ id: string, name: string }>(db, ORG_ID_NAME_SQL, [onboardingOrgId])
   if (orgResult.error || !orgResult.data) {

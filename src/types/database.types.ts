@@ -1044,6 +1044,7 @@ export type Database = {
           allow_device: boolean
           allow_device_self_set: boolean
           allow_emulator: boolean
+          bundle_alert_enabled: boolean | null
           allow_prod: boolean
           android: boolean
           app_id: string
@@ -1085,6 +1086,7 @@ export type Database = {
           allow_device?: boolean
           allow_device_self_set?: boolean
           allow_emulator?: boolean
+          bundle_alert_enabled?: boolean | null
           allow_prod?: boolean
           android?: boolean
           app_id: string
@@ -1126,6 +1128,7 @@ export type Database = {
           allow_device?: boolean
           allow_device_self_set?: boolean
           allow_emulator?: boolean
+          bundle_alert_enabled?: boolean | null
           allow_prod?: boolean
           android?: boolean
           app_id?: string
