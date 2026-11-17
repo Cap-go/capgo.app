@@ -513,21 +513,23 @@ async function finalizeFormerOwner(
   }))).data
   if (finalizedAt && parseTimestampMs(finalizedAt) >= transferredAtMs)
     return
+  // Transferred soon after the former owner's rollover: its previous cycle's last hours too. It runs
+  // first: the transfer cycle's replace advances the watermark checked above, so finalization only
+  // counts as done once both cycles succeeded, and a failed job retries both.
+  await finalizePreviousCycle(c, pg, events, {
+    appId: options.appId,
+    ownerOrg: transferredFrom,
+    cycleStart: formerCycle.cycle_start,
+    calculationEndMs: transferredAtMs,
+    accrualStart: formerOwnedSince,
+    writtenAt: options.writtenAt,
+  })
   await replaceCycleStorageHourly(c, pg, events, {
     appId: options.appId,
     ownerOrg: transferredFrom,
     cycleStart: formerCycle.cycle_start,
     cycleEnd: formerCycle.cycle_end,
     currentHour: transferredAt,
-    accrualStart: formerOwnedSince,
-    writtenAt: options.writtenAt,
-  })
-  // Transferred soon after the former owner's rollover: its previous cycle's last hours too.
-  await finalizePreviousCycle(c, pg, events, {
-    appId: options.appId,
-    ownerOrg: transferredFrom,
-    cycleStart: formerCycle.cycle_start,
-    calculationEndMs: transferredAtMs,
     accrualStart: formerOwnedSince,
     writtenAt: options.writtenAt,
   })

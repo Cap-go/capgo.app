@@ -388,4 +388,56 @@ describe('on_app_delete trigger', () => {
       vi.useRealTimers()
     }
   })
+
+  it('retries both former-owner cycles when the previous one fails', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-02-02T00:00:00.000Z'))
+    try {
+      pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('FROM public.version_meta')) {
+          const until = Date.parse(String(params?.[1]))
+          const rows = [{ timestamp: '2026-01-31T00:00:00.000Z', version_id: 1, size: 100 }]
+            .filter(row => Date.parse(row.timestamp) < until)
+          return { rows, rowCount: rows.length } as any
+        }
+        if (sql.includes('billing_cycle_for_anchor')) {
+          const before = Date.parse(String(params?.[1]))
+          return before <= Date.parse('2026-02-01T00:00:00.000Z')
+            ? { rows: [{ cycle_start: '2026-01-01T00:00:00.000Z', cycle_end: '2026-02-01T00:00:00.000Z' }], rowCount: 1 } as any
+            : { rows: [{ cycle_start: '2026-02-01T00:00:00.000Z', cycle_end: '2026-03-01T00:00:00.000Z' }], rowCount: 1 } as any
+        }
+        // The former owner's January cycle cannot be written.
+        if (sql.includes('replace_app_storage_hourly') && params?.[1] === 'org-old' && params?.[2] === '2026-01-01')
+          throw new Error('connection reset')
+        return { rows: [], rowCount: 0 }
+      })
+
+      const response = await app.request('http://local/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'DELETE',
+          table: 'apps',
+          occurred_at: '2026-02-01T12:00:00.000Z',
+          record: {
+            app_id: 'com.test.delete',
+            owner_org: 'org-new',
+            created_at: '2026-01-01T00:00:00.000Z',
+            transfer_history: [{ transferred_at: '2026-02-01T06:00:00.000Z', transferred_from: 'org-old', transferred_to: 'org-new' }],
+          },
+        }),
+      })
+
+      // The job fails for a retry, and the former owner's February cycle (whose watermark marks the
+      // finalization done) was not written before the January one succeeded.
+      expect(response.status).toBeGreaterThanOrEqual(500)
+      const formerFebruary = pgQuery.mock.calls.filter(([sql, params]) => sql.includes('replace_app_storage_hourly') && params?.[1] === 'org-old' && params?.[2] === '2026-02-01')
+      expect(formerFebruary).toHaveLength(0)
+    }
+    finally {
+      pgQuery.mockReset()
+      pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+      vi.useRealTimers()
+    }
+  })
 })
