@@ -322,8 +322,9 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
     const compatibility = packages.length ? { packages, dependenciesPath } : null
     const [currentBundleName, rolloutTargetName] = await Promise.all([
       chan.version ? currentBundleNameOf(chan.version) : null,
-      // A new stable bundle resets any configured rollout (channel trigger).
-      chan.rollout_version ? currentBundleNameOf(chan.rollout_version) : null,
+      // A new stable bundle resets any configured rollout (channel trigger); the
+      // same bundle again does not change the version, so the rollout stays.
+      chan.rollout_version && chan.version !== bundle.id ? currentBundleNameOf(chan.rollout_version) : null,
     ])
     const result = await confirmChannelChange({
       appId: bundle.app_id,

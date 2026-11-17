@@ -134,7 +134,29 @@ async function requestChannelImpact(token: string, request: ChannelImpactRequest
   return await response.json() as ChannelImpactResponse
 }
 
-export async function fetchChannelImpact(request: ChannelImpactRequest): Promise<ChannelImpactResponse> {
+// One warm-up per channel and minute fills the server cache of the device scan.
+// A dialog opened while it runs waits for it instead of starting a second scan
+// (the server cannot share one in-flight scan between requests).
+const WARM_INTERVAL_MS = 60_000
+const warmups = new Map<string, { at: number, promise: Promise<unknown> }>()
+
+function warmKey(appId: string, channelId: number) {
+  return `${appId}|${channelId}`
+}
+
+export function warmChannelImpactCache(appId: string, channelId: number) {
+  const key = warmKey(appId, channelId)
+  const now = Date.now()
+  const previous = warmups.get(key)
+  if (previous && now - previous.at < WARM_INTERVAL_MS)
+    return
+  const promise = fetchChannelImpact({ appId, channelId, targets: [{ kind: 'builtin' }] }, { skipWarmupWait: true }).catch(() => null)
+  warmups.set(key, { at: now, promise })
+}
+
+export async function fetchChannelImpact(request: ChannelImpactRequest, options: { skipWarmupWait?: boolean } = {}): Promise<ChannelImpactResponse> {
+  if (!options.skipWarmupWait)
+    await warmups.get(warmKey(request.appId, request.channelId))?.promise
   const { data } = await useConsole().auth.getSession()
   const session = data.session
   if (!session?.access_token || !session.user?.id)

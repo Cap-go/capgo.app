@@ -20,7 +20,7 @@ import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
 import { confirmChannelChange } from '~/composables/useChannelChangeConfirm'
 import { BUNDLE_PICKER_COLUMNS } from '~/services/bundleColumns'
-import { fetchChannelImpact, invalidateChannelImpact } from '~/services/channelImpact'
+import { invalidateChannelImpact, warmChannelImpactCache } from '~/services/channelImpact'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate, formatLocalDate } from '~/services/date'
@@ -614,6 +614,9 @@ function servedBundleName(name: string | null | undefined) {
 async function handleVersionLink(picked: BundlePickerRow) {
   if (!channel.value)
     return
+  // The page can switch channel while a dialog is open: only save to the
+  // channel the user confirmed.
+  const confirmedChannelId = channel.value.id
   // Close the bundle picker once a bundle is chosen; the impact confirm and the
   // notification prompt below open their own dialogs.
   if (dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management'))
@@ -653,6 +656,8 @@ async function handleVersionLink(picked: BundlePickerRow) {
       await router.push(compatibility.dependenciesPath)
     return
   }
+  if (id.value !== confirmedChannelId)
+    return
 
   if (rollout) {
     const saved = await saveChannelChanges({
@@ -883,13 +888,9 @@ async function handleUnlink() {
 
 // Warm the server-side device scan when the pointer reaches a bundle action, so
 // the impact confirm usually opens with its numbers already cached.
-const IMPACT_WARM_INTERVAL_MS = 60_000
-let impactWarmedAt = 0
 function warmChannelImpact() {
-  if (!channel.value || !canPromoteBundle.value || Date.now() - impactWarmedAt < IMPACT_WARM_INTERVAL_MS)
-    return
-  impactWarmedAt = Date.now()
-  void fetchChannelImpact({ appId: channel.value.app_id, channelId: channel.value.id, targets: [{ kind: 'builtin' }] }).catch(() => {})
+  if (channel.value && canPromoteBundle.value)
+    warmChannelImpactCache(channel.value.app_id, channel.value.id)
 }
 
 async function handleRevert() {
@@ -899,6 +900,7 @@ async function handleRevert() {
   }
   if (!channel.value)
     return
+  const confirmedChannelId = channel.value.id
   // Ask first whether to roll back to the channel's previous bundle or send every
   // device back to the store version, then show who each choice reaches.
   // Either way any progressive rollout stops, otherwise rollout devices would
@@ -918,6 +920,9 @@ async function handleRevert() {
     return
   }
 
+  // The page switched channel while the dialog was open: do not save elsewhere.
+  if (id.value !== confirmedChannelId)
+    return
   const rollbackTo = result.choice === 'previous' ? result.previousBundle : null
   if (result.choice === 'previous' && !rollbackTo)
     return

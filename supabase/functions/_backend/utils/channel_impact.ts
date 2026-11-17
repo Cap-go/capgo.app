@@ -284,9 +284,13 @@ export function computeRequirement(channel: ChannelImpactChannelConfig, target: 
 function compareNative(a: string, b: string) {
   const left = parseVersion(a)
   const right = parseVersion(b)
-  if (left && right)
-    return greaterThan(left, right) ? -1 : lessThan(left, right) ? 1 : 0
-  return a.localeCompare(b)
+  if (!left || !right)
+    return a.localeCompare(b)
+  if (greaterThan(left, right))
+    return -1
+  if (lessThan(left, right))
+    return 1
+  return 0
 }
 
 interface EvaluatedGroup extends ChannelImpactDeviceGroup {
