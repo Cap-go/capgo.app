@@ -230,6 +230,11 @@ if [[ -n "$modified_files" ]]; then
       continue
     fi
 
+    if is_storage_gb_hours_split_delete "$file"; then
+      echo "⚠️  Allowing replacement of unapplied storage gb-hours split migration: $file"
+      continue
+    fi
+
     disallowed_modified_files+="${file}"$'\n'
   done <<< "$modified_files"
 

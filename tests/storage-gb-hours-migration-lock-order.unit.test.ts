@@ -20,8 +20,16 @@ function lockPrecedesFkDrop(sql: string) {
 }
 
 function lockListsAppVersionsBeforeApps(sql: string) {
-  const line = sql.match(/LOCK TABLE ([^\n]+) IN ACCESS EXCLUSIVE MODE/)?.[1] ?? ''
-  const tables = line.split(',').map(t => t.trim())
+  const line = sql.match(
+    /LOCK TABLE public\.app_versions, public\.apps IN ACCESS EXCLUSIVE MODE/,
+  )?.[0]
+  if (!line)
+    return false
+  const tables = line
+    .replace(/^LOCK TABLE /, '')
+    .replace(/ IN ACCESS EXCLUSIVE MODE$/, '')
+    .split(',')
+    .map(t => t.trim())
   const av = tables.indexOf('public.app_versions')
   const apps = tables.indexOf('public.apps')
   return av >= 0 && apps > av
