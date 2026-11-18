@@ -94,6 +94,20 @@ interface ClaimedApp {
   required_commit_at: string
 }
 
+interface ClaimedServingPolicy {
+  token: string
+  generation: string
+  app_id: string
+  active_epoch: string | null
+  required_commit_at: string
+}
+
+interface SyncStatus {
+  fully_synced: boolean
+  pending_full: boolean
+  archived_full: boolean
+}
+
 interface ClaimResult {
   status: 'busy' | 'empty' | 'ok'
   lease_token?: string
@@ -869,16 +883,39 @@ async function fullSync(source: SourceReader, store: SyncStore, appId: string, r
 
 // ---- Drain --------------------------------------------------------------------
 
-async function readSyncStatus(pg: Pg, appId: string) {
-  const [row] = await mutate(pg, db => rows<{ fully_synced: boolean, pending_full: boolean, archived_full: boolean }>(db, sql`
-    SELECT
-      EXISTS (SELECT 1 FROM public.plugin_state_sync_apps WHERE app_id = ${appId} AND full_synced_at IS NOT NULL) AS fully_synced,
-      EXISTS (SELECT 1 FROM public.plugin_state_sync_pending WHERE app_id = ${appId} AND kind = 'full') AS pending_full,
-      EXISTS (SELECT 1 FROM public.plugin_state_sync_failed WHERE app_id = ${appId} AND kind = 'full') AS archived_full`))
-  return row ?? { fully_synced: false, pending_full: false, archived_full: false }
+async function readSyncStatuses(pg: Pg, apps: ClaimedApp[]) {
+  const appIds = apps.filter(item => !item.jobs.some(job => job.kind === 'full')
+    && item.jobs.some(job => job.kind === 'app' || job.kind === 'device')).map(item => item.app_id)
+  if (appIds.length === 0)
+    return new Map<string, SyncStatus>()
+  const statuses = await mutate(pg, db => rows<SyncStatus & { app_id: string }>(db, sql`
+    SELECT app.app_id,
+      EXISTS (SELECT 1 FROM public.plugin_state_sync_apps s WHERE s.app_id = app.app_id AND s.full_synced_at IS NOT NULL) AS fully_synced,
+      EXISTS (SELECT 1 FROM public.plugin_state_sync_pending p WHERE p.app_id = app.app_id AND p.kind = 'full') AS pending_full,
+      EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = app.app_id AND f.kind = 'full') AS archived_full
+    FROM pg_catalog.unnest(${sql.param(appIds)}::text[]) AS app(app_id)`))
+  return new Map(statuses.map(status => [status.app_id, status]))
 }
 
-async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp, deadline: number, syncStatus: Awaited<ReturnType<typeof readSyncStatus>> | null): Promise<AppOutcome> {
+async function syncFullApp(source: SourceReader, store: SyncStore, appId: string, fullJobs: ClaimedApp['jobs'], deadline: number): Promise<AppOutcome> {
+  // A fresh request restarts the full sync; otherwise resume the cursor.
+  const ref = fullJobs.length === 0 || fullJobs.some(job => !job.ref) ? '' : fullJobs[0].ref
+  const result = await fullSync(source, store, appId, ref, deadline)
+  if (!result.done)
+    return { appId, ok: true, continuation: result.cursor, versionsChanged: true }
+  return { appId, ok: true, fullDone: true, removed: result.removed, versionsChanged: true }
+}
+
+async function syncAppDuringHistoryScan(source: SourceReader, store: SyncStore, item: ClaimedApp) {
+  if (!item.jobs.some(job => job.kind === 'app' || job.kind === 'device'))
+    return
+  const { doc } = await buildAppDoc(source, item.app_id)
+  if (doc.exists)
+    doc.manifest_ids = []
+  await putJson(store, await pluginStateAppKey(item.app_id), doc)
+}
+
+async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp, deadline: number, syncStatus: SyncStatus | null): Promise<AppOutcome> {
   const appId = item.app_id
   const completed: CompletedKey[] = []
   try {
@@ -903,23 +940,12 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
     // channels, plan or app deletion. Publish the bounded app snapshot without
     // restarting that scan; missing independent dependencies use replicas.
     if (syncStatus?.pending_full || syncStatus?.archived_full) {
-      if (wantsApp) {
-        const { doc } = await buildAppDoc(source, appId)
-        if (doc.exists)
-          doc.manifest_ids = []
-        await putJson(store, await pluginStateAppKey(appId), doc)
-      }
+      await syncAppDuringHistoryScan(source, store, item)
       return { appId, ok: true, versionsChanged: versionNames.length > 0 }
     }
 
-    if (needsFull) {
-      // A fresh request restarts the full sync; otherwise resume the cursor.
-      const ref = fullJobs.length === 0 || fullJobs.some(job => !job.ref) ? '' : fullJobs[0].ref
-      const result = await fullSync(source, store, appId, ref, deadline)
-      if (!result.done)
-        return { appId, ok: true, continuation: result.cursor, versionsChanged: true }
-      return { appId, ok: true, fullDone: true, removed: result.removed, versionsChanged: true }
-    }
+    if (needsFull)
+      return await syncFullApp(source, store, appId, fullJobs, deadline)
 
     if (wantsApp) {
       const written = await writeAppDoc(source, store, appId)
@@ -1104,13 +1130,9 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         throw new Error('plugin state claim has no publication generation')
       result.claims++
 
-      // Keep indexed control reads on the primary, serialized on its single
-      // Hyperdrive handle. Parallel app builders only own EU source handles.
-      const syncStatuses = new Map<string, Awaited<ReturnType<typeof readSyncStatus>>>()
-      for (const item of claimed.apps) {
-        if (!item.jobs.some(job => job.kind === 'full') && item.jobs.some(job => job.kind === 'app' || job.kind === 'device'))
-          syncStatuses.set(item.app_id, await readSyncStatus(pg, item.app_id))
-      }
+      // One bounded bookkeeping query owns the primary handle; parallel app
+      // builders only own EU source handles.
+      const syncStatuses = await readSyncStatuses(pg, claimed.apps)
       const appDeadline = Math.min(deadline, Date.now() + APP_BUDGET_MS)
       const outcomes = await runLimited(claimed.apps, APP_CONCURRENCY, async (item): Promise<AppOutcome> => {
         const store = createPluginStateSyncStore(namespace, pointers, claimed.generation!, budget)
@@ -1174,27 +1196,31 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
   return result
 }
 
+async function publishClaimedServingPolicy(c: SyncContext, claim: ClaimedServingPolicy, pointers: PointerStore, budget: PublicationBudget, deadline: number) {
+  const source = createPluginStateSourceReader(c, deadline, claim.required_commit_at)
+  const [row] = await sourceRows<{ serving_regions: unknown, serving_region_mode: unknown }>(source, sql`SELECT serving_regions, serving_region_mode FROM public.apps WHERE app_id = ${claim.app_id}`)
+  if (!row)
+    return
+  const publish = createServingPolicyPublisher(pointers, claim.generation, budget)
+  // Initialize a legacy baseline during preparation. Activation starts a
+  // separate bounded pass over requested settings; UI remains pending.
+  const policy = claim.active_epoch ? parseServingPolicy(row.serving_regions, row.serving_region_mode) : parseServingPolicy(undefined, undefined)
+  await publish(claim.app_id, policy.regions, policy.mode, claim.active_epoch)
+}
+
 export async function drainServingPolicies(c: SyncContext, pg: Pg, pointers: PointerStore, budget: PublicationBudget, deadline: number, result: PluginStateDrainResult) {
   // Reserve for all five CAS attempts before taking a lease. The claim cap
   // also bounds deleted/no-op rows, which consume no provider operations.
   const maxClaims = Math.floor(budget.remaining / POLICY_PUBLICATION_OPERATIONS)
   for (let claimed = 0; claimed < maxClaims && Date.now() < deadline && budget.remaining >= POLICY_PUBLICATION_OPERATIONS; claimed++) {
-    const [claim] = await mutate(pg, db => rows<{ token: string, generation: string, app_id: string, active_epoch: string | null, required_commit_at: string }>(db, sql`SELECT * FROM public.claim_serving_policy_sync_source()`))
+    const [claim] = await mutate(pg, db => rows<ClaimedServingPolicy>(db, sql`SELECT * FROM public.claim_serving_policy_sync_source()`))
     if (!claim)
       break
     result.claims++
     let ok = false
     let deferred = false
     try {
-      const source = createPluginStateSourceReader(c, deadline, claim.required_commit_at)
-      const [row] = await sourceRows<{ serving_regions: unknown, serving_region_mode: unknown }>(source, sql`SELECT serving_regions, serving_region_mode FROM public.apps WHERE app_id = ${claim.app_id}`)
-      if (row) {
-        const publish = createServingPolicyPublisher(pointers, claim.generation, budget)
-        // Initialize a legacy baseline during preparation. Activation starts a
-        // separate bounded pass over requested settings; UI remains pending.
-        const policy = claim.active_epoch ? parseServingPolicy(row.serving_regions, row.serving_region_mode) : parseServingPolicy(undefined, undefined)
-        await publish(claim.app_id, policy.regions, policy.mode, claim.active_epoch)
-      }
+      await publishClaimedServingPolicy(c, claim, pointers, budget, deadline)
       ok = true
       result.apps++
     }

@@ -334,7 +334,7 @@ describe('plugin state same-app reclaim', () => {
           apps: [{ app_id: 'com.test.full-backoff', jobs: [{ kind: 'device', ref: 'fixture-device' }], attempts: 1 }],
         } }] }
       if (statement.sql.includes('FROM public.plugin_state_sync_apps'))
-        return { rows: [{ fully_synced: true, pending_full: true, archived_full: false }] }
+        return { rows: [{ app_id: 'com.test.full-backoff', fully_synced: true, pending_full: true, archived_full: false }] }
       if (statement.sql.includes('public.ack_plugin_state_sync_progress('))
         acks.push(statement)
       return { rows: [] }
@@ -400,7 +400,7 @@ describe('plugin state same-app reclaim', () => {
           apps: [{ app_id: appId, jobs: [{ kind: 'app', ref: '' }], attempts: 1 }],
         } }] }
       if (statement.sql.includes('FROM public.plugin_state_sync_apps'))
-        return { rows: [{ fully_synced: false, pending_full: false, archived_full: true }] }
+        return { rows: [{ app_id: appId, fully_synced: false, pending_full: false, archived_full: true }] }
       if (statement.sql.includes('public.ack_plugin_state_sync_progress('))
         acks.push(statement)
       return { rows: [] }
@@ -427,7 +427,7 @@ describe('plugin state same-app reclaim', () => {
           apps: [{ app_id: appId, jobs: [{ kind: 'device', ref: 'fixture-device' }], attempts: 1 }],
         } }] }
       if (statement.sql.includes('FROM public.plugin_state_sync_apps'))
-        return { rows: [{ fully_synced: false, pending_full: false, archived_full: true }] }
+        return { rows: [{ app_id: appId, fully_synced: false, pending_full: false, archived_full: true }] }
       if (statement.sql.includes('public.ack_plugin_state_sync_progress('))
         acks.push(statement)
       return { rows: [] }
@@ -476,7 +476,7 @@ describe('plugin state same-app reclaim', () => {
           apps: [{ app_id: appId, jobs: [{ kind: 'app', ref: '' }], attempts: 1 }],
         } }] }
       if (statement.sql.includes('FROM public.plugin_state_sync_apps'))
-        return { rows: [{ fully_synced: false, pending_full: false, archived_full: true }] }
+        return { rows: [{ app_id: appId, fully_synced: false, pending_full: false, archived_full: true }] }
       if (statement.sql.includes('FROM public.orgs o'))
         return { rows: [{ customer_id: null, has_credits: true }] }
       if (statement.sql.includes('public.ack_plugin_state_sync_progress('))

@@ -14,6 +14,7 @@ interface Connection { id: number, inTransaction: boolean }
 
 const provider = vi.hoisted(() => ({
   connect: vi.fn<(context?: unknown, route?: boolean | 'eu-replica') => Promise<Connection>>(),
+  select: vi.fn(),
   execute: vi.fn(),
   marker: vi.fn(),
   inventory: vi.fn(),
@@ -29,7 +30,7 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/servingRegionRollou
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: provider.connect,
-  getDrizzleClient: (client: Connection) => ({ execute: async (query: SQL) => {
+  getDrizzleClient: (client: Connection) => ({ select: (...args: unknown[]) => provider.select(client, ...args), execute: async (query: SQL) => {
     const statement = dialect.sqlToQuery(query)
     if (statement.sql.includes('FROM public.read_replica_commit_marker'))
       return provider.marker(client, query)
@@ -61,6 +62,7 @@ let nextConnection = 0
 
 beforeEach(() => {
   vi.clearAllMocks()
+  provider.select.mockReset()
   activeTransactions = 0
   peakTransactions = 0
   nextConnection = 0
@@ -718,6 +720,58 @@ describe('EU source deferral and inventory', () => {
   function ackArguments(statement: ReturnType<typeof dialect.sqlToQuery>) {
     return Object.fromEntries([...statement.sql.matchAll(/(p_\w+)\s*=>\s*\$(\d+)/g)].map(match => [match[1], statement.params[Number(match[2]) - 1]]))
   }
+
+  it('batches primary bookkeeping and preserves each app status without reading source rows there', async () => {
+    const storage = publicationProviders()
+    const appIds = ['com.example.pending-history', 'com.example.finished-history']
+    const bookkeeping = vi.fn()
+    const ack = vi.fn()
+    let claims = 0
+    provider.select.mockImplementation((client: Connection) => {
+      expect(client.id).toBeGreaterThan(0)
+      return { from: () => ({ where: () => ({ leftJoin: () => ({ limit: async () => [] }) }) }) }
+    })
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('claim_serving_policy_sync_source'))
+        return { rows: [] }
+      if (statement.sql.includes('plugin_state_sync_enabled'))
+        return { rows: [{ enabled: true }] }
+      if (statement.sql.includes('claim_plugin_state_sync(')) {
+        if (++claims > 1)
+          return { rows: [{ result: { status: 'empty' } }] }
+        return { rows: [{ result: { status: 'ok', lease_token: 'fixture-lease', generation: '2', has_more: false,
+          apps: appIds.map(app_id => ({ app_id, jobs: [{ kind: 'app', ref: '' }], attempts: 1 })),
+        } }] }
+      }
+      if (statement.sql.includes('public.plugin_state_sync_apps')) {
+        expect(client.id).toBe(0)
+        bookkeeping(statement.params)
+        return { rows: appIds.map((app_id, index) => ({ app_id, fully_synced: index === 1, pending_full: index === 0, archived_full: false })) }
+      }
+      if (statement.sql.includes('FROM public.apps')) {
+        expect(client.id).toBeGreaterThan(0)
+        return { rows: [] }
+      }
+      if (statement.sql.includes('ack_plugin_state_sync_progress')) {
+        ack(ackArguments(statement))
+        return { rows: [] }
+      }
+      if (statement.sql.includes('claim_plugin_state_gc'))
+        return { rows: [{ result: null }] }
+      throw new Error(`unexpected query: ${statement.sql}`)
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(await response.json()).toEqual({ claims: 1, apps: 2, failed: 0 })
+    expect(bookkeeping).toHaveBeenCalledExactlyOnceWith([appIds])
+    expect(provider.select).toHaveBeenCalledTimes(2)
+    expect(provider.connect.mock.calls.slice(1).every(call => call[1] === 'eu-replica')).toBe(true)
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({
+      p_done: appIds, p_continuations: JSON.stringify({ [appIds[1]]: '' }),
+    }))
+  })
 
   it.each(['lag', 'missing-marker', 'connection-failure', 'missing-barrier'])('preserves every full cursor/key without publication or completion ACK on %s', async (failure) => {
     const storage = publicationProviders()
