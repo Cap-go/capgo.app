@@ -405,8 +405,11 @@ explicit repair; do not reset poison-job retry budgets automatically each day.
 Source snapshots use bounded internal repeatable-read transactions on EU,
 then release the transaction before provider I/O. Every source transaction
 checks its durable primary claim barrier against `read_replica_commit_marker`
-in that same snapshot. The marker transaction must have started after the
-producer commit became visible to the claim. All ten source tables must also
+in that same snapshot. A claim reserves a strictly increasing marker value
+in its primary control transaction after observing committed producer rows.
+The existing heartbeat preserves this ordering even if the primary clock moves
+backward. One marker write is needed per newly claimed payload batch, policy
+claim, or new inventory pass; deferrals reuse their durable barrier. All ten source tables must also
 be streaming in the marker's subscription; a heartbeat alone does not prove
 initial table-copy completion. Missing markers, unready subscriptions, replica
 lag, connection errors, or missing EU bindings defer publication without a

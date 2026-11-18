@@ -1,13 +1,46 @@
 -- Service-only background operations. Business source rows are read only on EU.
 -- Primary keeps leases, cursors, retries, runtime switches and purge bookkeeping.
--- A barrier is captured AFTER the claim sees a committed producer row. The
--- replicated heartbeat's transaction must start after that barrier, not merely
--- have a recent transport timestamp. Preserve microseconds and barriers on deferral.
+-- A monotonic marker value is reserved AFTER the claim sees committed producer
+-- rows. Only its visibility in EU proves those source commits have applied.
+-- Preserve PostgreSQL precision and barriers on deferral and continuation.
 ALTER TABLE public.plugin_state_sync_pending ADD COLUMN source_commit_at timestamptz;
 ALTER TABLE public.serving_policy_sync_pending ADD COLUMN source_commit_at timestamptz;
 ALTER TABLE public.plugin_state_sync_state ADD COLUMN source_commit_at timestamptz,
   ADD COLUMN repair_requested boolean NOT NULL DEFAULT false;
 ALTER TABLE public.serving_policy_sync_progress ADD COLUMN source_commit_at timestamptz;
+
+-- A short control-plane write reserves a strictly increasing value in the
+-- existing replicated singleton. Its transaction commits after the observed
+-- producer commit. This is a logical watermark even if the wall clock steps
+-- backwards. No new replicated table/column, timer, or per-device primary read.
+CREATE FUNCTION public.reserve_plugin_state_source_barrier() RETURNS timestamptz
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE v_barrier timestamptz;
+BEGIN
+  UPDATE public.read_replica_commit_marker
+  SET committed_at = GREATEST(committed_at + interval '1 microsecond', pg_catalog.clock_timestamp())
+  WHERE id = 1 RETURNING committed_at INTO v_barrier;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Plugin source commit marker is missing'; END IF;
+  RETURN v_barrier;
+END;
+$$;
+ALTER FUNCTION public.reserve_plugin_state_source_barrier() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.reserve_plugin_state_source_barrier() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reserve_plugin_state_source_barrier() TO service_role;
+
+-- The existing heartbeat must preserve the same monotonic ordering. Its lag
+-- warning and schedule are unchanged.
+CREATE OR REPLACE FUNCTION public.touch_read_replica_commit_marker() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE prior_at timestamptz;
+BEGIN
+  SELECT committed_at INTO prior_at FROM public.read_replica_commit_marker WHERE id = 1;
+  IF prior_at IS NOT NULL AND prior_at < pg_catalog.now() - interval '60 seconds' THEN
+    RAISE WARNING 'read_replica_commit_marker stale before touch: age %', pg_catalog.now() - prior_at;
+  END IF;
+  PERFORM public.reserve_plugin_state_source_barrier();
+END;
+$$;
 
 CREATE OR REPLACE FUNCTION public.claim_plugin_state_sync(p_limit integer DEFAULT 25)
 RETURNS jsonb
@@ -22,6 +55,7 @@ DECLARE
   v_apps jsonb;
   v_generation text;
   v_retry_at timestamptz;
+  v_barrier timestamptz;
 BEGIN
   -- Claims are serialized: an app is never leased by two drains at once.
   IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('plugin_state_sync_claim')) THEN
@@ -76,8 +110,7 @@ BEGIN
   ),
   claimed AS (
     UPDATE public.plugin_state_sync_pending p
-    SET lease_token = v_token, leased_until = v_now + v_lease, attempts = p.attempts + 1,
-      source_commit_at = COALESCE(p.source_commit_at, pg_catalog.clock_timestamp())
+    SET lease_token = v_token, leased_until = v_now + v_lease, attempts = p.attempts + 1
     FROM bounded
     WHERE p.id = bounded.id
     RETURNING p.id, p.app_id, p.kind, p.ref, p.attempts, p.source_commit_at
@@ -112,6 +145,22 @@ BEGIN
         ELSE GREATEST(LEAST(CEIL(EXTRACT(epoch FROM (v_retry_at - v_now)) * 1000)::integer, 120000), 1) END);
   END IF;
 
+  IF EXISTS (SELECT 1 FROM public.plugin_state_sync_pending WHERE lease_token = v_token AND source_commit_at IS NULL) THEN
+    -- Exactly one singleton write per batch, after committed producer rows
+    -- were observed. Already deferred keys keep their original watermark.
+    v_barrier := public.reserve_plugin_state_source_barrier();
+    UPDATE public.plugin_state_sync_pending SET source_commit_at = v_barrier
+    WHERE lease_token = v_token AND source_commit_at IS NULL;
+    SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('app_id', grouped.app_id, 'jobs', grouped.jobs,
+      'attempts', grouped.attempts, 'required_commit_at', grouped.source_commit_at::text)) INTO v_apps
+    FROM (
+      SELECT p.app_id,
+        pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('kind', p.kind, 'ref', p.ref) ORDER BY p.id) AS jobs,
+        MAX(p.attempts) AS attempts, MAX(p.source_commit_at) AS source_commit_at
+      FROM public.plugin_state_sync_pending p WHERE p.lease_token = v_token GROUP BY p.app_id
+    ) grouped;
+  END IF;
+
   v_generation := pg_catalog.nextval('public.plugin_state_sync_generation'::pg_catalog.regclass)::text;
   RETURN pg_catalog.jsonb_build_object(
     'status', 'ok',
@@ -141,7 +190,7 @@ BEGIN
   IF v_id IS NULL THEN RETURN; END IF;
   UPDATE public.serving_policy_sync_pending p SET token = v_token,
     leased_until = pg_catalog.clock_timestamp() + interval '1 minute', attempts = attempts + 1,
-    source_commit_at = COALESCE(p.source_commit_at, pg_catalog.clock_timestamp()) WHERE p.id = v_id
+    source_commit_at = COALESCE(p.source_commit_at, public.reserve_plugin_state_source_barrier()) WHERE p.id = v_id
     RETURNING p.source_commit_at INTO v_required;
   RETURN QUERY SELECT v_token, pg_catalog.nextval('public.plugin_state_sync_generation'::pg_catalog.regclass)::text,
     v_app, public.serving_policy_active_epoch(), v_required::text;
@@ -507,12 +556,12 @@ BEGIN
     UPDATE public.serving_policy_sync_progress SET epoch = v_epoch, after_app = NULL, done_at = NULL, source_commit_at = NULL
     WHERE id AND epoch <> v_epoch;
     IF (SELECT count(*) FROM (SELECT 1 FROM public.serving_policy_sync_pending LIMIT 200) p) >= 200 THEN RETURN NULL; END IF;
-    UPDATE public.serving_policy_sync_progress SET source_commit_at = COALESCE(source_commit_at, pg_catalog.clock_timestamp())
+    UPDATE public.serving_policy_sync_progress SET source_commit_at = COALESCE(source_commit_at, public.reserve_plugin_state_source_barrier())
     WHERE id AND done_at IS NULL RETURNING after_app, source_commit_at INTO v_after, v_required;
     IF NOT FOUND THEN RETURN NULL; END IF;
   ELSIF p_kind = 'payload' THEN
     IF NOT public.plugin_state_sync_enabled() OR (SELECT count(*) FROM (SELECT 1 FROM public.plugin_state_sync_pending LIMIT 200) p) >= 200 THEN RETURN NULL; END IF;
-    UPDATE public.plugin_state_sync_state SET source_commit_at = COALESCE(source_commit_at, pg_catalog.clock_timestamp())
+    UPDATE public.plugin_state_sync_state SET source_commit_at = COALESCE(source_commit_at, public.reserve_plugin_state_source_barrier())
     WHERE id AND backfill_done_at IS NULL RETURNING backfill_after, source_commit_at INTO v_after, v_required;
     IF NOT FOUND THEN RETURN NULL; END IF;
     -- Loose index walks skip all duplicate job keys for an app. DISTINCT/LIMIT

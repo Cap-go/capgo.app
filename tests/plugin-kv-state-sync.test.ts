@@ -635,6 +635,7 @@ describe('plugin KV sync queue contracts', () => {
       FROM unnest(ARRAY['anon', 'authenticated']) AS role_name
       CROSS JOIN unnest(ARRAY[
         'public.claim_plugin_state_sync(integer)',
+        'public.reserve_plugin_state_source_barrier()',
         'public.claim_serving_policy_sync_source()',
         'public.defer_serving_policy_sync(uuid)',
         'public.prepare_plugin_state_inventory(text)',

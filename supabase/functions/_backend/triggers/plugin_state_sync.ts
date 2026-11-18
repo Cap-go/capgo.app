@@ -190,9 +190,10 @@ export function createPluginStateSourceWork() {
 /** Each document/page checks the primary claim's commit barrier inside the
  * same repeatable-read snapshot as all of its source data. Marker age or a
  * transport heartbeat alone cannot prove that an enqueue has replicated.
- * The scheduled marker transaction must have STARTED after the claim saw the
- * committed producer row. Its visibility proves earlier source commits have
- * applied too. Retain PostgreSQL's timestamp precision, never round in JS.
+ * Claims reserve a monotonic value in the replicated marker after observing
+ * committed producer rows. Its visibility proves those earlier commits have
+ * applied too, even across primary clock rollback. Retain PostgreSQL's
+ * timestamp precision, never round in JS.
  * Transactions end before provider I/O. Request-path caching is unchanged. */
 export function createPluginStateSourceReader(c: SyncContext, deadline: number, requiredCommitAt: string, work = createPluginStateSourceWork()) {
   return {

@@ -103,6 +103,26 @@ describe('EU source commit barrier and primary progress', () => {
     expect(await response.json()).toEqual({ deleted: false, size: '128' })
   })
 
+  it('reserves strictly increasing source commit barriers even when the stored marker is ahead of the wall clock', async () => rollback(async () => {
+    await control.query("UPDATE public.read_replica_commit_marker SET committed_at = '2100-01-01' WHERE id = 1")
+    const first = (await control.query('SELECT public.reserve_plugin_state_source_barrier()::text AS barrier')).rows[0].barrier
+    await control.query('SELECT public.touch_read_replica_commit_marker()')
+    const result = (await control.query(`SELECT committed_at > $1::timestamptz AS increased,
+      committed_at > clock_timestamp() AS clock_rollback FROM public.read_replica_commit_marker WHERE id = 1`, [first])).rows[0]
+    expect(result).toEqual({ increased: true, clock_rollback: true })
+  }))
+
+  it('reserves one marker write for a 48-job payload batch', async () => rollback(async () => {
+    await enable()
+    await control.query("UPDATE public.read_replica_commit_marker SET committed_at = '2100-01-01' WHERE id = 1")
+    await control.query(`INSERT INTO public.plugin_state_sync_pending(app_id, kind, ref, due_at)
+      SELECT $1, 'manifest', n::text, '-infinity' FROM generate_series(1,48) n`, [appId])
+    const leased = await claim()
+    expect(leased.apps[0].jobs).toHaveLength(48)
+    expect((await control.query(`SELECT committed_at = '2100-01-01'::timestamptz + interval '1 microsecond' AS once
+      FROM public.read_replica_commit_marker WHERE id = 1`)).rows[0].once).toBe(true)
+  }))
+
   it('retains the exact barrier and full cursor through repeated lag deferrals without exhausting five attempts', async () => rollback(async () => {
     await enable()
     await control.query('DELETE FROM public.plugin_state_sync_pending WHERE app_id = $1', [appId])
