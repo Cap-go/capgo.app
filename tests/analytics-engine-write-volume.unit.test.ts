@@ -67,6 +67,53 @@ describe('analytics engine write volume', () => {
     expect(writeDataPoint).toHaveBeenCalledTimes(1)
   })
 
+  it('samples high-volume APP_LOG actions and stores the rate in double2', async () => {
+    const { APP_LOG_VOLUME_SAMPLE_RATE, trackLogsCF } = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
+    const writeDataPoint = vi.fn()
+    const c = createContext({ APP_LOG: { writeDataPoint } })
+
+    mockRandomUint32(1)
+    await trackLogsCF(c, 'com.example.app', 'device-1', 'noNew', '1.0.0')
+    expect(writeDataPoint).not.toHaveBeenCalled()
+
+    mockRandomUint32(APP_LOG_VOLUME_SAMPLE_RATE * 3)
+    await trackLogsCF(c, 'com.example.app', 'device-1', 'app_moved_to_foreground', '1.0.0', { duration_ms: '15' })
+    expect(writeDataPoint).toHaveBeenCalledWith(expect.objectContaining({
+      doubles: [15, APP_LOG_VOLUME_SAMPLE_RATE],
+      indexes: ['com.example.app'],
+    }))
+  })
+
+  it('keeps launch, install and failure logs out of the volume sample', async () => {
+    const { trackLogsCF } = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
+    const writeDataPoint = vi.fn()
+    const c = createContext({ APP_LOG: { writeDataPoint } })
+    mockRandomUint32(1)
+    for (const action of ['app_launch_ready', 'set', 'get', 'download_fail', 'app_crash'] as const)
+      await trackLogsCF(c, 'com.example.app', 'device-1', action, '1.0.0')
+    expect(writeDataPoint).toHaveBeenCalledTimes(5)
+    for (const [point] of writeDataPoint.mock.calls)
+      expect(point.doubles).toBeUndefined()
+  })
+
+  it('uses the same app_log volume sample on the plugin and API paths', async () => {
+    const plugin = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
+    const api = await import('../supabase/functions/_backend/utils/cloudflare.ts')
+    expect(plugin.APP_LOG_VOLUME_SAMPLE_RATE).toBe(api.APP_LOG_VOLUME_SAMPLE_RATE)
+    expect([...plugin.APP_LOG_VOLUME_SAMPLED_ACTIONS]).toEqual([...api.APP_LOG_VOLUME_SAMPLED_ACTIONS])
+  })
+
+  it('scales app_log insight totals by the stored sample rate', async () => {
+    const { readStatsInsightsCF } = await import('../supabase/functions/_backend/utils/cloudflare.ts')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ meta: [], data: [] })))
+    const c = createContext({ CF_ACCOUNT_ANALYTICS_ID: 'account', CF_ANALYTICS_TOKEN: 'token', APP_LOG: {} })
+    await readStatsInsightsCF(c, { app_id: 'com.example.app', start_date: '2026-11-01', end_date: '2026-11-02' })
+    const bodies = fetchMock.mock.calls.map(([, init]) => String(init?.body))
+    expect(bodies.length).toBeGreaterThan(0)
+    for (const body of bodies)
+      expect(body).toContain('sum(_sample_interval * if(double2 > 0, double2, 1.0))')
+  })
+
   it('samples APP_LOG_EXTERNAL and stores the sample rate in double2', async () => {
     const { APP_LOG_EXTERNAL_SAMPLE_RATE, trackLogsCFExternal } = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
     const writeDataPoint = vi.fn()

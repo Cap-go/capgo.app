@@ -80,6 +80,8 @@ interface NativeObserveEventSample {
   version_name: string
   device_id: string
   duration_ms: number | null
+  /** How many original events this stored point stands for. Unsampled rows are 1. */
+  weight?: number
   platform?: string
   channel_name?: string
 }
@@ -411,18 +413,27 @@ function metricFromDurations(durations: number[]): Pick<NativeObserveMetricRow, 
   }
 }
 
+function observeSampleWeight(sample: NativeObserveEventSample) {
+  const weight = sample.weight
+  if (typeof weight !== 'number' || !Number.isFinite(weight) || weight < 1)
+    return 1
+  return Math.round(weight)
+}
+
 function toNativeObserveEventSamples(events: UpdateDeliveryTimingEventCF[]): NativeObserveEventSample[] {
   const samples: NativeObserveEventSample[] = []
   for (const event of events) {
     const createdAtMs = Date.parse(event.created_at)
     if (!Number.isFinite(createdAtMs))
       continue
+    const rawWeight = event.sample_weight
     samples.push({
       day: new Date(createdAtMs).toISOString().slice(0, 10),
       action: event.action,
       version_name: event.version_name || 'unknown',
       device_id: event.device_id,
       duration_ms: resolveUpdateDeliveryTimingDurationMs(event),
+      weight: typeof rawWeight === 'number' && rawWeight >= 1 ? rawWeight : 1,
     })
   }
   return samples
@@ -451,6 +462,9 @@ interface NativeObserveAggregateState {
   launchTimeoutCount: number
   launchDurations: number[]
   webviewDurations: number[]
+  /** Stored rows read. The 100k cap counts these, not the weighted event total. */
+  rowsRead: number
+  /** Event total after multiplying each stored point by its sample weight. */
   events: number
 }
 
@@ -468,6 +482,7 @@ function createNativeObserveAggregateState(
     launchTimeoutCount: 0,
     launchDurations: [],
     webviewDurations: [],
+    rowsRead: 0,
     events: 0,
   }
 }
@@ -478,9 +493,10 @@ function bumpMetricBucket(
   key: string,
   deviceId: string,
   durationMs: number | null,
+  weight: number,
 ) {
   const bucket = map.get(key) ?? { events: 0, devices: new Set<string>(), durations: [] }
-  bucket.events += 1
+  bucket.events += weight
   bucket.devices.add(deviceId)
   if (durationMs !== null)
     pushDurationSample(bucket.durations, durationMs)
@@ -497,14 +513,16 @@ function pushTimedActionDuration(action: string, durationMs: number | null, laun
 }
 
 function foldOverviewCounters(state: NativeObserveAggregateState, sample: NativeObserveEventSample) {
-  state.events += 1
+  const weight = observeSampleWeight(sample)
+  state.rowsRead += 1
+  state.events += weight
   state.allDevices.add(sample.device_id)
   if (issueActionSet.has(sample.action)) {
-    state.issueCount += 1
+    state.issueCount += weight
     state.issueDevices.add(sample.device_id)
   }
   if (sample.action === 'app_launch_timeout')
-    state.launchTimeoutCount += 1
+    state.launchTimeoutCount += weight
   pushTimedActionDuration(sample.action, sample.duration_ms, state.launchDurations, state.webviewDurations)
 }
 
@@ -532,10 +550,11 @@ function foldVersionBucket(state: NativeObserveAggregateState, sample: NativeObs
     launchDurations: [],
     webviewDurations: [],
   }
-  version.events += 1
+  const weight = observeSampleWeight(sample)
+  version.events += weight
   version.devices.add(sample.device_id)
   if (issueActionSet.has(sample.action)) {
-    version.issueCount += 1
+    version.issueCount += weight
     version.issueDevices.add(sample.device_id)
   }
   pushTimedActionDuration(sample.action, sample.duration_ms, version.launchDurations, version.webviewDurations)
@@ -544,9 +563,10 @@ function foldVersionBucket(state: NativeObserveAggregateState, sample: NativeObs
 
 function foldNativeObserveSamples(state: NativeObserveAggregateState, samples: NativeObserveEventSample[]) {
   for (const sample of samples) {
+    const weight = observeSampleWeight(sample)
     foldOverviewCounters(state, sample)
-    bumpMetricBucket(state.dailyMap, `${sample.day}\0${sample.action}`, sample.device_id, sample.duration_ms)
-    bumpMetricBucket(state.actionMap, sample.action, sample.device_id, sample.duration_ms)
+    bumpMetricBucket(state.dailyMap, `${sample.day}\0${sample.action}`, sample.device_id, sample.duration_ms, weight)
+    bumpMetricBucket(state.actionMap, sample.action, sample.device_id, sample.duration_ms, weight)
     foldVersionBucket(state, sample)
   }
 }
@@ -844,9 +864,9 @@ async function foldNativeObserveTimingEventsCFChunked(
 
   const deviceMetaCache = new Map<string, { platform: string, channel_name: string }>()
 
-  for (let i = 0; i < windows.length && state.events < MAX_NATIVE_OBSERVE_EVENTS; i += NATIVE_OBSERVE_CHUNK_CONCURRENCY) {
+  for (let i = 0; i < windows.length && state.rowsRead < MAX_NATIVE_OBSERVE_EVENTS; i += NATIVE_OBSERVE_CHUNK_CONCURRENCY) {
     const batch = windows.slice(i, i + NATIVE_OBSERVE_CHUNK_CONCURRENCY)
-    const remaining = MAX_NATIVE_OBSERVE_EVENTS - state.events
+    const remaining = MAX_NATIVE_OBSERVE_EVENTS - state.rowsRead
     const perChunkLimit = Math.max(1, Math.min(50_000, Math.ceil(remaining / batch.length)))
     const chunks = await Promise.all(batch.map(window => readUpdateDeliveryTimingEventsCF(c, {
       start_date: window.start,
@@ -856,7 +876,7 @@ async function foldNativeObserveTimingEventsCFChunked(
       limit: perChunkLimit,
     })))
     for (const chunk of chunks) {
-      if (state.events >= MAX_NATIVE_OBSERVE_EVENTS)
+      if (state.rowsRead >= MAX_NATIVE_OBSERVE_EVENTS)
         break
       const samples = await enrichNativeObserveSamplesWithDeviceMeta(
         c,

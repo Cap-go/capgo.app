@@ -273,14 +273,46 @@ function appLogDimensionBlobs(dimensions?: AppLogDimensions) {
   ]
 }
 
+// These actions were 79% of app_log writes on 2026-11-18 (~120M points/day).
+// One write in 20, with the rate in double2, brings app_log down by about 4x.
+// Insights multiply double2 back in. double2 = 0 on older rows still counts as 1.
+// app_launch_ready, failures, installs, downloads and crashes are not in this list.
+export const APP_LOG_VOLUME_SAMPLE_RATE = 20
+
+export const APP_LOG_VOLUME_SAMPLED_ACTIONS = [
+  'app_launch_start',
+  'app_moved_to_background',
+  'app_moved_to_foreground',
+  'disableAutoUpdateUnderNative',
+  'getChannel',
+  'noNew',
+  'webview_dom_content_loaded',
+  'webview_page_loaded',
+] as const
+
+const APP_LOG_VOLUME_SAMPLED_ACTION_SET: ReadonlySet<string> = new Set(APP_LOG_VOLUME_SAMPLED_ACTIONS)
+
+const APP_LOG_EVENT_COUNT_SQL = 'sum(_sample_interval * if(double2 > 0, double2, 1.0))'
+
+function keepAppLogVolumeSample(action: string) {
+  if (!APP_LOG_VOLUME_SAMPLED_ACTION_SET.has(action))
+    return true
+  return crypto.getRandomValues(new Uint32Array(1))[0] % APP_LOG_VOLUME_SAMPLE_RATE === 0
+}
+
 export function trackLogsCF(c: Context, app_id: string, device_id: string, action: string, version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
   if (!c.env.APP_LOG)
     return Promise.resolve()
+  if (!keepAppLogVolumeSample(action))
+    return Promise.resolve()
 
   const durationMs = parseStatsDurationMs(metadata)
+  const doubles = APP_LOG_VOLUME_SAMPLED_ACTION_SET.has(action)
+    ? [durationMs ?? 0, APP_LOG_VOLUME_SAMPLE_RATE]
+    : (durationMs !== null ? [durationMs] : null)
   c.env.APP_LOG.writeDataPoint({
     blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
-    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
+    ...(doubles ? { doubles } : {}),
     indexes: [app_id],
   })
 
@@ -1276,7 +1308,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
     ${actionFilter}`
 
   const summaryQuery = `SELECT
-    sum(_sample_interval) AS total,
+    ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
     COUNT(DISTINCT blob2) AS action_count
   FROM app_log
@@ -1284,7 +1316,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
 
   const actionsQuery = `SELECT
     blob2 AS action,
-    sum(_sample_interval) AS total,
+    ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
     COUNT(DISTINCT blob3) AS version_count,
     min(timestamp) AS first_seen,
@@ -1300,7 +1332,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const dailyQuery = `SELECT
     formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
     blob2 AS action,
-    sum(_sample_interval) AS total
+    ${APP_LOG_EVENT_COUNT_SQL} AS total
   FROM app_log
   WHERE ${baseWhere}
   GROUP BY date, action
@@ -1309,7 +1341,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const versionsQuery = `SELECT
     blob2 AS action,
     blob3 AS version_name,
-    sum(_sample_interval) AS total,
+    ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
     max(timestamp) AS last_seen
   FROM app_log
@@ -1321,7 +1353,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const devicesQuery = `SELECT
     blob2 AS action,
     blob1 AS device_id,
-    sum(_sample_interval) AS total,
+    ${APP_LOG_EVENT_COUNT_SQL} AS total,
     argMax(blob3, timestamp) AS version_name,
     max(timestamp) AS last_seen
   FROM app_log
