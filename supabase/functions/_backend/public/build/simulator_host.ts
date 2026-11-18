@@ -15,6 +15,7 @@ export interface EmulatorSessionData {
   url: string
   status?: string
   remoteConfig?: unknown
+  lastActivityAt?: string | null
   finishedAt?: string | null
 }
 
