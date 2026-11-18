@@ -24,7 +24,7 @@ function bumpWouldSucceed(lastActivityAt: string, startedAt: string, maxDuration
 const sessionState = vi.hoisted(() => ({
   started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
   last_activity_at: new Date(Date.now() - 60_000).toISOString(),
-  status: 'in-progress' as const,
+  status: 'in-progress' as 'in-progress' | 'stopped',
   max_duration_minutes: 40,
 }))
 
@@ -195,7 +195,7 @@ describe('simulator entrypoint activity bumps', () => {
   })
 
   it('rejects commands when the host session is already stopped', async () => {
-    recordBuildTimeMock.mockResolvedValueOnce(null)
+    recordBuildTimeMock.mockResolvedValueOnce(null as unknown as string)
     const stoppedAt = new Date(Date.now() - 2 * 60_000).toISOString()
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = typeof url === 'string' ? url : url instanceof Request ? url.url : url.toString()
