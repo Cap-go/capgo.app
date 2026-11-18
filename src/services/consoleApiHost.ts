@@ -1,5 +1,8 @@
+import { Capacitor } from '@capacitor/core'
+
 export const CHINA_API_HOST = 'https://api.capgo.com.cn'
 export const CHINA_CONSOLE_URL = 'https://console.capgo.com.cn'
+export const GLOBAL_CONSOLE_WEB_HOST = 'console.capgo.app'
 
 export function isChinaCapgoConsoleHostname(hostname: string): boolean {
   return hostname === 'capgo.com.cn' || hostname.endsWith('.capgo.com.cn')
@@ -9,6 +12,33 @@ export function getConsoleApiHost(): string {
   if (typeof window !== 'undefined' && isChinaCapgoConsoleHostname(window.location.hostname))
     return CHINA_API_HOST
   return import.meta.env.VITE_API_HOST as string
+}
+
+export interface GlobalConsoleWebHostContext {
+  hostname?: string
+  isNativePlatform?: boolean
+  devMode?: boolean
+}
+
+export function isOnGlobalConsoleWebHost(context: GlobalConsoleWebHostContext = {}): boolean {
+  if (context.isNativePlatform ?? Capacitor.isNativePlatform())
+    return false
+
+  const hostname = context.hostname ?? (typeof window !== 'undefined' ? window.location.hostname : '')
+  if (!hostname)
+    return false
+
+  if (isChinaCapgoConsoleHostname(hostname))
+    return false
+
+  if (hostname === GLOBAL_CONSOLE_WEB_HOST)
+    return true
+
+  const devMode = context.devMode ?? import.meta.env.MODE === 'development'
+  if (devMode && (hostname === 'localhost' || hostname === '127.0.0.1'))
+    return true
+
+  return false
 }
 
 export function getConsoleWebOrigin(): string {
