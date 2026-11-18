@@ -46,6 +46,21 @@ describe('getRemoteConfig config fetch timeouts', () => {
     expect(suggestChinaConsole.value).toBe(false)
   }, 10_000)
 
+  it('does not fetch remote config when the console API host is local', async () => {
+    vi.stubEnv('VITE_API_HOST', 'http://127.0.0.1:57671/functions/v1')
+    vi.stubGlobal('window', {
+      location: { hostname: '127.0.0.1', origin: 'http://127.0.0.1:5173' },
+    })
+    const fetchMock = vi.fn(hangUntilAbort)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { getRemoteConfig } = await import('../src/services/console')
+    await expect(getRemoteConfig()).resolves.toMatchObject({
+      apiHost: 'http://127.0.0.1:57671/functions/v1',
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('aborts the main fetch and bounds the China probe on console.capgo.app', async () => {
     vi.stubGlobal('window', {
       location: { hostname: 'console.capgo.app', origin: 'https://console.capgo.app' },

@@ -183,6 +183,9 @@ export async function getRemoteConfig() {
     return localConfig
 
   const apiHost = getConsoleApiHost()
+  // Visual diff / local preview builds point at a worktree API host; skip remote config polling.
+  if (isLocal(apiHost))
+    return localConfig
   try {
     const response = await fetchWithConfigTimeout(`${apiHost}/private/config`)
     if (!response.ok) {
