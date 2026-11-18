@@ -65,8 +65,8 @@ function enforcingDownloadBase(c: Context): URL {
   }
 }
 
-function gatedDownloadUrl(c: Context, key: string, query: Record<string, string>) {
-  const url = enforcingDownloadBase(c)
+function gatedDownloadUrl(c: Context, key: string, query: Record<string, string>, base = enforcingDownloadBase(c)) {
+  const url = new URL(base.href)
   url.pathname += key.split('/').map(encodeURIComponent).join('/')
   for (const [name, value] of Object.entries(query))
     url.searchParams.set(name, value)
@@ -116,6 +116,9 @@ export function getManifestUrl(c: Context, versionId: number, manifest: { file_n
     return []
   }
 
+  // Outside the catch below: an invalid enforcing download base is a 503,
+  // not an empty manifest the plugin would read as a healthy answer.
+  const gatedBase = servingRegionReaderEpoch ? enforcingDownloadBase(c) : null
   try {
     const url = new URL(c.req.url)
     const { finalPath } = rewriteLocalEdgeRuntimeUrl(url, c)
@@ -128,8 +131,8 @@ export function getManifestUrl(c: Context, versionId: number, manifest: { file_n
       return {
         file_name: normalizeLegacyEncodedManifestFileName(entry.file_name, entry.s3_path),
         file_hash: entry.file_hash,
-        download_url: servingRegionReaderEpoch
-          ? gatedDownloadUrl(c, entry.s3_path, { key: String(signKey), device_id: deviceId })
+        download_url: gatedBase
+          ? gatedDownloadUrl(c, entry.s3_path, { key: String(signKey), device_id: deviceId }, gatedBase)
           : `${url.protocol}//${url.host}/${finalPath}/${entry.s3_path}?key=${signKey}&device_id=${deviceId}`,
       }
     }).filter(entry => entry !== null) as ManifestEntry[]

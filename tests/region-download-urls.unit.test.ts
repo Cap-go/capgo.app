@@ -35,5 +35,9 @@ describe('enforcing download URLs', () => {
     expect((await app.request('https://updates.example.com/')).status).toBe(503)
     expect(signedUrl).not.toHaveBeenCalled()
   })
-
+  it('fails a delta-only manifest unavailable instead of answering an empty file list', async () => {
+    const manifestOnly = new Hono().get('/', c => c.json(getManifestUrl(c, 123, [{ s3_path: key, file_name: 'index.html', file_hash: 'fake-hash' }], 'fake-device')))
+    const response = await manifestOnly.request('https://updates.example.com/', undefined, { PLUGIN_FILE_DOWNLOAD_BASE_URL: 'not a url' })
+    expect(response.status).toBe(503)
+  })
 })

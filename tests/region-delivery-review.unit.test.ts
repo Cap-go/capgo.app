@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import worker from '../cloudflare_workers/files/index.ts'
 import { buildWorkersCacheKey } from '../cloudflare_workers/files/cache_key.ts'
-import { enforcePreviewServingPolicy } from '../supabase/functions/_backend/files/file_serving_policy.ts'
+import { enforceFileServingPolicy, enforcePreviewServingPolicy } from '../supabase/functions/_backend/files/file_serving_policy.ts'
 import { enforceServingPolicy } from '../supabase/functions/_backend/plugin_runtime/utils/servingPolicy.ts'
 import { SERVING_REGIONS } from '../supabase/functions/_backend/plugin_runtime/utils/servingRegions.ts'
 
@@ -55,6 +55,28 @@ describe('app identity at delivery admission', () => {
     expect((await app.fetch(request('files.capgo.app', '/'), { PLUGIN_STATE_POINTERS: { get } })).status).toBe(503)
     expect(get).toHaveBeenCalledTimes(1)
     expect(data).not.toHaveBeenCalled()
+  })
+})
+
+describe('TUS upload IDs at file admission', () => {
+  it('admits a supported TUS upload ID through the app of its storage key', async () => {
+    const tusId = btoa(`capgo/orgs/example/apps/${appId}/bundle.zip/123e4567-e89b-42d3-a456-426614174000`)
+    const get = vi.fn(async (_key: string) => ({ json: async () => policy(appId) }))
+    const app = new Hono().get('/', async (c) => {
+      await enforceFileServingPolicy(c, tusId)
+      return c.text('admitted')
+    })
+    expect((await app.fetch(request('files.capgo.app', '/'), { PLUGIN_STATE_POINTERS: { get } })).status).toBe(200)
+    expect(get.mock.calls.map(call => String(call[0]))).toEqual([`sr1:${appId}`])
+  })
+  it('still refuses an ID that stays unscoped once decoded', async () => {
+    const get = vi.fn()
+    const app = new Hono().get('/', async (c) => {
+      await enforceFileServingPolicy(c, btoa('capgo/uploads/bundle.zip/123e4567-e89b-42d3-a456-426614174000'))
+      return c.text('admitted')
+    })
+    expect((await app.fetch(request('files.capgo.app', '/'), { PLUGIN_STATE_POINTERS: { get } })).status).toBe(503)
+    expect(get).not.toHaveBeenCalled()
   })
 })
 

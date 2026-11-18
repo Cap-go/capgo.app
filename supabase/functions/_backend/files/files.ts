@@ -23,13 +23,13 @@ import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo
 import { checkPermissionPgFreshRetry } from '../utils/rbac.ts'
 import { createStatsBandwidth } from '../utils/stats.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
-import { buildFileReadCacheRequest, getFileReadCache, isAttachmentVersionDeleted } from './file_read_cache.ts'
+import { buildFileReadCacheRequest, deletionEvidenceAllowsRestore, getFileReadCache, isAttachmentVersionDeleted } from './file_read_cache.ts'
 import { enforceFileServingPolicy, withFileServingHeaders } from './file_serving_policy.ts'
 import { app as files_config } from './files_config.ts'
 import { parseUploadMetadata } from './parse.ts'
 import { DEFAULT_RETRY_PARAMS, RetryBucket } from './retry.ts'
 import { supabaseTusCreateHandler, supabaseTusHeadHandler, supabaseTusPatchHandler } from './supabaseTusProxy.ts'
-import { ALLOWED_HEADERS, ALLOWED_METHODS, buildFileHttpMetadata, decodeUploadLocationKey, encodeR2KeyForUploadLocation, EXPOSED_HEADERS, getSafeAttachmentReadCandidateKeys, headFirstExistingAttachmentCandidate, isRetryableDurableObjectResetError, isSafeAttachmentKey, MAX_UPLOAD_LENGTH_BYTES, NO_TRANSFORM_CACHE_CONTROL, parseAppScopedAttachmentPath, toBase64, TUS_EXTENSIONS, TUS_VERSION, withNoTransformCacheControl, X_CHECKSUM_SHA256, X_UPLOAD_HANDLER_RETRYABLE } from './util.ts'
+import { ALLOWED_HEADERS, ALLOWED_METHODS, buildFileHttpMetadata, decodeTusUploadStorageKey, decodeUploadLocationKey, encodeR2KeyForUploadLocation, EXPOSED_HEADERS, getSafeAttachmentReadCandidateKeys, headFirstExistingAttachmentCandidate, isRetryableDurableObjectResetError, isSafeAttachmentKey, MAX_UPLOAD_LENGTH_BYTES, NO_TRANSFORM_CACHE_CONTROL, parseAppScopedAttachmentPath, toBase64, TUS_EXTENSIONS, TUS_VERSION, withNoTransformCacheControl, X_CHECKSUM_SHA256, X_UPLOAD_HANDLER_RETRYABLE } from './util.ts'
 
 const DO_CALL_TIMEOUT = 1000 * 60 * 30 // 30 minutes
 const DO_FETCH_RETRY_ATTEMPTS = 3
@@ -501,38 +501,42 @@ async function getHandler(c: Context): Promise<Response> {
     response = cachedResponse
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache hit' })
     // Best-effort restore: if a live file is cached but missing in R2, write it back.
-    await backgroundTask(c, (async () => {
-      // Clone before the first await, before the response body is handed to the client.
-      const cached = cachedResponse.clone()
-      try {
-        if (await isAttachmentVersionDeleted(c, fileId))
-          return
+    // Never from replica evidence: a replica behind a committed deletion would
+    // write the deleted object back to R2.
+    if (deletionEvidenceAllowsRestore(c)) {
+      await backgroundTask(c, (async () => {
+        // Clone before the first await, before the response body is handed to the client.
+        const cached = cachedResponse.clone()
+        try {
+          if (await isAttachmentVersionDeleted(c, fileId))
+            return
 
-        const retryBucket = new RetryBucket(bucket, DEFAULT_RETRY_PARAMS)
-        const existingObject = await headFirstExistingAttachmentCandidate(retryBucket, candidateKeys)
-        if (existingObject != null)
-          return
+          const retryBucket = new RetryBucket(bucket, DEFAULT_RETRY_PARAMS)
+          const existingObject = await headFirstExistingAttachmentCandidate(retryBucket, candidateKeys)
+          if (existingObject != null)
+            return
 
-        const data = await cached.arrayBuffer()
-        if (await isAttachmentVersionDeleted(c, fileId))
-          return
+          const data = await cached.arrayBuffer()
+          if (await isAttachmentVersionDeleted(c, fileId))
+            return
 
-        const contentType = cached.headers.get('content-type') || undefined
-        const httpMetadata = buildFileHttpMetadata(contentType, cached.headers.get('cache-control'))
-        await bucket.put(fileId, data, { httpMetadata })
-        cloudlog({ requestId: c.get('requestId'), message: 'Restored cached file to R2', fileId })
-        await sendDiscordAlert(c, {
-          content: `🛠️ Restored cached file to R2\nFile: ${fileId}\nRequest ID: ${c.get('requestId') ?? 'unknown'}`,
-        })
-      }
-      catch (err) {
-        cloudlog({ requestId: c.get('requestId'), message: 'Failed to restore cached file to R2', fileId, error: String(err) })
-      }
-      finally {
-        if (!cached.bodyUsed)
-          void cached.body?.cancel().catch(() => {})
-      }
-    })())
+          const contentType = cached.headers.get('content-type') || undefined
+          const httpMetadata = buildFileHttpMetadata(contentType, cached.headers.get('cache-control'))
+          await bucket.put(fileId, data, { httpMetadata })
+          cloudlog({ requestId: c.get('requestId'), message: 'Restored cached file to R2', fileId })
+          await sendDiscordAlert(c, {
+            content: `🛠️ Restored cached file to R2\nFile: ${fileId}\nRequest ID: ${c.get('requestId') ?? 'unknown'}`,
+          })
+        }
+        catch (err) {
+          cloudlog({ requestId: c.get('requestId'), message: 'Failed to restore cached file to R2', fileId, error: String(err) })
+        }
+        finally {
+          if (!cached.bodyUsed)
+            void cached.body?.cancel().catch(() => {})
+        }
+      })())
+    }
     const cachedHeaders = new Headers(cachedResponse.headers)
     cachedHeaders.delete(MANIFEST_SIZE_RECEIPT_HEADER)
     const secret = getEnv(c, 'MANIFEST_SIZE_RECEIPT_SECRET')
@@ -1023,69 +1027,11 @@ async function setKeyFromIdParam(c: Context, next: Next) {
   assertRawAttachmentRouteIdHasValidEncoding(c, 'setKeyFromIdParam')
   const normalizedFileId = fileId
 
-  // Check if this is a Supabase TUS upload ID (base64 encoded)
-  // TUS upload IDs from Supabase are base64-encoded paths like: capgo/orgs/xxx/apps/yyy/file.zip/uuid
-  let extractedFileId = normalizedFileId
-  try {
-    const decoded = atob(normalizedFileId)
-    // If decoded starts with bucket name and contains orgs/, it's a TUS upload ID
-    if (decoded.startsWith('capgo/') && decoded.includes('/orgs/')) {
-      const parts = decoded.split('/')
-      // Expected format:
-      // [0]: 'capgo'
-      // [1]: 'orgs'
-      // [2]: orgId
-      // [3]: 'apps'
-      // [4]: appId
-      // [5..n-2]: file path segments
-      // [n-1]: UUID
-      if (
-        parts.length >= 6
-        && parts[0] === 'capgo'
-        && parts[1] === 'orgs'
-        && parts[3] === 'apps'
-      ) {
-        cloudlog({
-          requestId: c.get('requestId'),
-          message: 'setKeyFromIdParam - detected Supabase TUS upload ID',
-          decoded,
-          parts,
-        })
-        // Extract file path: remove bucket prefix (capgo/) and UUID suffix
-        // Resulting path starts with "orgs/..."
-        const pathParts = parts.slice(1, -1)
-        if (pathParts.length > 0) {
-          extractedFileId = pathParts.join('/')
-          cloudlog({
-            requestId: c.get('requestId'),
-            message: 'setKeyFromIdParam - extracted fileId from TUS ID',
-            extractedFileId,
-            originalParts: parts,
-            pathParts,
-          })
-        }
-        else {
-          cloudlog({
-            requestId: c.get('requestId'),
-            message: 'setKeyFromIdParam - TUS ID decoded but pathParts is empty, using normalizedFileId as fileId',
-            decoded,
-            parts,
-          })
-        }
-      }
-      else {
-        cloudlog({
-          requestId: c.get('requestId'),
-          message: 'setKeyFromIdParam - decoded TUS ID has unexpected structure, using normalizedFileId as fileId',
-          decoded,
-          parts,
-        })
-      }
-    }
-  }
-  catch {
-    // Not a base64 string, use as-is
-  }
+  // Supabase TUS upload IDs are base64-encoded paths like capgo/orgs/xxx/apps/yyy/file.zip/uuid.
+  const tusStorageKey = decodeTusUploadStorageKey(normalizedFileId)
+  const extractedFileId = tusStorageKey ?? normalizedFileId
+  if (tusStorageKey)
+    cloudlog({ requestId: c.get('requestId'), message: 'setKeyFromIdParam - extracted fileId from TUS ID', extractedFileId })
 
   cloudlog({
     requestId: c.get('requestId'),

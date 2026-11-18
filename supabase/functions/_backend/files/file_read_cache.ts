@@ -205,9 +205,22 @@ function closeLatePgClient(c: Context, clientPromise: Promise<Awaited<ReturnType
     .catch(() => {})
 }
 
+/** Deletion evidence comes from a regional replica (enforcing builds with a serving policy). */
+function usesReplicaDeletionEvidence(c: Context) {
+  return Boolean(servingRegionReaderEpoch && requestServingPolicy(c))
+}
+
+/**
+ * Restoring a cached file to R2 needs deletion evidence that cannot lag a
+ * committed deletion. Replica evidence can, so it only gates serving.
+ */
+export function deletionEvidenceAllowsRestore(c: Context) {
+  return !usesReplicaDeletionEvidence(c)
+}
+
 async function lookupAttachmentVersionDeleted(c: Context, fileId: string): Promise<boolean> {
   const deadlineMs = Date.now() + DELETED_LOOKUP_TIMEOUT_MS
-  const useReplica = Boolean(servingRegionReaderEpoch && requestServingPolicy(c))
+  const useReplica = usesReplicaDeletionEvidence(c)
   if (useReplica) {
     c.set('requireReadReplica', true)
     // Files workers have no regional identity. Prefer EU only when it is allowed;

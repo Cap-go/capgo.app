@@ -77,11 +77,21 @@ The enforcing deletion query stays a single cacheable SELECT. It does not open
 a transaction or bypass Hyperdrive caching, so replica lag and the ordinary
 query-cache lifetime still apply to deletion evidence. Route/configuration
 failures return unavailable before serving bytes. Actual transient database
-errors still fail open, as required, and a live Cache API hit can restore a
-missing R2 object. The restoration receives an invoked promise and its own body
-branch before the client starts consuming the response. Deleted markers and
-positive deletion evidence still prevent restoration. Disabled builds retain
-the legacy deletion connection/transaction path.
+errors still fail open, as required. Because replica evidence can lag a
+committed deletion, it only gates serving: a cache hit never restores a
+missing R2 object from it, so a lagging replica cannot write a deleted object
+back. Disabled builds retain the legacy primary deletion
+connection/transaction path, and only that path restores a live cached file
+to R2. The restoration receives an invoked promise and its own body branch
+before the client starts consuming the response. Deleted markers and positive
+deletion evidence still prevent restoration.
+
+Activation prerequisites for this path: a cached zip of a just-deleted bundle
+stays downloadable until the replica and Hyperdrive's query cache see the
+deletion (/updates stops offering it as soon as the plugin state syncs), and
+the replica lookup has no server-side statement bound of its own. Confirm the
+replica role's `statement_timeout` (or accept these bounds) before setting the
+reader epoch.
 
 The policy read admits a request. A tightening does not stop an in-flight
 response, remove bytes already downloaded, or revoke a response already held

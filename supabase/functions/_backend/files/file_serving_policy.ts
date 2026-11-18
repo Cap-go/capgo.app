@@ -4,13 +4,14 @@ import { quickError } from '../plugin_runtime/utils/hono.ts'
 import { enforceServingPolicy, requestServingPolicy } from '../plugin_runtime/utils/servingPolicy.ts'
 import { hasServingRegionExclusions } from '../plugin_runtime/utils/servingRegions.ts'
 import { servingRegionReaderEpoch } from '../plugin_runtime/utils/servingRegionRollout.js'
-import { parseAppScopedAttachmentPath } from './util.ts'
+import { decodeTusUploadStorageKey, parseAppScopedAttachmentPath } from './util.ts'
 
 /** Use the actual storage key, never a caller's app_id or hostname. */
 export async function enforceFileServingPolicy(c: Context, fileId: string) {
   if (!servingRegionReaderEpoch)
     return
-  const scope = parseAppScopedAttachmentPath(fileId)
+  // Same storage key as setKeyFromIdParam: a supported TUS upload ID decodes to it.
+  const scope = parseAppScopedAttachmentPath(decodeTusUploadStorageKey(fileId) ?? fileId)
   if (scope?.kind !== 'scoped')
     throw quickError(503, 'serving_policy_unavailable', 'File delivery policy unavailable')
   await enforceServingPolicy(c, scope.app_id)

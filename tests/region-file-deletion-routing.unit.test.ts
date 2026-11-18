@@ -103,7 +103,7 @@ describe('regional deleted zip evidence through the real routing helper', () => 
     expect(fixture.queries[0]?.text).not.toMatch(/BEGIN|now\(|transaction_timestamp/i)
     expect(put).not.toHaveBeenCalled()
   })
-  it.each([false, true])('preserves live cache bytes and R2 restoration on a real transient outage: %s', async (outage) => {
+  it.each([false, true])('serves live cache bytes without restoring R2 from replica evidence, outage %s', async (outage) => {
     fixture.deleted = false
     fixture.outage = outage
     const { env, put } = environment()
@@ -112,6 +112,17 @@ describe('regional deleted zip evidence through the real routing helper', () => 
     expect(await response.text()).toBe('cached zip bytes')
     expect(fixture.clients.map(client => client.connectionString)).toEqual(['postgres://replica-na'])
     expect(fixture.queries).toHaveLength(1)
+    // A replica behind a committed deletion must not write the object back.
+    expect(put).not.toHaveBeenCalled()
+  })
+  it('still restores a live cached zip to R2 from the legacy evidence of disabled builds', async () => {
+    fixture.epoch = null
+    fixture.deleted = false
+    const { env, put } = environment()
+    const response = await serve(env)
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('cached zip bytes')
+    expect(fixture.clients.map(client => client.connectionString)).toEqual(['postgres://forbidden-primary'])
     expect(put).toHaveBeenCalledOnce()
     expect(put.mock.calls[0]?.[0]).toBe(key)
   })

@@ -238,7 +238,8 @@ describe('/updates external delivery boundaries', () => {
     requestInfosPostgresMock.mockResolvedValue({ channelData: baseChannel({ external_url: url }) })
     const json = await (await runUpdate()).json()
     if (excluded) {
-      expect(json).toMatchObject({ error: 'external_delivery_unavailable' })
+      // An expected policy refusal, not a failed update check.
+      expect(json).toMatchObject({ error: 'external_delivery_unavailable', kind: 'blocked' })
       expect(json).not.toHaveProperty('url')
     }
     else {
