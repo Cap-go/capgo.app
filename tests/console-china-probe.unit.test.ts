@@ -32,13 +32,34 @@ describe('global console web host gate', () => {
     expect(isOnGlobalConsoleWebHost({ hostname: 'console.capgo.com.cn', isNativePlatform: false })).toBe(false)
   })
 
+  it.concurrent('rejects native clients on the production global console hostname', () => {
+    expect(isOnGlobalConsoleWebHost({ hostname: GLOBAL_CONSOLE_WEB_HOST, isNativePlatform: true })).toBe(false)
+  })
+
   it.concurrent('rejects native clients on localhost even when the API host is global', () => {
     expect(isOnGlobalConsoleWebHost({ hostname: 'localhost', isNativePlatform: true, devMode: false })).toBe(false)
+  })
+
+  it.concurrent('rejects native clients on localhost even in development', () => {
+    expect(isOnGlobalConsoleWebHost({ hostname: 'localhost', isNativePlatform: true, devMode: true })).toBe(false)
   })
 
   it.concurrent('allows web localhost only in development', () => {
     expect(isOnGlobalConsoleWebHost({ hostname: 'localhost', isNativePlatform: false, devMode: true })).toBe(true)
     expect(isOnGlobalConsoleWebHost({ hostname: 'localhost', isNativePlatform: false, devMode: false })).toBe(false)
+  })
+
+  it.concurrent('allows web 127.0.0.1 only in development', () => {
+    expect(isOnGlobalConsoleWebHost({ hostname: '127.0.0.1', isNativePlatform: false, devMode: true })).toBe(true)
+    expect(isOnGlobalConsoleWebHost({ hostname: '127.0.0.1', isNativePlatform: false, devMode: false })).toBe(false)
+  })
+
+  it.concurrent('requires the Capacitor native guard on console.capgo.app', () => {
+    const nativeGlobalWeb = { hostname: GLOBAL_CONSOLE_WEB_HOST, isNativePlatform: true }
+    expect(isOnGlobalConsoleWebHost(nativeGlobalWeb)).toBe(false)
+    const hostnameOnlyGate = nativeGlobalWeb.hostname === GLOBAL_CONSOLE_WEB_HOST
+      && !isChinaCapgoConsoleHostname(nativeGlobalWeb.hostname)
+    expect(hostnameOnlyGate).toBe(true)
   })
 
   it.concurrent('requires the web host gate so native clients never get the banner', () => {
