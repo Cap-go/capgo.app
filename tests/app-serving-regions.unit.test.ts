@@ -69,9 +69,26 @@ describe('automatic serving-region settings status', () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ cache: 'no-store', signal: expect.any(AbortSignal) })
     expect(status()).toContain(messages['serving-region-status-active'])
     expect(container.querySelector('button')).toBeNull()
-    expect(container.textContent).not.toMatch(/publication|activation|database|replication|enforcement/i)
+    expect(container.textContent).not.toMatch(/publication|activation|database|enforcement/i)
     await vi.advanceTimersByTimeAsync(120000)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts with every region checked and lets the customer deselect without a routing override', async () => {
+    const regions = ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME']
+    fetchMock.mockResolvedValue(active(appId, regions, 'route'))
+    mount({ regions, savedRegions: [...regions], mode: 'route', savedMode: 'route' })
+    await settle()
+    const inputs = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+    expect(inputs).toHaveLength(9)
+    expect([...inputs].every(input => input.checked)).toBe(true)
+    expect(container.querySelector('select')).toBeNull()
+    expect(container.textContent).toContain('Deselect a region to stop devices there from receiving updates.')
+    expect(container.textContent).toContain('It does not change where your data is stored or replicated.')
+    inputs[0].click()
+    await nextTick()
+    expect(inputs[0].checked).toBe(false)
+    expect(status()).toContain(messages['serving-region-status-unsaved'])
   })
 
   it('hides controls while the service cannot apply them, preserving saved choices', async () => {

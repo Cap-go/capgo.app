@@ -189,11 +189,18 @@ describe('serving policy', () => {
     expect(get).toHaveBeenCalledTimes(2)
   })
 
+  it('blocks a deselected device region even with a legacy route preference', async () => {
+    const { app, env, dataAccess } = harness(() => document(['NA']))
+    const response = await app.fetch(request(), env)
+    expect(response.status).toBe(403)
+    expect(dataAccess).not.toHaveBeenCalled()
+  })
+
   it('routes a request on a disabled Worker region to an allowed DB binding and cache partition', async () => {
     const { app, env } = harness(() => document(['NA']))
     Object.defineProperty(env, 'HYPERDRIVE_CAPGO_READ_EU', { get: () => { throw new Error('Forbidden replica selected') } })
     Object.defineProperty(env, 'HYPERDRIVE_CAPGO_DIRECT_EU', { get: () => { throw new Error('Forbidden primary selected') } })
-    const response = await app.fetch(request(), env)
+    const response = await app.fetch(request('/', 'EWR'), env)
     expect(await response.json()).toEqual({ url: 'postgres://na', key: 'https://plugin.eu.capgo.app/cached?serving_regions=NA' })
   })
 
@@ -207,15 +214,15 @@ describe('serving policy', () => {
     setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_NA', { status: 'lagging', max_lag_seconds: 2400 })
     const { app, env } = harness(() => document(['NA', 'HK']))
     const withHk = { ...env, HYPERDRIVE_CAPGO_READ_HK: { connectionString: 'postgres://hk' } }
-    const result = await (await app.fetch(request(), withHk)).json()
+    const result = await (await app.fetch(request('/', 'EWR'), withHk)).json()
     assert(result && typeof result === 'object' && 'url' in result)
     expect(result.url).toBe('postgres://hk')
-    expect((await app.fetch(request(), env)).status).toBe(503)
+    expect((await app.fetch(request('/', 'EWR'), env)).status).toBe(503)
   })
 
   it('never falls back to EU/primary when the only allowed replica binding is absent', async () => {
     const { app, env } = harness(() => document(['HK']))
-    expect((await app.fetch(request(), env)).status).toBe(503)
+    expect((await app.fetch(request('/', 'HKG'), env)).status).toBe(503)
   })
 
   it('reports a completed restricted read after its replica becomes lagging, while rejecting new reads', async () => {
@@ -229,7 +236,7 @@ describe('serving policy', () => {
       expect(() => getDatabaseURL(c, true)).toThrow()
       return c.json({ source })
     })
-    const response = await app.fetch(request(), env)
+    const response = await app.fetch(request('/', 'EWR'), env)
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ source: 'HYPERDRIVE_CAPGO_READ_NA' })
   })
@@ -509,12 +516,12 @@ describe('serving policy', () => {
     expect(providers.namespace.get).not.toHaveBeenCalled()
   })
 
-  it('blocks before any snippet cache or backend call after tightening', async () => {
+  it.each(['https://plugin.capgo.app/stats', 'https://api.capgo.app/plugin/updates', 'https://updates.example.com/updates'])('blocks %s before any snippet cache or backend call after tightening', async (url) => {
     const cache = { match: vi.fn(async () => Response.json({ error: 'on_premise_app' }, { status: 429 })), put: vi.fn(), delete: vi.fn() }
     vi.stubGlobal('caches', { default: cache })
-    const fetcher = vi.fn(async () => Response.json({ ...document(['NA'], 'block'), active: true, epoch: rollout.epoch, receipt: 'signed' }))
+    const fetcher = vi.fn(async () => Response.json({ ...document(['NA'], 'route'), active: true, epoch: rollout.epoch, receipt: 'signed' }))
     vi.stubGlobal('fetch', fetcher)
-    const req = new Request('https://plugin.capgo.app/stats', { method: 'POST', body: JSON.stringify({ app_id: appId, device_id: 'device', action: 'ping' }) })
+    const req = new Request(url, { method: 'POST', body: JSON.stringify({ app_id: appId, device_id: 'device', action: 'ping' }) })
     Object.defineProperty(req, 'cf', { value: { colo: 'CDG' } })
     expect((await snippet.fetch(req)).status).toBe(403)
     expect(fetcher).toHaveBeenCalledTimes(1)
@@ -531,7 +538,7 @@ describe('serving policy', () => {
       return url.includes('/serving_policy/') ? Response.json({ ...document(['NA']), active: true, epoch: rollout.epoch, receipt: 'signed' }) : Response.json({ error: 'offline' }, { status: 503 })
     }))
     const req = new Request('https://plugin.capgo.app/updates', { method: 'POST', body: JSON.stringify({ app_id: appId }) })
-    Object.defineProperty(req, 'cf', { value: { colo: 'CDG' } })
+    Object.defineProperty(req, 'cf', { value: { colo: 'EWR' } })
     expect((await snippet.fetch(req)).status).toBe(503)
     expect(targets.slice(1).every(url => url.startsWith('https://plugin.na.capgo.app/'))).toBe(true)
     expect(targets.length).toBeGreaterThan(1)

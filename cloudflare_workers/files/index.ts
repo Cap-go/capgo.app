@@ -1,3 +1,5 @@
+import type { ExecutionContext } from 'hono'
+import { enforceFileServingPolicy, enforcePreviewServingPolicy, withFileServingHeaders } from '../../supabase/functions/_backend/files/file_serving_policy.ts'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { getAttachmentFileIdFromReadPath, hasDeletedFileMarker } from '../../supabase/functions/_backend/files/file_read_cache.ts'
 import { app as files } from '../../supabase/functions/_backend/files/files.ts'
@@ -55,30 +57,40 @@ export const filesWorkerCacheTestUtils = {
   buildWorkersCacheKey,
 }
 
-export default {
-  async fetch(request: Request, env: Cloudflare.Env, ctx: FilesExecutionContext): Promise<Response> {
-    const rawFileId = getAttachmentFileIdFromReadPath(new URL(request.url).pathname)
-    let fileId: string | null = rawFileId
-    if (rawFileId) {
-      try {
-        fileId = decodeURIComponent(rawFileId)
-      }
-      catch {
-        // Let the files handler return its invalid-path response.
-      }
+// This outer entrypoint always runs before the managed CachedFiles entrypoint.
+const ingress = createHono(functionName, version)
+ingress.all('*', async (c) => {
+  const request = c.req.raw
+  const env = c.env
+  const ctx: FilesExecutionContext = c.executionCtx
+  const rawFileId = getAttachmentFileIdFromReadPath(new URL(request.url).pathname)
+  let fileId: string | null = rawFileId
+  if (rawFileId) {
+    try {
+      fileId = decodeURIComponent(rawFileId)
     }
-    if (fileId && await hasDeletedFileMarker(fileId)) {
-      return withPreviewHostHeaders(request, new Response(JSON.stringify({ error: 'not_found', message: 'Not found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' },
-      }))
+    catch {
+      // Let the files handler return its invalid-path response.
     }
+  }
+  if (isPreviewSubdomain(c.req.header('host') || new URL(request.url).hostname))
+    await enforcePreviewServingPolicy(c)
+  if (fileId)
+    await enforceFileServingPolicy(c, fileId)
+  if (fileId && await hasDeletedFileMarker(fileId)) {
+    return withPreviewHostHeaders(request, new Response(JSON.stringify({ error: 'not_found', message: 'Not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+  }
 
-    const cacheKey = buildWorkersCacheKey(request)
-    const cachedFiles = ctx.exports?.CachedFiles
-    if (cacheKey && cachedFiles)
-      return withPreviewHostHeaders(request, await cachedFiles.fetch(request, { cf: { cacheKey } }))
+  const cacheKey = buildWorkersCacheKey(request)
+  const cachedFiles = ctx.exports?.CachedFiles
+  if (cacheKey && cachedFiles)
+    return withFileServingHeaders(withPreviewHostHeaders(request, await cachedFiles.fetch(request, { cf: { cacheKey } })))
 
-    return withPreviewHostHeaders(request, await app.fetch(request, env, ctx))
-  },
-}
+  return withFileServingHeaders(withPreviewHostHeaders(request, await app.fetch(request, env, ctx)))
+})
+createAllCatch(ingress, functionName)
+
+export default { fetch: ingress.fetch }

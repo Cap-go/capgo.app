@@ -2,6 +2,9 @@ import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { normalizeLegacyEncodedManifestFileName } from './manifest_encoding.ts'
+import { quickError } from './hono.ts'
+import { getEnv } from './utils.ts'
+import { servingRegionReaderEpoch } from './servingRegionRollout.js'
 import { s3 } from './s3.ts'
 
 const EXPIRATION_SECONDS = 604800
@@ -48,6 +51,28 @@ function rewriteLocalEdgeRuntimeUrl(url: URL, c: Context): { url: URL, finalPath
   return { url, finalPath }
 }
 
+/** A server-configured file ingress also works for custom API-only hostnames. */
+function enforcingDownloadBase(c: Context): URL {
+  try {
+    const url = new URL(c.env?.PLUGIN_FILE_DOWNLOAD_BASE_URL ?? getEnv(c, 'PLUGIN_FILE_DOWNLOAD_BASE_URL'))
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash
+      || !url.pathname.endsWith('/files/read/attachments/'))
+      throw new Error('Invalid file ingress')
+    return url
+  }
+  catch {
+    throw quickError(503, 'file_delivery_unavailable', 'Update file delivery temporarily unavailable')
+  }
+}
+
+function gatedDownloadUrl(c: Context, key: string, query: Record<string, string>) {
+  const url = enforcingDownloadBase(c)
+  url.pathname += key.split('/').map(encodeURIComponent).join('/')
+  for (const [name, value] of Object.entries(query))
+    url.searchParams.set(name, value)
+  return url.href
+}
+
 export interface ManifestEntry {
   file_name: string | null
   file_hash: string | null
@@ -63,6 +88,9 @@ export async function getBundleUrl(
   cloudlog({ requestId: c.get('requestId'), message: 'getBundleUrl path', r2_path })
   if (!r2_path)
     return null
+
+  if (servingRegionReaderEpoch)
+    return gatedDownloadUrl(c, r2_path, { key: checksum, device_id: deviceId })
 
   if (getRuntimeKey() !== 'workerd') {
     try {
@@ -100,7 +128,9 @@ export function getManifestUrl(c: Context, versionId: number, manifest: { file_n
       return {
         file_name: normalizeLegacyEncodedManifestFileName(entry.file_name, entry.s3_path),
         file_hash: entry.file_hash,
-        download_url: `${url.protocol}//${url.host}/${finalPath}/${entry.s3_path}?key=${signKey}&device_id=${deviceId}`,
+        download_url: servingRegionReaderEpoch
+          ? gatedDownloadUrl(c, entry.s3_path, { key: String(signKey), device_id: deviceId })
+          : `${url.protocol}//${url.host}/${finalPath}/${entry.s3_path}?key=${signKey}&device_id=${deviceId}`,
       }
     }).filter(entry => entry !== null) as ManifestEntry[]
   }

@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const getAppOwnerPostgresMock = vi.fn()
 const requestInfosPostgresMock = vi.fn()
 const getBundleUrlMock = vi.fn()
+const servingPolicyMock = vi.fn()
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/servingPolicy.ts', async (original) => ({
+  ...await original<typeof import('../supabase/functions/_backend/plugin_runtime/utils/servingPolicy.ts')>(),
+  requestServingPolicy: servingPolicyMock,
+}))
 const sendStatsAndDeviceMock = vi.fn(() => Promise.resolve())
 
 ;(globalThis as any).EdgeRuntime = undefined
@@ -97,6 +102,7 @@ function baseChannel(versionOverrides: Record<string, unknown> = {}, channelOver
 
 function resetUpdateMocks() {
   vi.clearAllMocks()
+  servingPolicyMock.mockReturnValue(undefined)
   getBundleUrlMock.mockResolvedValue('https://signed.example/bundle.zip')
   getAppOwnerPostgresMock.mockResolvedValue({
     allow_device_custom_id: true,
@@ -214,5 +220,18 @@ describe('/updates paused channel', () => {
     expect(json.error).toBeUndefined()
     expect(json.version).toBe('3.0.0')
     expect(json.url).toBe('https://signed.example/bundle.zip')
+  })
+})
+
+
+describe('/updates external delivery boundaries', () => {
+  beforeEach(resetUpdateMocks)
+  it('does not issue an external URL for a restricted app even in a selected region', async () => {
+    servingPolicyMock.mockReturnValue({ regions: ['EU'], mode: 'route' })
+    requestInfosPostgresMock.mockResolvedValue({ channelData: baseChannel({ external_url: 'https://external.example.com/bundle.zip' }) })
+    const json = await (await runUpdate()).json()
+    expect(json).toMatchObject({ error: 'external_delivery_unavailable' })
+    expect(json).not.toHaveProperty('url')
+    expect(getBundleUrlMock).not.toHaveBeenCalled()
   })
 })

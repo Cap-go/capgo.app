@@ -130,6 +130,10 @@
           "binding": "ATTACHMENT_BUCKET",
           "bucket_name": "capgo",
           "preview_bucket_name": "capgo"
+        },
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod-20261114-recovery"
         }
       ],
       "analytics_engine_datasets": [
@@ -190,6 +194,10 @@
           "binding": "ATTACHMENT_BUCKET",
           "bucket_name": "capgo-preprod",
           "preview_bucket_name": "capgo-preprod"
+        },
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-preprod"
         }
       ],
       "analytics_engine_datasets": [
@@ -239,6 +247,10 @@
           "binding": "ATTACHMENT_BUCKET",
           "bucket_name": "capgo-alpha",
           "preview_bucket_name": "capgo-alpha"
+        },
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-alpha"
         }
       ],
       "analytics_engine_datasets": [
@@ -272,6 +284,10 @@
           "binding": "ATTACHMENT_BUCKET",
           "bucket_name": "capgo-local",
           "preview_bucket_name": "capgo-local"
+        },
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "local-plugin-state-pointers"
         }
       ]
     }

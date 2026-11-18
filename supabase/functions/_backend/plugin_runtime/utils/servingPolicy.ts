@@ -141,7 +141,7 @@ export async function enforceServingPolicy(c: Context, appId: string) {
   let policy: ServingPolicy
   try {
     policy = (await readServingPolicy(c, appId)).policy
-    if (policy.mode === 'block') {
+    if (isRestrictedServingPolicy(policy)) {
       const ingress = await ingressRegion(c, appId)
       if (!ingress)
         throw new Error('Trusted ingress unavailable')

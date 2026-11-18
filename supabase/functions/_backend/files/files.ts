@@ -24,6 +24,7 @@ import { checkPermissionPgFreshRetry } from '../utils/rbac.ts'
 import { createStatsBandwidth } from '../utils/stats.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
 import { buildFileReadCacheRequest, getFileReadCache, isAttachmentVersionDeleted } from './file_read_cache.ts'
+import { enforceFileServingPolicy, withFileServingHeaders } from './file_serving_policy.ts'
 import { app as files_config } from './files_config.ts'
 import { parseUploadMetadata } from './parse.ts'
 import { DEFAULT_RETRY_PARAMS, RetryBucket } from './retry.ts'
@@ -449,6 +450,12 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
   headers.delete('cache-control')
   const storageResponse = new Response(response.body, { headers, status: response.status, statusText: response.statusText })
   return withAttachmentResponseHeaders(storageResponse, fileId, method !== 'HEAD')
+}
+
+async function fileDeliveryPolicy(c: Context, next: Next) {
+  await enforceFileServingPolicy(c, c.get('fileId'))
+  await next()
+  c.res = withFileServingHeaders(c.res)
 }
 
 async function getHandler(c: Context): Promise<Response> {
@@ -1419,7 +1426,7 @@ app.get(
     return getHandler(c)
   },
 )
-app.get(`/read/${ATTACHMENT_PREFIX}/:id{.+}`, setKeyFromIdParam, getHandler)
+app.get(`/read/${ATTACHMENT_PREFIX}/:id{.+}`, setKeyFromIdParam, fileDeliveryPolicy, getHandler)
 app.patch(`/upload/${ATTACHMENT_PREFIX}/:id{.+}`, authenticateAttachmentUpload, setKeyFromIdParam, authorizeAttachmentUpload, (c) => {
   if (getRuntimeKey() !== 'workerd') {
     return supabaseTusPatchHandler(c)
