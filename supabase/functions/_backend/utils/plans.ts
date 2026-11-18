@@ -599,7 +599,7 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
     finalIsGoodPlan = !result.needsUpgrade
     exceededFlags = result.exceededFlags
   }
-  else if (!is_good_plan) {
+  else if (!is_good_plan && (is_onboarded || !is_onboarding_needed)) {
     const result = await userAbovePlan(c, org, orgId, is_good_plan, drizzleClient)
     finalIsGoodPlan = !result.needsUpgrade
     exceededFlags = result.exceededFlags
@@ -677,8 +677,10 @@ export async function updatePlanStatus(
           is_good_plan = ${result.finalIsGoodPlan},
           plan_usage = ${planUsage}
       WHERE customer_id = ${org.customer_id}
-        AND product_id IS NOT DISTINCT FROM ${billingGuard?.productId ?? null}
-        AND price_id IS NOT DISTINCT FROM ${billingGuard?.priceId ?? null}
+        ${billingGuard
+        ? sql`AND product_id IS NOT DISTINCT FROM ${billingGuard.productId ?? null}
+             AND price_id IS NOT DISTINCT FROM ${billingGuard.priceId ?? null}`
+        : sql``}
         AND ROW(is_above_plan, is_good_plan, plan_usage)
           IS DISTINCT FROM ROW(${isAbovePlan}, ${result.finalIsGoodPlan}, ${planUsage})
     `)
@@ -696,8 +698,10 @@ export async function updatePlanStatus(
         bandwidth_exceeded = ${flags.bandwidth_exceeded},
         build_time_exceeded = ${flags.build_time_exceeded}
     WHERE customer_id = ${org.customer_id}
-      AND product_id IS NOT DISTINCT FROM ${billingGuard?.productId ?? null}
-      AND price_id IS NOT DISTINCT FROM ${billingGuard?.priceId ?? null}
+      ${billingGuard
+      ? sql`AND product_id IS NOT DISTINCT FROM ${billingGuard.productId ?? null}
+           AND price_id IS NOT DISTINCT FROM ${billingGuard.priceId ?? null}`
+      : sql``}
       AND ROW(is_above_plan, is_good_plan, plan_usage, mau_exceeded, storage_exceeded, bandwidth_exceeded, build_time_exceeded)
         IS DISTINCT FROM ROW(${isAbovePlan}, ${result.finalIsGoodPlan}, ${planUsage}, ${flags.mau_exceeded}, ${flags.storage_exceeded}, ${flags.bandwidth_exceeded}, ${flags.build_time_exceeded})
   `)
