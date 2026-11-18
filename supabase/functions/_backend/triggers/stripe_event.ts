@@ -390,6 +390,25 @@ export function shouldRecomputePlanStatusAfterStripeSubscriptionChange(
   return productChanged || priceChanged
 }
 
+export function shouldRefreshPlanStatusAfterStripeSubscriptionChange(
+  stripeData: Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>,
+  priorStripeInfo?: Pick<StripeInfoRow, 'product_id' | 'price_id'> | null,
+) {
+  if (shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData))
+    return true
+
+  const nextProductId = stripeData.data.product_id ?? null
+  const nextPriceId = stripeData.data.price_id ?? null
+  if (!nextProductId && !nextPriceId)
+    return false
+
+  const priorProductId = priorStripeInfo?.product_id ?? null
+  const priorPriceId = priorStripeInfo?.price_id ?? null
+  const productChanged = Boolean(nextProductId && priorProductId && nextProductId !== priorProductId)
+  const priceChanged = Boolean(nextPriceId && priorPriceId && nextPriceId !== priorPriceId)
+  return productChanged || priceChanged
+}
+
 async function recomputeOrgPlanStatusAfterStripePlanChange(c: Context, orgId: string): Promise<void> {
   const pgClient = await getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
@@ -401,7 +420,23 @@ async function recomputeOrgPlanStatusAfterStripePlanChange(c: Context, orgId: st
   }
 }
 
+async function touchOrgPlanStatsRefreshRequested(c: Context, orgId: string): Promise<void> {
+  await withAdminPg(c, async (pg) => {
+    await pg.query(
+      `INSERT INTO public.org_stats_refresh_state (org_id) VALUES ($1::uuid) ON CONFLICT (org_id) DO NOTHING`,
+      [orgId],
+    )
+    await pg.query(
+      `UPDATE public.org_stats_refresh_state
+       SET stats_refresh_requested_at = timezone('UTC', clock_timestamp())
+       WHERE org_id = $1::uuid`,
+      [orgId],
+    )
+  })
+}
+
 async function queueOrgPlanStatusRecompute(c: Context, orgId: string, customerId: string): Promise<void> {
+  await touchOrgPlanStatsRefreshRequested(c, orgId)
   await withAdminPg(c, pg =>
     pg.query('SELECT public.queue_cron_stat_org_for_org($1::uuid, $2::text)', [orgId, customerId]),
   )
@@ -414,11 +449,14 @@ async function refreshPlanStatusAfterStripeSubscriptionChange(
   org: Org,
   stripeData: StripeData,
   didPersist: StripeSubscriptionPersistOutcome,
+  priorStripeInfo?: Pick<StripeInfoRow, 'product_id' | 'price_id'> | null,
 ): Promise<void> {
-  if (!shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData))
+  if (!shouldRefreshPlanStatusAfterStripeSubscriptionChange(stripeData, priorStripeInfo))
     return
   if (didPersist !== 'applied' && didPersist !== 'duplicate' && didPersist !== 'stale')
     return
+
+  await touchOrgPlanStatsRefreshRequested(c, org.id)
 
   try {
     await recomputeOrgPlanStatusAfterStripePlanChange(c, org.id)
@@ -1522,7 +1560,7 @@ async function createdOrUpdated(
         stripeEventId: c.get('stripeEvent')!.id,
         subscriptionId: stripeData.data.subscription_id,
       })
-      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist)
+      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist, currentStripeInfo)
       return
     }
     if (didPersist === 'stale') {
@@ -1533,13 +1571,13 @@ async function createdOrUpdated(
         eventOccurredAtIso,
         subscriptionId: stripeData.data.subscription_id,
       })
-      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist)
+      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist, currentStripeInfo)
       return
     }
     if (didPersist === 'missing')
       return quickError(404, 'succeeded_customer_id_not_found', `succeeded: customer_id not found`, { stripeData })
 
-    await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist)
+    await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist, currentStripeInfo)
 
     const openAIFirstPaymentAt = getOpenAIFirstPaymentAt({
       firstPaidAt,
@@ -2478,6 +2516,7 @@ export const stripeEventTestUtils = {
   getSubscriptionTrackingState,
   isStaleStripeEvent,
   shouldRecomputePlanStatusAfterStripeSubscriptionChange,
+  shouldRefreshPlanStatusAfterStripeSubscriptionChange,
   refreshPlanStatusAfterStripeSubscriptionChange,
   recomputeOrgPlanStatusAfterStripePlanChange,
   createdOrUpdated,

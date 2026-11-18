@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
 import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
 
-const { shouldRecomputePlanStatusAfterStripeSubscriptionChange } = stripeEventTestUtils
+const {
+  shouldRecomputePlanStatusAfterStripeSubscriptionChange,
+  shouldRefreshPlanStatusAfterStripeSubscriptionChange,
+} = stripeEventTestUtils
 
 const mockContext = {
   get: () => 'test-request-id',
@@ -89,6 +92,30 @@ describe('stripe subscription event classification', () => {
     expect(shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData)).toBe(true)
   })
 
+  it.concurrent('recomputes when only price changes', () => {
+    expect(shouldRecomputePlanStatusAfterStripeSubscriptionChange({
+      data: {
+        product_id: 'prod_same',
+        price_id: 'price_new',
+        customer_id: 'cus_same',
+      } as StripeData['data'],
+      previousProductId: 'prod_same',
+      previousPriceId: 'price_old',
+    } satisfies Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>)).toBe(true)
+  })
+
+  it.concurrent('recomputes when only product changes', () => {
+    expect(shouldRecomputePlanStatusAfterStripeSubscriptionChange({
+      data: {
+        product_id: 'prod_new',
+        price_id: 'price_same',
+        customer_id: 'cus_same',
+      } as StripeData['data'],
+      previousProductId: 'prod_old',
+      previousPriceId: 'price_same',
+    } satisfies Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>)).toBe(true)
+  })
+
   it.concurrent('skips plan status recompute when price and product stay unchanged', () => {
     expect(shouldRecomputePlanStatusAfterStripeSubscriptionChange({
       data: {
@@ -99,6 +126,36 @@ describe('stripe subscription event classification', () => {
       previousProductId: 'prod_same',
       previousPriceId: 'price_same',
     } satisfies Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>)).toBe(false)
+  })
+
+  it.concurrent('refreshes when persisted product differs without previous_attributes', () => {
+    expect(shouldRefreshPlanStatusAfterStripeSubscriptionChange(
+      {
+        data: {
+          product_id: 'prod_team',
+          price_id: 'price_team',
+          customer_id: 'cus_same',
+        } as StripeData['data'],
+        previousProductId: undefined,
+        previousPriceId: undefined,
+      } satisfies Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>,
+      { product_id: 'prod_maker', price_id: 'price_maker' },
+    )).toBe(true)
+  })
+
+  it.concurrent('skips refresh when stored billing already matches incoming snapshot', () => {
+    expect(shouldRefreshPlanStatusAfterStripeSubscriptionChange(
+      {
+        data: {
+          product_id: 'prod_team',
+          price_id: 'price_team',
+          customer_id: 'cus_same',
+        } as StripeData['data'],
+        previousProductId: undefined,
+        previousPriceId: undefined,
+      } satisfies Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>,
+      { product_id: 'prod_team', price_id: 'price_team' },
+    )).toBe(false)
   })
 
   it.concurrent('marks monthly to yearly cadence changes as upgraded without a plan change', () => {
