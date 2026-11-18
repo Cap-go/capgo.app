@@ -401,10 +401,19 @@ BEGIN
   IF v_app_ids IS NULL THEN
     RETURN 0;
   END IF;
+  -- Coalesce only never-claimed repairs. Serialize the decision with claims
+  -- and other repairs so a claim cannot reserve its source barrier between
+  -- the freshness check and a concurrent request being coalesced.
+  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('plugin_state_sync_claim'));
   -- An explicit repair must fail atomically if durable enqueue fails. The
   -- business-write notification helper intentionally swallows those errors.
   INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref)
   SELECT selected.app_id, 'full', '' FROM pg_catalog.unnest(v_app_ids) AS selected (app_id)
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.plugin_state_sync_pending pending
+    WHERE pending.app_id = selected.app_id AND pending.kind = 'full' AND pending.ref = ''
+      AND pending.lease_token IS NULL AND pending.attempts = 0 AND pending.source_commit_at IS NULL
+  )
   ON CONFLICT ON CONSTRAINT plugin_state_sync_pending_producer_job_unique DO NOTHING;
 
   -- Manual repair grants a fresh budget to exhausted exact keys, including

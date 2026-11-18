@@ -188,6 +188,82 @@ describe('EU source commit barrier and primary progress', () => {
       .toEqual([{ kind: 'full', ref: '', attempts: 0 }, { kind: 'manifest', ref: '12345', attempts: 0 }])
   }))
 
+  it('coalesces committed repairs before the first claim but preserves requests after a claim or deferral', async () => {
+    const repairApp = `${appId}.repair-coalescing`
+    const enqueue = () => control.query('SELECT public.enqueue_plugin_state_full_sync($1::text[])', [[repairApp]])
+    const jobs = () => control.query("SELECT id::text, kind, ref FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = 'full' ORDER BY id", [repairApp])
+    await control.query("SELECT set_config('capgo.plugin_state_wake_sent', 'on', false)")
+    try {
+      await control.query("INSERT INTO public.plugin_state_sync_failed(app_id, kind, ref, repair_at) VALUES($1, 'manifest', '98765', now())", [repairApp])
+      await enqueue()
+      const first = (await jobs()).rows[0].id
+      // Separate committed producer transactions must still coalesce.
+      await enqueue()
+      expect((await jobs()).rows).toEqual([{ id: first, kind: 'full', ref: '' }])
+      expect((await control.query('SELECT app_id FROM public.plugin_state_sync_failed WHERE app_id = $1', [repairApp])).rows).toEqual([])
+      expect((await control.query("SELECT ref FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = 'manifest'", [repairApp])).rows).toEqual([{ ref: '98765' }])
+
+      await control.query(`UPDATE public.plugin_state_sync_pending SET lease_token = gen_random_uuid(),
+        leased_until = now() + interval '2 minutes', attempts = 1, source_commit_at = now() WHERE id = $1`, [first])
+      await enqueue()
+      expect((await jobs()).rows).toHaveLength(2)
+      // A source deferral refunds attempts, but the durable barrier records
+      // that the old repair was already claimed and must not absorb a new one.
+      await control.query("DELETE FROM public.plugin_state_sync_pending WHERE app_id = $1 AND id <> $2 AND kind = 'full'", [repairApp, first])
+      await control.query('UPDATE public.plugin_state_sync_pending SET lease_token = NULL, leased_until = NULL, attempts = 0 WHERE id = $1', [first])
+      await enqueue()
+      expect((await jobs()).rows).toHaveLength(2)
+      await enqueue()
+      expect((await jobs()).rows).toHaveLength(2)
+    }
+    finally {
+      await control.query('DELETE FROM public.plugin_state_sync_pending WHERE app_id = $1', [repairApp])
+      await control.query('DELETE FROM public.plugin_state_sync_failed WHERE app_id = $1', [repairApp])
+      await control.query("SELECT set_config('capgo.plugin_state_wake_sent', '', false)")
+    }
+  })
+
+  it('serializes concurrent repairs and retains a repair arriving while a claim commits', async () => {
+    const repairApp = `${appId}.concurrent-repairs`
+    const peer = new Client({ connectionString: POSTGRES_URL })
+    await peer.connect()
+    await control.query("SELECT set_config('capgo.plugin_state_wake_sent', 'on', false)")
+    await peer.query("SELECT set_config('capgo.plugin_state_wake_sent', 'on', false)")
+    let pendingRepair: Promise<unknown> | undefined
+    try {
+      await Promise.all([control, peer].map(client => client.query('SELECT public.enqueue_plugin_state_full_sync($1::text[])', [[repairApp]])))
+      const first = (await control.query("SELECT id::text FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = 'full'", [repairApp])).rows
+      expect(first).toHaveLength(1)
+      const controlPid = (await control.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+      await peer.query('BEGIN')
+      await peer.query("SELECT pg_advisory_xact_lock(hashtext('plugin_state_sync_claim'))")
+      await peer.query(`UPDATE public.plugin_state_sync_pending SET lease_token = gen_random_uuid(),
+        leased_until = now() + interval '2 minutes', attempts = 1,
+        source_commit_at = public.reserve_plugin_state_source_barrier() WHERE id = $1`, [first[0].id])
+      pendingRepair = control.query('SELECT public.enqueue_plugin_state_full_sync($1::text[])', [[repairApp]])
+      let blocked = false
+      for (let check = 0; check < 50; check++) {
+        const result = await peer.query('SELECT cardinality(pg_blocking_pids($1::integer)) > 0 AS blocked', [controlPid])
+        if (result.rows[0].blocked) {
+          blocked = true
+          break
+        }
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(blocked).toBe(true)
+      await peer.query('COMMIT')
+      await pendingRepair
+      expect((await control.query("SELECT id FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = 'full'", [repairApp])).rows).toHaveLength(2)
+    }
+    finally {
+      await peer.query('ROLLBACK')
+      await pendingRepair?.catch(() => {})
+      await control.query('DELETE FROM public.plugin_state_sync_pending WHERE app_id = $1', [repairApp])
+      await control.query("SELECT set_config('capgo.plugin_state_wake_sent', '', false)")
+      await peer.end()
+    }
+  })
+
   it('bounds deleted-app inventory by distinct app identities even with 5k archived keys for one app', async () => rollback(async () => {
     await enable()
     const prefix = `${appId}.inventory`

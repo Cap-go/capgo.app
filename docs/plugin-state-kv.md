@@ -418,6 +418,22 @@ and cursor and refunds the unused publication attempt; actual publication
 failures still have at most five attempts. Full continuations carry the barrier
 forward. Independently published keys can still settle on a later deferral.
 
+Parallel work retains every failure. A provider write failure consumes its
+publication attempt even if another worker loses the source snapshot. Only a
+pure source/deadline/capacity stop defers unfinished payload work; serving-policy
+capacity failures after provider I/O still consume an attempt. Source loss
+inside a full scan retains the original full cursor instead of acknowledging a
+replacement continuation. Ordinary capacity yields may advance proven pages.
+
+When full history work also carries a current app or device change, it reserves
+app-key publication capacity and time before scanning. The reservation covers a
+pointer GET, immutable KV PUT and five CAS/GET pairs within the shared 800-operation
+cap. A yielded scan publishes the bounded current snapshot before acknowledging
+that change; a terminal scan writes only its complete snapshot. If that refresh
+cannot complete, current work and the original full cursor remain queued.
+Queued serving policies run before inventory. Inventory errors are reported
+separately and leave their cursor unchanged without aborting queued publication.
+
 Backfill and policy inventory page `apps(app_id)` on EU, at most 25 and 100
 identities per wake respectively. Primary merges bounded bookkeeping identities
 for deleted apps, then atomically commits enqueue and cursor progress with a
@@ -426,6 +442,10 @@ work. An explicit `enqueue_plugin_state_full_sync(NULL)` now requests this
 asynchronous inventory and returns zero immediately; explicit app lists retain
 their synchronous enqueue behavior. Only an explicit repair can refresh poison
 budgets or restore archived exact keys. Normal backfill preserves the archive.
+Repeated explicit repairs reuse a never-claimed fresh full job. Claim coordination
+serializes this check with claims; an already claimed or source-deferred job keeps
+its durable barrier and cannot absorb a newer repair request. Archived exact-key
+restoration still runs when a fresh full job is reused.
 
 The API worker's prod and alpha environments reuse the existing
 `HYPERDRIVE_CAPGO_READ_EU` resource used by plugin workers, under the dedicated
