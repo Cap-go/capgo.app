@@ -12,6 +12,19 @@ Verify provisioning and the `/updates`, `/stats`, and `/channel_self` endpoints 
 
 Reference: [Workers Routes API](https://developers.cloudflare.com/api/resources/workers/subresources/routes/methods/create/), [Cloudflare Worker as fallback origin](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/start/advanced-settings/worker-as-origin/) and [custom hostname API](https://developers.cloudflare.com/api/resources/custom_hostnames/methods/create/).
 
+## Automatic snippet selection
+
+All custom hostnames in the `capgo.app` SaaS zone, including manually configured
+ones, serve the Live Updates API. The normal snippet release installs a stable
+foreign-host predicate for exact plugin endpoint paths. Once installed, newly
+provisioned hostnames automatically select the current `plugin_load_balancer`
+snippet without a database inventory refresh or per-domain snippet-rule writes.
+Existing manual and native routing branches remain in place. See
+[snippet deployment](snippets-deployment.md#custom-domain-routing) for paths,
+release constraints and O2O validation limits. Provisioning still creates the
+hostname and Worker route synchronously; DNS and certificate activation remain
+required.
+
 ## Data and permissions
 
 The service-managed `org_custom_domains` table has a primary key on `org_id` and unique indexes on hostname, provider hostname ID, and Worker route ID. Direct anonymous/authenticated access is denied for every operation. API requests require `org.update_settings`; only creation additionally requires an active Enterprise plan with a live Stripe subscription in `active` status and no overdue balance (`past_due_at`). Trialing, past-due, canceled, and missing subscriptions cannot create domains; legacy paid accounts do not depend on `paid_at` being populated. Read and removal do not require Enterprise, so downgraded organizations can migrate and remove their domain. Creation and deletion serialize using an indexed organization row lock. No plugin hot-path database lookups or new cron jobs are introduced.

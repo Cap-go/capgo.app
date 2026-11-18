@@ -611,7 +611,6 @@ jobs:
         run: bun run deploy:snippets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
 
   deploy_native_ios:
     needs: [changes, supabase_deploy, deploy_webapp]
