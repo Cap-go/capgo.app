@@ -13,12 +13,6 @@ const lockTimeoutLiteral = `SET LOCAL lock_timeout = '500ms'`
 const lockTables =
   'LOCK TABLE public.app_versions, public.apps IN ACCESS EXCLUSIVE MODE'
 
-function lockPrecedesFkDrop(sql: string) {
-  const lock = sql.indexOf(lockTables)
-  const fk = sql.indexOf(fkDrop)
-  return lock > 0 && fk > 0 && lock < fk
-}
-
 function lockListsAppVersionsBeforeApps(sql: string) {
   const line = sql.match(
     /LOCK TABLE public\.app_versions, public\.apps IN ACCESS EXCLUSIVE MODE/,
