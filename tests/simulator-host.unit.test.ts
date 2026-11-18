@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { recordStoppedSimulatorDevices, simulatorMaxSessionStopIso } from '../supabase/functions/_backend/public/build/simulator_host.ts'
+import { recordStoppedSimulatorDevices, simulatorMaxSessionStopIso, simulatorRecordedDeviceStopIso } from '../supabase/functions/_backend/public/build/simulator_host.ts'
 
 const { mockGetPgClient, mockCloseClient, mockGetEnv, mockLogErr } = vi.hoisted(() => ({
   mockGetPgClient: vi.fn(),
@@ -68,6 +68,7 @@ describe('stopped simulator devices', () => {
 
   it('records the stop time of a device the host stopped, caps a session at its maximum, and leaves a fresh one alone', async () => {
     vi.useFakeTimers()
+    try {
     vi.setSystemTime(syncNow)
     mockGetPgClient.mockResolvedValue({
       connect: async () => ({
@@ -95,20 +96,30 @@ describe('stopped simulator devices', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     await recordStoppedSimulatorDevices(context, orgId)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
     const stops = queries.filter(query => query.sql.includes('device_stopped_at = COALESCE'))
     expect(stops).toHaveLength(2)
     expect(stops.map(stop => stop.params)).toEqual(expect.arrayContaining([
       [maxed, '2026-11-09T11:40:00.000Z'],
       [idle, '2026-11-09T12:07:00.000Z'],
     ]))
-    vi.useRealTimers()
+    expect(stops.some(stop => stop.params?.[0] === busy)).toBe(false)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the host idle stop when sync runs after the maximum', () => {
+    expect(simulatorRecordedDeviceStopIso('2026-11-09T11:07:00.000Z', '2026-11-09T11:40:00.000Z')).toBe('2026-11-09T11:07:00.000Z')
+    expect(simulatorRecordedDeviceStopIso('2026-11-09T12:45:00.000Z', '2026-11-09T11:40:00.000Z')).toBe('2026-11-09T11:40:00.000Z')
   })
 
   it('returns the maximum stop instant only once the session cap is reached', () => {
     const openedAt = '2026-11-09T11:00:00.000Z'
     expect(simulatorMaxSessionStopIso(openedAt, 40, Date.parse('2026-11-09T11:39:59.000Z'))).toBeUndefined()
     expect(simulatorMaxSessionStopIso(openedAt, 40, Date.parse('2026-11-09T11:40:00.000Z'))).toBe('2026-11-09T11:40:00.000Z')
+    expect(simulatorMaxSessionStopIso('2026-11-09T11:00:00.123Z', 40, Date.parse('2026-11-09T11:40:01.000Z'))).toBe('2026-11-09T11:40:00.123Z')
   })
 
   it('never blocks the caller when the host is down', async () => {

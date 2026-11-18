@@ -79,6 +79,18 @@ export function simulatorMaxSessionStopIso(
   return new Date(capAt).toISOString()
 }
 
+export function simulatorRecordedDeviceStopIso(hostStop: string, maxStop?: string): string {
+  if (!maxStop)
+    return hostStop
+  const hostMs = Date.parse(hostStop)
+  const maxMs = Date.parse(maxStop)
+  if (!Number.isFinite(hostMs))
+    return maxStop
+  if (!Number.isFinite(maxMs))
+    return hostStop
+  return hostMs > maxMs ? maxStop : hostStop
+}
+
 export async function queryWrite<T extends object>(c: Context, sql: string, params: unknown[]): Promise<T[]> {
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   let client: PgQueryClient | null = null
@@ -167,17 +179,30 @@ export async function recordStoppedSimulatorDevices(c: Context, orgId: string): 
         const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_MINUTES
         const openedAt = row.started_at ?? row.created_at
         const maxStop = simulatorMaxSessionStopIso(openedAt, maxMinutes, now)
-        if (maxStop) {
-          await rememberDeviceStop(c, row.id, maxStop)
+        const found = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${encodeURIComponent(row.emulator_id)}`, 'GET', undefined, DEVICE_CHECK_TIMEOUT_MS)
+        const responseNow = Date.now()
+        const hostStop = deviceStopTime(found.data, responseNow)
+        if (hostStop) {
+          await rememberDeviceStop(c, row.id, simulatorRecordedDeviceStopIso(hostStop, maxStop))
           return
         }
-        const found = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${encodeURIComponent(row.emulator_id)}`, 'GET', undefined, DEVICE_CHECK_TIMEOUT_MS)
-        const stoppedAt = deviceStopTime(found.data, now)
-        if (stoppedAt)
-          await rememberDeviceStop(c, row.id, stoppedAt)
+        if (maxStop)
+          await rememberDeviceStop(c, row.id, maxStop)
       }
       catch (error) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator device check failed', sessionId: row.id, error })
+        const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_MINUTES
+        const maxStop = simulatorMaxSessionStopIso(row.started_at ?? row.created_at, maxMinutes, Date.now())
+        if (maxStop) {
+          try {
+            await rememberDeviceStop(c, row.id, maxStop)
+          }
+          catch (writeError) {
+            cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator max stop write failed', sessionId: row.id, error: writeError })
+          }
+        }
+        else {
+          cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator device check failed', sessionId: row.id, error })
+        }
       }
     }))
   }
