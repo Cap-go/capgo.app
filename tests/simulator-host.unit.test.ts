@@ -120,6 +120,7 @@ describe('stopped simulator devices', () => {
     expect(simulatorMaxSessionStopIso(openedAt, 40, Date.parse('2026-11-09T11:39:59.000Z'))).toBeUndefined()
     expect(simulatorMaxSessionStopIso(openedAt, 40, Date.parse('2026-11-09T11:40:00.000Z'))).toBe('2026-11-09T11:40:00.000Z')
     expect(simulatorMaxSessionStopIso('2026-11-09T11:00:00.123Z', 40, Date.parse('2026-11-09T11:40:01.000Z'))).toBe('2026-11-09T11:40:00.123Z')
+    expect(simulatorMaxSessionStopIso(new Date('2026-11-09T11:00:00.750Z'), 40, Date.parse('2026-11-09T11:40:00.750Z'))).toBe('2026-11-09T11:40:00.750Z')
   })
 
   it('never blocks the caller when the host is down', async () => {

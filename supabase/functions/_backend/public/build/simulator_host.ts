@@ -64,13 +64,13 @@ export function deviceStopTime(device: EmulatorSessionData | undefined, now = Da
 }
 
 export function simulatorMaxSessionStopIso(
-  openedAt: string | null,
+  openedAt: string | Date | null,
   maxDurationMinutes = SIMULATOR_MAX_MINUTES,
   now = Date.now(),
 ): string | undefined {
   if (!openedAt)
     return undefined
-  const opened = Date.parse(openedAt)
+  const opened = openedAt instanceof Date ? openedAt.getTime() : Date.parse(openedAt)
   if (!Number.isFinite(opened))
     return undefined
   const capAt = opened + Math.max(1, maxDurationMinutes) * 60_000
@@ -162,8 +162,8 @@ export async function recordStoppedSimulatorDevices(c: Context, orgId: string): 
     const running = await queryRead<{
       id: string
       emulator_id: string
-      started_at: string | null
-      created_at: string
+      started_at: Date | null
+      created_at: Date
       max_duration_minutes: number
     }>(c, `
       SELECT id, emulator_id, started_at, created_at, max_duration_minutes
