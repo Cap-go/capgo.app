@@ -1,33 +1,34 @@
 import { randomUUID } from 'node:crypto'
+import type { Context } from 'hono'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
-import { getSupabaseClient, TEST_EMAIL, USER_ID } from './test-utils.ts'
+import { getDrizzleClient } from '../supabase/functions/_backend/utils/pg.ts'
+import { checkPlanStatusOnly } from '../supabase/functions/_backend/utils/plans.ts'
+import { cleanupPostgresClient, getPostgresClient, getSupabaseClient, TEST_EMAIL, USER_ID } from './test-utils.ts'
 
 const MAKER_PRODUCT_ID = 'prod_LQIs1Yucml9ChU'
 const TEAM_PRODUCT_ID = 'prod_LQIugvJcPrxhda'
-const MAKER_MONTHLY_PRICE_ID = 'price_1KjSGyGH46eYKnWwL4h14DsK'
-const TEAM_MONTHLY_PRICE_ID = 'price_1KjSIUGH46eYKnWwWHvg8XYs'
 
 const testRunId = randomUUID()
 const ORG_ID = testRunId
 const STRIPE_CUSTOMER_ID = `cus_build_upgrade_${testRunId.slice(0, 8)}`
 const APPNAME = `com.build.upgrade.${testRunId.slice(0, 8)}`
 
-const mockContext = {
-  get: () => 'test-request-id',
-} as any
-
-function makeSubscriptionItem(priceId: string, productId: string) {
+function createContext(): Context {
   return {
-    current_period_end: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
-    current_period_start: Math.floor(Date.now() / 1000) - 15 * 24 * 60 * 60,
-    plan: {
-      id: priceId,
-      interval: 'month',
-      product: productId,
-      usage_type: 'licensed',
-    },
-  } as const
+    get: (key: string) => key === 'requestId' ? 'test-request-id' : undefined,
+  } as Context
+}
+
+async function recomputePlanStatus() {
+  const pool = await getPostgresClient()
+  const client = await pool.connect()
+  try {
+    const drizzleClient = getDrizzleClient(client, { logger: false })
+    await checkPlanStatusOnly(createContext(), ORG_ID, drizzleClient)
+  }
+  finally {
+    client.release()
+  }
 }
 
 beforeAll(async () => {
@@ -84,19 +85,7 @@ beforeEach(async () => {
   const today = new Date().toISOString().split('T')[0]
 
   await supabase.from('daily_build_time').delete().eq('app_id', APPNAME)
-  await supabase.from('build_logs').delete().eq('org_id', ORG_ID)
   await supabase.from('app_metrics_cache').delete().eq('org_id', ORG_ID)
-
-  const { error: stripeError } = await supabase.from('stripe_info').update({
-    bandwidth_exceeded: false,
-    build_time_exceeded: true,
-    is_good_plan: true,
-    mau_exceeded: false,
-    product_id: MAKER_PRODUCT_ID,
-    storage_exceeded: false,
-  }).eq('customer_id', STRIPE_CUSTOMER_ID)
-  if (stripeError)
-    throw stripeError
 
   const { error: buildTimeError } = await supabase.from('daily_build_time').insert({
     app_id: APPNAME,
@@ -115,75 +104,75 @@ afterAll(async () => {
   await supabase.from('org_users').delete().eq('org_id', ORG_ID)
   await supabase.from('orgs').delete().eq('id', ORG_ID)
   await supabase.from('stripe_info').delete().eq('customer_id', STRIPE_CUSTOMER_ID)
+  await cleanupPostgresClient()
 })
 
-async function applySubscriptionWebhookStripeInfo() {
-  const stripeData = extractDataEvent(mockContext, {
-    data: {
-      object: {
-        customer: STRIPE_CUSTOMER_ID,
-        id: `sub_build_upgrade_${testRunId.slice(0, 8)}`,
-        items: {
-          data: [makeSubscriptionItem(TEAM_MONTHLY_PRICE_ID, TEAM_PRODUCT_ID)],
-        },
-        status: 'active',
-      },
-      previous_attributes: {
-        items: {
-          data: [makeSubscriptionItem(MAKER_MONTHLY_PRICE_ID, MAKER_PRODUCT_ID)],
-        },
-      },
-    },
-    type: 'customer.subscription.updated',
-  } as any)
-
-  const { data } = stripeData
-  const supabase = getSupabaseClient()
-  const { error } = await supabase.from('stripe_info').update({
-    bandwidth_exceeded: data.bandwidth_exceeded,
-    build_time_exceeded: data.build_time_exceeded,
-    is_good_plan: data.is_good_plan,
-    mau_exceeded: data.mau_exceeded,
-    price_id: data.price_id,
-    product_id: data.product_id,
-    storage_exceeded: data.storage_exceeded,
-    subscription_anchor_end: data.subscription_anchor_end,
-    subscription_anchor_start: data.subscription_anchor_start,
-    subscription_id: data.subscription_id,
-  }).eq('customer_id', STRIPE_CUSTOMER_ID)
-  if (error)
-    throw error
+async function isBuildTimeAllowed() {
+  const { data, error } = await getSupabaseClient().rpc('is_allowed_action_org_action', {
+    actions: ['build_time'],
+    orgid: ORG_ID,
+  })
+  expect(error).toBeFalsy()
+  return data
 }
 
-describe('build_time_exceeded after plan upgrade', () => {
-  it('clears build_time_exceeded on subscription upgrade webhook payload and allows native builds', async () => {
+describe('build_time_exceeded after plan change recompute', () => {
+  it('clears build_time_exceeded when usage fits the upgraded plan', async () => {
     const supabase = getSupabaseClient()
 
-    const { data: stuckState } = await supabase
+    const { error: makerStateError } = await supabase.from('stripe_info').update({
+      build_time_exceeded: true,
+      is_good_plan: false,
+      product_id: MAKER_PRODUCT_ID,
+    }).eq('customer_id', STRIPE_CUSTOMER_ID)
+    expect(makerStateError).toBeFalsy()
+
+    const { error: upgradeError } = await supabase.from('stripe_info').update({
+      product_id: TEAM_PRODUCT_ID,
+    }).eq('customer_id', STRIPE_CUSTOMER_ID)
+    expect(upgradeError).toBeFalsy()
+
+    await recomputePlanStatus()
+
+    const { data: stripeInfo } = await supabase
       .from('stripe_info')
       .select('build_time_exceeded, is_good_plan, product_id')
       .eq('customer_id', STRIPE_CUSTOMER_ID)
       .single()
-    expect(stuckState?.build_time_exceeded).toBe(true)
-    expect(stuckState?.is_good_plan).toBe(true)
-    expect(stuckState?.product_id).toBe(MAKER_PRODUCT_ID)
+    expect(stripeInfo?.product_id).toBe(TEAM_PRODUCT_ID)
+    expect(stripeInfo?.build_time_exceeded).toBe(false)
+    expect(stripeInfo?.is_good_plan).toBe(true)
+    expect(await isBuildTimeAllowed()).toBe(true)
+  })
 
-    await applySubscriptionWebhookStripeInfo()
+  it('keeps build_time_exceeded when usage is still over the new plan', async () => {
+    const supabase = getSupabaseClient()
+    const today = new Date().toISOString().split('T')[0]
 
-    const { data: stripeInfoAfterUpgrade } = await supabase
+    await supabase.from('daily_build_time').update({ build_time_unit: 10_000 }).eq('app_id', APPNAME).eq('date', today)
+
+    const { error: teamStateError } = await supabase.from('stripe_info').update({
+      build_time_exceeded: false,
+      is_good_plan: true,
+      product_id: TEAM_PRODUCT_ID,
+    }).eq('customer_id', STRIPE_CUSTOMER_ID)
+    expect(teamStateError).toBeFalsy()
+
+    const { error: downgradeError } = await supabase.from('stripe_info').update({
+      product_id: MAKER_PRODUCT_ID,
+    }).eq('customer_id', STRIPE_CUSTOMER_ID)
+    expect(downgradeError).toBeFalsy()
+
+    await recomputePlanStatus()
+
+    const { data: stripeInfo } = await supabase
       .from('stripe_info')
       .select('build_time_exceeded, is_good_plan, product_id')
       .eq('customer_id', STRIPE_CUSTOMER_ID)
       .single()
-    expect(stripeInfoAfterUpgrade?.product_id).toBe(TEAM_PRODUCT_ID)
-    expect(stripeInfoAfterUpgrade?.is_good_plan).toBe(true)
-    expect(stripeInfoAfterUpgrade?.build_time_exceeded).toBe(false)
-
-    const { data: buildAllowed, error: buildAllowedError } = await supabase.rpc('is_allowed_action_org_action', {
-      actions: ['build_time'],
-      orgid: ORG_ID,
-    })
-    expect(buildAllowedError).toBeFalsy()
-    expect(buildAllowed).toBe(true)
+    expect(stripeInfo?.product_id).toBe(MAKER_PRODUCT_ID)
+    expect(stripeInfo?.build_time_exceeded).toBe(true)
+    expect(stripeInfo?.is_good_plan).toBe(false)
+    expect(await isBuildTimeAllowed()).toBe(false)
   })
 })

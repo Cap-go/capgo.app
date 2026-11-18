@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
 import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
 
+const { shouldRecomputePlanStatusAfterStripeSubscriptionChange } = stripeEventTestUtils
+
 const mockContext = {
   get: () => 'test-request-id',
 } as any
@@ -51,12 +53,12 @@ function makePlan({
 }
 
 describe('stripe subscription event classification', () => {
-  it.concurrent('resets usage exceeded flags including build time on subscription updates', () => {
+  it.concurrent('detects product and price changes that need plan status recompute', () => {
     const stripeData = extractDataEvent(mockContext, {
       data: {
         object: {
-          customer: 'cus_usage_reset',
-          id: 'sub_usage_reset',
+          customer: 'cus_recompute',
+          id: 'sub_recompute',
           items: {
             data: [
               makeSubscriptionItem({
@@ -83,10 +85,15 @@ describe('stripe subscription event classification', () => {
       type: 'customer.subscription.updated',
     } as any)
 
-    expect(stripeData.data.build_time_exceeded).toBe(false)
-    expect(stripeData.data.mau_exceeded).toBe(false)
-    expect(stripeData.data.storage_exceeded).toBe(false)
-    expect(stripeData.data.bandwidth_exceeded).toBe(false)
+    expect(shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData)).toBe(true)
+  })
+
+  it.concurrent('skips plan status recompute when price and product stay unchanged', () => {
+    expect(shouldRecomputePlanStatusAfterStripeSubscriptionChange({
+      data: { product_id: 'prod_same', price_id: 'price_same' },
+      previousProductId: 'prod_same',
+      previousPriceId: 'price_same',
+    })).toBe(false)
   })
 
   it.concurrent('marks monthly to yearly cadence changes as upgraded without a plan change', () => {

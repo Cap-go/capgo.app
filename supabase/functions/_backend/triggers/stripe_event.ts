@@ -37,6 +37,7 @@ import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { buildTransferInvoiceFooter, getStripeCustomerEmailFromEvent, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import type { TrialPlanFirstInvoiceState } from '../utils/stripe_trial_plan.ts'
 import { cancelTrialPlanScheduleForSubscription, isTrialPlanFirstInvoiceUnpaid, isTrialPlanSubscription, settleTrialPlanFirstInvoice } from '../utils/stripe_trial_plan.ts'
+import { checkPlanStatusOnly } from '../utils/plans.ts'
 import { customerToSegmentOrg } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { trackUsChargeRefunded, trackUsChargeSucceeded } from '../utils/us_revenue_tracking.ts'
@@ -371,6 +372,33 @@ function getPlanType(
   priceId: string | null | undefined,
 ) {
   return getPlanPriceInterval(plan, priceId)
+}
+
+export function shouldRecomputePlanStatusAfterStripeSubscriptionChange(
+  stripeData: Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>,
+) {
+  const productChanged = Boolean(
+    stripeData.previousProductId
+    && stripeData.data.product_id
+    && stripeData.previousProductId !== stripeData.data.product_id,
+  )
+  const priceChanged = Boolean(
+    stripeData.previousPriceId
+    && stripeData.data.price_id
+    && stripeData.previousPriceId !== stripeData.data.price_id,
+  )
+  return productChanged || priceChanged
+}
+
+async function recomputeOrgPlanStatusAfterStripePlanChange(c: Context, orgId: string): Promise<void> {
+  const pgClient = await getPgClient(c, false)
+  const drizzleClient = getDrizzleClient(pgClient)
+  try {
+    await checkPlanStatusOnly(c, orgId, drizzleClient)
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
 }
 
 function getSubscriptionTrackingState(
@@ -1461,6 +1489,22 @@ async function createdOrUpdated(
     if (didPersist === 'missing')
       return quickError(404, 'succeeded_customer_id_not_found', `succeeded: customer_id not found`, { stripeData })
 
+    if (shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData)) {
+      try {
+        await recomputeOrgPlanStatusAfterStripePlanChange(c, org.id)
+      }
+      catch (error) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'plan status recompute after Stripe plan change failed',
+          orgId: org.id,
+          customerId: stripeData.data.customer_id,
+          error,
+        })
+        throw error
+      }
+    }
+
     const openAIFirstPaymentAt = getOpenAIFirstPaymentAt({
       firstPaidAt,
       currentPaidAt: currentStripeInfo?.paid_at,
@@ -2397,6 +2441,7 @@ export const stripeEventTestUtils = {
   getSubscriptionMrr,
   getSubscriptionTrackingState,
   isStaleStripeEvent,
+  shouldRecomputePlanStatusAfterStripeSubscriptionChange,
   isCustomerProfileEvent,
   didStripeCustomerEmailChange,
   shouldReplaceOrgManagementEmail,

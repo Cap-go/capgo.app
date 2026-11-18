@@ -237,7 +237,6 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
     mau_exceeded: false,
     storage_exceeded: false,
     bandwidth_exceeded: false,
-    build_time_exceeded: false,
     status: 'succeeded',
   }
   let isUpgrade = false
