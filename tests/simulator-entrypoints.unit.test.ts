@@ -170,6 +170,22 @@ describe('simulator entrypoint activity bumps', () => {
     })).toBe(true)
   })
 
+  it('rejects commands when the bump guard shows the session is no longer eligible', async () => {
+    sessionState.started_at = new Date(Date.now() - 45 * 60_000).toISOString()
+    sessionState.last_activity_at = new Date(Date.now() - 10 * 60_000).toISOString()
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = typeof url === 'string' ? url : url instanceof Request ? url.url : url.toString()
+      if (target.includes('/v2/device-run-sessions/') && (!init || init.method === 'GET'))
+        return new Response(JSON.stringify({ data: { status: 'running', lastActivityAt: sessionState.last_activity_at } }), { status: 200 })
+      return new Response(JSON.stringify({ result: { data: null } }), { status: 200 })
+    }))
+    const { commandSimulator, SIMULATOR_STOPPED_MESSAGE } = await import('../supabase/functions/_backend/public/build/simulator.ts')
+    await expect(
+      commandSimulator(context, sessionId, { app_id: 'com.test.sim', command: 'home' }, userId, principal),
+    ).rejects.toMatchObject({ message: expect.stringContaining(SIMULATOR_STOPPED_MESSAGE.slice(0, 20)) })
+    expect(pgState.queries.filter(query => query.includes('agent-device/rpc')).length).toBe(0)
+  })
+
   it('rejects commands when the host session is already stopped', async () => {
     recordBuildTimeMock.mockResolvedValueOnce(null as unknown as string)
     const stoppedAt = new Date(Date.now() - 2 * 60_000).toISOString()

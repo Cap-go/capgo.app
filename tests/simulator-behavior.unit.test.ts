@@ -200,13 +200,13 @@ describe('simulator idle behavior', () => {
   it('expires the next org when one org expiry throws', async () => {
     const failingOrg = '91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57'
     const nextOrg = orgId
-    let expireRpcCalls = 0
+    const expireOrgSequence: string[] = []
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 })))
     pgState.query.mockImplementation(async (sql: string, params?: unknown[]) => {
       if (sql.includes('DISTINCT owner_org'))
         return { rowCount: 2, rows: [{ owner_org: failingOrg }, { owner_org: nextOrg }] }
       if (sql.includes('expire_simulator_sessions')) {
-        expireRpcCalls++
+        expireOrgSequence.push(String(params?.[0]))
         if (params?.[0] === failingOrg)
           throw new Error('expire failed')
         return { rowCount: 1, rows: [{ expire_simulator_sessions: 1 }] }
@@ -221,7 +221,7 @@ describe('simulator idle behavior', () => {
     vi.spyOn(simulator, 'syncInProgressSimulatorSessionsForOrgFromHost').mockResolvedValue({ synced: 0, hostUnreachableSessionIds: [] })
     const { sweepDueSimulatorSessions } = await import('../supabase/functions/_backend/public/build/concurrency.ts')
     await sweepDueSimulatorSessions(context)
-    expect(expireRpcCalls).toBe(2)
+    expect(expireOrgSequence).toEqual([failingOrg, nextOrg])
   })
 
   it('still expires orgs and stops orphans when one host sync row fails', async () => {

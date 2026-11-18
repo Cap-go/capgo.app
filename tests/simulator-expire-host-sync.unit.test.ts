@@ -246,6 +246,31 @@ describe('simulator org expiry host sync', () => {
     ))).toBe(true)
     const expireIndex = pgState.queries.findIndex(query => query.includes('expire_simulator_sessions'))
     expect(pgState.queryParams[expireIndex]).toEqual([orgId, [sessionId]])
+    const dueIndex = pgState.queries.findIndex(query => query.includes('FOR UPDATE') && query.includes('simulator_sessions'))
+    expect(pgState.queryParams[dueIndex]).toEqual([orgId, [sessionId]])
+  })
+
+  it('still settles max duration when host sync and in-progress id fallback fail', async () => {
+    const simulator = await import('../supabase/functions/_backend/public/build/simulator.ts')
+    vi.spyOn(simulator, 'syncInProgressSimulatorSessionsForOrgFromHost').mockRejectedValue(new Error('read failed'))
+    vi.spyOn(simulator, 'stopDevicesForDueSimulatorExpiry').mockResolvedValue(undefined)
+    pgState.query.mockImplementation(async (sql: string, params?: unknown[]): Promise<PgQueryResult> => {
+      pgState.queries.push(sql)
+      pgState.queryParams.push(params ?? [])
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK')
+        return { rowCount: 0, rows: [] }
+      if (sql.includes('SELECT id::text AS id'))
+        throw new Error('fallback read failed')
+      if (sql.includes('FOR UPDATE') && sql.includes('simulator_sessions'))
+        return { rowCount: 0, rows: [] }
+      if (sql.includes('expire_simulator_sessions'))
+        return { rowCount: 1, rows: [{ expire_simulator_sessions: 1 }] }
+      return { rowCount: 0, rows: [] }
+    })
+    const { expireSimulatorSessions } = await import('../supabase/functions/_backend/public/build/concurrency.ts')
+    await expireSimulatorSessions(context, orgId)
+    const expireIndex = pgState.queries.findIndex(query => query.includes('expire_simulator_sessions'))
+    expect(pgState.queryParams[expireIndex]).toEqual([orgId, []])
   })
 
   it('finishes org reserve sync within the org wall-clock budget', async () => {

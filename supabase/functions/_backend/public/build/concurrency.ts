@@ -294,7 +294,18 @@ export async function expireSimulatorSessions(c: Context, orgId: string): Promis
         orgId,
         error,
       })
-      hostUnreachableSessionIds = await inProgressEmulatorSessionIds(c, orgId)
+      try {
+        hostUnreachableSessionIds = await inProgressEmulatorSessionIds(c, orgId)
+      }
+      catch (fallbackError) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'Simulator in-progress id fallback failed; max-duration settlement still runs',
+          orgId,
+          error: fallbackError,
+        })
+        hostUnreachableSessionIds = []
+      }
     }
     pgPool = await getPgClient(c)
     client = await checkoutPgClient(pgPool) as PgClient

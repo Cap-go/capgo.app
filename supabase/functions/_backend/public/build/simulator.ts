@@ -863,7 +863,9 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
   const { row: liveRow } = await ownedSession(c, principal, userId, appId, sessionId)
   if (liveRow.status !== 'in-progress' || !liveRow.url)
     throw simpleError('invalid_request', SIMULATOR_STOPPED_MESSAGE)
-  await bumpSimulatorSessionActivity(c, sessionId)
+  const activity = await touchSimulatorActivity(c, sessionId, { orgId, userId, appId, row: liveRow })
+  if (activity !== 'bumped')
+    throw simpleError('invalid_request', SIMULATOR_STOPPED_MESSAGE)
   const { accessKey } = simulatorConfig(c)
   const response = await fetch(simulatorDeviceUrl(liveRow.url, 'agent-device/rpc'), {
     method: 'POST',
@@ -881,7 +883,12 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
   let image: string | undefined
   if (rpc.params.command === 'screenshot') {
     image = await simulatorScreenshot(liveRow.url, accessKey, appId)
-    await bumpSimulatorSessionActivity(c, sessionId)
+    try {
+      await bumpSimulatorSessionActivity(c, sessionId)
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to record simulator activity after screenshot', sessionId, error })
+    }
   }
   return c.json({
     data: {
