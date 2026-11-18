@@ -361,10 +361,30 @@ describe('queue persistence boundary', () => {
     expect(queueSend.mock.calls[3][0]).toMatchObject({ event_id: derived.event_id, payload: { timestamp: derived.payload.timestamp } })
   })
 
+  it('does not classify a failed channel lookup as a non-default channel', async () => {
+    from.mockImplementation((table: string) => {
+      if (table === 'apps')
+        return [{ owner_org: 'org-a', name: 'Example app', bundle_incompatible_alert: 'default' }]
+      if (table === 'channels')
+        throw new Error('channel lookup unavailable')
+      return []
+    })
+    const response = await request({
+      event: 'Bundle Incompatible',
+      org_id: 'org-a',
+      tags: { app_id: 'com.example.queue', channel: 'production', channel_overwritten: true },
+    })
+    expect(response.status).toBe(200)
+    expect(queueSend).toHaveBeenCalledTimes(1)
+    expect(sendTracking.mock.calls[0][1].bento).toBeUndefined()
+  })
+
   it('skips the incompatible-bundle email for a non-default channel', async () => {
     from.mockImplementation((table: string) => {
       if (table === 'apps')
         return [{ owner_org: 'org-a', name: 'Example app', default_upload_channel: 'staging', bundle_incompatible_alert: 'default' }]
+      if (table === 'channels')
+        return [{ default_download: false }]
       if (table === 'orgs')
         return [{ id: 'org-a', name: 'Example org' }]
       return []
@@ -401,6 +421,8 @@ describe('queue persistence boundary', () => {
     from.mockImplementation((table: string) => {
       if (table === 'apps')
         return [{ owner_org: 'org-a', name: 'Example app', default_upload_channel: 'staging', bundle_incompatible_alert: 'all' }]
+      if (table === 'channels')
+        return [{ default_download: false }]
       if (table === 'orgs')
         return [{ id: 'org-a', name: 'Example org' }]
       return []

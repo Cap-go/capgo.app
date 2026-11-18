@@ -434,11 +434,11 @@ async function lookupChannelAlertSettings(
   appId: string,
   channelName: string | undefined,
 ) {
-  if (!channelName)
-    return null
-  // `.maybeSingle()` with the error ignored: zero, several rows or a failure all read as null.
-  const { data: channelRow } = await single<{ disable_auto_update: string | null, default_download: boolean, bundle_alert_enabled: boolean | null }>(db, 'SELECT disable_auto_update, public AND (ios OR android OR electron) AS default_download, bundle_alert_enabled FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2', [appId, channelName])
-  return channelRow
+  return single<{ disable_auto_update: string | null, default_download: boolean, bundle_alert_enabled: boolean | null }>(
+    db,
+    'SELECT disable_auto_update, public AND (ios OR android OR electron) AS default_download, bundle_alert_enabled FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
+    [appId, channelName ?? null],
+  )
 }
 
 async function lookupVersionMinUpdate(
@@ -499,11 +499,15 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
   }
 
-  const channelSettings = await lookupChannelAlertSettings(db, appId, incompatibleChannel)
+  const { data: channelSettings, error: channelError } = await lookupChannelAlertSettings(db, appId, incompatibleChannel)
+  if (!channelSettings) {
+    cloudlog({ requestId: c.get('requestId'), message: 'bundle incompatible channel lookup failed; skipping signal', channel: incompatibleChannel, error: channelError })
+    return undefined
+  }
   if (!isBundleIncompatibleAlertForChannel({
     alert: appResult.data.bundle_incompatible_alert,
-    isDefaultDownload: channelSettings?.default_download === true,
-    override: channelSettings?.bundle_alert_enabled,
+    isDefaultDownload: channelSettings.default_download === true,
+    override: channelSettings.bundle_alert_enabled,
   })) {
     await trackBundleIncompatibleEmail(c, {
       ...emailBase,
@@ -514,7 +518,7 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
   }
 
-  const updateStrategy = channelSettings?.disable_auto_update ?? null
+  const updateStrategy = channelSettings.disable_auto_update ?? null
   const versionNewName = optionalNonEmptyTagString(tags.version_new_name)
   const versionOldName = optionalTagString(tags.version_old_name)
   const { versionNewId, minUpdateVersion } = await lookupVersionMinUpdate(db, appId, versionNewName)
