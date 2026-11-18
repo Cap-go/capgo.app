@@ -2,15 +2,25 @@ import type { Context } from 'hono'
 import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
-import type { PgQueryClient } from '../../utils/pg.ts'
-import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from '../../utils/pg.ts'
 import { recordBuildTime } from '../../utils/supabase.ts'
-import { backgroundTask, getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
+import { backgroundTask } from '../../utils/utils.ts'
 import { expireSimulatorSessions, reserveSimulatorSlot, SIMULATOR_IDLE_TIMEOUT_MINUTES, SIMULATOR_MAX_DURATION_MINUTES } from './concurrency.ts'
 
 export { SIMULATOR_IDLE_TIMEOUT_MINUTES, SIMULATOR_MAX_DURATION_MINUTES } from './concurrency.ts'
 import { savedOutputsForJobs } from './outputs.ts'
 import { ensureBuildPermission, ensureBuildTimePlanAllowed, getBuildOwnerOrg } from './request.ts'
+import type { EmulatorSessionData } from './simulator_host.ts'
+import {
+  postEmulator,
+  queryRead,
+  queryWrite,
+  rememberDeviceStop,
+  SIMULATOR_HOST_TIMEOUT_MS,
+  SimulatorHostError,
+  simulatorConfig,
+} from './simulator_host.ts'
+
+export type { EmulatorSessionData } from './simulator_host.ts'
 
 export interface SimulatorBody {
   app_id?: string
@@ -21,15 +31,6 @@ export interface SimulatorBody {
   x?: number
   y?: number
   bundle_id?: string
-}
-
-export interface EmulatorSessionData {
-  id: string
-  url: string
-  status?: string
-  remoteConfig?: unknown
-  lastActivityAt?: string | null
-  finishedAt?: string | null
 }
 
 const HOST_TERMINAL_SESSION_STATUSES = new Set(['stopped', 'errored'])
@@ -130,8 +131,7 @@ export async function readCappedBytes(stream: ReadableStream<Uint8Array>, maxByt
   return bytes
 }
 
-const DEFAULT_SIMULATOR_ORIGIN = 'https://ios-emulator.capgo.app'
-export const SIMULATOR_HOST_TIMEOUT_MS = 30_000
+export { SIMULATOR_HOST_TIMEOUT_MS } from './simulator_host.ts'
 export const SIMULATOR_ORG_HOST_SYNC_BUDGET_MS = 5_000
 export const SIMULATOR_ORG_HOST_SYNC_TIMEOUT_MS = 2_500
 export const SIMULATOR_ORG_HOST_SYNC_CONCURRENCY = 4
@@ -408,51 +408,6 @@ export function isSimulatorSessionId(value: string) {
   return SIMULATOR_SESSION_ID.test(value)
 }
 
-async function queryWrite<T extends object>(c: Context, sql: string, params: unknown[]): Promise<T[]> {
-  let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
-  let client: PgQueryClient | null = null
-  try {
-    pgPool = await getPgClient(c)
-    client = await checkoutPgClient(pgPool)
-    await beginWriteTransaction(client)
-    const result = await client.query(sql, params)
-    await client.query('COMMIT')
-    return result.rows as T[]
-  }
-  catch (error) {
-    if (client) {
-      try {
-        await client.query('ROLLBACK')
-      }
-      catch {
-        // Preserve the original error.
-      }
-    }
-    throw error
-  }
-  finally {
-    releasePgClient(pgPool, client)
-    if (pgPool)
-      await closeClient(c, pgPool)
-  }
-}
-
-async function queryRead<T extends object>(c: Context, sql: string, params: unknown[]): Promise<T[]> {
-  let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
-  let client: PgQueryClient | null = null
-  try {
-    pgPool = await getPgClient(c, true)
-    client = await checkoutPgClient(pgPool)
-    const result = await client.query(sql, params)
-    return result.rows as T[]
-  }
-  finally {
-    releasePgClient(pgPool, client)
-    if (pgPool)
-      await closeClient(c, pgPool)
-  }
-}
-
 interface SimulatorRow {
   id: string
   app_id: string
@@ -501,13 +456,6 @@ export async function markSession(c: Context, id: string, status: 'in-progress' 
   `, [id, status, extra?.url ?? null, extra?.emulatorId ?? null])
   if (rows.length !== 1)
     throw simpleError('not_found', 'Simulator session not found.')
-}
-
-class SimulatorHostError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message)
-    this.name = 'SimulatorHostError'
-  }
 }
 
 export function simulatorHostStopIsFinal(status: number): boolean {
@@ -690,29 +638,6 @@ export async function syncInProgressSimulatorSessionsForOrgFromHost(c: Context, 
   return { synced, hostUnreachableSessionIds }
 }
 
-async function postEmulator(
-  origin: string,
-  accessKey: string,
-  path: string,
-  method: string,
-  body?: unknown,
-  timeoutMs = SIMULATOR_HOST_TIMEOUT_MS,
-): Promise<{ status: number, data?: EmulatorSessionData }> {
-  const response = await fetch(`${origin}${path}`, {
-    method,
-    headers: {
-      'Authorization': `Bearer ${accessKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  })
-  const payload = await response.json().catch(() => undefined) as { data?: EmulatorSessionData, error?: string } | undefined
-  if (!response.ok)
-    throw new SimulatorHostError(payload?.error || `Simulator request failed (${response.status})`, response.status)
-  return { status: response.status, data: payload?.data }
-}
-
 export async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string, sessionUrl: string, accessKey: string, sessionId: string) {
   const saved = (await savedOutputsForJobs(c, principal, appId, ownerOrg, [jobId]))[jobId]
   if (saved?.kind !== 'ios_ipa')
@@ -752,14 +677,6 @@ export async function installSavedIpa(c: Context, principal: RlsPrincipal, appId
     throw new Error((reason || text).slice(0, 300) || 'The simulator could not install the build.')
   }
   await touchSimulatorActivity(c, sessionId)
-}
-
-function simulatorConfig(c: Context) {
-  const accessKey = getEnv(c, 'SIMULATOR_ACCESS_KEY')
-  if (!accessKey)
-    throw quickError(503, 'simulator_not_configured', 'Simulator is not configured.', {}, undefined, { alert: false })
-  const origin = trimTrailingSlashes(getEnv(c, 'SIMULATOR_ORIGIN') || DEFAULT_SIMULATOR_ORIGIN)
-  return { accessKey, origin }
 }
 
 async function ownedSession(c: Context, principal: RlsPrincipal, userId: string, appId: string, sessionId: string) {
@@ -1026,17 +943,6 @@ async function confirmDeviceStopped(c: Context, row: SimulatorRow, sessionId: st
   const remoteStatus = row.emulator_id ? await stopRemoteDevice(c, row.emulator_id, sessionId, row.id) : null
   const stoppedAt = await rememberDeviceStop(c, row.id, new Date().toISOString())
   return { remoteStatus, stoppedAt }
-}
-
-async function rememberDeviceStop(c: Context, id: string, stoppedAt: string) {
-  const rows = await queryWrite<{ device_stopped_at: string }>(c, `
-    UPDATE public.simulator_sessions
-    SET device_stopped_at = COALESCE(device_stopped_at, $2::timestamptz),
-        updated_at = now()
-    WHERE id = $1::uuid
-    RETURNING device_stopped_at
-  `, [id, stoppedAt])
-  return rows[0]?.device_stopped_at ?? stoppedAt
 }
 
 export async function stopSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
