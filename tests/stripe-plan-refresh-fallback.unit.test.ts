@@ -164,7 +164,8 @@ function makeContext(stripeEventId: string) {
   } as any
 }
 
-function setupPgMock() {
+function setupPgMock(options?: { processedStripeEventInserts?: number, touchThrows?: boolean }) {
+  let statsTouchCalls = 0
   pgClientQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
     const normalized = sql.replace(/\s+/g, ' ').trim()
     if (sql.includes('pg_catalog.to_json')) {
@@ -174,17 +175,51 @@ function setupPgMock() {
     if (normalized.includes('SELECT last_stripe_event_at'))
       return { rows: [{ last_stripe_event_at: null, past_due_at: null, status: 'succeeded', paid_at: null }], rowCount: 1 }
     if (normalized.includes('INSERT INTO public.processed_stripe_events'))
-      return { rowCount: 0 }
+      return { rowCount: options?.processedStripeEventInserts ?? 0 }
+    if (normalized.includes('UPDATE public.stripe_info'))
+      return { rowCount: 1 }
     if (normalized.includes('queue_cron_stat_org_for_org')) {
       queueCalls.push(params ?? [])
       return { rowCount: 1 }
     }
-    if (normalized.includes('org_stats_refresh_state'))
+    if (normalized.includes('org_stats_refresh_state')) {
+      statsTouchCalls++
+      if (options?.touchThrows && statsTouchCalls === 1)
+        throw new Error('touch failed')
       return { rowCount: 1 }
+    }
     if (normalized === 'ROLLBACK' || normalized === 'COMMIT' || normalized === 'BEGIN')
       return { rowCount: 0 }
     return { rows: [], rowCount: 0 }
   })
+}
+
+function invokeCreatedOrUpdatedForFixture(stripeEventId: string, originalStatus: StripeData['data']['status'] | null = 'updated') {
+  const c = makeContext(stripeEventId)
+  const stripeData = extractDataEvent(c, makeStripeEvent())
+  const currentStripeInfo = {
+    customer_id: CUSTOMER_ID,
+    product_id: MAKER_PRODUCT_ID,
+    price_id: MAKER_PRICE_ID,
+    status: 'succeeded',
+    last_stripe_event_at: null,
+  }
+  if (originalStatus && stripeData.data.status) {
+    stripeData.data.status = resolveActiveSubscriptionStatus(
+      stripeData.data.status,
+      currentStripeInfo as any,
+      stripeData.data.subscription_id,
+      'paid',
+    )
+  }
+  return createdOrUpdated(
+    c,
+    stripeData,
+    { id: ORG_ID, name: 'Test org' } as any,
+    currentStripeInfo as any,
+    new Date().toISOString(),
+    originalStatus,
+  )
 }
 
 describe('createdOrUpdated plan refresh fallback', () => {
@@ -197,36 +232,30 @@ describe('createdOrUpdated plan refresh fallback', () => {
 
   it('queues cron_stat_org when plan recompute fails and still resolves', async () => {
     checkPlanStatusOnly.mockRejectedValueOnce(new Error('recompute failed'))
-    const c = makeContext('evt_recompute_fail')
-    const stripeData = extractDataEvent(c, makeStripeEvent())
-    const currentStripeInfo = {
-      customer_id: CUSTOMER_ID,
-      product_id: MAKER_PRODUCT_ID,
-      price_id: MAKER_PRICE_ID,
-      status: 'succeeded',
-      last_stripe_event_at: null,
-    }
-    const originalStatus = stripeData.data.status
-    if (originalStatus) {
-      stripeData.data.status = resolveActiveSubscriptionStatus(
-        originalStatus,
-        currentStripeInfo as any,
-        stripeData.data.subscription_id,
-        'paid',
-      )
-    }
 
-    await expect(createdOrUpdated(
-      c,
-      stripeData,
-      { id: ORG_ID, name: 'Test org' } as any,
-      currentStripeInfo as any,
-      new Date().toISOString(),
-      originalStatus,
-    )).resolves.toBeUndefined()
+    await expect(invokeCreatedOrUpdatedForFixture('evt_recompute_fail')).resolves.toBeUndefined()
 
     expect(checkPlanStatusOnly).toHaveBeenCalled()
     expect(queueCalls).toContainEqual([ORG_ID, CUSTOMER_ID])
+  })
+
+  it('still resolves when stats refresh touch throws before recompute', async () => {
+    checkPlanStatusOnly.mockResolvedValue(undefined)
+    setupPgMock({ touchThrows: true })
+
+    await expect(invokeCreatedOrUpdatedForFixture('evt_touch_fail')).resolves.toBeUndefined()
+
+    expect(checkPlanStatusOnly).not.toHaveBeenCalled()
+    expect(queueCalls).toContainEqual([ORG_ID, CUSTOMER_ID])
+  })
+
+  it('recomputes after applied Stripe persist (not duplicate)', async () => {
+    checkPlanStatusOnly.mockResolvedValue(undefined)
+    setupPgMock({ processedStripeEventInserts: 1 })
+
+    await expect(invokeCreatedOrUpdatedForFixture('evt_applied')).resolves.toBeUndefined()
+
+    expect(checkPlanStatusOnly).toHaveBeenCalledOnce()
   })
 
   it('still resolves when recompute and queue both fail', async () => {
@@ -314,6 +343,17 @@ describe('refreshPlanStatusAfterStripeSubscriptionChange duplicate and stale', (
       { id: ORG_ID, name: 'Test org' } as any,
       stripeData,
       'stale',
+      { product_id: MAKER_PRODUCT_ID, price_id: MAKER_PRICE_ID },
+    )
+    expect(checkPlanStatusOnly).toHaveBeenCalledOnce()
+  })
+
+  it('recomputes after applied persist outcome', async () => {
+    await refreshPlanStatusAfterStripeSubscriptionChange(
+      makeContext('evt_applied'),
+      { id: ORG_ID, name: 'Test org' } as any,
+      stripeData,
+      'applied',
       { product_id: MAKER_PRODUCT_ID, price_id: MAKER_PRICE_ID },
     )
     expect(checkPlanStatusOnly).toHaveBeenCalledOnce()
