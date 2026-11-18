@@ -158,7 +158,7 @@ is_failed_migration_hotfix() {
   case "${file}:${blob}" in
     supabase/migrations/20260713114104_harden_rbac_compat_cleanup_after_rls.sql:17dfb3f478bff6b52bc71a85f0016cce11f1d789) return 0 ;;
     supabase/migrations/20261027220500_delta_storage_backfill.sql:0bf94d5123ca6e72cca0b72dd3013857846f20c4) return 0 ;;
-    supabase/migrations/20261117152120_storage_gb_hours_billing.sql:d6c5ba97783b89d8a12a881e4121ad65e3be83c1) return 0 ;;
+    supabase/migrations/20261117152120_storage_gb_hours_billing.sql:103b931c868af599f91234e7e99ea1036e437c13) return 0 ;;
     *) return 1 ;;
   esac
 }

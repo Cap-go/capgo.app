@@ -15,6 +15,12 @@
 -- cycle, so the billable value never goes down mid cycle and overage debits
 -- stay monotonic.
 
+-- capgo-22.63.1: dropping daily_storage_hourly's FK to apps takes AccessExclusive
+-- on apps for the rest of the transaction; live traffic locks app_versions first.
+-- Acquire both tables in live-traffic order before any such DDL.
+SET LOCAL lock_timeout = '5s';
+LOCK TABLE public.app_versions, public.apps IN ACCESS EXCLUSIVE MODE;
+
 -- ---------------------------------------------------------------------------
 -- 1. Byte-hours of deleted apps stay billable until delete_old_deleted_apps
 -- ---------------------------------------------------------------------------
@@ -515,11 +521,6 @@ BEGIN
   END LOOP;
 END;
 $$;
-
--- capgo-22.63.1: trigger DDL below locked apps before app_versions; live
--- traffic does the reverse and deadlocked under load (SQLSTATE 40P01).
-SET LOCAL lock_timeout = '5s';
-LOCK TABLE public.app_versions, public.apps IN ACCESS EXCLUSIVE MODE;
 
 -- ---------------------------------------------------------------------------
 -- 2e. Close bundle lifetimes when an app is deleted
