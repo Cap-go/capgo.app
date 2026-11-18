@@ -121,6 +121,14 @@ vi.mock('~/services/console', () => {
   }
 
   return {
+    getLocalConfig: () => ({
+      apiHost: 'https://api.capgo.app',
+      host: 'https://console.capgo.app',
+      hostWeb: '',
+      stripeEnabled: true,
+    }),
+    getConsoleApiHost: () => 'https://api.capgo.app',
+    PROD_API_URL: 'https://api.capgo.app',
     useConsole: () => ({
       auth: {
         getClaims: async () => ({ data: { claims: { sub: 'user-id' } } }),

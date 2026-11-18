@@ -32,7 +32,6 @@ import {
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { shouldShowCliLoginGuidance } from '~/services/cliLogin'
 import { getConsoleApiHost, getLocalConfig, PROD_API_URL, useConsole } from '~/services/console'
-import { buildLoginCliCommand } from '~/utils/onboardingSetupMode'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissionsBatch } from '~/services/permissions'
@@ -41,6 +40,7 @@ import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { getRbacRoleI18nKey, useOrganizationStore } from '~/stores/organization'
 import { rules, validateField } from '~/utils/formValidation'
+import { buildLoginCliCommand } from '~/utils/onboardingSetupMode'
 import '@vuepic/vue-datepicker/dist/main.css'
 
 interface Role {
