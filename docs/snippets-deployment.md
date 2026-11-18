@@ -66,6 +66,10 @@ alternatives. These retained branches may intentionally match more paths than
 the new branch. The combined expression must fit Cloudflare's 4,096-character
 limit; deployment fails before writing if it does not. Existing alternatives
 are not pruned or adopted as managed state.
+The read-only check reports current and planned expression character counts and
+the limit, without printing the expression. Confirm that plan against the live
+rule before the stable release; an earlier code-guard receipt containing only
+rule hashes does not establish that the candidate expression fits.
 
 Subsequent releases skip the rule write when that unconditional branch is present.
 Adding or removing a custom hostname needs no `snippet_rules` write and no snippet
@@ -91,7 +95,8 @@ routing is updated only after all module content checks succeed. Existing
 release gates, inventory checks and retry constraints still apply.
 
 Cloudflare evaluates snippet rules in the serving zone against the original
-request hostname and URI path. With O2O, customer-zone settings apply first and
+request hostname and the URI path after URL normalization and URL Rewrite Rules.
+With O2O, customer-zone settings apply first and
 provider-zone settings second; `cf-connecting-o2o` is per-request behavior, not a
 hostname ownership signal. The predicate does not depend on that header or a
 CNAME target. This change does not alter O2O, DNS or Worker-route configuration.
@@ -137,5 +142,7 @@ Rules semantics: [snippet evaluation](https://developers.cloudflare.com/rules/sn
 [functions](https://developers.cloudflare.com/ruleset-engine/rules-language/functions/),
 [original request hostname](https://developers.cloudflare.com/ruleset-engine/rules-language/fields/reference/http.host/),
 [request path](https://developers.cloudflare.com/ruleset-engine/rules-language/fields/reference/http.request.uri.path/),
+[execution order](https://developers.cloudflare.com/rules/snippets/#execution-order),
+[incoming URL normalization](https://developers.cloudflare.com/rules/normalization/settings/),
 [O2O](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/saas-customers/how-it-works/).
-Primary documentation checked on 2026-11-17.
+Primary documentation checked on 2026-11-18.

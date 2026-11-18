@@ -7,8 +7,7 @@ import { deploySnippets } from '../scripts/snippet/deploy-snippets'
 // Evaluate the actual emitted expression using only its documented Rules-language
 // subset. Unknown tokens fail closed. This is a local semantic check, not the
 // Cloudflare engine or provider-side validation.
-function matches(expression: string, request: Request, rawHost = new URL(request.url).hostname): boolean {
-  const url = new URL(request.url)
+function matches(expression: string, request: Request, rawHost = new URL(request.url).hostname, rulePath = new URL(request.url).pathname): boolean {
   const tokens = expression.match(/"(?:[^"\\]|\\.)*"|[a-z_][a-z0-9_.]*|[(){},]|\s+/gi) ?? []
   expect(tokens.join('')).toBe(expression)
   const mapping: Record<string, string> = {
@@ -39,7 +38,7 @@ function matches(expression: string, request: Request, rawHost = new URL(request
   return runInNewContext(js, {
     host: rawHost,
     uri: request.url,
-    path: url.pathname,
+    path: rulePath,
     method: request.method,
     lower: (value: string) => value.toLowerCase(),
     trimEnd: (value: string, bytes: string) => {
@@ -92,10 +91,23 @@ describe('stable custom-domain snippet routing', () => {
     '/api/stats', '/functions/v1/updates', '/updates_history', '/stats_extra', '/channel_selfish',
     '/updates/', '/stats/', '/channel_self/', '/updates/nested', '/stats/nested',
     '/updates/manifest_size/nested', '/plugin/updates/', '/plugin/stats/nested', '/plugin/channel_self/nested',
-    '/plugin/updates/manifest_size/', '/UPDATES', '/%75pdates',
-  ])('does not add routing for unrelated path %s', (path) => {
+    '/plugin/updates/manifest_size/', '/UPDATES',
+  ])('does not add routing for unrelated rule-phase path %s', (path) => {
     for (const method of methods)
       expect(matches(CUSTOM_DOMAIN_PLUGIN_EXPRESSION, new Request(`https://new-api.example.org${path}`, { method }))).toBe(false)
+  })
+
+  it.concurrent.each([
+    { normalization: 'enabled', rulePath: '/updates', expected: true },
+    { normalization: 'disabled', rulePath: '/%75pdates', expected: false },
+  ])('evaluates the supplied rule-phase path with incoming normalization $normalization', ({ rulePath, expected }) => {
+    const request = new Request('https://new-api.example.org/%75pdates')
+    expect(matches(CUSTOM_DOMAIN_PLUGIN_EXPRESSION, request, undefined, rulePath)).toBe(expected)
+  })
+
+  it.concurrent('evaluates the path after URL Rewrite Rules rather than the original request path', () => {
+    expect(matches(CUSTOM_DOMAIN_PLUGIN_EXPRESSION, new Request('https://new-api.example.org/customer-updates'), undefined, '/updates')).toBe(true)
+    expect(matches(CUSTOM_DOMAIN_PLUGIN_EXPRESSION, new Request('https://new-api.example.org/updates'), undefined, '/health')).toBe(false)
   })
 
   it.concurrent('uses hostname boundaries rather than CNAME targets or substring matches', () => {
@@ -116,11 +128,32 @@ describe('stable custom-domain snippet routing', () => {
     }
   })
 
+  it.concurrent.each([' or ', '||', ')or('])('recognizes an installed predicate after formatting with separator %s', (separator) => {
+    const formatted = CUSTOM_DOMAIN_PLUGIN_EXPRESSION.replace(' and ', '\n\tand\n').replaceAll(', ', ',\t')
+    const expression = separator === ')or('
+      ? `(${baseline})or${formatted}`
+      : `(${baseline})${separator}${formatted}`
+    expect(includeCustomDomainRouting(expression)).toEqual({ expression, changed: false })
+  })
+
+  it.concurrent('preserves quoted whitespace when comparing predicates', () => {
+    const different = CUSTOM_DOMAIN_PLUGIN_EXPRESSION.replace('"/updates"', '"/updates "')
+    expect(includeCustomDomainRouting(different).changed).toBe(true)
+  })
+
+  it.concurrent('does not duplicate a reformatted predicate near the expression limit', () => {
+    const formatted = CUSTOM_DOMAIN_PLUGIN_EXPRESSION.replace(' and ', '\n and\n')
+    const expression = formatted + ' '.repeat(4096 - formatted.length)
+    expect(includeCustomDomainRouting(expression)).toEqual({ expression, changed: false })
+  })
+
   it.concurrent.each([
     `not ${CUSTOM_DOMAIN_PLUGIN_EXPRESSION}`,
     `${CUSTOM_DOMAIN_PLUGIN_EXPRESSION} and http.request.method eq "POST"`,
     `http.request.uri.path eq ${JSON.stringify(CUSTOM_DOMAIN_PLUGIN_EXPRESSION)}`,
     `http.request.uri.path eq r#"${CUSTOM_DOMAIN_PLUGIN_EXPRESSION}"#`,
+    `http.request.uri.path eq "left || right" and ${CUSTOM_DOMAIN_PLUGIN_EXPRESSION}`,
+    `not (${CUSTOM_DOMAIN_PLUGIN_EXPRESSION} || http.host eq "example.org")`,
   ])('does not confuse conditional, negated or quoted occurrences with coverage', (expression) => {
     expect(includeCustomDomainRouting(expression).changed).toBe(true)
   })
@@ -136,6 +169,7 @@ describe('stable custom-domain snippet routing', () => {
     expect(atLimit).toHaveLength(4096)
     expect(includeCustomDomainRouting(atLimit).changed).toBe(false)
     expect(() => includeCustomDomainRouting(prefix + ' '.repeat(room + 1))).toThrow('4096-character')
+    expect(() => includeCustomDomainRouting(prefix + ' '.repeat(room + 1))).toThrow('planned=4097')
     expect(() => includeCustomDomainRouting(atLimit + ' ')).toThrow('4096-character')
   })
 

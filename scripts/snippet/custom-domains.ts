@@ -41,10 +41,15 @@ function unconditionalAlternatives(expression: string): string[] {
     }
     if (depth < 0)
       throw new Error('Cannot safely parse the live plugin snippet expression')
-    const separator = depth === 0 ? /^\s+or\s+/.exec(expression.slice(i)) : null
-    if (separator) {
+    const separatorLength = depth !== 0 ? 0 : expression.startsWith('||', i)
+      ? 2
+      : expression.startsWith('or', i)
+        && !/[\w.]/.test(expression[i - 1] ?? '') && !/[\w.]/.test(expression[i + 2] ?? '')
+        ? 2
+        : 0
+    if (separatorLength) {
       parts.push(expression.slice(start, i).trim())
-      i += separator[0].length - 1
+      i += separatorLength - 1
       start = i + 1
     }
   }
@@ -57,14 +62,21 @@ function unconditionalAlternatives(expression: string): string[] {
   return [expression]
 }
 
+function comparisonTokens(expression: string): string {
+  // Preserve entire quoted literals and token boundaries; only spacing outside
+  // strings is insignificant. Raw strings may contain quotes and whitespace.
+  return JSON.stringify(expression.match(/r(#*)"[\s\S]*?"\1|"(?:[^"\\]|\\.)*"|[a-z_][a-z0-9_.]*|[^\s]/gi))
+}
+
 export function includeCustomDomainRouting(expression: string): { expression: string, changed: boolean } {
   if (!expression.trim())
     throw new Error('Cannot safely parse the live plugin snippet expression')
   const existing = unconditionalAlternatives(expression.trim())
   const branch = CUSTOM_DOMAIN_PLUGIN_EXPRESSION.slice(1, -1)
-  const changed = !existing.includes(branch)
+  const tokens = comparisonTokens(branch)
+  const changed = !existing.some(alternative => comparisonTokens(alternative) === tokens)
   const updated = changed ? `(${expression}) or ${CUSTOM_DOMAIN_PLUGIN_EXPRESSION}` : expression
   if (updated.length > 4096)
-    throw new Error('Custom-domain routing would exceed the 4096-character expression limit')
+    throw new Error(`Custom-domain routing would exceed the 4096-character expression limit (current=${expression.length}, planned=${updated.length})`)
   return { expression: updated, changed }
 }

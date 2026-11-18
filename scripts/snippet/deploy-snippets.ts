@@ -86,6 +86,7 @@ export async function deploySnippets({ token, snippets, apply = false, fetcher =
     if (pluginRules.length !== 1 || !pluginRules[0].enabled)
       throw new Error('Expected one enabled plugin_load_balancer rule before reconciling custom domains')
     const plan = includeCustomDomainRouting(pluginRules[0].expression)
+    log(`Custom-domain routing expression: current=${pluginRules[0].expression.length} planned=${plan.expression.length} limit=4096`)
     pluginRules[0].expression = plan.expression
     routingChanged = plan.changed
     log(`Custom-domain routing: ${routingChanged ? 'stable predicate missing' : 'stable predicate present'}`)

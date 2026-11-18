@@ -169,6 +169,13 @@ describe('production custom domains in snippet deployment', () => {
     expect(f.rules[0].description).toBe('Rule for plugin_load_balancer')
     expect(f.rules[1]).toEqual(other)
     const rulePut = f.calls.findIndex(call => call.url.endsWith('/snippet_rules') && call.init?.method === 'PUT')
+    for (const { name } of f.definitions) {
+      const modulePut = f.calls.findIndex(call => call.url.endsWith(`/snippets/${name}`) && call.init?.method === 'PUT')
+      const readback = f.calls.findIndex((call, index) => index > modulePut && call.url.endsWith(`/snippets/${name}/content`))
+      expect(modulePut).toBeGreaterThanOrEqual(0)
+      expect(readback).toBeGreaterThan(modulePut)
+      expect(readback).toBeLessThan(rulePut)
+    }
     expect(f.calls.slice(rulePut).filter(call => call.url.endsWith('/content'))).toEqual([])
     await run(f)
     expect(f.ruleWrites).toHaveLength(1)
@@ -176,9 +183,13 @@ describe('production custom domains in snippet deployment', () => {
 
   it.concurrent('dry run reports the missing predicate without rewriting code or rules', async () => {
     const f = create()
-    await run(f, false)
+    const messages: string[] = []
+    const currentLength = f.rules[0].expression.length
+    await deploySnippets({ token: 'test-token', snippets: f.definitions, fetcher: f.fetcher, log: message => messages.push(message) })
     expect(f.writes).toEqual([])
     expect(f.ruleWrites).toEqual([])
+    expect(messages).toContain(`Custom-domain routing expression: current=${currentLength} planned=${currentLength + CUSTOM_DOMAIN_PLUGIN_EXPRESSION.length + 6} limit=4096`)
+    expect(messages.join('\n')).not.toContain('example.com')
   })
 
   it.concurrent.each(['disabled', 'duplicate', 'missing', 'oversized'] as const)('rejects %s plugin rules before uploading code', async (kind) => {
