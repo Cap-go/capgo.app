@@ -259,7 +259,7 @@ export async function sweepDueSimulatorSessions(c: Context): Promise<{ orgs: num
 async function inProgressEmulatorSessionIds(c: Context, orgId: string): Promise<string[]> {
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
-    pgPool = await getPgClient(c, true)
+    pgPool = await getPgClient(c)
     const result = await pgPool.query<{ id: string }>(`
       SELECT id::text AS id
       FROM public.simulator_sessions

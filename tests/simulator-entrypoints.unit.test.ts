@@ -145,53 +145,29 @@ describe('simulator entrypoint activity bumps', () => {
     const freshActivity = new Date(Date.now() - 60_000).toISOString()
     const staleActivity = new Date(Date.now() - 10 * 60_000).toISOString()
     sessionState.last_activity_at = staleActivity
-    pgState.query.mockImplementation(async (sql: string, params?: unknown[]) => {
-      pgState.queries.push(sql)
-      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK')
-        return { rowCount: 0, rows: [] }
-      if (sql.includes('last_activity_at = $2')) {
-        sessionState.last_activity_at = String(params?.[1] ?? freshActivity)
-        return { rowCount: 1, rows: [{ last_activity_at: sessionState.last_activity_at }] }
-      }
-      if (sql.includes('bump_simulator_session_activity')) {
-        const bumped = bumpWouldSucceed(sessionState.last_activity_at, sessionState.started_at, sessionState.max_duration_minutes) ? 1 : 0
-        return { rowCount: 1, rows: [{ bumped }] }
-      }
-      if (sql.includes('FROM public.simulator_sessions') && sql.includes('owner_org = $2'))
-        return {
-          rowCount: 1,
-          rows: [{
-            id: sessionId,
-            app_id: 'com.test.sim',
-            platform: 'ios',
-            status: sessionState.status,
-            url: 'https://host.test/s/x/',
-            emulator_id: 'emu-1',
-            started_at: sessionState.started_at,
-            last_activity_at: sessionState.last_activity_at,
-            device_stopped_at: null,
-            requested_by: userId,
-            max_duration_minutes: 40,
-          }],
-        }
-      if (sql.includes('UPDATE public.simulator_sessions') && sql.includes('finished_at = CASE'))
-        return { rowCount: 1, rows: [{ id: sessionId }] }
-      return { rowCount: 0, rows: [] }
-    })
-    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+    expect(bumpWouldSucceed(staleActivity, sessionState.started_at, sessionState.max_duration_minutes)).toBe(false)
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
       const target = typeof url === 'string' ? url : url instanceof Request ? url.url : url.toString()
       if (target.includes('/v2/device-run-sessions/'))
         return new Response(JSON.stringify({ data: { status: 'running', lastActivityAt: freshActivity } }), { status: 200 })
       return new Response(JSON.stringify({ result: { data: null } }), { status: 200 })
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const { commandSimulator } = await import('../supabase/functions/_backend/public/build/simulator.ts')
     await expect(commandSimulator(context, sessionId, { app_id: 'com.test.sim', command: 'home' }, userId, principal)).resolves.toBeTruthy()
+    expect(sessionState.last_activity_at).toBe(freshActivity)
+    expect(bumpWouldSucceed(sessionState.last_activity_at, sessionState.started_at, sessionState.max_duration_minutes)).toBe(true)
+    expect(fetchMock).toHaveBeenCalled()
     expect(pgState.queries.some(query => query.includes('last_activity_at = $2'))).toBe(true)
     const bumpIndex = pgState.queries.findIndex(query => query.includes('bump_simulator_session_activity'))
     const refreshIndex = pgState.queries.findIndex(query => query.includes('last_activity_at = $2'))
     expect(bumpIndex).toBeGreaterThan(refreshIndex)
     expect(pgState.queries.some(query => query.includes('bump_simulator_session_activity'))).toBe(true)
     expect(pgState.queries.some(query => query.includes('SET status = $2'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([url]) => {
+      const target = typeof url === 'string' ? url : url instanceof Request ? url.url : url.toString()
+      return target.includes('agent-device/rpc')
+    })).toBe(true)
   })
 
   it('rejects commands when the host session is already stopped', async () => {

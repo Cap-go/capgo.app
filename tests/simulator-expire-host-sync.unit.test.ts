@@ -239,6 +239,11 @@ describe('simulator org expiry host sync', () => {
     })
     const { expireSimulatorSessions } = await import('../supabase/functions/_backend/public/build/concurrency.ts')
     await expireSimulatorSessions(context, orgId)
+    expect(pgState.queries.some(query => (
+      query.includes('SELECT id::text AS id')
+      && query.includes('\'in-progress\'')
+      && !query.includes('FOR UPDATE')
+    ))).toBe(true)
     const expireIndex = pgState.queries.findIndex(query => query.includes('expire_simulator_sessions'))
     expect(pgState.queryParams[expireIndex]).toEqual([orgId, [sessionId]])
   })
