@@ -161,24 +161,23 @@ is_failed_migration_hotfix() {
   esac
 }
 
-# capgo-22.63.1: 20261117152120 never applied in prod. Split into data (152410)
-# then locks/triggers (152411) before invoice 152412 on main.
-is_storage_gb_hours_split_data() {
+# capgo-22.63.1: 20261117152120 never applied in prod; atomic replacement at
+# 20261118193000 after invoice 152412 (R085 rename of 152120 on this branch).
+is_storage_gb_hours_152120_repair() {
   local file="$1"
   local blob
   blob="$(git hash-object "$file")"
   case "${file}:${blob}" in
-    supabase/migrations/20261117152410_storage_gb_hours_billing_data.sql:280d08f4d4e6699b937c92c8ff32f53a3063f70f) return 0 ;;
+    supabase/migrations/20261118193000_storage_gb_hours_billing.sql:ca4ca4233bf1601faaa1ae0390e1f32c3b20a038) return 0 ;;
     *) return 1 ;;
   esac
 }
 
-is_storage_gb_hours_split_locks() {
-  local file="$1"
-  local blob
-  blob="$(git hash-object "$file")"
-  case "${file}:${blob}" in
-    supabase/migrations/20261117152411_storage_gb_hours_billing_apps_locks.sql:ecba77122072910ccf588f3215d1c3ec815330b5) return 0 ;;
+# Branch-only split of failed 152120; never applied in prod (capgo-22.63.1).
+is_storage_gb_hours_split_delete() {
+  case "$1" in
+    supabase/migrations/20261117152410_storage_gb_hours_billing_data.sql) return 0 ;;
+    supabase/migrations/20261117152411_storage_gb_hours_billing_apps_locks.sql) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -226,8 +225,8 @@ if [[ -n "$modified_files" ]]; then
       continue
     fi
 
-    if is_storage_gb_hours_split_data "$file"; then
-      echo "⚠️  Allowing split of failed unapplied 20261117152120 (part 1 data): $file"
+    if is_storage_gb_hours_152120_repair "$file"; then
+      echo "⚠️  Allowing audited repair of failed unapplied 20261117152120: $file"
       continue
     fi
 
@@ -273,13 +272,25 @@ if [[ "$baseline_added_count" -eq 1 && "$deleted_count" -ge 50 ]]; then
 fi
 
 if [[ -n "$deleted_files" && "$allow_migration_squash" -ne 1 ]]; then
-  echo '❌ Existing Supabase migrations were deleted in this change.'
-  echo '  Supabase migrations must remain append-only.'
+  disallowed_deleted_files=''
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
-    echo "  - $file"
+    if is_storage_gb_hours_split_delete "$file"; then
+      echo "⚠️  Allowing removal of unapplied storage gb-hours split migration: $file"
+      continue
+    fi
+    disallowed_deleted_files+="${file}"$'\n'
   done <<< "$deleted_files"
-  status=1
+
+  if [[ -n "$disallowed_deleted_files" ]]; then
+    echo '❌ Existing Supabase migrations were deleted in this change.'
+    echo '  Supabase migrations must remain append-only.'
+    while IFS= read -r file; do
+      [[ -z "$file" ]] && continue
+      echo "  - $file"
+    done <<< "$disallowed_deleted_files"
+    status=1
+  fi
 fi
 if [[ -n "$added_files" ]]; then
   : > "${added_timestamps_file}"
@@ -317,8 +328,6 @@ if [[ -n "$added_files" ]]; then
         echo "⚠️  Allowing baseline timestamp before latest main migration during squash: $file"
       elif is_prod_history_restore "$file"; then
         echo "⚠️  Allowing audited prod-history restore with older timestamp: $file"
-      elif is_storage_gb_hours_split_locks "$file"; then
-        echo "⚠️  Allowing split of failed unapplied 20261117152120 (part 2 locks, before invoice 152412): $file"
       else
         echo '❌ Migration timestamp regression detected'
         echo "  Latest timestamp on ${base_ref}: ${latest_base_timestamp}"

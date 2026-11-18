@@ -1,12 +1,15 @@
 /**
- * Tinbase timing for 20261117152410 (data-only). Seeds ~1.3% of prod row counts,
- * applies part 1, extrapolates to prod-scale daily_storage_hourly / version_meta.
+ * Tinbase timing for 20261118193000 (excludes final apps/app_versions lock window).
+ * Seeds ~1.3% of prod row counts plus minimal live app_versions rows so
+ * backfill_missing_storage_lifetimes has representative work. Timing excludes
+ * that backfill until app_versions rows are seeded (see seed_app_versions).
  */
 import { Database, createPgliteEngine } from 'tinbase'
 import { loadSupabaseProject } from 'tinbase/node'
 
 const BENCH_USER = '00000000-0000-4000-8000-000000000002'
 const BENCH_ORG = '00000000-0000-4000-8000-000000000001'
+const MIGRATION_TS = 20261118193000
 
 const PROD = {
   daily_storage_hourly: 392_876,
@@ -16,19 +19,20 @@ const PROD = {
 const SCALE = 0.013
 const SEED_DSH = Math.max(1, Math.round(PROD.daily_storage_hourly * SCALE))
 const SEED_VM = Math.max(1, Math.round(PROD.version_meta * SCALE))
+const SEED_LIVE_VERSIONS = Math.min(200, SEED_VM)
 
 const database = await Database.create(await createPgliteEngine())
 const project = await loadSupabaseProject(process.cwd())
-const part1Migration = project.migrations.find((m) =>
-  m.name.startsWith('20261117152410_storage_gb_hours_billing_data'),
+const migration = project.migrations.find((m) =>
+  m.name.startsWith('20261118193000_storage_gb_hours_billing'),
 )
-if (!part1Migration)
-  throw new Error('part1 migration 20261117152410 not found')
+if (!migration)
+  throw new Error('migration 20261118193000 not found')
 
 try {
   const prior = project.migrations.filter((m) => {
     const ts = Number(m.name.match(/^(\d+)/)?.[1] ?? 0)
-    return ts > 0 && ts < 20261117152410
+    return ts > 0 && ts < MIGRATION_TS
   })
   await database.runMigrations(prior)
 
@@ -68,7 +72,17 @@ try {
     ALTER TABLE public.orgs ENABLE TRIGGER generate_org_user_stripe_info_on_org_create
   `)
 
-  // Bench only: prod has the FK until part 2 drops it; unlock inserts without provisioning apps.
+  await database.query(`
+    INSERT INTO public.apps (app_id, owner_org, name, created_at)
+  SELECT
+      'com.bench.storage.' || gs::text,
+      '${BENCH_ORG}'::uuid,
+      'bench',
+      now()
+    FROM generate_series(1, 50) gs
+    ON CONFLICT DO NOTHING
+  `)
+
   await database.query(`
     ALTER TABLE public.daily_storage_hourly
     DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey
@@ -97,16 +111,46 @@ try {
     ON CONFLICT DO NOTHING
   `)
 
+  await database.query(`
+    INSERT INTO public.app_versions (id, app_id, owner_org, name, version, deleted, created_at, updated_at)
+    SELECT
+      9_000_000_000 + gs,
+      'com.bench.live.' || (gs % 20)::text,
+      '${BENCH_ORG}'::uuid,
+      'bench',
+      gs::text,
+      gs % 5 = 0,
+      now(),
+      now()
+    FROM generate_series(1, ${SEED_LIVE_VERSIONS}) gs
+    ON CONFLICT DO NOTHING
+  `)
+
+  await database.query(`
+    INSERT INTO public.app_versions_meta (id, size, created_at, updated_at)
+    SELECT
+      9_000_000_000 + gs,
+      4096,
+      now(),
+      now()
+    FROM generate_series(1, ${SEED_LIVE_VERSIONS}) gs
+    WHERE (gs % 5) <> 0
+    ON CONFLICT DO NOTHING
+  `)
+
   const t0 = performance.now()
-  await database.runMigrations([part1Migration])
+  await database.runMigrations([migration])
   const seconds = (performance.now() - t0) / 1000
   const extrapolatedSeconds = seconds * (PROD.daily_storage_hourly / SEED_DSH)
 
   console.log(JSON.stringify({
     seed_daily_storage_hourly: SEED_DSH,
     seed_version_meta: SEED_VM,
-    part1_seconds_tinbase: Number(seconds.toFixed(2)),
-    extrapolated_part1_seconds_at_prod_dsh_rows: Number(extrapolatedSeconds.toFixed(0)),
+    seed_app_versions: SEED_LIVE_VERSIONS,
+    migration: '20261118193000_storage_gb_hours_billing.sql',
+    note: 'Full atomic migration; includes final apps/app_versions lock window (short on Tinbase).',
+    seconds_tinbase: Number(seconds.toFixed(2)),
+    extrapolated_seconds_at_prod_dsh_rows: Number(extrapolatedSeconds.toFixed(0)),
     prod_row_estimates: PROD,
   }))
 }
