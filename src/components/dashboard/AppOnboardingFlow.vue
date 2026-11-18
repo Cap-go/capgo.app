@@ -105,7 +105,7 @@ import {
   readOnboardingSetupHandoff,
 } from '~/utils/onboardingRedirect'
 import { openOnboardingResumeDialog } from '~/utils/onboardingResumeDialog'
-import { checklistTaskListMode, manualSetupCliCommand, manualSetupUsesBuilder } from '~/utils/onboardingSetupMode'
+import { buildInitCliCommand, checklistTaskListMode, manualSetupCliCommand, manualSetupUsesBuilder } from '~/utils/onboardingSetupMode'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
   buildUserOnboardingProgress,
@@ -452,7 +452,7 @@ watch(() => props.initialChecklistPath, (path) => {
     setupStage.value = 'cli'
   }
 })
-const builderCliCommand = computed(() => apiKey.value ? `npx @capgo/cli@latest build init -a ${apiKey.value}` : '')
+const builderCliCommand = computed(() => apiKey.value ? buildInitCliCommand(apiKey.value, localCommand) : '')
 const cliCommand = computed(() => {
   const key = apiKey.value
   if (!key)

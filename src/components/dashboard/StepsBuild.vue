@@ -25,6 +25,7 @@ import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { buildInitCliCommand } from '~/utils/onboardingSetupMode'
 
 type Platform = 'ios' | 'android'
 
@@ -105,7 +106,7 @@ const setupStep = computed<Step>(() => {
     return {
       key: 'setup-ios',
       title: t('build-step-ios-setup-title'),
-      command: `npx @capgo/cli@latest build init -a ${apiKey.value} --platform ios`,
+      command: buildInitCliCommand(apiKey.value, localCommand, 'ios'),
       subtitle: t('build-step-ios-setup-subtitle'),
       icon: IconSettings,
     }
@@ -114,7 +115,7 @@ const setupStep = computed<Step>(() => {
   return {
     key: 'setup-android',
     title: t('build-step-android-setup-title'),
-    command: `npx @capgo/cli@latest build init -a ${apiKey.value} --platform android`,
+    command: buildInitCliCommand(apiKey.value, localCommand, 'android'),
     subtitle: t('build-step-android-setup-subtitle'),
     icon: IconSettings,
   }
