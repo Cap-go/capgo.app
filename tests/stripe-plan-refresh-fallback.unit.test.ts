@@ -231,7 +231,9 @@ describe('createdOrUpdated plan refresh fallback', () => {
 
   it('still resolves when recompute and queue both fail', async () => {
     checkPlanStatusOnly.mockRejectedValueOnce(new Error('recompute failed'))
+    const sqlCalls: string[] = []
     pgClientQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+      sqlCalls.push(sql)
       const normalized = sql.replace(/\s+/g, ' ').trim()
       if (sql.includes('pg_catalog.to_json')) {
         const plans = sql.includes('name = ANY') ? REVENUE_PLANS : [TEAM_PLAN, MAKER_PLAN]
@@ -268,6 +270,12 @@ describe('createdOrUpdated plan refresh fallback', () => {
       new Date().toISOString(),
       'updated',
     )).resolves.toBeUndefined()
+
+    const markerIndex = sqlCalls.findIndex(sql => sql.includes('stats_refresh_requested_at'))
+    const queueIndex = sqlCalls.findIndex(sql => sql.includes('queue_cron_stat_org_for_org'))
+    expect(markerIndex).toBeGreaterThanOrEqual(0)
+    expect(queueIndex).toBeGreaterThanOrEqual(0)
+    expect(markerIndex).toBeLessThan(queueIndex)
   })
 })
 

@@ -136,6 +136,8 @@ async function invokeCreatedOrUpdated(
     subscriptionId,
   )
   const stripeData = extractDataEvent(c, stripeEvent)
+  expect(stripeData.data.customer_id).toBe(stripeCustomerId)
+  expect(stripeData.data.subscription_id).toBe(subscriptionId)
   expect(shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData)).toBe(true)
   const supabase = getSupabaseClient()
   const { data: org, error: orgError } = await supabase.from('orgs').select('*').eq('id', orgId).single()
