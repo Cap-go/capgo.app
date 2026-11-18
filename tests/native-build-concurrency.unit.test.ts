@@ -98,7 +98,7 @@ describe('native build concurrency limits', () => {
     expect(client.query).toHaveBeenCalledWith('BEGIN')
     expect(client.query).toHaveBeenCalledWith('COMMIT')
     expect(client.query).not.toHaveBeenCalledWith('ROLLBACK')
-    expect(client.release).toHaveBeenCalledTimes(3)
+    expect(client.release).toHaveBeenCalledTimes(4)
     expect(mockCloseClient).toHaveBeenCalledWith(context, pool)
     expect(mockSendEventToTracking).not.toHaveBeenCalled()
   })
@@ -127,7 +127,7 @@ describe('native build concurrency limits', () => {
 
     expect(client.query).toHaveBeenCalledWith('ROLLBACK')
     expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE public.build_requests'), expect.anything())
-    expect(client.release).toHaveBeenCalledTimes(3)
+    expect(client.release).toHaveBeenCalledTimes(4)
     expect(mockSendEventToTracking).toHaveBeenCalledWith(context, expect.objectContaining({
       event: 'Native build concurrency limit reached',
       sentToBento: true,

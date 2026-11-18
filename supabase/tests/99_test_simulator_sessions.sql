@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(38);
+SELECT plan(40);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -298,7 +298,7 @@ INSERT INTO public.simulator_sessions (
   id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, device_stopped_at
 )
 VALUES (
-  '99000000-0000-4000-8000-000000000007',
+  '99000000-0000-4000-8000-000000000009',
   '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
   'com.test.simulator.session',
   'ios',
@@ -316,7 +316,7 @@ SELECT is(
 );
 
 SELECT is(
-  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000007'),
+  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000009'),
   'stopped',
   'a stopped device releases its builder slot'
 );
@@ -326,7 +326,7 @@ SELECT is(
     SELECT build_time_unit
     FROM public.build_logs
     WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
-      AND build_id = '99000000-0000-4000-8000-000000000007'
+      AND build_id = '99000000-0000-4000-8000-000000000009'
   ),
   420::bigint,
   'a stopped device is billed up to its stop, not its maximum duration'
@@ -337,15 +337,15 @@ SELECT is(
     SELECT billable_seconds
     FROM public.build_logs
     WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
-      AND build_id = '99000000-0000-4000-8000-000000000007'
+      AND build_id = '99000000-0000-4000-8000-000000000009'
   ),
   840::bigint,
   'iOS simulator time counts double'
 );
 
 SELECT is(
-  (SELECT finished_at FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000007'),
-  (SELECT device_stopped_at FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000007'),
+  (SELECT finished_at FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000009'),
+  (SELECT device_stopped_at FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000009'),
   'the session ends when its device stopped'
 );
 
@@ -354,7 +354,7 @@ INSERT INTO public.simulator_sessions (
   id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, created_at, started_at, device_stopped_at
 )
 VALUES (
-  '99000000-0000-4000-8000-000000000008',
+  '99000000-0000-4000-8000-000000000010',
   '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
   'com.test.simulator.session',
   'ios',
@@ -373,7 +373,7 @@ SELECT is(
 );
 
 SELECT is(
-  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000008'),
+  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000010'),
   'stopped',
   'an unstarted session releases its builder slot'
 );
@@ -383,10 +383,27 @@ SELECT is(
     SELECT count(*)
     FROM public.build_logs
     WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
-      AND build_id = '99000000-0000-4000-8000-000000000008'
+      AND build_id = '99000000-0000-4000-8000-000000000010'
   ),
   0::bigint,
   'an unstarted session is not billed'
+);
+
+SELECT is(
+  (
+    SELECT count(*)::integer
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = 'expire_simulator_sessions'
+  ),
+  1,
+  'expire_simulator_sessions keeps one signature with a default skip list'
+);
+
+SELECT lives_ok(
+  $$ SELECT public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8') $$,
+  'transfer paths call expire with one org argument without ambiguity'
 );
 
 INSERT INTO public.orgs (id, created_by, management_email, name)
