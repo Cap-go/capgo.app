@@ -7,6 +7,9 @@ import { cleanupPostgresClient, getPostgresClient, getSupabaseClient, TEST_EMAIL
 
 const MAKER_PRODUCT_ID = 'prod_LQIs1Yucml9ChU'
 const TEAM_PRODUCT_ID = 'prod_LQIugvJcPrxhda'
+const MAKER_BUILD_LIMIT = 7_200
+const TEAM_BUILD_LIMIT = 36_000
+const USAGE_OVER_MAKER_UNDER_TEAM = 8_000
 
 const testRunId = randomUUID()
 const ORG_ID = testRunId
@@ -90,7 +93,7 @@ beforeEach(async () => {
   const { error: buildTimeError } = await supabase.from('daily_build_time').insert({
     app_id: APPNAME,
     build_count: 3,
-    build_time_unit: 4_435,
+    build_time_unit: USAGE_OVER_MAKER_UNDER_TEAM,
     date: today,
   })
   if (buildTimeError)
@@ -99,12 +102,19 @@ beforeEach(async () => {
 
 afterAll(async () => {
   const supabase = getSupabaseClient()
-  await supabase.from('daily_build_time').delete().eq('app_id', APPNAME)
-  await supabase.from('apps').delete().eq('app_id', APPNAME)
-  await supabase.from('org_users').delete().eq('org_id', ORG_ID)
-  await supabase.from('orgs').delete().eq('id', ORG_ID)
-  await supabase.from('stripe_info').delete().eq('customer_id', STRIPE_CUSTOMER_ID)
+  const errors: unknown[] = []
+  const track = (error: unknown) => {
+    if (error)
+      errors.push(error)
+  }
+  track((await supabase.from('daily_build_time').delete().eq('app_id', APPNAME)).error)
+  track((await supabase.from('apps').delete().eq('app_id', APPNAME)).error)
+  track((await supabase.from('org_users').delete().eq('org_id', ORG_ID)).error)
+  track((await supabase.from('orgs').delete().eq('id', ORG_ID)).error)
+  track((await supabase.from('stripe_info').delete().eq('customer_id', STRIPE_CUSTOMER_ID)).error)
   await cleanupPostgresClient()
+  if (errors.length)
+    throw new AggregateError(errors, 'build-time-exceeded-plan-upgrade teardown failed')
 })
 
 async function isBuildTimeAllowed() {
@@ -120,17 +130,36 @@ describe('build_time_exceeded after plan change recompute', () => {
   it('clears build_time_exceeded when usage fits the upgraded plan', async () => {
     const supabase = getSupabaseClient()
 
+    expect(USAGE_OVER_MAKER_UNDER_TEAM).toBeGreaterThan(MAKER_BUILD_LIMIT)
+    expect(USAGE_OVER_MAKER_UNDER_TEAM).toBeLessThan(TEAM_BUILD_LIMIT)
+
     const { error: makerStateError } = await supabase.from('stripe_info').update({
-      build_time_exceeded: true,
-      is_good_plan: false,
+      is_good_plan: true,
       product_id: MAKER_PRODUCT_ID,
     }).eq('customer_id', STRIPE_CUSTOMER_ID)
     expect(makerStateError).toBeFalsy()
+
+    await recomputePlanStatus()
+
+    const { data: makerFit } = await supabase.rpc('get_plan_usage_and_fit', { orgid: ORG_ID })
+    expect(makerFit?.is_good_plan).toBe(false)
+
+    const { data: onMakerBeforeUpgrade } = await supabase
+      .from('stripe_info')
+      .select('build_time_exceeded, is_good_plan')
+      .eq('customer_id', STRIPE_CUSTOMER_ID)
+      .single()
+    expect(onMakerBeforeUpgrade?.build_time_exceeded).toBe(true)
+    expect(onMakerBeforeUpgrade?.is_good_plan).toBe(false)
+    expect(await isBuildTimeAllowed()).toBe(false)
 
     const { error: upgradeError } = await supabase.from('stripe_info').update({
       product_id: TEAM_PRODUCT_ID,
     }).eq('customer_id', STRIPE_CUSTOMER_ID)
     expect(upgradeError).toBeFalsy()
+
+    const { data: teamFit } = await supabase.rpc('get_plan_usage_and_fit', { orgid: ORG_ID })
+    expect(teamFit?.is_good_plan).toBe(true)
 
     await recomputePlanStatus()
 

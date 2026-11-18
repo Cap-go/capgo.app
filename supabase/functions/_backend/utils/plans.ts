@@ -617,11 +617,14 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
       }).catch()
     }
   }
-  else if (is_good_plan) {
-    if (is_onboarded)
-      await userIsAtPlanUsage(c, orgId, percentUsage, drizzleClient)
+  else if (is_good_plan && is_onboarded) {
+    await userIsAtPlanUsage(c, orgId, percentUsage, drizzleClient)
+  }
+
+  if (is_good_plan) {
     finalIsGoodPlan = true
-    exceededFlags = createEmptyExceededFlags()
+    if (!exceededFlags)
+      exceededFlags = createEmptyExceededFlags()
   }
 
   return { exceededFlags, finalIsGoodPlan }
