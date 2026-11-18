@@ -51,6 +51,44 @@ function makePlan({
 }
 
 describe('stripe subscription event classification', () => {
+  it.concurrent('resets usage exceeded flags including build time on subscription updates', () => {
+    const stripeData = extractDataEvent(mockContext, {
+      data: {
+        object: {
+          customer: 'cus_usage_reset',
+          id: 'sub_usage_reset',
+          items: {
+            data: [
+              makeSubscriptionItem({
+                interval: 'month',
+                priceId: 'price_team',
+                productId: 'prod_team',
+              }),
+            ],
+          },
+          status: 'active',
+        },
+        previous_attributes: {
+          items: {
+            data: [
+              makeSubscriptionItem({
+                interval: 'month',
+                priceId: 'price_maker',
+                productId: 'prod_maker',
+              }),
+            ],
+          },
+        },
+      },
+      type: 'customer.subscription.updated',
+    } as any)
+
+    expect(stripeData.data.build_time_exceeded).toBe(false)
+    expect(stripeData.data.mau_exceeded).toBe(false)
+    expect(stripeData.data.storage_exceeded).toBe(false)
+    expect(stripeData.data.bandwidth_exceeded).toBe(false)
+  })
+
   it.concurrent('marks monthly to yearly cadence changes as upgraded without a plan change', () => {
     const stripeData = extractDataEvent(mockContext, {
       data: {
