@@ -31,7 +31,8 @@ import {
 } from '~/services/apikeys'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { shouldShowCliLoginGuidance } from '~/services/cliLogin'
-import { useConsole } from '~/services/console'
+import { getConsoleApiHost, getLocalConfig, PROD_API_URL, useConsole } from '~/services/console'
+import { buildLoginCliCommand } from '~/utils/onboardingSetupMode'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissionsBatch } from '~/services/permissions'
@@ -113,7 +114,9 @@ const capgo = useConsole()
 const keys = ref<ApiKeyRow[]>([])
 const hasLoadedKeys = ref(false)
 const now = useNow({ interval: 60_000 })
-const cliLoginCommand = 'npx @capgo/cli@latest login'
+const config = getLocalConfig()
+const localCommand = config.apiHost !== PROD_API_URL ? ` --api-host ${getConsoleApiHost()}` : ''
+const cliLoginCommand = computed(() => buildLoginCliCommand(localCommand))
 const showCliLoginGuidance = computed(() =>
   hasLoadedKeys.value && shouldShowCliLoginGuidance(keys.value, now.value),
 )
@@ -962,7 +965,7 @@ async function getKeys(retry = true): Promise<void> {
 
 async function copyCliLoginCommand() {
   try {
-    await navigator.clipboard.writeText(cliLoginCommand)
+    await navigator.clipboard.writeText(cliLoginCommand.value)
     toast.success(t('cli-login-guidance-command-copied'))
   }
   catch (error) {
