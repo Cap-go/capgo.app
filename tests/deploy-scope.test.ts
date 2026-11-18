@@ -44,6 +44,7 @@ describe('deploy scope matching', () => {
     ['frontend-only changes deploy no backend target', ['src/pages/index.vue'], {}],
     ['CLI-only lockfile changes deploy no backend target', ['bun.lock', 'cli/src/index.ts'], {}],
     ['replica schema code runs the subscriber reconciliation', ['read_replicate/direct_schema_sync.ts', 'scripts/check-read-replica-hyperdrive-schema.sh', 'cloudflare_workers/read-replica-schema-check/index.ts'], { supabase: true }],
+    ['release migration push script runs the Supabase deploy step', ['scripts/push-release-migrations.sh'], { supabase: true }],
     ['source messages deploy translation plus API surfaces', ['messages/en.json'], { api: true, supabase: true, translation: true }],
     ['plugin endpoints stay scoped to Supabase and plugin workers', ['supabase/functions/_backend/plugin_runtime/plugins/updates.ts'], { plugins: true, supabase: true }],
     ['public API changes stay scoped to Supabase and API workers', ['supabase/functions/_backend/public/app/index.ts'], { api: true, supabase: true }],
