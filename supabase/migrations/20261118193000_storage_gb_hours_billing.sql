@@ -78,12 +78,6 @@ COMMENT ON TABLE public.daily_storage_hourly IS
 'get_org_storage_billable_bytes. Rows of deleted apps are kept until '
 'delete_old_deleted_apps purges them.';
 
--- Drop before the long version_meta phase and before the final apps lock wait,
--- so concurrent app deletes do not CASCADE-block on this FK while the
--- migration retries LOCK TABLE public.app_versions, public.apps.
-ALTER TABLE public.daily_storage_hourly
-DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
-
 -- ---------------------------------------------------------------------------
 -- 2. Billable storage of an org for a period
 -- ---------------------------------------------------------------------------
@@ -1513,6 +1507,12 @@ DROP TABLE IF EXISTS public.daily_storage;
 -- ---------------------------------------------------------------------------
 -- Deadlock-safe final locks (apps / app_versions)
 -- ---------------------------------------------------------------------------
+-- Drop the apps FK here (not during the long version_meta phase) so the
+-- AccessExclusiveLock on public.apps from this ALTER is not held across that
+-- work. Still before the explicit apps/app_versions LOCK wait.
+ALTER TABLE public.daily_storage_hourly
+DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
+
 DO $capgo_lock_apps_for_storage_triggers$
 DECLARE
   attempt int;

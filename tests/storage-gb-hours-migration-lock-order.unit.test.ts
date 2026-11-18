@@ -12,6 +12,7 @@ const finalAppsLockMarker = '$capgo_lock_apps_for_storage_triggers$'
 const lockTimeoutLiteral = `SET LOCAL lock_timeout = '500ms'`
 const lockTables =
   'LOCK TABLE public.app_versions, public.apps IN ACCESS EXCLUSIVE MODE'
+const versionMetaLockMarker = '$capgo_lock_version_meta$'
 
 function lockListsAppVersionsBeforeApps(sql: string) {
   const line = sql.match(
@@ -36,6 +37,7 @@ function assertMigrationGuards(sql: string) {
   const lockTimeout = sql.indexOf(lockTimeoutLiteral, finalLockBlock)
   const lockTablesIndex = sql.indexOf(lockTables, finalLockBlock)
   const fkDropIndex = sql.indexOf(fkDrop)
+  const versionMetaLockEnd = sql.lastIndexOf(versionMetaLockMarker)
   const firstAppsTrigger = sql.search(/DROP TRIGGER IF EXISTS \w+ ON public\.apps/)
 
   expect(begin).toBeGreaterThan(0)
@@ -43,11 +45,18 @@ function assertMigrationGuards(sql: string) {
   expect(finalLockBlock).toBeGreaterThan(begin)
   expect(fkDropIndex).toBeGreaterThan(begin)
   expect(fkDropIndex).toBeLessThan(finalLockBlock)
+  expect(fkDropIndex).toBeGreaterThan(versionMetaLockEnd)
   expect(lockTimeout).toBeGreaterThan(finalLockBlock)
   expect(lockTablesIndex).toBeGreaterThan(lockTimeout)
   expect(firstAppsTrigger).toBeGreaterThan(lockTablesIndex)
   expect(commit).toBeGreaterThan(firstAppsTrigger)
   expect(lockListsAppVersionsBeforeApps(sql)).toBe(true)
+
+  const betweenFinalLockAndTriggers = sql.slice(finalLockBlock, firstAppsTrigger)
+  const preTriggerLockCount = (
+    betweenFinalLockAndTriggers.match(/LOCK TABLE public\.app_versions/g) ?? []
+  ).length
+  expect(preTriggerLockCount).toBe(1)
 
   const preFinalLock = sql.slice(0, finalLockBlock)
   const beforeAppsTriggers = sql.slice(0, sql.search(
@@ -57,6 +66,8 @@ function assertMigrationGuards(sql: string) {
   expect(preFinalLock).not.toMatch(
     /LOCK TABLE public\.(app_versions, public\.apps|apps|app_versions) IN ACCESS EXCLUSIVE MODE/,
   )
+  const earlyPhase = sql.slice(0, versionMetaLockEnd)
+  expect(earlyPhase).not.toContain(fkDrop)
   expect(preFinalLock).toContain(fkDrop)
   expect(preFinalLock).not.toMatch(/ALTER TABLE public\.apps\b/)
   expect(preFinalLock).not.toMatch(
@@ -83,13 +94,7 @@ describe('storage gb-hours billing migration lock order', () => {
   })
 
   it('fails the ordering check if apps locks run after trigger DDL (mutation guard)', () => {
-    const withoutFinalLock = migration.replace(
-      new RegExp(
-        `DO \\$capgo_lock_apps_for_storage_triggers\\$[\\s\\S]*?\\$capgo_lock_apps_for_storage_triggers\\$;\\n`,
-      ),
-      '',
-    )
-    const lateLockMigration = withoutFinalLock.replace(
+    const lateLockMigration = migration.replace(
       /(DROP TRIGGER IF EXISTS \w+ ON public\.apps)/,
       `${lockTimeoutLiteral};\n${lockTables};\n\n$1`,
     )
