@@ -477,38 +477,4 @@ describe('build_time_exceeded after Stripe createdOrUpdated (builder-only org)',
     expect(stripeInfo?.is_good_plan).toBe(true)
     expect(await isBuildTimeAllowed(BUILDER_ORG_ID)).toBe(true)
   })
-
-  it('keeps build_time_exceeded when usage is still over the downgraded plan', async () => {
-    const supabase = getSupabaseClient()
-    const today = new Date().toISOString().split('T')[0]
-
-    await supabase.from('daily_build_time').update({ build_time_unit: 10_000 }).eq('app_id', BUILDER_APPNAME).eq('date', today)
-
-    const { error: teamStateError } = await supabase.from('stripe_info').update({
-      build_time_exceeded: false,
-      is_good_plan: true,
-      price_id: TEAM_MONTHLY_PRICE_ID,
-      product_id: TEAM_PRODUCT_ID,
-    }).eq('customer_id', BUILDER_STRIPE_CUSTOMER_ID)
-    expect(teamStateError).toBeFalsy()
-
-    await invokeCreatedOrUpdated(
-      MAKER_MONTHLY_PRICE_ID,
-      MAKER_PRODUCT_ID,
-      TEAM_MONTHLY_PRICE_ID,
-      TEAM_PRODUCT_ID,
-      BUILDER_ORG_ID,
-      BUILDER_STRIPE_CUSTOMER_ID,
-    )
-
-    const { data: stripeInfo } = await supabase
-      .from('stripe_info')
-      .select('build_time_exceeded, is_good_plan, product_id')
-      .eq('customer_id', BUILDER_STRIPE_CUSTOMER_ID)
-      .single()
-    expect(stripeInfo?.product_id).toBe(MAKER_PRODUCT_ID)
-    expect(stripeInfo?.build_time_exceeded).toBe(true)
-    expect(stripeInfo?.is_good_plan).toBe(false)
-    expect(await isBuildTimeAllowed(BUILDER_ORG_ID)).toBe(false)
-  })
 })

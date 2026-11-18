@@ -468,6 +468,7 @@ async function refreshPlanStatusAfterStripeSubscriptionChange(
     return
 
   try {
+    await touchOrgPlanStatsRefreshRequested(c, org.id)
     await recomputeOrgPlanStatusAfterStripePlanChange(c, org.id)
   }
   catch (error) {
