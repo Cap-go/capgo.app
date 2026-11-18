@@ -152,9 +152,14 @@ async function probeChinaApiReachable(): Promise<boolean> {
   }
 }
 
+/** Same gate as updateChinaConsoleSuggestion: web global console only, never native or China hostname. */
+export function chinaConsoleSuggestionGate(): boolean {
+  return isOnGlobalConsoleWebHost() && getConsoleApiHost() === PROD_API_URL
+}
+
 function updateChinaConsoleSuggestion(mainApiReachable: boolean, chinaApiReachable: boolean) {
   suggestChinaConsole.value = shouldSuggestChinaConsole({
-    onGlobalConsole: isOnGlobalConsoleWebHost() && getConsoleApiHost() === PROD_API_URL,
+    onGlobalConsole: chinaConsoleSuggestionGate(),
     mainApiReachable,
     chinaApiReachable,
   })

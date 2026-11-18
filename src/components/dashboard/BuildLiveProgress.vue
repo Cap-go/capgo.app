@@ -14,10 +14,11 @@ import IconRotate from '~icons/lucide/rotate-ccw'
 import IconSparkles from '~icons/lucide/sparkles'
 import { applyBuildStreamMessage, buildTimeline, createBuildLiveState, resolveBuildOutcome, stepCopy } from '~/services/buildLiveStream'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useConsole } from '~/services/console'
+import { getConsoleApiHost, getLocalConfig, PROD_API_URL, useConsole } from '~/services/console'
 import { buildPreviewQrCodeDataUrl } from '~/services/previewQrCode'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
+import { buildRequestCliCommand } from '~/utils/onboardingSetupMode'
 
 type BuildRow = Pick<Database['public']['Tables']['build_requests']['Row'], 'status' | 'created_at' | 'started_at' | 'completed_at' | 'last_error' | 'builder_job_id'>
 
@@ -41,6 +42,8 @@ const MAX_RECONNECTS = 5
 const { t } = useI18n()
 const capgo = useConsole()
 const organizationStore = useOrganizationStore()
+const config = getLocalConfig()
+const localCommand = config.apiHost !== PROD_API_URL ? ` --api-host ${getConsoleApiHost()}` : ''
 const row = ref<BuildRow | null>(null)
 const live = ref<BuildLiveState>(createBuildLiveState())
 const now = ref(Date.now())
@@ -82,7 +85,7 @@ const queued = computed(() => !outcome.value && (currentRow.value?.key === 'uplo
 const errorText = computed(() => row.value?.last_error || live.value.statusMessage || t('build-live-failed-no-error'))
 const downloadUrl = computed(() => live.value.downloadUrl || savedDownloadUrl.value)
 const qrCode = computed(() => downloadUrl.value ? buildPreviewQrCodeDataUrl(downloadUrl.value) : '')
-const terminalCommand = computed(() => `npx @capgo/cli@latest build request ${props.appId} --platform ${props.platform}`)
+const terminalCommand = computed(() => buildRequestCliCommand(props.appId, props.platform, localCommand))
 const jobShort = computed(() => row.value?.builder_job_id ? `${row.value.builder_job_id.slice(0, 12)}…` : '')
 
 const title = computed(() => {

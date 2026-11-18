@@ -36,13 +36,14 @@ describe('China console API routing', () => {
     expect(getLocalConfig().apiHost).toBe(CHINA_API)
   })
 
-  it('console client queries go through the China API host', async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: [], error: null, count: null, status: 200 }), {
+  it('createConsoleClient routes queries and auth to the China API host', async () => {
+    const { createConsoleClient } = await import('../src/services/consoleClient')
+    const { SESSION_STORAGE_KEY } = await import('../src/services/consoleAuth')
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ data: [], error: null, count: null, status: 200 }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }))
-    const { createConsoleClient } = await import('../src/services/consoleClient')
-    const { SESSION_STORAGE_KEY } = await import('../src/services/consoleAuth')
     const storage = memoryStorage()
     storage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
       access_token: fakeJwt({ sub: 'user-1' }),
@@ -52,24 +53,18 @@ describe('China console API routing', () => {
     }))
     vi.stubGlobal('localStorage', storage)
     await createConsoleClient().from('orgs').select('id').limit(1)
-    const [url] = fetchMock.mock.calls[0]
-    expect(url).toBe(`${CHINA_API}/private/console/query`)
-  })
+    expect(fetchMock.mock.calls[0][0]).toBe(`${CHINA_API}/private/console/query`)
 
-  it('console auth calls go through the China API host', async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({
-      access_token: 'token',
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      access_token: fakeJwt({ sub: 'user-1', email: 'user@example.com' }),
       refresh_token: 'refresh',
       expires_in: 3600,
       expires_at: Math.floor(Date.now() / 1000) + 3600,
       token_type: 'bearer',
       user: { id: 'user-1', email: 'user@example.com' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-    const { createConsoleAuthClient, resolveConsoleApiBase } = await import('../src/services/consoleAuth')
-    const { getConsoleApiHost } = await import('../src/services/consoleApiHost')
-    const auth = createConsoleAuthClient({ baseURL: resolveConsoleApiBase(getConsoleApiHost()) })
-    await auth.signInWithPassword({ email: 'user@example.com', password: 'pw' })
-    const [url] = fetchMock.mock.calls[0]
-    expect(url).toBe(`${CHINA_API}/private/console/auth/token?grant_type=password`)
+    vi.stubGlobal('localStorage', memoryStorage())
+    await createConsoleClient({ persistSession: false }).auth.signInWithPassword({ email: 'user@example.com', password: 'pw' })
+    expect(fetchMock.mock.calls[1][0]).toBe(`${CHINA_API}/private/console/auth/token?grant_type=password`)
   })
 })

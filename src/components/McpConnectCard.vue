@@ -3,7 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconClipboard from '~icons/heroicons/clipboard-document'
 import IconSparkles from '~icons/heroicons/sparkles'
-import { getConsoleApiHost } from '~/services/console'
+import { getConsoleApiHost } from '~/services/consoleApiHost'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
 

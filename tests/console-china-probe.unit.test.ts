@@ -62,16 +62,12 @@ describe('global console web host gate', () => {
     expect(hostnameOnlyGate).toBe(true)
   })
 
-  it.concurrent('requires the web host gate so native clients never get the banner', () => {
-    const nativeLocalhost = { hostname: 'localhost', isNativePlatform: true, devMode: false }
-    const apiHostIsGlobalProd = true
-    const revertedGate = apiHostIsGlobalProd
-    const fixedGate = isOnGlobalConsoleWebHost(nativeLocalhost) && apiHostIsGlobalProd
-
-    expect(revertedGate).toBe(true)
-    expect(fixedGate).toBe(false)
-    expect(shouldSuggestChinaConsole({ ...CHINA_BANNER_SCENARIO, onGlobalConsole: revertedGate })).toBe(true)
-    expect(shouldSuggestChinaConsole({ ...CHINA_BANNER_SCENARIO, onGlobalConsole: fixedGate })).toBe(false)
+  it.concurrent('feeds updateChinaConsoleSuggestion: native must not pass the web gate', () => {
+    const onGlobalConsole = isOnGlobalConsoleWebHost({
+      hostname: GLOBAL_CONSOLE_WEB_HOST,
+      isNativePlatform: true,
+    })
+    expect(shouldSuggestChinaConsole({ ...CHINA_BANNER_SCENARIO, onGlobalConsole })).toBe(false)
   })
 })
 

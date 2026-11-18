@@ -200,6 +200,10 @@ export function buildInitCliCommand(apiKey: string, apiHostArgs = '', platform?:
   return `npx @capgo/cli@latest build init -a ${apiKey}${platformArg}${apiHostArgs}`
 }
 
+export function buildRequestCliCommand(appId: string, platform: 'ios' | 'android', apiHostArgs = '') {
+  return `npx @capgo/cli@latest build request ${appId} --platform ${platform}${apiHostArgs}`
+}
+
 /**
  * The single CLI command shown first on the manual setup, so users leaving the AI path
  * still run one command in their project. Same commands as the setup step of the wizard:
