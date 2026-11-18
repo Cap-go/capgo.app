@@ -7,8 +7,10 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', async importOriginal =>
   getEnv: (_c: unknown, key: string) => (key === 'API_SECRET' ? API_SECRET : ''),
 }))
 
+const sweepDueSimulatorSessionsMock = vi.hoisted(() => vi.fn(async () => ({ orgs: 2, orphanedDevices: 1, hostSync: 3 })))
+
 vi.mock('../supabase/functions/_backend/public/build/concurrency.ts', () => ({
-  sweepDueSimulatorSessions: vi.fn(async () => ({ orgs: 2, orphanedDevices: 1, hostSync: 3 })),
+  sweepDueSimulatorSessions: sweepDueSimulatorSessionsMock,
 }))
 
 describe('cron_expire_simulator_sessions', () => {
@@ -23,8 +25,10 @@ describe('cron_expire_simulator_sessions', () => {
   })
 
   it('rejects requests without the API secret', async () => {
+    sweepDueSimulatorSessionsMock.mockClear()
     const { app } = await import('../supabase/functions/_backend/triggers/cron_expire_simulator_sessions.ts')
     const response = await app.request('http://local/', { method: 'POST' })
     expect(response.status).toBe(400)
+    expect(sweepDueSimulatorSessionsMock).not.toHaveBeenCalled()
   })
 })

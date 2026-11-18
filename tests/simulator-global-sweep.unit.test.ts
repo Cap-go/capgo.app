@@ -6,6 +6,7 @@ import { SIMULATOR_IDLE_TIMEOUT_MINUTES } from '../supabase/functions/_backend/p
 
 const concurrencyPath = join(dirname(fileURLToPath(import.meta.url)), '../supabase/functions/_backend/public/build/concurrency.ts')
 const workerPath = join(dirname(fileURLToPath(import.meta.url)), '../cloudflare_workers/api/index.ts')
+const wranglerPath = join(dirname(fileURLToPath(import.meta.url)), '../cloudflare_workers/api/wrangler.jsonc')
 
 describe('simulator global idle sweep', () => {
   it('finds due orgs globally and expires each org', () => {
@@ -19,10 +20,14 @@ describe('simulator global idle sweep', () => {
     expect(source).toContain('SIMULATOR_IDLE_TIMEOUT_MINUTES')
   })
 
-  it('binds the API worker minute cron to the sweep endpoint', () => {
+  it('registers a per minute cron trigger in the deployed worker config', () => {
+    const wrangler = readFileSync(wranglerPath, 'utf8')
+    expect(wrangler).toContain('"crons": ["* * * * *"]')
+  })
+
+  it('dispatches the simulator sweep from the scheduled handler', async () => {
     const worker = readFileSync(workerPath, 'utf8')
     expect(worker).toContain('runScheduledSimulatorExpiry')
-    expect(worker).toContain('expire-simulator-sessions')
     expect(worker).toContain('sweepDueSimulatorSessions')
   })
 

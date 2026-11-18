@@ -7,6 +7,8 @@ const idleDueId = '99000000-0000-4000-8000-000000000010'
 const idleSkippedId = '99000000-0000-4000-8000-000000000011'
 const activeId = '99000000-0000-4000-8000-000000000012'
 const maxDueSkippedId = '99000000-0000-4000-8000-000000000013'
+const idleNoEmulatorId = '99000000-0000-4000-8000-000000000014'
+const idleAlreadyStoppedId = '99000000-0000-4000-8000-000000000015'
 
 let db: PGlite
 
@@ -32,7 +34,9 @@ beforeAll(async () => {
       ('${idleDueId}', '${orgId}', 'in-progress', 'emu-due', NULL, now() - interval '20 minutes', now() - interval '6 minutes', 40),
       ('${idleSkippedId}', '${orgId}', 'in-progress', 'emu-skip', NULL, now() - interval '20 minutes', now() - interval '6 minutes', 40),
       ('${activeId}', '${orgId}', 'in-progress', 'emu-live', NULL, now() - interval '20 minutes', now() - interval '2 minutes', 40),
-      ('${maxDueSkippedId}', '${orgId}', 'in-progress', 'emu-max', NULL, now() - interval '41 minutes', now() - interval '41 minutes', 40);
+      ('${maxDueSkippedId}', '${orgId}', 'in-progress', 'emu-max', NULL, now() - interval '41 minutes', now() - interval '41 minutes', 40),
+      ('${idleNoEmulatorId}', '${orgId}', 'in-progress', NULL, NULL, now() - interval '20 minutes', now() - interval '6 minutes', 40),
+      ('${idleAlreadyStoppedId}', '${orgId}', 'in-progress', 'emu-done', now() - interval '3 minutes', now() - interval '20 minutes', now() - interval '6 minutes', 40);
   `)
 }, 30000)
 
