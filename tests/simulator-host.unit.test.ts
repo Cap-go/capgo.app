@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { recordStoppedSimulatorDevices } from '../supabase/functions/_backend/public/build/simulator_host.ts'
+import { recordStoppedSimulatorDevices, simulatorMaxSessionStopIso } from '../supabase/functions/_backend/public/build/simulator_host.ts'
 
 const { mockGetPgClient, mockCloseClient, mockGetEnv, mockLogErr } = vi.hoisted(() => ({
   mockGetPgClient: vi.fn(),
@@ -26,6 +26,10 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 const orgId = '91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57'
 const idle = '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4'
 const busy = '7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5'
+const maxed = '8d3e1f2a-9c4b-4e5f-a6b7-c8d9e0f1a2b3'
+const busyStartedAt = '2026-11-09T12:05:00.000Z'
+const maxedStartedAt = '2026-11-09T11:00:00.000Z'
+const syncNow = Date.parse('2026-11-09T12:10:00.000Z')
 const context = { get: () => 'req-simulator-host' } as any
 
 describe('stopped simulator devices', () => {
@@ -33,13 +37,19 @@ describe('stopped simulator devices', () => {
 
   beforeEach(() => {
     queries.length = 0
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString()
     mockGetEnv.mockImplementation((_c: unknown, key: string) => key === 'SIMULATOR_ACCESS_KEY' ? 'access-key' : key === 'SIMULATOR_ORIGIN' ? 'https://sim.example.test/' : undefined)
     mockGetPgClient.mockResolvedValue({
       connect: async () => ({
         query: async (sql: string, params?: unknown[]) => {
           queries.push({ sql, params })
           if (sql.includes('SELECT id, emulator_id'))
-            return { rows: [{ id: idle, emulator_id: idle }, { id: busy, emulator_id: busy }] }
+            return {
+              rows: [
+                { id: idle, emulator_id: idle, started_at: fiveMinutesAgo, created_at: fiveMinutesAgo, max_duration_minutes: 40 },
+                { id: busy, emulator_id: busy, started_at: fiveMinutesAgo, created_at: fiveMinutesAgo, max_duration_minutes: 40 },
+              ],
+            }
           if (sql.includes('device_stopped_at = COALESCE'))
             return { rows: [{ device_stopped_at: params?.[1] }] }
           return { rows: [] }
@@ -56,7 +66,28 @@ describe('stopped simulator devices', () => {
     mockLogErr.mockReset()
   })
 
-  it('records the stop time of a device the host stopped, and leaves a running one alone', async () => {
+  it('records the stop time of a device the host stopped, caps a session at its maximum, and leaves a fresh one alone', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(syncNow)
+    mockGetPgClient.mockResolvedValue({
+      connect: async () => ({
+        query: async (sql: string, params?: unknown[]) => {
+          queries.push({ sql, params })
+          if (sql.includes('SELECT id, emulator_id'))
+            return {
+              rows: [
+                { id: idle, emulator_id: idle, started_at: '2026-11-09T11:55:00.000Z', created_at: '2026-11-09T11:55:00.000Z', max_duration_minutes: 40 },
+                { id: busy, emulator_id: busy, started_at: busyStartedAt, created_at: busyStartedAt, max_duration_minutes: 40 },
+                { id: maxed, emulator_id: maxed, started_at: maxedStartedAt, created_at: maxedStartedAt, max_duration_minutes: 40 },
+              ],
+            }
+          if (sql.includes('device_stopped_at = COALESCE'))
+            return { rows: [{ device_stopped_at: params?.[1] }] }
+          return { rows: [] }
+        },
+        release: () => {},
+      }),
+    })
     const fetchMock = vi.fn(async (url: string) => {
       if (url === `https://sim.example.test/v2/device-run-sessions/${idle}`)
         return Response.json({ data: { id: idle, url: 'u', status: 'stopped', finishedAt: '2026-11-09T12:07:00.000Z' } })
@@ -66,8 +97,18 @@ describe('stopped simulator devices', () => {
     await recordStoppedSimulatorDevices(context, orgId)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const stops = queries.filter(query => query.sql.includes('device_stopped_at = COALESCE'))
-    expect(stops).toHaveLength(1)
-    expect(stops[0]?.params).toEqual([idle, '2026-11-09T12:07:00.000Z'])
+    expect(stops).toHaveLength(2)
+    expect(stops.map(stop => stop.params)).toEqual(expect.arrayContaining([
+      [maxed, '2026-11-09T11:40:00.000Z'],
+      [idle, '2026-11-09T12:07:00.000Z'],
+    ]))
+    vi.useRealTimers()
+  })
+
+  it('returns the maximum stop instant only once the session cap is reached', () => {
+    const openedAt = '2026-11-09T11:00:00.000Z'
+    expect(simulatorMaxSessionStopIso(openedAt, 40, Date.parse('2026-11-09T11:39:59.000Z'))).toBeUndefined()
+    expect(simulatorMaxSessionStopIso(openedAt, 40, Date.parse('2026-11-09T11:40:00.000Z'))).toBe('2026-11-09T11:40:00.000Z')
   })
 
   it('never blocks the caller when the host is down', async () => {
