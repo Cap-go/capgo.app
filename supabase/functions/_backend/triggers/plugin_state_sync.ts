@@ -408,7 +408,7 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
       }
       catch {
         // A corrupt previous document must not prevent the repair writer
-        // from replacing it with a fresh primary-backed snapshot.
+        // from replacing it with a fresh EU-replica snapshot.
         return null
       }
     },
@@ -1126,6 +1126,10 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
       const deferred = outcomes.filter(outcome => outcome.deferred)
       for (const outcome of failed)
         cloudlogErr({ requestId: c.get('requestId'), message: 'plugin state sync failed', app_id: outcome.appId, error: serializeError(outcome.error) })
+      for (const outcome of deferred) {
+        if (outcome.error instanceof PluginStateSourceUnavailable)
+          cloudlogErr({ requestId: c.get('requestId'), message: 'plugin state source deferred', app_id: outcome.appId, error: serializeError(outcome.error) })
+      }
 
       // ACK validates the lease and persists the next cursor atomically. A
       // stale drain must never enqueue an older continuation after replacement.

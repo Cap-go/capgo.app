@@ -773,6 +773,9 @@ describe('EU source deferral and inventory', () => {
     expect(storage.namespace.put).not.toHaveBeenCalled()
     expect(storage.pointers.put).not.toHaveBeenCalled()
     expect(provider.connect.mock.calls.filter(call => call.length < 2)).toHaveLength(1)
+    expect(provider.log).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'plugin state source deferred', app_id: appId, error: expect.any(Error),
+    }))
   })
 
   it('settles only a proven version key when a later manifest snapshot loses its replica', async () => {
