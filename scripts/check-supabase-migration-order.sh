@@ -161,6 +161,28 @@ is_failed_migration_hotfix() {
   esac
 }
 
+# capgo-22.63.1: 20261117152120 never applied in prod. Split into data (152410)
+# then locks/triggers (152411) before invoice 152412 on main.
+is_storage_gb_hours_split_data() {
+  local file="$1"
+  local blob
+  blob="$(git hash-object "$file")"
+  case "${file}:${blob}" in
+    supabase/migrations/20261117152410_storage_gb_hours_billing_data.sql:280d08f4d4e6699b937c92c8ff32f53a3063f70f) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_storage_gb_hours_split_locks() {
+  local file="$1"
+  local blob
+  blob="$(git hash-object "$file")"
+  case "${file}:${blob}" in
+    supabase/migrations/20261117152411_storage_gb_hours_billing_apps_locks.sql:ecba77122072910ccf588f3215d1c3ec815330b5) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Prod-applied migrations restored from remote schema_migrations.statements.
 # Exact blob hashes keep this allowlist from accepting later edits.
 is_prod_history_restore() {
@@ -201,6 +223,11 @@ if [[ -n "$modified_files" ]]; then
 
     if is_failed_migration_hotfix "$file"; then
       echo "⚠️  Allowing audited repair to failed unapplied migration: $file"
+      continue
+    fi
+
+    if is_storage_gb_hours_split_data "$file"; then
+      echo "⚠️  Allowing split of failed unapplied 20261117152120 (part 1 data): $file"
       continue
     fi
 
@@ -290,6 +317,8 @@ if [[ -n "$added_files" ]]; then
         echo "⚠️  Allowing baseline timestamp before latest main migration during squash: $file"
       elif is_prod_history_restore "$file"; then
         echo "⚠️  Allowing audited prod-history restore with older timestamp: $file"
+      elif is_storage_gb_hours_split_locks "$file"; then
+        echo "⚠️  Allowing split of failed unapplied 20261117152120 (part 2 locks, before invoice 152412): $file"
       else
         echo '❌ Migration timestamp regression detected'
         echo "  Latest timestamp on ${base_ref}: ${latest_base_timestamp}"

@@ -1,4 +1,6 @@
 -- capgo-22.63.1: short lock window for apps / app_versions (data migration is 20261117152410).
+BEGIN;
+
 SET LOCAL lock_timeout = '5s';
 LOCK TABLE public.app_versions, public.apps IN ACCESS EXCLUSIVE MODE;
 
@@ -223,4 +225,6 @@ DROP TRIGGER IF EXISTS guard_apps_ownership_history ON public.apps;
 CREATE TRIGGER guard_apps_ownership_history
 BEFORE INSERT OR UPDATE OF created_at, transfer_history ON public.apps
 FOR EACH ROW EXECUTE FUNCTION public.guard_apps_ownership_history();
+
+COMMIT;
 
