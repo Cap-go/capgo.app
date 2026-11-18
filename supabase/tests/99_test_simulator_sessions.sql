@@ -511,7 +511,7 @@ VALUES (
   '6aa76066-55ef-4238-ade6-0b32334a4097',
   40,
   now() - interval '15 minutes',
-  now() - interval '2 minutes'
+  now() - interval '10 minutes'
 );
 
 SELECT is(
@@ -548,15 +548,14 @@ SELECT is(
   'deleting the app settles an in progress simulator into build_logs'
 );
 
-SELECT cmp_ok(
+SELECT is(
   (
     SELECT build_time_unit
     FROM public.build_logs
     WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
       AND build_id = '99000000-0000-4000-8000-000000000012'
   ),
-  '>=',
-  300::bigint,
+  600::bigint,
   'deleting the app bills the running session up to the idle cap'
 );
 

@@ -26,11 +26,11 @@ describe('simulator worker scheduled sweep', () => {
     expect(sweepSpy).toHaveBeenCalledTimes(1)
     expect(pending.length).toBeGreaterThan(0)
     let settled = false
-    void Promise.all(pending).then(() => { settled = true })
+    const completion = Promise.all(pending).then(() => { settled = true }).catch(() => {})
     await new Promise(resolve => setTimeout(resolve, 20))
     expect(settled).toBe(false)
     releaseSweep?.()
-    await Promise.all(pending)
+    await completion
     expect(settled).toBe(true)
   })
 })
