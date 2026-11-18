@@ -1507,12 +1507,6 @@ DROP TABLE IF EXISTS public.daily_storage;
 -- ---------------------------------------------------------------------------
 -- Deadlock-safe final locks (apps / app_versions)
 -- ---------------------------------------------------------------------------
--- Drop the apps FK here (not during the long version_meta phase) so the
--- AccessExclusiveLock on public.apps from this ALTER is not held across that
--- work. Still before the explicit apps/app_versions LOCK wait.
-ALTER TABLE public.daily_storage_hourly
-DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
-
 DO $capgo_lock_apps_for_storage_triggers$
 DECLARE
   attempt int;
@@ -1532,6 +1526,13 @@ BEGIN
   END LOOP;
 END;
 $capgo_lock_apps_for_storage_triggers$;
+
+-- Drop after the LOCK retry block (not before it): ALTER on daily_storage_hourly
+-- takes AccessExclusiveLock on public.apps and is held until COMMIT, so doing
+-- this before LOCK TABLE would keep apps locked through failed retries.
+-- Still after the long version_meta phase so that work does not run under apps.
+ALTER TABLE public.daily_storage_hourly
+DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
 
 -- ---------------------------------------------------------------------------
 -- 2e. Close bundle lifetimes when an app is deleted
