@@ -152,15 +152,19 @@ describe('Builder setup method choice', () => {
   })
 
   it('folds the setup instructions once a platform has started so progress stays in view', async () => {
-    const { find } = mount(onboarding({ ios: 'start_setup' }))
+    const { find, host } = mount(onboarding({ ios: 'start_setup' }))
     await nextTick()
     expect(find('builder-checklist-methods')).toBeNull()
     expect(find('builder-checklist-ai-setup')).toBeNull()
+    // The card pick is not what started the setup, so the summary does not name a method.
+    expect(find('builder-checklist-setup-summary')?.textContent).not.toContain('builder-checklist-method-ai')
     const toggle = find('builder-checklist-setup-toggle')!
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.hasAttribute('aria-controls')).toBe(false)
     toggle.click()
     await nextTick()
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(host.querySelector(`[id="${toggle.getAttribute('aria-controls')}"]`)).not.toBeNull()
     expect(find('builder-checklist-methods')).not.toBeNull()
     expect(find('builder-checklist-ai-setup')).not.toBeNull()
   })

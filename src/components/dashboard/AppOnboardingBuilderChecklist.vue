@@ -340,16 +340,12 @@ function statusLabel(status: BuilderStepStatus) {
 
     <template v-if="!completed">
       <div v-if="showProgress" class="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 shadow-sm dark:border-white/15 dark:bg-slate-900" data-test="builder-checklist-setup-summary">
-        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-azure-500/10 text-sky-700 dark:text-azure-300" aria-hidden="true">
-          <IconSparkles v-if="method === 'ai'" class="h-4 w-4" />
-          <IconTerminal v-else class="h-4 w-4" />
-        </span>
-        <p class="min-w-0 flex-1 text-sm text-slate-600 dark:text-slate-300">
-          <span class="font-semibold text-slate-950 dark:text-white">{{ t('builder-checklist-setup-started') }}</span>
-          <span class="mx-1 text-slate-300 dark:text-slate-600" aria-hidden="true">·</span>
-          {{ t(`builder-checklist-method-${method}`) }}
+        <!-- The card pick is not what started the setup (the CLI or another assistant may have), so no method is named. -->
+        <IconCheck class="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+        <p class="min-w-0 flex-1 text-sm font-semibold text-slate-950 dark:text-white">
+          {{ t('builder-checklist-setup-started') }}
         </p>
-        <button type="button" class="d-btn d-btn-ghost min-h-11 px-2 text-sky-700 dark:text-azure-300" :aria-expanded="setupOpen" :aria-controls="`${panelId}-setup`" data-test="builder-checklist-setup-toggle" @click="setupOpen = !setupOpen">
+        <button type="button" class="d-btn d-btn-ghost min-h-11 px-2 text-sky-700 dark:text-azure-300" :aria-expanded="setupOpen" :aria-controls="setupOpen ? `${panelId}-setup` : undefined" data-test="builder-checklist-setup-toggle" @click="setupOpen = !setupOpen">
           {{ setupOpen ? t('builder-checklist-hide-setup') : t('builder-checklist-show-setup') }}
           <IconChevronDown class="h-4 w-4 shrink-0" :class="{ 'rotate-180': setupOpen }" aria-hidden="true" />
         </button>
