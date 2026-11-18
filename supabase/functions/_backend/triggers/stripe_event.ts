@@ -436,7 +436,18 @@ async function touchOrgPlanStatsRefreshRequested(c: Context, orgId: string): Pro
 }
 
 async function queueOrgPlanStatusRecompute(c: Context, orgId: string, customerId: string): Promise<void> {
-  await touchOrgPlanStatsRefreshRequested(c, orgId)
+  try {
+    await touchOrgPlanStatsRefreshRequested(c, orgId)
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'touch org stats refresh requested before cron_stat_org queue failed',
+      orgId,
+      customerId,
+      error,
+    })
+  }
   await withAdminPg(c, pg =>
     pg.query('SELECT public.queue_cron_stat_org_for_org($1::uuid, $2::text)', [orgId, customerId]),
   )
@@ -455,8 +466,6 @@ async function refreshPlanStatusAfterStripeSubscriptionChange(
     return
   if (didPersist !== 'applied' && didPersist !== 'duplicate' && didPersist !== 'stale')
     return
-
-  await touchOrgPlanStatsRefreshRequested(c, org.id)
 
   try {
     await recomputeOrgPlanStatusAfterStripePlanChange(c, org.id)

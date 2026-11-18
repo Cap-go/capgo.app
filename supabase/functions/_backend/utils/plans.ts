@@ -59,6 +59,10 @@ interface OrgWithCustomerInfo {
   stripe_info: StripeInfoForPlanCheck | null
 }
 
+function hasPaidPlanEntitlement(org: Pick<OrgWithCustomerInfo, 'customer_id' | 'stripe_info'>): boolean {
+  return Boolean(org.customer_id && org.stripe_info?.status === 'succeeded')
+}
+
 interface BillingCycleRange {
   subscription_anchor_start: string
   subscription_anchor_end: string
@@ -599,7 +603,7 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
     finalIsGoodPlan = !result.needsUpgrade
     exceededFlags = result.exceededFlags
   }
-  else if (!is_good_plan && (is_onboarded || !is_onboarding_needed)) {
+  else if (!is_good_plan && (is_onboarded || hasPaidPlanEntitlement(org))) {
     const result = await userAbovePlan(c, org, orgId, is_good_plan, drizzleClient)
     finalIsGoodPlan = !result.needsUpgrade
     exceededFlags = result.exceededFlags

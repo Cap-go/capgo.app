@@ -119,6 +119,8 @@ async function invokeCreatedOrUpdated(
   currentProductId: string,
   previousPriceId: string,
   previousProductId: string,
+  orgId: string,
+  stripeCustomerId: string,
   stripeEventId = `evt_${randomUUID()}`,
 ) {
   const c = createBackendContext(stripeEventId)
@@ -131,13 +133,13 @@ async function invokeCreatedOrUpdated(
   const stripeData = extractDataEvent(c, stripeEvent)
   expect(shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData)).toBe(true)
   const supabase = getSupabaseClient()
-  const { data: org, error: orgError } = await supabase.from('orgs').select('*').eq('id', ORG_ID).single()
+  const { data: org, error: orgError } = await supabase.from('orgs').select('*').eq('id', orgId).single()
   if (orgError)
     throw orgError
   const { data: currentStripeInfo, error: stripeInfoError } = await supabase
     .from('stripe_info')
     .select('*')
-    .eq('customer_id', STRIPE_CUSTOMER_ID)
+    .eq('customer_id', stripeCustomerId)
     .single()
   if (stripeInfoError)
     throw stripeInfoError
@@ -263,10 +265,10 @@ afterAll(async () => {
     throw new AggregateError(errors, 'build-time-exceeded-plan-upgrade teardown failed')
 })
 
-async function isBuildTimeAllowed() {
+async function isBuildTimeAllowed(orgId: string) {
   const { data, error } = await getSupabaseClient().rpc('is_allowed_action_org_action', {
     actions: ['build_time'],
-    orgid: ORG_ID,
+    orgid: orgId,
   })
   expect(error).toBeFalsy()
   return data
@@ -282,7 +284,7 @@ describe('build_time_exceeded after Stripe createdOrUpdated plan change', () => 
     const { data: makerFitRows, error: makerFitError } = await supabase.rpc('get_plan_usage_and_fit', { orgid: ORG_ID })
     expect(makerFitError).toBeFalsy()
     expect(makerFitRows?.[0]?.is_good_plan).toBe(false)
-    expect(await isBuildTimeAllowed()).toBe(false)
+    expect(await isBuildTimeAllowed(ORG_ID)).toBe(false)
 
     const { data: stuckFlags } = await supabase
       .from('stripe_info')
@@ -296,6 +298,8 @@ describe('build_time_exceeded after Stripe createdOrUpdated plan change', () => 
       TEAM_PRODUCT_ID,
       MAKER_MONTHLY_PRICE_ID,
       MAKER_PRODUCT_ID,
+      ORG_ID,
+      STRIPE_CUSTOMER_ID,
     )
 
     const { data: teamFitRows, error: teamFitError } = await supabase.rpc('get_plan_usage_and_fit', { orgid: ORG_ID })
@@ -310,7 +314,7 @@ describe('build_time_exceeded after Stripe createdOrUpdated plan change', () => 
     expect(stripeInfo?.product_id).toBe(TEAM_PRODUCT_ID)
     expect(stripeInfo?.build_time_exceeded).toBe(false)
     expect(stripeInfo?.is_good_plan).toBe(true)
-    expect(await isBuildTimeAllowed()).toBe(true)
+    expect(await isBuildTimeAllowed(ORG_ID)).toBe(true)
   })
 
   it('keeps build_time_exceeded when usage is still over the new plan', async () => {
@@ -332,6 +336,8 @@ describe('build_time_exceeded after Stripe createdOrUpdated plan change', () => 
       MAKER_PRODUCT_ID,
       TEAM_MONTHLY_PRICE_ID,
       TEAM_PRODUCT_ID,
+      ORG_ID,
+      STRIPE_CUSTOMER_ID,
     )
 
     const { data: stripeInfo } = await supabase
@@ -342,6 +348,167 @@ describe('build_time_exceeded after Stripe createdOrUpdated plan change', () => 
     expect(stripeInfo?.product_id).toBe(MAKER_PRODUCT_ID)
     expect(stripeInfo?.build_time_exceeded).toBe(true)
     expect(stripeInfo?.is_good_plan).toBe(false)
-    expect(await isBuildTimeAllowed()).toBe(false)
+    expect(await isBuildTimeAllowed(ORG_ID)).toBe(false)
+  })
+})
+
+const builderRunId = randomUUID()
+const BUILDER_ORG_ID = builderRunId
+const BUILDER_STRIPE_CUSTOMER_ID = `cus_build_builder_${builderRunId.slice(0, 8)}`
+const BUILDER_SUBSCRIPTION_ID = `sub_build_builder_${builderRunId.slice(0, 8)}`
+const BUILDER_APPNAME = `com.build.builder.${builderRunId.slice(0, 8)}`
+
+describe('build_time_exceeded after Stripe createdOrUpdated (builder-only org)', () => {
+  beforeAll(async () => {
+    const supabase = getSupabaseClient()
+
+    const { error: stripeError } = await supabase.from('stripe_info').insert({
+      bandwidth_exceeded: false,
+      build_time_exceeded: false,
+      customer_id: BUILDER_STRIPE_CUSTOMER_ID,
+      is_good_plan: true,
+      mau_exceeded: false,
+      plan_usage: 50,
+      price_id: MAKER_MONTHLY_PRICE_ID,
+      product_id: MAKER_PRODUCT_ID,
+      status: 'succeeded' as const,
+      storage_exceeded: false,
+      subscription_anchor_end: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
+      subscription_anchor_start: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
+      subscription_id: BUILDER_SUBSCRIPTION_ID,
+      trial_at: new Date(0).toISOString(),
+    })
+    if (stripeError)
+      throw stripeError
+
+    const { error: orgError } = await supabase.from('orgs').insert({
+      created_by: USER_ID,
+      customer_id: BUILDER_STRIPE_CUSTOMER_ID,
+      id: BUILDER_ORG_ID,
+      management_email: TEST_EMAIL,
+      name: `Build upgrade builder org ${builderRunId.slice(0, 8)}`,
+    })
+    if (orgError)
+      throw orgError
+
+    const { error: orgUserError } = await supabase.from('org_users').insert({
+      org_id: BUILDER_ORG_ID,
+      rbac_role_name: 'org_super_admin',
+      user_id: USER_ID,
+    })
+    if (orgUserError)
+      throw orgUserError
+
+    const { error: appError } = await supabase.from('apps').insert({
+      app_id: BUILDER_APPNAME,
+      icon_url: 'https://example.com/icon.png',
+      name: 'Build upgrade builder app',
+      owner_org: BUILDER_ORG_ID,
+    })
+    if (appError)
+      throw appError
+  })
+
+  beforeEach(async () => {
+    const supabase = getSupabaseClient()
+    const today = new Date().toISOString().split('T')[0]
+
+    await supabase.from('daily_build_time').delete().eq('app_id', BUILDER_APPNAME)
+    await supabase.from('app_metrics_cache').delete().eq('org_id', BUILDER_ORG_ID)
+    await supabase.from('processed_stripe_events').delete().eq('customer_id', BUILDER_STRIPE_CUSTOMER_ID)
+
+    const { error: stripeError } = await supabase.from('stripe_info').update({
+      bandwidth_exceeded: false,
+      build_time_exceeded: true,
+      is_good_plan: false,
+      last_stripe_event_at: null,
+      mau_exceeded: false,
+      price_id: MAKER_MONTHLY_PRICE_ID,
+      product_id: MAKER_PRODUCT_ID,
+      storage_exceeded: false,
+    }).eq('customer_id', BUILDER_STRIPE_CUSTOMER_ID)
+    if (stripeError)
+      throw stripeError
+
+    const { error: buildTimeError } = await supabase.from('daily_build_time').insert({
+      app_id: BUILDER_APPNAME,
+      build_count: 3,
+      build_time_unit: USAGE_OVER_MAKER_UNDER_TEAM,
+      date: today,
+    })
+    if (buildTimeError)
+      throw buildTimeError
+  })
+
+  afterAll(async () => {
+    const supabase = getSupabaseClient()
+    const errors: unknown[] = []
+    const track = (error: unknown) => {
+      if (error)
+        errors.push(error)
+    }
+    track((await supabase.from('daily_build_time').delete().eq('app_id', BUILDER_APPNAME)).error)
+    track((await supabase.from('apps').delete().eq('app_id', BUILDER_APPNAME)).error)
+    track((await supabase.from('org_users').delete().eq('org_id', BUILDER_ORG_ID)).error)
+    track((await supabase.from('orgs').delete().eq('id', BUILDER_ORG_ID)).error)
+    track((await supabase.from('stripe_info').delete().eq('customer_id', BUILDER_STRIPE_CUSTOMER_ID)).error)
+    if (errors.length)
+      throw new AggregateError(errors, 'build-time-exceeded-builder teardown failed')
+  })
+
+  it('clears build_time_exceeded when usage fits the upgraded plan', async () => {
+    await invokeCreatedOrUpdated(
+      TEAM_MONTHLY_PRICE_ID,
+      TEAM_PRODUCT_ID,
+      MAKER_MONTHLY_PRICE_ID,
+      MAKER_PRODUCT_ID,
+      BUILDER_ORG_ID,
+      BUILDER_STRIPE_CUSTOMER_ID,
+    )
+
+    const supabase = getSupabaseClient()
+    const { data: stripeInfo } = await supabase
+      .from('stripe_info')
+      .select('build_time_exceeded, is_good_plan, product_id')
+      .eq('customer_id', BUILDER_STRIPE_CUSTOMER_ID)
+      .single()
+    expect(stripeInfo?.product_id).toBe(TEAM_PRODUCT_ID)
+    expect(stripeInfo?.build_time_exceeded).toBe(false)
+    expect(stripeInfo?.is_good_plan).toBe(true)
+    expect(await isBuildTimeAllowed(BUILDER_ORG_ID)).toBe(true)
+  })
+
+  it('keeps build_time_exceeded when usage is still over the downgraded plan', async () => {
+    const supabase = getSupabaseClient()
+    const today = new Date().toISOString().split('T')[0]
+
+    await supabase.from('daily_build_time').update({ build_time_unit: 10_000 }).eq('app_id', BUILDER_APPNAME).eq('date', today)
+
+    const { error: teamStateError } = await supabase.from('stripe_info').update({
+      build_time_exceeded: false,
+      is_good_plan: true,
+      price_id: TEAM_MONTHLY_PRICE_ID,
+      product_id: TEAM_PRODUCT_ID,
+    }).eq('customer_id', BUILDER_STRIPE_CUSTOMER_ID)
+    expect(teamStateError).toBeFalsy()
+
+    await invokeCreatedOrUpdated(
+      MAKER_MONTHLY_PRICE_ID,
+      MAKER_PRODUCT_ID,
+      TEAM_MONTHLY_PRICE_ID,
+      TEAM_PRODUCT_ID,
+      BUILDER_ORG_ID,
+      BUILDER_STRIPE_CUSTOMER_ID,
+    )
+
+    const { data: stripeInfo } = await supabase
+      .from('stripe_info')
+      .select('build_time_exceeded, is_good_plan, product_id')
+      .eq('customer_id', BUILDER_STRIPE_CUSTOMER_ID)
+      .single()
+    expect(stripeInfo?.product_id).toBe(MAKER_PRODUCT_ID)
+    expect(stripeInfo?.build_time_exceeded).toBe(true)
+    expect(stripeInfo?.is_good_plan).toBe(false)
+    expect(await isBuildTimeAllowed(BUILDER_ORG_ID)).toBe(false)
   })
 })
