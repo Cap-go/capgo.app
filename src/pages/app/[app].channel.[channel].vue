@@ -738,6 +738,20 @@ async function openPromoteToChannel() {
     await promoteBundleToChannel(target)
 }
 
+async function saveReviewedPromotion(channelId: number, bundleId: number, reviewedVersionId: number | null) {
+  let promotion = capgo.from('channels').update({ version: bundleId }).eq('id', channelId)
+  promotion = reviewedVersionId === null
+    ? promotion.is('version', null)
+    : promotion.eq('version', reviewedVersionId)
+  const { data: updated, error } = await promotion.select('id')
+  if (error || !updated?.length) {
+    console.error('cannot promote bundle', error)
+    toast.error(t(error ? (channelUpdatePackageErrorKey(error) ?? 'error-update-channel') : 'promotion-target-changed'))
+    return false
+  }
+  return true
+}
+
 async function promoteBundleToChannel(target: PromoteTargetChannel) {
   const source = channel.value
   if (!source?.version)
@@ -786,16 +800,8 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
     return
   }
 
-  let promotion = capgo.from('channels').update({ version: appVersion.id }).eq('id', target.id)
-  promotion = targetState.versionId === null
-    ? promotion.is('version', null)
-    : promotion.eq('version', targetState.versionId)
-  const { data: updated, error } = await promotion.select('id')
-  if (error || !updated?.length) {
-    console.error('cannot promote bundle', error)
-    toast.error(t(error ? (channelUpdatePackageErrorKey(error) ?? 'error-update-channel') : 'promotion-target-changed'))
+  if (!(await saveReviewedPromotion(target.id, appVersion.id, targetState.versionId)))
     return
-  }
 
   if (compatibility && targetState.versionId !== appVersion.id) {
     void sendEvent({
