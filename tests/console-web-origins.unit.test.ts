@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { collectConsoleWebOrigins, DEFAULT_CONSOLE_WEB_ORIGINS, isAllowedConsoleWebOrigin } from '../supabase/functions/_backend/utils/console_web_origins.ts'
 
 const mockedEnv: Record<string, string> = {
-  WEBAPP_URL: 'https://console.capgo.app',
+  WEBAPP_URL: 'https://console.selfhost.example',
 }
 
 vi.mock('hono/adapter', async (importOriginal) => {
@@ -31,14 +31,14 @@ describe('console web origins', () => {
   })
 
   it.concurrent('includes WEBAPP_URL alongside default console origins', () => {
-    mockedEnv.WEBAPP_URL = 'https://console.selfhost.example'
-    try {
-      const allowed = collectConsoleWebOrigins(createContext())
-      expect(allowed.has('https://console.selfhost.example')).toBe(true)
-      expect(isAllowedConsoleWebOrigin(createContext(), 'https://console.selfhost.example')).toBe(true)
-    }
-    finally {
-      mockedEnv.WEBAPP_URL = 'https://console.capgo.app'
-    }
+    const allowed = collectConsoleWebOrigins(createContext())
+    expect(allowed.has('https://console.selfhost.example')).toBe(true)
+    expect(allowed.has('https://console.capgo.com.cn')).toBe(true)
+    expect(isAllowedConsoleWebOrigin(createContext(), 'https://console.selfhost.example')).toBe(true)
+  })
+
+  it.concurrent('parses comma separated extra console origins with whitespace', () => {
+    expect(isAllowedConsoleWebOrigin(createContext(), 'https://extra.console.example', ' https://extra.console.example , https://other.console.example ')).toBe(true)
+    expect(isAllowedConsoleWebOrigin(createContext(), 'https://other.console.example', ' https://extra.console.example , https://other.console.example ')).toBe(true)
   })
 })
