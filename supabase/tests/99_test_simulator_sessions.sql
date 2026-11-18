@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(45);
+SELECT plan(47);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -520,6 +520,21 @@ SELECT is(
   'an active simulator session is open before app delete'
 );
 
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, created_at, started_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000013',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'android',
+  'starting',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '45 minutes',
+  NULL
+);
+
 DELETE FROM public.apps WHERE app_id = 'com.test.simulator.session';
 
 SELECT is(
@@ -543,6 +558,31 @@ SELECT cmp_ok(
   '>=',
   300::bigint,
   'deleting the app bills the running session up to the idle cap'
+);
+
+SELECT is(
+  (
+    SELECT build_time_unit
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id = '99000000-0000-4000-8000-000000000013'
+  ),
+  2400::bigint,
+  'the app delete trigger bills a never started session from created_at'
+);
+
+SELECT is(
+  (
+    SELECT count(*)::integer
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id IN (
+        '99000000-0000-4000-8000-000000000001',
+        '99000000-0000-4000-8000-000000000002'
+      )
+  ),
+  2,
+  'deleting the app keeps simulator minutes written before the delete'
 );
 
 SELECT ok(
