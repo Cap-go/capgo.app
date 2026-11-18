@@ -46,4 +46,16 @@ describe('McpConnectCard hosted URL', () => {
     const code = container.querySelector('[data-test="mcp-connect-copy-url"] code')
     expect(code?.textContent).toBe('https://api.capgo.com.cn/mcp')
   })
+
+  it('copies the China MCP URL to the clipboard when the button is clicked', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    app = createApp(McpConnectCard)
+    app.mount(container)
+    await nextTick()
+    const button = container.querySelector('[data-test="mcp-connect-copy-url"]') as HTMLButtonElement
+    button.click()
+    await nextTick()
+    expect(writeText).toHaveBeenCalledWith('https://api.capgo.com.cn/mcp')
+  })
 })

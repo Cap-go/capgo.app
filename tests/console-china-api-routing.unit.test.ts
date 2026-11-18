@@ -7,6 +7,7 @@ const CHINA_API = 'https://api.capgo.com.cn'
 
 function stubChinaConsoleWeb() {
   vi.stubEnv('VITE_API_HOST', GLOBAL_API)
+  vi.stubEnv('VITE_AUTH_API_HOST', '')
   vi.stubEnv('VITE_APP_URL', `https://${CHINA_CONSOLE_HOST}`)
   vi.stubGlobal('window', {
     location: { hostname: CHINA_CONSOLE_HOST, origin: `https://${CHINA_CONSOLE_HOST}` },
