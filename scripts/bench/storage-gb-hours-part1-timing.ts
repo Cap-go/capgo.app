@@ -112,12 +112,11 @@ try {
   `)
 
   await database.query(`
-    INSERT INTO public.app_versions (id, app_id, owner_org, name, version, deleted, created_at, updated_at)
+    INSERT INTO public.app_versions (id, app_id, owner_org, name, deleted, created_at, updated_at)
     SELECT
       9_000_000_000 + gs,
-      'com.bench.live.' || (gs % 20)::text,
+      'com.bench.storage.' || ((gs % 50) + 1)::text,
       '${BENCH_ORG}'::uuid,
-      'bench',
       gs::text,
       gs % 5 = 0,
       now(),
@@ -127,9 +126,12 @@ try {
   `)
 
   await database.query(`
-    INSERT INTO public.app_versions_meta (id, size, created_at, updated_at)
+    INSERT INTO public.app_versions_meta (id, app_id, owner_org, checksum, size, created_at, updated_at)
     SELECT
       9_000_000_000 + gs,
+      'com.bench.storage.' || ((gs % 50) + 1)::text,
+      '${BENCH_ORG}'::uuid,
+      'bench-checksum-' || gs::text,
       4096,
       now(),
       now()

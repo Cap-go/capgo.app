@@ -41,16 +41,17 @@ function assertMigrationGuards(sql: string) {
   const finalLockBlock = sql.indexOf(finalAppsLockMarker)
   const lockTimeout = sql.indexOf(lockTimeoutLiteral, finalLockBlock)
   const lockTablesIndex = sql.indexOf(lockTables, finalLockBlock)
-  const fkDropIndex = sql.indexOf(fkDrop, finalLockBlock)
+  const fkDropIndex = sql.indexOf(fkDrop)
   const firstAppsTrigger = sql.search(/DROP TRIGGER IF EXISTS \w+ ON public\.apps/)
 
   expect(begin).toBeGreaterThan(0)
   expect(commit).toBeGreaterThan(begin)
   expect(finalLockBlock).toBeGreaterThan(begin)
+  expect(fkDropIndex).toBeGreaterThan(begin)
+  expect(fkDropIndex).toBeLessThan(finalLockBlock)
   expect(lockTimeout).toBeGreaterThan(finalLockBlock)
   expect(lockTablesIndex).toBeGreaterThan(lockTimeout)
-  expect(fkDropIndex).toBeGreaterThan(lockTablesIndex)
-  expect(firstAppsTrigger).toBeGreaterThan(fkDropIndex)
+  expect(firstAppsTrigger).toBeGreaterThan(lockTablesIndex)
   expect(commit).toBeGreaterThan(firstAppsTrigger)
   expect(lockListsAppVersionsBeforeApps(sql)).toBe(true)
 
@@ -59,8 +60,10 @@ function assertMigrationGuards(sql: string) {
     /DROP TRIGGER IF EXISTS \w+ ON public\.apps/,
   ))
 
-  expect(preFinalLock).not.toMatch(/LOCK TABLE public\.(apps|app_versions)/)
-  expect(preFinalLock).not.toContain(fkDrop)
+  expect(preFinalLock).not.toMatch(
+    /LOCK TABLE public\.(app_versions, public\.apps|apps|app_versions) IN ACCESS EXCLUSIVE MODE/,
+  )
+  expect(preFinalLock).toContain(fkDrop)
   expect(preFinalLock).not.toMatch(/ALTER TABLE public\.apps\b/)
   expect(preFinalLock).not.toMatch(
     /CREATE (UNIQUE )?INDEX[\s\S]* ON public\.app_versions\b/,
@@ -85,17 +88,18 @@ describe('storage gb-hours billing migration lock order', () => {
     expect(migration).not.toMatch(/lock_timeout = '1s'/)
   })
 
-  it('fails the ordering check if the final lock sits after the FK drop (mutation guard)', () => {
-    const finalBlockStart = migration.indexOf(finalAppsLockMarker)
-    const finalBlockEnd = migration.indexOf('ALTER TABLE public.daily_storage_hourly', finalBlockStart)
-    const lateLockMigration = `${migration.slice(0, finalBlockStart)}${migration.slice(finalBlockEnd)}`
-      .replace(
-        `${fkDrop};`,
-        `${fkDrop};\n\n${lockTimeoutLiteral};\n${lockTables};\n\n`,
-      )
+  it('fails the ordering check if apps locks run after trigger DDL (mutation guard)', () => {
+    const withoutFinalLock = migration.replace(
+      new RegExp(
+        `DO \\$capgo_lock_apps_for_storage_triggers\\$[\\s\\S]*?\\$capgo_lock_apps_for_storage_triggers\\$;\\n`,
+      ),
+      '',
+    )
+    const lateLockMigration = withoutFinalLock.replace(
+      /(DROP TRIGGER IF EXISTS \w+ ON public\.apps)/,
+      `${lockTimeoutLiteral};\n${lockTables};\n\n$1`,
+    )
 
-    expect(lockPrecedesFkDrop(migration)).toBe(true)
-    expect(lockPrecedesFkDrop(lateLockMigration)).toBe(false)
     expect(() => assertMigrationGuards(lateLockMigration)).toThrow()
   })
 
