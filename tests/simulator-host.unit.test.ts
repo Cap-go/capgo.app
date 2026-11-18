@@ -127,6 +127,36 @@ describe('stopped simulator devices', () => {
     expect(mockLogErr).toHaveBeenCalled()
   })
 
+  it('keeps an earlier host idle stop when sync is past the session maximum', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(syncNow)
+      mockGetPgClient.mockResolvedValue({
+        connect: async () => ({
+          query: async (sql: string, params?: unknown[]) => {
+            queries.push({ sql, params })
+            if (sql.includes('SELECT id, emulator_id'))
+              return { rows: [{ id: maxed, emulator_id: maxed, started_at: maxedStartedAt, created_at: maxedStartedAt, max_duration_minutes: 40 }] }
+            if (sql.includes('device_stopped_at = COALESCE'))
+              return { rows: [{ device_stopped_at: params?.[1] }] }
+            return { rows: [] }
+          },
+          release: () => {},
+        }),
+      })
+      vi.stubGlobal('fetch', vi.fn(async () => (
+        Response.json({ data: { id: maxed, url: 'u', status: 'stopped', finishedAt: '2026-11-09T11:12:00.000Z' } })
+      )))
+      await recordStoppedSimulatorDevices(context, orgId)
+      const stops = queries.filter(query => query.sql.includes('device_stopped_at = COALESCE'))
+      expect(stops).toHaveLength(1)
+      expect(stops[0]?.params).toEqual([maxed, '2026-11-09T11:12:00.000Z'])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('writes the cap when the host rejects the device GET on a session past its maximum', async () => {
     vi.useFakeTimers()
     try {
@@ -152,6 +182,104 @@ describe('stopped simulator devices', () => {
       expect(stops).toHaveLength(1)
       expect(stops[0]?.params).toEqual([maxed, '2026-11-09T11:40:00.000Z'])
       expect(mockLogErr).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('honors per-session max_duration_minutes for the cap instant', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(Date.parse('2026-11-09T11:25:00.000Z'))
+      mockGetPgClient.mockResolvedValue({
+        connect: async () => ({
+          query: async (sql: string, params?: unknown[]) => {
+            queries.push({ sql, params })
+            if (sql.includes('SELECT id, emulator_id'))
+              return { rows: [{ id: maxed, emulator_id: maxed, started_at: maxedStartedAt, created_at: maxedStartedAt, max_duration_minutes: 20 }] }
+            if (sql.includes('device_stopped_at = COALESCE'))
+              return { rows: [{ device_stopped_at: params?.[1] }] }
+            return { rows: [] }
+          },
+          release: () => {},
+        }),
+      })
+      vi.stubGlobal('fetch', vi.fn(async () => (
+        Response.json({ data: { id: maxed, url: 'u', status: 'in-progress', finishedAt: null } })
+      )))
+      await recordStoppedSimulatorDevices(context, orgId)
+      const stops = queries.filter(query => query.sql.includes('device_stopped_at = COALESCE'))
+      expect(stops).toHaveLength(1)
+      expect(stops[0]?.params).toEqual([maxed, '2026-11-09T11:20:00.000Z'])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('caps from started_at when created_at is earlier', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(syncNow)
+      mockGetPgClient.mockResolvedValue({
+        connect: async () => ({
+          query: async (sql: string, params?: unknown[]) => {
+            queries.push({ sql, params })
+            if (sql.includes('SELECT id, emulator_id'))
+              return {
+                rows: [{
+                  id: maxed,
+                  emulator_id: maxed,
+                  started_at: maxedStartedAt,
+                  created_at: '2026-11-09T10:50:00.000Z',
+                  max_duration_minutes: 40,
+                }],
+              }
+            if (sql.includes('device_stopped_at = COALESCE'))
+              return { rows: [{ device_stopped_at: params?.[1] }] }
+            return { rows: [] }
+          },
+          release: () => {},
+        }),
+      })
+      vi.stubGlobal('fetch', vi.fn(async () => (
+        Response.json({ data: { id: maxed, url: 'u', status: 'in-progress', finishedAt: null } })
+      )))
+      await recordStoppedSimulatorDevices(context, orgId)
+      const stops = queries.filter(query => query.sql.includes('device_stopped_at = COALESCE'))
+      expect(stops).toHaveLength(1)
+      expect(stops[0]?.params).toEqual([maxed, '2026-11-09T11:40:00.000Z'])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clamps a host stop after the cap to the cap instant', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(syncNow)
+      mockGetPgClient.mockResolvedValue({
+        connect: async () => ({
+          query: async (sql: string, params?: unknown[]) => {
+            queries.push({ sql, params })
+            if (sql.includes('SELECT id, emulator_id'))
+              return { rows: [{ id: maxed, emulator_id: maxed, started_at: maxedStartedAt, created_at: maxedStartedAt, max_duration_minutes: 40 }] }
+            if (sql.includes('device_stopped_at = COALESCE'))
+              return { rows: [{ device_stopped_at: params?.[1] }] }
+            return { rows: [] }
+          },
+          release: () => {},
+        }),
+      })
+      vi.stubGlobal('fetch', vi.fn(async () => (
+        Response.json({ data: { id: maxed, url: 'u', status: 'stopped', finishedAt: '2026-11-09T11:45:00.000Z' } })
+      )))
+      await recordStoppedSimulatorDevices(context, orgId)
+      const stops = queries.filter(query => query.sql.includes('device_stopped_at = COALESCE'))
+      expect(stops).toHaveLength(1)
+      expect(stops[0]?.params).toEqual([maxed, '2026-11-09T11:40:00.000Z'])
     }
     finally {
       vi.useRealTimers()
