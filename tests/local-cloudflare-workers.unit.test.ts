@@ -27,6 +27,20 @@ function fixture() {
 }
 
 describe('single-owner local Workers launcher', () => {
+  it('leaves the remote-only AI binding out, as a single --local wrangler dev does', () => {
+    const folder = fixture()
+    try {
+      const path = join(folder, 'cloudflare_workers/api/wrangler.jsonc')
+      const original = JSON.parse(readFileSync(path, 'utf8'))
+      writeFileSync(path, JSON.stringify({ ...original, ai: { binding: 'AI' }, env: { local: { ...original.env.local, ai: { binding: 'AI' } } } }))
+      const config = prepareLocalWorkerConfig(path, '2026-09-30') as Record<string, unknown> & { env: { local: Record<string, unknown> } }
+      expect(config).not.toHaveProperty('ai')
+      expect(config.env.local).not.toHaveProperty('ai')
+      expect(config.env.local.kv_namespaces).toEqual([{ binding: 'STATE', id: 'synthetic-state' }])
+    }
+    finally { rmSync(folder, { recursive: true, force: true }) }
+  })
+
   it('keeps bindings and flags while resolving each original entrypoint', () => {
     const folder = fixture()
     try {
@@ -35,7 +49,7 @@ describe('single-owner local Workers launcher', () => {
       const config = prepareLocalWorkerConfig(path, '2026-09-30')
       expect(config.main).toBe(join(dirname(path), 'index.ts'))
       expect(config.compatibility_date).toBe('2026-09-30')
-      expect(config.compatibility_flags).toEqual(['nodejs_compat'])
+      expect((config as Record<string, unknown>).compatibility_flags).toEqual(['nodejs_compat'])
       expect(config.env.local).toEqual({ name: 'synthetic-api-local', vars: { EXISTING: 'kept' },
         kv_namespaces: [{ binding: 'STATE', id: 'synthetic-state' }],
         r2_buckets: [{ binding: 'POINTERS', bucket_name: 'synthetic-pointers' }] })

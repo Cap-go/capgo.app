@@ -9,6 +9,12 @@ import { parseJsonc } from './generate-plugin-route-hosts.ts'
 import { LOCAL_URL_HEADER, LOCAL_WORKER_HEADER } from './local-cloudflare-proxy-headers.ts'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+// Bun-only APIs, typed here: the unit test compiles this file with the
+// Workers types of the backend project, which have no Bun declarations.
+interface LoopbackServer { stop: (closeActiveConnections?: boolean) => unknown }
+interface BunServeApi {
+  serve: (options: { hostname: string, port: number, idleTimeout: number, fetch: (request: Request) => Response | Promise<Response> }) => LoopbackServer
+}
 const localConfigSchema = z.looseObject({
   main: z.string().min(1),
   env: z.looseObject({
@@ -34,8 +40,14 @@ export function prepareLocalWorkerConfig(configPath: string, compatibilityDate: 
     if (key in config)
       throw new Error(`Local Workers launcher needs path handling for ${key}`)
   }
+  // Workers AI has no local simulator. A single `wrangler dev --local` leaves
+  // it out ("not supported"); a multi-config runtime would instead open a
+  // remote proxy session, which needs Cloudflare credentials CI does not have.
+  const { ai: _ai, ...topLevel } = config
+  const { ai: _localAi, ...local } = config.env.local
   return {
-    ...config,
+    ...topLevel,
+    env: { ...config.env, local },
     main: resolve(dirname(configPath), config.main),
     compatibility_date: compatibilityDate,
   }
@@ -55,7 +67,9 @@ export function forwardLocalWorkerRequest(request: Request, target: 'plugin' | '
   const forwarded = new Request(upstream, request)
   forwarded.headers.set(LOCAL_WORKER_HEADER, target)
   forwarded.headers.set(LOCAL_URL_HEADER, original.href)
-  return fetch(forwarded, { redirect: 'manual', decompress: false })
+  // Bun's fetch option: keep compressed bytes and their headers as sent.
+  const init: RequestInit & { decompress: boolean } = { redirect: 'manual', decompress: false }
+  return fetch(forwarded, init)
 }
 
 export async function runLocalCloudflareWorkers(options: LocalWorkerOptions) {
@@ -71,7 +85,8 @@ export async function runLocalCloudflareWorkers(options: LocalWorkerOptions) {
   const compatibilityDate = localCompatibilityDate()
   const writePrivate = (path: string, content: string) => writeFileSync(path, content, { mode: 0o600 })
   let child: ReturnType<typeof spawn> | undefined
-  const proxies: Array<{ stop: (closeActiveConnections?: boolean) => unknown }> = []
+  const proxies: LoopbackServer[] = []
+  const bun = (globalThis as unknown as { Bun: BunServeApi }).Bun
   let stopping = false
   const signalGroup = (signal: NodeJS.Signals) => {
     if (!child?.pid)
@@ -142,9 +157,9 @@ export async function runLocalCloudflareWorkers(options: LocalWorkerOptions) {
       '--persist-to', options.persistDir, '-c', routerConfig,
       ...configPaths.flatMap(path => ['-c', path])]
     child = spawn('bash', command, { cwd: ROOT, detached: true, stdio: 'inherit', env: { ...process.env, WRANGLER_SEND_METRICS: 'false' } })
-    proxies.push(Bun.serve({ hostname: '127.0.0.1', port: options.pluginPort, idleTimeout: 0,
+    proxies.push(bun.serve({ hostname: '127.0.0.1', port: options.pluginPort, idleTimeout: 0,
       fetch: request => forwardLocalWorkerRequest(request, 'plugin', options.apiPort) }))
-    proxies.push(Bun.serve({ hostname: '127.0.0.1', port: options.filesPort, idleTimeout: 0,
+    proxies.push(bun.serve({ hostname: '127.0.0.1', port: options.filesPort, idleTimeout: 0,
       fetch: request => forwardLocalWorkerRequest(request, 'files', options.apiPort) }))
     const code = await new Promise<number | null>((resolveExit, reject) => {
       child?.once('error', reject)
