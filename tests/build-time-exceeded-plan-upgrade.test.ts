@@ -21,7 +21,11 @@ vi.mock('../supabase/functions/_backend/utils/cloudflare_cache_purge.ts', () => 
   purgePlanCacheForOrg: vi.fn().mockResolvedValue(undefined),
 }))
 
-const { createdOrUpdated, shouldRecomputePlanStatusAfterStripeSubscriptionChange } = stripeEventTestUtils
+const {
+  createdOrUpdated,
+  resolveActiveSubscriptionStatus,
+  shouldRecomputePlanStatusAfterStripeSubscriptionChange,
+} = stripeEventTestUtils
 
 const MAKER_PRODUCT_ID = 'prod_LQIs1Yucml9ChU'
 const TEAM_PRODUCT_ID = 'prod_LQIugvJcPrxhda'
@@ -138,7 +142,16 @@ async function invokeCreatedOrUpdated(
   if (stripeInfoError)
     throw stripeInfoError
   const eventOccurredAtIso = new Date().toISOString()
-  await createdOrUpdated(c, stripeData, org!, currentStripeInfo, eventOccurredAtIso, 'updated')
+  const originalStatus = stripeData.data.status
+  if (originalStatus) {
+    stripeData.data.status = resolveActiveSubscriptionStatus(
+      originalStatus,
+      currentStripeInfo,
+      stripeData.data.subscription_id,
+      'paid',
+    )
+  }
+  await createdOrUpdated(c, stripeData, org!, currentStripeInfo, eventOccurredAtIso, originalStatus)
 }
 
 beforeAll(async () => {
