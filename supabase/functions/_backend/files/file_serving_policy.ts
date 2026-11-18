@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import { parsePreviewHostname } from '../../shared/preview-subdomain.ts'
 import { quickError } from '../plugin_runtime/utils/hono.ts'
 import { enforceServingPolicy, requestServingPolicy } from '../plugin_runtime/utils/servingPolicy.ts'
-import { isRestrictedServingPolicy } from '../plugin_runtime/utils/servingRegions.ts'
+import { hasServingRegionExclusions } from '../plugin_runtime/utils/servingRegions.ts'
 import { servingRegionReaderEpoch } from '../plugin_runtime/utils/servingRegionRollout.js'
 import { parseAppScopedAttachmentPath } from './util.ts'
 
@@ -27,7 +27,7 @@ export async function enforcePreviewServingPolicy(c: Context) {
   const policy = requestServingPolicy(c)
   // Preview metadata currently uses the console database lane. Restricted
   // apps cannot enter that lane or emit an uncontrolled external download URL.
-  if (policy && isRestrictedServingPolicy(policy))
+  if (policy && hasServingRegionExclusions(policy))
     throw quickError(503, 'preview_unavailable', 'Preview unavailable with these update regions')
 }
 

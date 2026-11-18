@@ -1,3 +1,4 @@
+import { SERVING_REGIONS } from '../supabase/functions/_backend/plugin_runtime/utils/servingRegions.ts'
 import { Hono } from 'hono/tiny'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -226,12 +227,24 @@ describe('/updates paused channel', () => {
 
 describe('/updates external delivery boundaries', () => {
   beforeEach(resetUpdateMocks)
-  it('does not issue an external URL for a restricted app even in a selected region', async () => {
-    servingPolicyMock.mockReturnValue({ regions: ['EU'], mode: 'route' })
-    requestInfosPostgresMock.mockResolvedValue({ channelData: baseChannel({ external_url: 'https://external.example.com/bundle.zip' }) })
+  it.each([
+    { regions: [...SERVING_REGIONS], mode: 'route', excluded: false },
+    { regions: [...SERVING_REGIONS], mode: 'block', excluded: false },
+    { regions: ['EU'], mode: 'route', excluded: true },
+    { regions: ['EU'], mode: 'block', excluded: true },
+  ])('uses actual deselections for external offers with legacy $mode and $regions', async ({ regions, mode, excluded }) => {
+    servingPolicyMock.mockReturnValue({ regions, mode })
+    const url = 'https://external.example.com/bundle.zip'
+    requestInfosPostgresMock.mockResolvedValue({ channelData: baseChannel({ external_url: url }) })
     const json = await (await runUpdate()).json()
-    expect(json).toMatchObject({ error: 'external_delivery_unavailable' })
-    expect(json).not.toHaveProperty('url')
+    if (excluded) {
+      expect(json).toMatchObject({ error: 'external_delivery_unavailable' })
+      expect(json).not.toHaveProperty('url')
+    }
+    else {
+      expect(json).toMatchObject({ url })
+      expect(json).not.toHaveProperty('error')
+    }
     expect(getBundleUrlMock).not.toHaveBeenCalled()
   })
 })

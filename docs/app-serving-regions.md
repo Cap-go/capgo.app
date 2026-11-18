@@ -38,9 +38,16 @@ legacy `/private/files/read/attachments/` routes. App identity comes from the
 validated storage key `orgs/<org>/apps/<app>/...`, never a query parameter or
 hostname. Native, regional and custom hosts use the same gate. Existing alias
 candidate rules cannot cross app/organization boundaries. GET, implicit HEAD,
-range and old URLs all undergo admission again. Public preview URLs also check policy before their managed cache. Restricted
-apps cannot use previews, whose current metadata lane and external download
-payload cannot meet these boundaries. Unknown/unscoped legacy keys
+range and old URLs all undergo admission again. A preview hostname combined
+with an attachment path is rejected before policy or cache access. Memoized
+admission is bound to the app identity as well as the Request; a second app
+cannot reuse the first app's admission.
+
+Public preview URLs also check policy before their managed cache. Apps with
+actual region deselections cannot use previews, whose current metadata lane
+and external download payload cannot meet these boundaries. All-nine policies
+retain previews and external offers with either legacy mode; a hidden saved
+Block mode is not itself a delivery exclusion. Unknown/unscoped legacy keys
 fail unavailable while enforcement is enabled: there is no primary lookup,
 manifest scan or permissive app guess. This is an intentional compatibility
 limit that must be inventoried before activation.
@@ -52,10 +59,29 @@ and manifest URLs, including from custom API-only domains. Missing/invalid file
 ingress configuration fails unavailable. Worker source configuration supplies
 the matching native file ingress for each environment; Deno must receive the
 same setting before activation. Deno no longer issues direct presigned GET URLs
-in enforcing builds. Restricted apps do
+in enforcing builds. Apps with actual region deselections do
 not receive new `external_url` bundle offers, because an external provider
 cannot apply our later policy changes. All-region apps retain normal update eligibility. Disabled-build URLs and
 cache behavior are preserved.
+
+The shared Cache API zip handler checks indexed deletion evidence on an allowed
+replica in enforcing builds. Files workers prefer EU only when policy permits
+it, and the selector still rejects missing/lagging allowed bindings without
+primary fallback. The source files-Worker production and alpha configs reuse
+the nine replica bindings of the matching plugin Worker. Preproduction has no
+replica and needs a genuine allowed replica binding before activation; its
+direct/primary binding must not be relabeled as a replica. No provider
+configuration is changed by this source edit.
+
+The enforcing deletion query stays a single cacheable SELECT. It does not open
+a transaction or bypass Hyperdrive caching, so replica lag and the ordinary
+query-cache lifetime still apply to deletion evidence. Route/configuration
+failures return unavailable before serving bytes. Actual transient database
+errors still fail open, as required, and a live Cache API hit can restore a
+missing R2 object. The restoration receives an invoked promise and its own body
+branch before the client starts consuming the response. Deleted markers and
+positive deletion evidence still prevent restoration. Disabled builds retain
+the legacy deletion connection/transaction path.
 
 The policy read admits a request. A tightening does not stop an in-flight
 response, remove bytes already downloaded, or revoke a response already held

@@ -501,7 +501,9 @@ async function getHandler(c: Context): Promise<Response> {
     response = cachedResponse
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache hit' })
     // Best-effort restore: if a live file is cached but missing in R2, write it back.
-    await backgroundTask(c, async () => {
+    await backgroundTask(c, (async () => {
+      // Clone before the first await, before the response body is handed to the client.
+      const cached = cachedResponse.clone()
       try {
         if (await isAttachmentVersionDeleted(c, fileId))
           return
@@ -511,7 +513,6 @@ async function getHandler(c: Context): Promise<Response> {
         if (existingObject != null)
           return
 
-        const cached = cachedResponse.clone()
         const data = await cached.arrayBuffer()
         if (await isAttachmentVersionDeleted(c, fileId))
           return
@@ -527,7 +528,11 @@ async function getHandler(c: Context): Promise<Response> {
       catch (err) {
         cloudlog({ requestId: c.get('requestId'), message: 'Failed to restore cached file to R2', fileId, error: String(err) })
       }
-    })
+      finally {
+        if (!cached.bodyUsed)
+          void cached.body?.cancel().catch(() => {})
+      }
+    })())
     const cachedHeaders = new Headers(cachedResponse.headers)
     cachedHeaders.delete(MANIFEST_SIZE_RECEIPT_HEADER)
     const secret = getEnv(c, 'MANIFEST_SIZE_RECEIPT_SECRET')

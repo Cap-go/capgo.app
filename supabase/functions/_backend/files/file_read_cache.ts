@@ -1,6 +1,9 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
-import { closeClient, getPgClient } from '../plugin_runtime/utils/pg.ts'
+import { quickError } from '../plugin_runtime/utils/hono.ts'
+import { requestServingPolicy } from '../plugin_runtime/utils/servingPolicy.ts'
+import { servingRegionReaderEpoch } from '../plugin_runtime/utils/servingRegionRollout.js'
+import { closeClient, getDatabaseURL, getPgClient } from '../plugin_runtime/utils/pg.ts'
 import { cloudlog } from '../utils/logging.ts'
 
 export const FILE_READ_TRACKING_QUERY_PARAMS = ['device_id'] as const
@@ -14,7 +17,7 @@ const FILE_READ_PATH_PREFIXES = [
   '/read/attachments/',
 ] as const
 
-/** Fail-open quickly on primary blips; full zip download must not wait on 10s pool connect. */
+/** Fail-open quickly on database blips; full zip download must not wait on 10s pool connect. */
 const DELETED_LOOKUP_TIMEOUT_MS = 2000
 const DELETED_LOOKUP_STATEMENT_TIMEOUT = `${DELETED_LOOKUP_TIMEOUT_MS}ms`
 // Open the transaction and bound it in one round trip. If the deadline abandons
@@ -162,7 +165,7 @@ function buildWorkersFileCacheRequests(fileId: string, checksum?: string | null)
 }
 
 // Per-DC cache delete/marker calls are best-effort accelerators. The globally durable
-// deletion gate is isAttachmentVersionDeleted's primary-DB lookup on app_versions.r2_path
+// deletion gate is isAttachmentVersionDeleted's indexed lookup on app_versions.r2_path
 // (deleted/deleted_at), which the serve path checks before returning cached bytes or
 // restoring to R2 (see files.ts cache-hit guard). Workers CachedFiles also short-circuits on the local deleted marker.
 // Checksum is required so key=checksum cache variants are purged alongside path-only entries.
@@ -202,16 +205,33 @@ function closeLatePgClient(c: Context, clientPromise: Promise<Awaited<ReturnType
     .catch(() => {})
 }
 
-async function lookupAttachmentVersionDeletedFromPrimary(c: Context, fileId: string): Promise<boolean> {
+async function lookupAttachmentVersionDeleted(c: Context, fileId: string): Promise<boolean> {
   const deadlineMs = Date.now() + DELETED_LOOKUP_TIMEOUT_MS
-  const clientPromise = getPgClient(c, false)
+  const useReplica = Boolean(servingRegionReaderEpoch && requestServingPolicy(c))
+  if (useReplica) {
+    c.set('requireReadReplica', true)
+    // Files workers have no regional identity. Prefer EU only when it is allowed;
+    // the existing selector still fences subsets to their allowed healthy bindings.
+    // Route/configuration failures are not transient lookup errors. Validate
+    // outside the fail-open catch, before any DB client or cached bytes.
+    try {
+      getDatabaseURL(c, true, 'EU')
+    }
+    catch {
+      throw quickError(503, 'serving_region_unavailable', 'File deletion evidence temporarily unavailable')
+    }
+  }
+  const clientPromise = useReplica ? getPgClient(c, true, 'EU') : getPgClient(c, false)
   let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   try {
     pgClient = await raceWithDeadline(deadlineMs, clientPromise)
     const result = await raceWithDeadline(deadlineMs, (async () => {
       try {
         // Inside try: if the batch fails after BEGIN ran, the catch still rolls it back.
-        await pgClient!.query(DELETED_LOOKUP_BEGIN)
+        // Replica reads remain cacheable. Do not put them inside a transaction
+        // to bypass Hyperdrive's query cache. Disabled releases keep the legacy path.
+        if (!useReplica)
+          await pgClient!.query(DELETED_LOOKUP_BEGIN)
         const queryResult = await pgClient!.query<{ deleted: boolean | null, deleted_at: string | null }>(
           `
           SELECT deleted, deleted_at
@@ -222,11 +242,13 @@ async function lookupAttachmentVersionDeletedFromPrimary(c: Context, fileId: str
         `,
           [fileId],
         )
-        await pgClient!.query('COMMIT')
+        if (!useReplica)
+          await pgClient!.query('COMMIT')
         return queryResult
       }
       catch (error) {
-        await pgClient!.query('ROLLBACK').catch(() => {})
+        if (!useReplica)
+          await pgClient!.query('ROLLBACK').catch(() => {})
         throw error
       }
     })())
@@ -265,7 +287,7 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
 
   let pending = perRequest.get(fileId)
   if (!pending) {
-    pending = lookupAttachmentVersionDeletedFromPrimary(c, fileId)
+    pending = lookupAttachmentVersionDeleted(c, fileId)
     perRequest.set(fileId, pending)
   }
   return pending

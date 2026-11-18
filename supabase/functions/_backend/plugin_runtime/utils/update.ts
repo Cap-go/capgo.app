@@ -30,7 +30,7 @@ import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss
 import { pluginStateQueriesFor } from './pluginStateRegistry.ts'
 import { getClientIP } from './rate_limit.ts'
 import { onPremiseAppResponse } from './rateLimitInfo.ts'
-import { isRestrictedServingPolicy } from './servingRegions.ts'
+import { hasServingRegionExclusions } from './servingRegions.ts'
 import { s3 } from './s3.ts'
 import { getSnippetEdgeAnswerBps, getSnippetEdgeReplay, setSnippetUpdatesFill } from './snippetEdgeAnswer.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
@@ -904,7 +904,7 @@ export async function updateWithPG(
   const startBundleUrl = performance.now()
   // An external provider cannot enforce a later regional preference change.
   const servingPolicy = requestServingPolicy(c)
-  if (version.external_url && servingPolicy && isRestrictedServingPolicy(servingPolicy))
+  if (version.external_url && servingPolicy && hasServingRegionExclusions(servingPolicy))
     return updateError200(c, 'external_delivery_unavailable', 'This bundle cannot be delivered with these update regions')
 
   let signedURL = serveZip ? (version.external_url ?? '') : ''

@@ -7,7 +7,7 @@ import { handlePreviewSubdomain, isPreviewSubdomain, withPreviewHostHeaders } fr
 import { app as download_link } from '../../supabase/functions/_backend/private/download_link.ts'
 import { app as upload_link } from '../../supabase/functions/_backend/private/upload_link.ts'
 import { app as ok } from '../../supabase/functions/_backend/public/ok.ts'
-import { createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
+import { createAllCatch, createHono, quickError } from '../../supabase/functions/_backend/utils/hono.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
 import { buildWorkersCacheKey } from './cache_key.ts'
 
@@ -73,7 +73,11 @@ ingress.all('*', async (c) => {
       // Let the files handler return its invalid-path response.
     }
   }
-  if (isPreviewSubdomain(c.req.header('host') || new URL(request.url).hostname))
+  const previewHost = isPreviewSubdomain(c.req.header('host') || new URL(request.url).hostname)
+  // Preview routes and attachment routes cannot share admission or byte caches.
+  if (previewHost && rawFileId)
+    throw quickError(404, 'not_found', 'Not found')
+  if (previewHost)
     await enforcePreviewServingPolicy(c)
   if (fileId)
     await enforceFileServingPolicy(c, fileId)
