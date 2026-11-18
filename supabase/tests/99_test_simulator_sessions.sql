@@ -429,6 +429,13 @@ SELECT throws_ok(
 SELECT set_config('capgo.allow_owner_org_transfer', 'false', true);
 
 UPDATE public.simulator_sessions
+SET status = 'stopped',
+    finished_at = now()
+WHERE app_id = 'com.test.simulator.session'
+  AND status = 'in-progress'
+  AND id <> '99000000-0000-4000-8000-000000000002';
+
+UPDATE public.simulator_sessions
 SET started_at = now() - interval '2 hours',
     last_activity_at = now() - interval '2 hours'
 WHERE id = '99000000-0000-4000-8000-000000000002';

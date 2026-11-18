@@ -5,6 +5,7 @@ import SimulatorSessionCard from '../src/components/dashboard/SimulatorSessionCa
 import { clearSimulatorSessions, rememberSimulator, runningSimulators } from '../src/services/simulatorSessions'
 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+vi.mock('~/services/date', () => ({ formatLocalDateTime: (value: string | null) => value ?? '' }))
 vi.mock('~icons/lucide/smartphone', () => ({ default: { name: 'IconSmartphone', setup: () => () => null } }))
 vi.mock('~/services/console', () => ({
   defaultApiHost: 'https://api.example.test',
