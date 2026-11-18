@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep the default order check for every migration except the four that
+# Keep the default order check for every migration except the five that
 # landed after production had applied 20261117115240.
 if plan=$(supabase db push --dry-run 2>&1); then
   exec supabase db push
@@ -17,7 +17,8 @@ while read -r migration; do
     supabase/migrations/20261117014348_console_request_fanout.sql|\
     supabase/migrations/20261117014945_stats_rollout_cron_load.sql|\
     supabase/migrations/20261117030227_app_storage_cleanup_passes.sql|\
-    supabase/migrations/20261117031521_billing_profile_currency.sql)
+    supabase/migrations/20261117031521_billing_profile_currency.sql|\
+    supabase/migrations/20261117032322_simulator_idle_stop.sql)
       found=true ;;
     *) exit 1 ;;
   esac
