@@ -130,15 +130,24 @@ export function mergeRemoteConfig(localConfig: CapgoConfig, remoteConfig: Partia
   }
 }
 
-const CHINA_CONFIG_PROBE_MS = 4_000
+const CONFIG_PROBE_MS = 4_000
+
+async function fetchWithConfigTimeout(url: string): Promise<Response> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), CONFIG_PROBE_MS)
+  try {
+    return await fetch(url, { signal: controller.signal })
+  }
+  finally {
+    clearTimeout(timeout)
+  }
+}
 
 async function probeChinaApiReachable(): Promise<boolean> {
-  if (getConsoleApiHost() !== PROD_API_URL)
+  if (!chinaConsoleSuggestionGate())
     return false
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), CHINA_CONFIG_PROBE_MS)
   try {
-    const response = await fetch(`${CHINA_API_HOST}/private/config`, { signal: controller.signal })
+    const response = await fetchWithConfigTimeout(`${CHINA_API_HOST}/private/config`)
     if (!response.ok)
       return false
     await response.json()
@@ -147,9 +156,12 @@ async function probeChinaApiReachable(): Promise<boolean> {
   catch {
     return false
   }
-  finally {
-    clearTimeout(timeout)
-  }
+}
+
+async function chinaReachableAfterMainFailure(): Promise<boolean> {
+  if (!chinaConsoleSuggestionGate())
+    return false
+  return probeChinaApiReachable()
 }
 
 /** Same gate as updateChinaConsoleSuggestion: web global console only, never native or China hostname. */
@@ -172,11 +184,11 @@ export async function getRemoteConfig() {
 
   const apiHost = getConsoleApiHost()
   try {
-    const response = await fetch(`${apiHost}/private/config`)
+    const response = await fetchWithConfigTimeout(`${apiHost}/private/config`)
     if (!response.ok) {
       console.log('Local config', localConfig)
       stripeEnabled.value = localConfig.stripeEnabled ?? stripeEnabled.value
-      const chinaReachable = await probeChinaApiReachable()
+      const chinaReachable = await chinaReachableAfterMainFailure()
       updateChinaConsoleSuggestion(false, chinaReachable)
       return localConfig as CapgoConfig
     }
@@ -190,7 +202,7 @@ export async function getRemoteConfig() {
   catch {
     console.log('Local config', localConfig)
     stripeEnabled.value = localConfig.stripeEnabled ?? stripeEnabled.value
-    const chinaReachable = await probeChinaApiReachable()
+    const chinaReachable = await chinaReachableAfterMainFailure()
     updateChinaConsoleSuggestion(false, chinaReachable)
     return localConfig as CapgoConfig
   }

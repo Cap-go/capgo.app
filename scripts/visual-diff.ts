@@ -890,6 +890,10 @@ async function runPipeline(options: CliOptions) {
       console.log(`[visual-diff] ${summary.changedCount} route(s) changed`)
     else
       console.log('[visual-diff] no visual differences detected')
+
+  // Release preview + Supabase stacks before git restore so the job can exit inside the CI timeout.
+    await stopFrontendStack()
+    await stopBackendStack()
   }
   finally {
     if (!options.skipGitCheckout) {
