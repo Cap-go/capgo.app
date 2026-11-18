@@ -15,12 +15,16 @@ const VISUAL_PATHS = [
   /^android\/.+\/res\/drawable[^/]*\/[^/]+\.xml$/,
 ]
 
-const MARKDOWN_IMAGE = /!\[[^\]]*\]\(\s*([^)\s]+)(?:\s+[^)]*)?\s*\)/
-const HTML_IMAGE = /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i
-const ATTACHMENT = /https:\/\/github\.com\/user-attachments\/(?:assets|files)\/[A-Za-z0-9._-]+/i
-const USER_IMAGE = /https:\/\/(?:private-)?user-images\.githubusercontent\.com\/\S+/i
-const CAMO = /https:\/\/camo\.githubusercontent\.com\/\S+/i
-const MEDIA_URL = /https?:\/\/[^\s)]+\.(?:png|jpe?g|gif|webp|mp4|mov|webm)(?:[?#][^\s)]*)?/i
+const MARKDOWN_IMAGE = /!\[[^\]]*\]\(\s*([^)\s]+)(?:\s+[^)]*)?\s*\)/g
+const HTML_IMAGE = /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi
+const ATTACHMENT = /https:\/\/github\.com\/user-attachments\/(?:assets|files)\/[A-Za-z0-9._-]+/gi
+const USER_IMAGE = /https:\/\/(?:private-)?user-images\.githubusercontent\.com\/\S+/gi
+const CAMO = /https:\/\/camo\.githubusercontent\.com\/\S+/gi
+const MEDIA_URL = /https?:\/\/[^\s)]+\.(?:png|jpe?g|gif|webp|mp4|mov|webm)(?:[?#][^\s)]*)?/gi
+const GENERATED_FOOTERS = [
+  ['<!-- codesmith:footer -->', '<!-- /codesmith:footer -->'],
+  ['<!-- This is an auto-generated description by cubic. -->', '<!-- End of auto-generated description by cubic. -->'],
+] as const
 
 export interface MissingScreenshotReview {
   ok: false
@@ -39,21 +43,92 @@ export function isVisualPath(path: string): boolean {
   return VISUAL_PATHS.some(pattern => pattern.test(normalized))
 }
 
+function stripMarkedBlock(body: string, start: string, end: string): string {
+  let result = ''
+  let cursor = 0
+  while (cursor < body.length) {
+    const open = body.indexOf(start, cursor)
+    if (open === -1) {
+      result += body.slice(cursor)
+      break
+    }
+    result += body.slice(cursor, open)
+    const close = body.indexOf(end, open + start.length)
+    if (close === -1)
+      break
+    cursor = close + end.length
+  }
+  return result
+}
+
+function stripHtmlComments(body: string): string {
+  let result = ''
+  let cursor = 0
+  while (cursor < body.length) {
+    const start = body.indexOf('<!--', cursor)
+    if (start === -1) {
+      result += body.slice(cursor)
+      break
+    }
+    result += body.slice(cursor, start)
+    const end = body.indexOf('-->', start + 4)
+    if (end === -1)
+      break
+    cursor = end + 3
+  }
+  return result
+}
+
 function visibleDescription(body: string): string {
-  return body
-    .replace(/<!--[\s\S]*?-->/g, '')
+  let visible = body
+  for (const [start, end] of GENERATED_FOOTERS)
+    visible = stripMarkedBlock(visible, start, end)
+  return stripHtmlComments(visible)
     .replace(/```[\s\S]*?```/g, '')
     .replace(/~~~[\s\S]*?~~~/g, '')
 }
 
+function isBadgeUrl(url: string): boolean {
+  const trimmed = url.trim()
+  if (!trimmed)
+    return true
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed, 'https://capgo.local')
+  }
+  catch {
+    return false
+  }
+  const host = parsed.hostname.toLowerCase()
+  const path = parsed.pathname.toLowerCase()
+  if (host === 'img.shields.io' || host === 'shields.io')
+    return true
+  if ((host === 'cubic.dev' || host === 'www.cubic.dev') && path.startsWith('/buttons/'))
+    return true
+  if (host === 'pr-comments-assets.blacksmith.sh')
+    return true
+  if (host === 'sonarsource.github.io')
+    return true
+  return host === 'codspeed.io' && path.startsWith('/pr-report/')
+}
+
+function hasRealImage(pattern: RegExp, text: string): boolean {
+  for (const match of text.matchAll(pattern)) {
+    const url = match[1] || match[2] || match[3] || match[0]
+    if (!isBadgeUrl(url))
+      return true
+  }
+  return false
+}
+
 export function descriptionHasScreenshot(body: string | null | undefined): boolean {
   const visible = visibleDescription(body ?? '')
-  return MARKDOWN_IMAGE.test(visible)
-    || HTML_IMAGE.test(visible)
-    || ATTACHMENT.test(visible)
-    || USER_IMAGE.test(visible)
-    || CAMO.test(visible)
-    || MEDIA_URL.test(visible)
+  return hasRealImage(MARKDOWN_IMAGE, visible)
+    || hasRealImage(HTML_IMAGE, visible)
+    || hasRealImage(ATTACHMENT, visible)
+    || hasRealImage(USER_IMAGE, visible)
+    || hasRealImage(CAMO, visible)
+    || hasRealImage(MEDIA_URL, visible)
 }
 
 export function reviewVisualScreenshot(

@@ -1090,7 +1090,8 @@ and requests changes. Visual files are `src/**/*.vue`, `src/**/*.css`,
 `ios/**/*.xib`, `android/**/res/layout/**/*.xml`, and
 `android/**/res/drawable*/**/*.xml`. A screenshot is an image or video in the
 description. The word "screenshot", the empty Screenshots heading, HTML
-comments, and images inside code fences do not count.
+comments, images inside code fences, and Cubic or Codesmith footer badges do
+not count.
 
 **Request the automated PR report** by either:
 

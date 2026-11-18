@@ -58,6 +58,24 @@ describe('visual screenshot review', () => {
     expect(descriptionHasScreenshot(hidden)).toBe(false)
   })
 
+  it('ignores Cubic and Codesmith footer badges', () => {
+    const footer = `${template}
+<!-- codesmith:footer -->
+<a href="https://example.com"><img alt="Autofix with codesmith" src="https://pr-comments-assets.blacksmith.sh/codesmith/autofix-with-codesmith-dark-3x.png"></a>
+<!-- /codesmith:footer -->
+<!-- This is an auto-generated description by cubic. -->
+<img alt="View guided diff" src="https://www.cubic.dev/buttons/review-in-cubic-light.svg">
+<!-- End of auto-generated description by cubic. -->
+![P2](https://img.shields.io/badge/P2-yellow?style=flat)`
+    expect(descriptionHasScreenshot(footer)).toBe(false)
+    expect(reviewVisualScreenshot(['src/pages/login.vue'], footer)).toEqual({
+      ok: false,
+      message: MISSING_SCREENSHOT_REVIEW,
+      files: ['src/pages/login.vue'],
+    })
+    expect(descriptionHasScreenshot(`${footer}\n![login](https://github.com/user-attachments/assets/abc-123)`)).toBe(true)
+  })
+
   it('passes when no visual file changed', () => {
     expect(reviewVisualScreenshot(['supabase/functions/_backend/utils/pg.ts'], '')).toEqual({ ok: true })
     expect(reviewVisualScreenshot([], null)).toEqual({ ok: true })
