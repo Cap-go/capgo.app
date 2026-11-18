@@ -151,6 +151,26 @@ describe('Builder setup method choice', () => {
     expect(events.platformChanged).toEqual([['android']])
   })
 
+  it('folds the setup instructions once a platform has started so progress stays in view', async () => {
+    const { find } = mount(onboarding({ ios: 'start_setup' }))
+    await nextTick()
+    expect(find('builder-checklist-methods')).toBeNull()
+    expect(find('builder-checklist-ai-setup')).toBeNull()
+    const toggle = find('builder-checklist-setup-toggle')!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    toggle.click()
+    await nextTick()
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(find('builder-checklist-methods')).not.toBeNull()
+    expect(find('builder-checklist-ai-setup')).not.toBeNull()
+  })
+
+  it('keeps the setup instructions open while waiting for the first platform', () => {
+    const { find } = mount()
+    expect(find('builder-checklist-setup-summary')).toBeNull()
+    expect(find('builder-checklist-methods')).not.toBeNull()
+  })
+
   it('adds a tab for the second platform only once it has started', async () => {
     const { find } = mount(onboarding({ ios: 'start_setup', android: 'start_setup' }))
     await nextTick()

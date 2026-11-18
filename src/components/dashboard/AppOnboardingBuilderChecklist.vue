@@ -65,6 +65,8 @@ const setupMethod = useSetupMethodPreference()
 const pickedMethod = ref<BuilderSetupMethod | null>(null)
 const method = computed<BuilderSetupMethod>(() => pickedMethod.value ?? (setupMethod.manualFirst.value ? 'terminal' : 'ai'))
 const showApiKey = ref(false)
+// Once a platform has started, the setup folds away so the build progress stays above the fold.
+const setupOpen = ref(false)
 const panelId = useId()
 const onboarding = ref(parseBuilderOnboarding(props.initialOnboarding))
 const viewedPlatform = ref<BuilderPlatform | null>(props.initialPlatform ?? onboarding.value.selectedPlatform)
@@ -337,53 +339,71 @@ function statusLabel(status: BuilderStepStatus) {
     </header>
 
     <template v-if="!completed">
-      <div class="grid gap-3 sm:grid-cols-2" role="group" :aria-label="t('builder-checklist-method-title')" data-test="builder-checklist-methods">
-        <button
-          v-for="option in (['ai', 'terminal'] as const)"
-          :key="option"
-          type="button"
-          class="flex min-h-20 items-center gap-4 rounded-2xl border bg-white px-5 py-4 text-left shadow-sm transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:bg-slate-900"
-          :class="method === option ? 'border-azure-500 ring-1 ring-azure-500/30 dark:border-azure-400' : 'border-slate-200 hover:border-slate-400 dark:border-white/15 dark:hover:border-white/35'"
-          :aria-pressed="method === option"
-          :data-test="`builder-method-${option}`"
-          @click="selectMethod(option)"
-        >
-          <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-azure-500/10 text-sky-700 dark:text-azure-300" aria-hidden="true">
-            <IconSparkles v-if="option === 'ai'" class="h-5 w-5" />
-            <IconTerminal v-else class="h-5 w-5" />
-          </span>
-          <span class="min-w-0 flex-1">
-            <span class="block text-base font-semibold text-slate-950 dark:text-white">{{ t(`builder-checklist-method-${option}`) }}</span>
-            <span class="mt-0.5 block text-sm text-slate-500 dark:text-slate-400">{{ t(`builder-checklist-method-${option}-description`) }}</span>
-          </span>
-          <span v-if="option === 'ai'" class="shrink-0 rounded-md bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">{{ t('builder-checklist-method-recommended') }}</span>
+      <div v-if="showProgress" class="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 shadow-sm dark:border-white/15 dark:bg-slate-900" data-test="builder-checklist-setup-summary">
+        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-azure-500/10 text-sky-700 dark:text-azure-300" aria-hidden="true">
+          <IconSparkles v-if="method === 'ai'" class="h-4 w-4" />
+          <IconTerminal v-else class="h-4 w-4" />
+        </span>
+        <p class="min-w-0 flex-1 text-sm text-slate-600 dark:text-slate-300">
+          <span class="font-semibold text-slate-950 dark:text-white">{{ t('builder-checklist-setup-started') }}</span>
+          <span class="mx-1 text-slate-300 dark:text-slate-600" aria-hidden="true">·</span>
+          {{ t(`builder-checklist-method-${method}`) }}
+        </p>
+        <button type="button" class="d-btn d-btn-ghost min-h-11 px-2 text-sky-700 dark:text-azure-300" :aria-expanded="setupOpen" :aria-controls="`${panelId}-setup`" data-test="builder-checklist-setup-toggle" @click="setupOpen = !setupOpen">
+          {{ setupOpen ? t('builder-checklist-hide-setup') : t('builder-checklist-show-setup') }}
+          <IconChevronDown class="h-4 w-4 shrink-0" :class="{ 'rotate-180': setupOpen }" aria-hidden="true" />
         </button>
       </div>
 
-      <AppOnboardingBuilderAiSetup v-if="method === 'ai'" @copy="emit('copyAi', 'checklist')" />
-
-      <section v-else class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/15 dark:bg-slate-900" :aria-labelledby="`${panelId}-terminal-title`" data-test="builder-checklist-terminal">
-        <h2 :id="`${panelId}-terminal-title`" class="flex items-center gap-3 text-base font-semibold text-slate-950 dark:text-white">
-          <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-azure-500/30 text-sm text-sky-700 dark:text-azure-300" aria-hidden="true">1</span>
-          {{ t('builder-checklist-terminal-title') }}
-        </h2>
-        <div v-if="command" class="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-slate-950 py-2 pl-4 pr-2">
-          <code class="min-w-0 flex-1 whitespace-pre-wrap break-all py-2 text-sm leading-6 text-sky-200" data-test="builder-checklist-command">{{ displayedCommand }}</code>
-          <button type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 px-3 py-2 text-xs text-slate-200 hover:bg-white/10" :aria-pressed="showApiKey" data-test="builder-checklist-command-reveal" @click="showApiKey = !showApiKey">
-            <IconEyeOff v-if="showApiKey" class="h-4 w-4 shrink-0" aria-hidden="true" />
-            <IconEye v-else class="h-4 w-4 shrink-0" aria-hidden="true" />
-            {{ showApiKey ? t('builder-checklist-hide-key') : t('builder-checklist-show-key') }}
-          </button>
-          <button type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 px-3 py-2 text-xs text-slate-200 hover:bg-white/10" data-test="builder-checklist-command-copy" @click="emit('copyCommand')">
-            <IconCopy class="h-4 w-4 shrink-0" aria-hidden="true" />
-            {{ t('builder-checklist-copy-command') }}
+      <div v-if="!showProgress || setupOpen" :id="`${panelId}-setup`" class="space-y-6">
+        <div class="grid gap-3 sm:grid-cols-2" role="group" :aria-label="t('builder-checklist-method-title')" data-test="builder-checklist-methods">
+          <button
+            v-for="option in (['ai', 'terminal'] as const)"
+            :key="option"
+            type="button"
+            class="flex min-h-20 items-center gap-4 rounded-2xl border bg-white px-5 py-4 text-left shadow-sm transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:bg-slate-900"
+            :class="method === option ? 'border-azure-500 ring-1 ring-azure-500/30 dark:border-azure-400' : 'border-slate-200 hover:border-slate-400 dark:border-white/15 dark:hover:border-white/35'"
+            :aria-pressed="method === option"
+            :data-test="`builder-method-${option}`"
+            @click="selectMethod(option)"
+          >
+            <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-azure-500/10 text-sky-700 dark:text-azure-300" aria-hidden="true">
+              <IconSparkles v-if="option === 'ai'" class="h-5 w-5" />
+              <IconTerminal v-else class="h-5 w-5" />
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="block text-base font-semibold text-slate-950 dark:text-white">{{ t(`builder-checklist-method-${option}`) }}</span>
+              <span class="mt-0.5 block text-sm text-slate-500 dark:text-slate-400">{{ t(`builder-checklist-method-${option}-description`) }}</span>
+            </span>
+            <span v-if="option === 'ai'" class="shrink-0 rounded-md bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">{{ t('builder-checklist-method-recommended') }}</span>
           </button>
         </div>
-        <output v-else class="mt-4 block rounded-xl bg-slate-950 p-4 text-sm text-slate-300">{{ t('app-onboarding-command-apikey-loading') }}</output>
-        <p class="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
-          {{ t('builder-checklist-command-location') }}
-        </p>
-      </section>
+
+        <AppOnboardingBuilderAiSetup v-if="method === 'ai'" @copy="emit('copyAi', 'checklist')" />
+
+        <section v-else class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/15 dark:bg-slate-900" :aria-labelledby="`${panelId}-terminal-title`" data-test="builder-checklist-terminal">
+          <h2 :id="`${panelId}-terminal-title`" class="flex items-center gap-3 text-base font-semibold text-slate-950 dark:text-white">
+            <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-azure-500/30 text-sm text-sky-700 dark:text-azure-300" aria-hidden="true">1</span>
+            {{ t('builder-checklist-terminal-title') }}
+          </h2>
+          <div v-if="command" class="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-slate-950 py-2 pl-4 pr-2">
+            <code class="min-w-0 flex-1 whitespace-pre-wrap break-all py-2 text-sm leading-6 text-sky-200" data-test="builder-checklist-command">{{ displayedCommand }}</code>
+            <button type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 px-3 py-2 text-xs text-slate-200 hover:bg-white/10" :aria-pressed="showApiKey" data-test="builder-checklist-command-reveal" @click="showApiKey = !showApiKey">
+              <IconEyeOff v-if="showApiKey" class="h-4 w-4 shrink-0" aria-hidden="true" />
+              <IconEye v-else class="h-4 w-4 shrink-0" aria-hidden="true" />
+              {{ showApiKey ? t('builder-checklist-hide-key') : t('builder-checklist-show-key') }}
+            </button>
+            <button type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 px-3 py-2 text-xs text-slate-200 hover:bg-white/10" data-test="builder-checklist-command-copy" @click="emit('copyCommand')">
+              <IconCopy class="h-4 w-4 shrink-0" aria-hidden="true" />
+              {{ t('builder-checklist-copy-command') }}
+            </button>
+          </div>
+          <output v-else class="mt-4 block rounded-xl bg-slate-950 p-4 text-sm text-slate-300">{{ t('app-onboarding-command-apikey-loading') }}</output>
+          <p class="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
+            {{ t('builder-checklist-command-location') }}
+          </p>
+        </section>
+      </div>
     </template>
 
     <section class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900" :aria-labelledby="`${panelId}-build-title`" data-test="builder-checklist-build">

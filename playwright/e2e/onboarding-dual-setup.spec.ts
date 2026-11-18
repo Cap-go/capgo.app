@@ -160,6 +160,9 @@ test('keeps AI setup available for later tasks and copies the active checklist p
     (window as any).onboardingSetupPreview.state.builderSteps.android.start_setup.status = 'done'
   })
   await page.getByRole('tab', { name: 'Builder', exact: true }).click()
+  // Once a platform started, the setup folds away behind a toggle.
+  await expect(page.locator('[data-test="builder-checklist-methods"]')).toHaveCount(0)
+  await page.locator('[data-test="builder-checklist-setup-toggle"]').click()
   await page.locator('[data-test="builder-method-ai"]').click()
   await openBuilderTask(page, 'connect_google_play')
   const taskActions = page.locator('[data-test="builder-checklist-task-actions"]')

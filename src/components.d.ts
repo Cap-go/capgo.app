@@ -37,6 +37,7 @@ declare module 'vue' {
     AppSetupGuides: typeof import('./components/dashboard/AppSetupGuides.vue')['default']
     AppTable: typeof import('./components/tables/AppTable.vue')['default']
     AssistantChat: typeof import('./components/assistant/AssistantChat.vue')['default']
+    AssistantMarkdown: typeof import('./components/assistant/AssistantMarkdown.vue')['default']
     AssistantSpans: typeof import('./components/assistant/AssistantSpans.vue')['default']
     AuditLogTable: typeof import('./components/tables/AuditLogTable.vue')['default']
     AuthPageShell: typeof import('./components/auth/AuthPageShell.vue')['default']
