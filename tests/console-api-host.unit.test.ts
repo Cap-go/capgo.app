@@ -24,7 +24,8 @@ describe('console API host resolver', () => {
     vi.stubGlobal('window', {
       location: { hostname: 'console.capgo.com.cn', origin: 'https://console.capgo.com.cn' },
     })
-    expect(getConsoleApiHost()).toBe(CHINA_API_HOST)
+    expect(getConsoleApiHost()).toBe('https://api.capgo.com.cn')
+    expect(CHINA_API_HOST).toBe('https://api.capgo.com.cn')
     expect(getConsoleWebOrigin()).toBe('https://console.capgo.com.cn')
   })
 

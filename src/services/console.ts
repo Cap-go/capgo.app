@@ -4,7 +4,7 @@ import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/database.types'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { CHINA_API_HOST, getConsoleApiHost, shouldSuggestChinaConsole } from '~/services/consoleApiHost'
+import { CHINA_API_HOST, getConsoleApiHost, isChinaCapgoConsoleHostname, shouldSuggestChinaConsole } from '~/services/consoleApiHost'
 import { createConsoleAuthClient, resolveConsoleApiBase } from '~/services/consoleAuth'
 import { createConsoleClient } from '~/services/consoleClient'
 import { sortCreditPricingSteps } from './creditPricing'
@@ -152,9 +152,15 @@ async function probeChinaApiReachable(): Promise<boolean> {
   }
 }
 
+function isOnGlobalConsoleWebHost(): boolean {
+  if (typeof window === 'undefined')
+    return getConsoleApiHost() === PROD_API_URL
+  return !isChinaCapgoConsoleHostname(window.location.hostname)
+}
+
 function updateChinaConsoleSuggestion(mainApiReachable: boolean, chinaApiReachable: boolean) {
   suggestChinaConsole.value = shouldSuggestChinaConsole({
-    onGlobalConsole: getConsoleApiHost() === PROD_API_URL,
+    onGlobalConsole: isOnGlobalConsoleWebHost() && getConsoleApiHost() === PROD_API_URL,
     mainApiReachable,
     chinaApiReachable,
   })

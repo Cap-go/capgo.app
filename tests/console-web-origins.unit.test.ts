@@ -29,4 +29,16 @@ describe('console web origins', () => {
     expect(isAllowedConsoleWebOrigin(createContext(), 'https://console.capgo.com.cn')).toBe(true)
     expect(isAllowedConsoleWebOrigin(createContext(), 'https://evil.example')).toBe(false)
   })
+
+  it.concurrent('includes WEBAPP_URL alongside default console origins', () => {
+    mockedEnv.WEBAPP_URL = 'https://console.selfhost.example'
+    try {
+      const allowed = collectConsoleWebOrigins(createContext())
+      expect(allowed.has('https://console.selfhost.example')).toBe(true)
+      expect(isAllowedConsoleWebOrigin(createContext(), 'https://console.selfhost.example')).toBe(true)
+    }
+    finally {
+      mockedEnv.WEBAPP_URL = 'https://console.capgo.app'
+    }
+  })
 })

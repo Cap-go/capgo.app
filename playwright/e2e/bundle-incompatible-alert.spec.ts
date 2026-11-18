@@ -4,6 +4,7 @@ import { createClient } from '../../tests/sql-data-client'
 import { expect, test } from '../support/commands'
 
 const APP_ID = 'com.bundlealert.e2e'
+const regions = ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME']
 
 function localAdminClient() {
   const status = getSupabaseStatus()
@@ -30,6 +31,7 @@ test('saves and reloads the incompatible-bundle alert scope', async ({ page }) =
   expect(insertError).toBeNull()
 
   try {
+    await page.route('**/serving_policy/**', route => route.fulfill({ json: { app_id: APP_ID, active: true, policy: { regions, mode: 'route' } } }))
     await page.login('test@capgo.app', 'testtest')
     await page.goto(`/app/${APP_ID}/settings`)
 

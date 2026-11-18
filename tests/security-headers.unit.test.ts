@@ -4,6 +4,7 @@ import { CONSOLE_CONTENT_SECURITY_POLICY } from '../scripts/console-security-pol
 import apiWorker from '../cloudflare_workers/api/index.ts'
 import pluginWorker from '../cloudflare_workers/plugin/index.ts'
 import { API_CONTENT_SECURITY_POLICY, createAllCatch, createHono, getAllowedCorsOrigin, useCors } from '../supabase/functions/_backend/utils/hono.ts'
+import { createHono as createPluginHono, getAllowedCorsOrigin as getPluginAllowedCorsOrigin, useCors as usePluginCors } from '../supabase/functions/_backend/plugin_runtime/utils/hono.ts'
 
 const consoleHeaders = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8')
 
@@ -128,6 +129,22 @@ describe('security response headers', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('access-control-allow-origin')).toBeNull()
+  })
+
+  it.concurrent('allows China console CORS origin on plugin workers', async () => {
+    const origin = 'https://console.capgo.com.cn'
+    expect(getPluginAllowedCorsOrigin(origin, {} as Parameters<typeof getPluginAllowedCorsOrigin>[1])).toBe(origin)
+
+    const app = createPluginHono('plugin', 'test')
+    app.use('/cors-test', usePluginCors)
+    app.get('/cors-test', c => c.json({ status: 'ok' }))
+
+    const response = await app.fetch(new Request('https://plugin.eu.capgo.app/cors-test', {
+      headers: { origin },
+    }))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('access-control-allow-origin')).toBe(origin)
   })
 
   it.concurrent('does not emit wildcard CORS on rejected preflight requests', async () => {

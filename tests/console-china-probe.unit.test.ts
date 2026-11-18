@@ -1,5 +1,5 @@
 // China console probe and banner behavior.
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   isChinaCapgoConsoleHostname,
   looksLikeChinaReachLocaleHint,
@@ -55,7 +55,24 @@ describe('China console suggestion', () => {
 })
 
 describe('China reach locale hint', () => {
-  it('reads navigator when present', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it.concurrent('uses mainland China time zones', () => {
+    vi.stubGlobal('navigator', { language: 'en-US', languages: ['en-US'] })
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      locale: 'en-US',
+      calendar: 'gregory',
+      numberingSystem: 'latn',
+      timeZone: 'Asia/Shanghai',
+      hour12: false,
+    })
+    expect(looksLikeChinaReachLocaleHint()).toBe(true)
+  })
+
+  it.concurrent('uses zh language hints when time zone is not China', () => {
     vi.stubGlobal('navigator', {
       language: 'zh-CN',
       languages: ['zh-CN', 'en'],
@@ -64,11 +81,9 @@ describe('China reach locale hint', () => {
       locale: 'zh-CN',
       calendar: 'gregory',
       numberingSystem: 'latn',
-      timeZone: 'Asia/Shanghai',
+      timeZone: 'UTC',
       hour12: false,
     })
     expect(looksLikeChinaReachLocaleHint()).toBe(true)
-    vi.restoreAllMocks()
-    vi.unstubAllGlobals()
   })
 })
