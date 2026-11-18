@@ -138,6 +138,7 @@ describe('stripe redirect URL allowlist', () => {
         retrieve: mocks.retrievePrice,
       },
       customers: mocks.customers,
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
       checkout: {
         sessions: {
           create: createSession,
@@ -162,7 +163,7 @@ describe('stripe redirect URL allowlist', () => {
     expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
       success_url: 'https://console.capgo.com.cn/app/success?success=true',
       cancel_url: 'https://console.capgo.com.cn/app/cancel',
-    }))
+    }), expect.anything())
   })
 
   it('allows same-origin return URLs for billing portal', async () => {
