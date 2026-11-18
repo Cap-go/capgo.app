@@ -37,6 +37,7 @@ import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { buildTransferInvoiceFooter, getStripeCustomerEmailFromEvent, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import type { TrialPlanFirstInvoiceState } from '../utils/stripe_trial_plan.ts'
 import { cancelTrialPlanScheduleForSubscription, isTrialPlanFirstInvoiceUnpaid, isTrialPlanSubscription, settleTrialPlanFirstInvoice } from '../utils/stripe_trial_plan.ts'
+import { checkPlanStatusOnly } from '../utils/plans.ts'
 import { customerToSegmentOrg } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { trackUsChargeRefunded, trackUsChargeSucceeded } from '../utils/us_revenue_tracking.ts'
@@ -371,6 +372,129 @@ function getPlanType(
   priceId: string | null | undefined,
 ) {
   return getPlanPriceInterval(plan, priceId)
+}
+
+export function shouldRecomputePlanStatusAfterStripeSubscriptionChange(
+  stripeData: Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>,
+) {
+  const productChanged = Boolean(
+    stripeData.previousProductId
+    && stripeData.data.product_id
+    && stripeData.previousProductId !== stripeData.data.product_id,
+  )
+  const priceChanged = Boolean(
+    stripeData.previousPriceId
+    && stripeData.data.price_id
+    && stripeData.previousPriceId !== stripeData.data.price_id,
+  )
+  return productChanged || priceChanged
+}
+
+export function shouldRefreshPlanStatusAfterStripeSubscriptionChange(
+  stripeData: Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>,
+  priorStripeInfo?: Pick<StripeInfoRow, 'product_id' | 'price_id'> | null,
+) {
+  if (shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData))
+    return true
+
+  const nextProductId = stripeData.data.product_id ?? null
+  const nextPriceId = stripeData.data.price_id ?? null
+  if (!nextProductId && !nextPriceId)
+    return false
+
+  const priorProductId = priorStripeInfo?.product_id ?? null
+  const priorPriceId = priorStripeInfo?.price_id ?? null
+  const productChanged = Boolean(nextProductId && priorProductId && nextProductId !== priorProductId)
+  const priceChanged = Boolean(nextPriceId && priorPriceId && nextPriceId !== priorPriceId)
+  return productChanged || priceChanged
+}
+
+async function recomputeOrgPlanStatusAfterStripePlanChange(c: Context, orgId: string): Promise<void> {
+  const pgClient = await getPgClient(c, false)
+  const drizzleClient = getDrizzleClient(pgClient)
+  try {
+    await checkPlanStatusOnly(c, orgId, drizzleClient)
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
+}
+
+async function touchOrgPlanStatsRefreshRequested(c: Context, orgId: string): Promise<void> {
+  await withAdminPg(c, async (pg) => {
+    await pg.query(
+      `INSERT INTO public.org_stats_refresh_state (org_id) VALUES ($1::uuid) ON CONFLICT (org_id) DO NOTHING`,
+      [orgId],
+    )
+    await pg.query(
+      `UPDATE public.org_stats_refresh_state
+       SET stats_refresh_requested_at = timezone('UTC', clock_timestamp())
+       WHERE org_id = $1::uuid`,
+      [orgId],
+    )
+  })
+}
+
+async function queueOrgPlanStatusRecompute(c: Context, orgId: string, customerId: string): Promise<void> {
+  try {
+    await touchOrgPlanStatsRefreshRequested(c, orgId)
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'touch org stats refresh requested before cron_stat_org queue failed',
+      orgId,
+      customerId,
+      error,
+    })
+  }
+  await withAdminPg(c, pg =>
+    pg.query('SELECT public.queue_cron_stat_org_for_org($1::uuid, $2::text)', [orgId, customerId]),
+  )
+}
+
+type StripeSubscriptionPersistOutcome = 'applied' | 'duplicate' | 'stale' | 'missing'
+
+async function refreshPlanStatusAfterStripeSubscriptionChange(
+  c: Context,
+  org: Org,
+  stripeData: StripeData,
+  didPersist: StripeSubscriptionPersistOutcome,
+  priorStripeInfo?: Pick<StripeInfoRow, 'product_id' | 'price_id'> | null,
+): Promise<void> {
+  if (!shouldRefreshPlanStatusAfterStripeSubscriptionChange(stripeData, priorStripeInfo))
+    return
+  if (didPersist !== 'applied' && didPersist !== 'duplicate' && didPersist !== 'stale')
+    return
+
+  try {
+    await touchOrgPlanStatsRefreshRequested(c, org.id)
+    await recomputeOrgPlanStatusAfterStripePlanChange(c, org.id)
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'plan status recompute after Stripe plan change failed',
+      orgId: org.id,
+      customerId: stripeData.data.customer_id,
+      error,
+    })
+    const customerId = stripeData.data.customer_id
+    if (!customerId)
+      return
+    try {
+      await queueOrgPlanStatusRecompute(c, org.id, customerId)
+    }
+    catch (queueError) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'queue cron_stat_org after plan recompute failure failed',
+        orgId: org.id,
+        customerId,
+        error: queueError,
+      })
+    }
+  }
 }
 
 function getSubscriptionTrackingState(
@@ -1446,6 +1570,7 @@ async function createdOrUpdated(
         stripeEventId: c.get('stripeEvent')!.id,
         subscriptionId: stripeData.data.subscription_id,
       })
+      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist, currentStripeInfo)
       return
     }
     if (didPersist === 'stale') {
@@ -1456,10 +1581,13 @@ async function createdOrUpdated(
         eventOccurredAtIso,
         subscriptionId: stripeData.data.subscription_id,
       })
+      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist, currentStripeInfo)
       return
     }
     if (didPersist === 'missing')
       return quickError(404, 'succeeded_customer_id_not_found', `succeeded: customer_id not found`, { stripeData })
+
+    await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist, currentStripeInfo)
 
     const openAIFirstPaymentAt = getOpenAIFirstPaymentAt({
       firstPaidAt,
@@ -2397,6 +2525,11 @@ export const stripeEventTestUtils = {
   getSubscriptionMrr,
   getSubscriptionTrackingState,
   isStaleStripeEvent,
+  shouldRecomputePlanStatusAfterStripeSubscriptionChange,
+  shouldRefreshPlanStatusAfterStripeSubscriptionChange,
+  refreshPlanStatusAfterStripeSubscriptionChange,
+  recomputeOrgPlanStatusAfterStripePlanChange,
+  createdOrUpdated,
   isCustomerProfileEvent,
   didStripeCustomerEmailChange,
   shouldReplaceOrgManagementEmail,
