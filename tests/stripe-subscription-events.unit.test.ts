@@ -1,3 +1,4 @@
+import type { StripeData } from '../supabase/functions/_backend/utils/stripe.ts'
 import { describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
 import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
@@ -90,10 +91,14 @@ describe('stripe subscription event classification', () => {
 
   it.concurrent('skips plan status recompute when price and product stay unchanged', () => {
     expect(shouldRecomputePlanStatusAfterStripeSubscriptionChange({
-      data: { product_id: 'prod_same', price_id: 'price_same' },
+      data: {
+        product_id: 'prod_same',
+        price_id: 'price_same',
+        customer_id: 'cus_same',
+      } as StripeData['data'],
       previousProductId: 'prod_same',
       previousPriceId: 'price_same',
-    })).toBe(false)
+    } satisfies Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>)).toBe(false)
   })
 
   it.concurrent('marks monthly to yearly cadence changes as upgraded without a plan change', () => {

@@ -401,6 +401,54 @@ async function recomputeOrgPlanStatusAfterStripePlanChange(c: Context, orgId: st
   }
 }
 
+async function queueOrgPlanStatusRecompute(c: Context, orgId: string, customerId: string): Promise<void> {
+  await withAdminPg(c, pg =>
+    pg.query('SELECT public.queue_cron_stat_org_for_org($1::uuid, $2::text)', [orgId, customerId]),
+  )
+}
+
+type StripeSubscriptionPersistOutcome = 'applied' | 'duplicate' | 'stale' | 'missing'
+
+async function refreshPlanStatusAfterStripeSubscriptionChange(
+  c: Context,
+  org: Org,
+  stripeData: StripeData,
+  didPersist: StripeSubscriptionPersistOutcome,
+): Promise<void> {
+  if (!shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData))
+    return
+  if (didPersist !== 'applied' && didPersist !== 'duplicate' && didPersist !== 'stale')
+    return
+
+  try {
+    await recomputeOrgPlanStatusAfterStripePlanChange(c, org.id)
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'plan status recompute after Stripe plan change failed',
+      orgId: org.id,
+      customerId: stripeData.data.customer_id,
+      error,
+    })
+    const customerId = stripeData.data.customer_id
+    if (!customerId)
+      return
+    try {
+      await queueOrgPlanStatusRecompute(c, org.id, customerId)
+    }
+    catch (queueError) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'queue cron_stat_org after plan recompute failure failed',
+        orgId: org.id,
+        customerId,
+        error: queueError,
+      })
+    }
+  }
+}
+
 function getSubscriptionTrackingState(
   stripeData: Pick<StripeData, 'data' | 'isUpgrade' | 'previousPriceId' | 'previousProductId'>,
   originalStatus: StripeWebhookStatus | null | undefined,
@@ -1474,6 +1522,7 @@ async function createdOrUpdated(
         stripeEventId: c.get('stripeEvent')!.id,
         subscriptionId: stripeData.data.subscription_id,
       })
+      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist)
       return
     }
     if (didPersist === 'stale') {
@@ -1484,26 +1533,13 @@ async function createdOrUpdated(
         eventOccurredAtIso,
         subscriptionId: stripeData.data.subscription_id,
       })
+      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist)
       return
     }
     if (didPersist === 'missing')
       return quickError(404, 'succeeded_customer_id_not_found', `succeeded: customer_id not found`, { stripeData })
 
-    if (shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData)) {
-      try {
-        await recomputeOrgPlanStatusAfterStripePlanChange(c, org.id)
-      }
-      catch (error) {
-        cloudlogErr({
-          requestId: c.get('requestId'),
-          message: 'plan status recompute after Stripe plan change failed',
-          orgId: org.id,
-          customerId: stripeData.data.customer_id,
-          error,
-        })
-        throw error
-      }
-    }
+    await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist)
 
     const openAIFirstPaymentAt = getOpenAIFirstPaymentAt({
       firstPaidAt,
@@ -2442,6 +2478,9 @@ export const stripeEventTestUtils = {
   getSubscriptionTrackingState,
   isStaleStripeEvent,
   shouldRecomputePlanStatusAfterStripeSubscriptionChange,
+  refreshPlanStatusAfterStripeSubscriptionChange,
+  recomputeOrgPlanStatusAfterStripePlanChange,
+  createdOrUpdated,
   isCustomerProfileEvent,
   didStripeCustomerEmailChange,
   shouldReplaceOrgManagementEmail,
