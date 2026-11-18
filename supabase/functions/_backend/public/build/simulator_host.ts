@@ -79,18 +79,6 @@ export function simulatorMaxSessionStopIso(
   return new Date(capAt).toISOString()
 }
 
-export function simulatorRecordedDeviceStopIso(hostStop: string, maxStop?: string): string {
-  if (!maxStop)
-    return hostStop
-  const hostMs = Date.parse(hostStop)
-  const maxMs = Date.parse(maxStop)
-  if (!Number.isFinite(hostMs))
-    return maxStop
-  if (!Number.isFinite(maxMs))
-    return hostStop
-  return hostMs > maxMs ? maxStop : hostStop
-}
-
 export async function queryWrite<T extends object>(c: Context, sql: string, params: unknown[]): Promise<T[]> {
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   let client: PgQueryClient | null = null
@@ -183,7 +171,10 @@ export async function recordStoppedSimulatorDevices(c: Context, orgId: string): 
         const responseNow = Date.now()
         const hostStop = deviceStopTime(found.data, responseNow)
         if (hostStop) {
-          await rememberDeviceStop(c, row.id, simulatorRecordedDeviceStopIso(hostStop, maxStop))
+          const maxMs = maxStop ? Date.parse(maxStop) : Number.NaN
+          const hostMs = Date.parse(hostStop)
+          const stopAt = Number.isFinite(maxMs) && Number.isFinite(hostMs) && hostMs > maxMs ? maxStop! : hostStop
+          await rememberDeviceStop(c, row.id, stopAt)
           return
         }
         if (maxStop)
