@@ -517,6 +517,18 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- Deadlock guard: live traffic locks app_versions before apps when bundle
+-- storage lifetimes write version_meta. Trigger DDL below used to lock apps
+-- first, then app_versions, inverting that order and deadlocking in prod
+-- (SQLSTATE 40P01, capgo-22.63.1 Apply Supabase Migrations). Hold every hot
+-- table in the live-traffic order before any trigger DDL on apps/app_versions.
+-- ---------------------------------------------------------------------------
+LOCK TABLE public.app_versions IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.apps IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.version_meta IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.daily_storage_hourly IN ACCESS EXCLUSIVE MODE;
+
+-- ---------------------------------------------------------------------------
 -- 2e. Close bundle lifetimes when an app is deleted
 -- ---------------------------------------------------------------------------
 -- Byte-hours are rebuilt from version_meta (a positive event when a bundle is
