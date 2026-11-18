@@ -21,7 +21,17 @@ const provider = vi.hoisted(() => ({
 // dispatch, per-invocation key deduplication and ACK construction all run.
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: async () => ({}),
-  getDrizzleClient: () => ({ execute: provider.execute }),
+  getDrizzleClient: () => ({ execute: async (query: SQL) => {
+    const statement = new PgDialect().sqlToQuery(query)
+    if (statement.sql.includes('FROM public.read_replica_commit_marker'))
+      return { rows: [{ ready: true }] }
+    if (statement.sql.includes('prepare_plugin_state_inventory'))
+      return { rows: [{ page: null }] }
+    const result = await provider.execute(query)
+    if (statement.sql.includes('claim_plugin_state_sync('))
+      result.rows.forEach((row: { result: { apps?: { required_commit_at: string }[] } }) => row.result.apps?.forEach(app => { app.required_commit_at = '2026-11-18 12:00:00+00' }))
+    return result
+  } }),
   closeClient: provider.close,
   withPgTransaction: async <T>(client: unknown, run: (client: unknown) => Promise<T>) => run(client),
 }))

@@ -153,8 +153,10 @@ describe('plugin KV sync queue contracts', () => {
       await client.query(`CREATE TRIGGER reject_backfill_enqueue BEFORE INSERT ON public.plugin_state_sync_pending
         FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_backfill_enqueue()`)
       await client.query(`UPDATE public.plugin_state_sync_state SET backfill_after = $1, backfill_done_at = NULL WHERE id`, [after])
+      const page = (await client.query("SELECT public.prepare_plugin_state_inventory('payload') AS page")).rows[0].page
       await client.query('SAVEPOINT before_tick')
-      await expect(client.query('SELECT public.plugin_state_sync_tick()')).rejects.toThrow('test backfill enqueue failure')
+      await expect(client.query("SELECT public.commit_plugin_state_inventory('payload', $1, $2, NULL, $3)",
+        [after, page.required_commit_at, [APP_ID]])).rejects.toThrow('test backfill enqueue failure')
       await client.query('ROLLBACK TO SAVEPOINT before_tick')
       const { rows } = await client.query<{ backfill_after: string }>('SELECT backfill_after FROM public.plugin_state_sync_state WHERE id')
       expect(rows[0].backfill_after).toBe(after)
@@ -633,6 +635,10 @@ describe('plugin KV sync queue contracts', () => {
       FROM unnest(ARRAY['anon', 'authenticated']) AS role_name
       CROSS JOIN unnest(ARRAY[
         'public.claim_plugin_state_sync(integer)',
+        'public.claim_serving_policy_sync_source()',
+        'public.defer_serving_policy_sync(uuid)',
+        'public.prepare_plugin_state_inventory(text)',
+        'public.commit_plugin_state_inventory(text,text,timestamptz,text,text[])',
         'public.ack_plugin_state_sync(uuid,text[],text[],integer,text[],text[],text[],text[],text[],jsonb,text[])',
         'public.enqueue_plugin_state_full_sync(text[])',
         'public.plugin_state_sync_tick()',

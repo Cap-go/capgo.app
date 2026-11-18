@@ -2,7 +2,7 @@ import { isRestrictedServingPolicy, parseServingPolicy, servingPolicyKey } from 
 import { servingRegionReaderEpoch } from '../plugin_runtime/utils/servingRegionRollout.js'
 import { parseServingPolicyDocument } from '../plugin_runtime/utils/servingPolicy.ts'
 // Writes the KV plugin state (plugin_runtime/utils/pluginState.ts) from the
-// primary database. Statement-level triggers queue what changed in
+// EU read replica. Primary statement-level triggers queue what changed in
 // public.plugin_state_sync_pending (migration plugin_kv_state); each wake
 // drains the queue in its own short transactions:
 //   claim_plugin_state_sync() -> rebuild the KV keys -> ack_plugin_state_sync()
@@ -91,6 +91,7 @@ interface ClaimedApp {
   app_id: string
   jobs: { kind: 'app' | 'full' | 'device' | 'version' | 'manifest', ref: string }[]
   attempts: number
+  required_commit_at: string
 }
 
 interface ClaimResult {
@@ -154,6 +155,7 @@ async function runLimited<T, R>(items: T[], limit: number, run: (item: T) => Pro
 }
 
 class KvBudgetExhausted extends Error {}
+class PluginStateSourceUnavailable extends KvBudgetExhausted {}
 
 export function createPluginStateWorkLimiter(limit: number) {
   let active = 0
@@ -181,31 +183,63 @@ export function createPluginStateWorkLimiter(limit: number) {
   }
 }
 
-/** This internal change-driven publisher materializes durable edge state. Each
- * source read uses a fresh, consistent primary snapshot rather than freezing a
- * previously cached SELECT into KV until the next change. Short transactions
- * release their checked-out connection before all KV/R2 work. Plugin requests
- * and the global Hyperdrive cache configuration are unchanged. */
-export function createPluginStateSourceReader(c: SyncContext, deadline: number) {
-  const sources = createPluginStateWorkLimiter(APP_CONCURRENCY)
-  const manifests = createPluginStateWorkLimiter(1)
+export function createPluginStateSourceWork() {
+  return { reads: createPluginStateWorkLimiter(APP_CONCURRENCY), manifest: createPluginStateWorkLimiter(1) }
+}
+
+/** Each document/page checks the primary claim's commit barrier inside the
+ * same repeatable-read snapshot as all of its source data. Marker age or a
+ * transport heartbeat alone cannot prove that an enqueue has replicated.
+ * The scheduled marker transaction must have STARTED after the claim saw the
+ * committed producer row. Its visibility proves earlier source commits have
+ * applied too. Retain PostgreSQL's timestamp precision, never round in JS.
+ * Transactions end before provider I/O. Request-path caching is unchanged. */
+export function createPluginStateSourceReader(c: SyncContext, deadline: number, requiredCommitAt: string, work = createPluginStateSourceWork()) {
   return {
     async read<T>(run: (db: Db) => Promise<T>): Promise<T> {
-      return sources(async () => {
+      return work.reads(async () => {
         if (Date.now() >= deadline)
           throw new KvBudgetExhausted('plugin state snapshot deadline exhausted')
-        const pg = await getPgClient(c)
+        let pg: Pg | null = null
         try {
-          return await withPgTransaction(pg, client => run(getDrizzleClient(client, { logger: false })), {
-            appendSql: 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY',
-          })
+          if (!requiredCommitAt)
+            throw new Error('plugin state claim has no source commit barrier')
+          pg = await getPgClient(c, 'eu-replica')
+          return await withPgTransaction(pg, async (client) => {
+            const db = getDrizzleClient(client, { logger: false })
+            // During initial table copy a heartbeat can stream before source
+            // tables finish copying. All inputs must stream in its subscription.
+            // Local/CI uses an explicitly configured fixture database instead.
+            const localFixture = getEnv(c, 'ENV_NAME').endsWith('-local') && Boolean(getEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL'))
+            const subscriptionReady = localFixture ? sql`true` : sql`EXISTS (
+              SELECT 1 FROM pg_catalog.pg_subscription_rel marker_rel
+              WHERE marker_rel.srrelid = 'public.read_replica_commit_marker'::regclass AND marker_rel.srsubstate = 'r'
+                AND (SELECT count(*) FROM pg_catalog.pg_subscription_rel source_rel
+                  JOIN pg_catalog.pg_class source_table ON source_table.oid = source_rel.srrelid
+                  JOIN pg_catalog.pg_namespace source_schema ON source_schema.oid = source_table.relnamespace
+                  WHERE source_rel.srsubid = marker_rel.srsubid AND source_rel.srsubstate = 'r'
+                    AND source_schema.nspname = 'public'
+                    AND source_table.relname = ANY (ARRAY['apps', 'orgs', 'stripe_info', 'channels', 'channel_devices',
+                      'app_versions', 'version_files', 'delta_files', 'delta_sessions', 'read_replica_commit_marker']::text[])) = 10
+            )`
+            const [marker] = await rows<{ ready: boolean }>(db, sql`
+              SELECT committed_at >= ${requiredCommitAt}::timestamptz AND ${subscriptionReady} AS ready
+              FROM public.read_replica_commit_marker WHERE id = 1`)
+            if (marker?.ready !== true)
+              throw new Error('EU source commit marker has not reached the claimed change')
+            return run(db)
+          }, { appendSql: 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY' })
+        }
+        catch (cause) {
+          throw new PluginStateSourceUnavailable('EU plugin state source unavailable', { cause })
         }
         finally {
-          closeClient(c, pg)
+          if (pg)
+            closeClient(c, pg)
         }
       })
     },
-    manifest: manifests,
+    manifest: work.manifest,
   }
 }
 
@@ -834,16 +868,16 @@ async function fullSync(source: SourceReader, store: SyncStore, appId: string, r
 
 // ---- Drain --------------------------------------------------------------------
 
-async function readSyncStatus(source: SourceReader, appId: string) {
-  const [row] = await sourceRows<{ fully_synced: boolean, pending_full: boolean, archived_full: boolean }>(source, sql`
+async function readSyncStatus(pg: Pg, appId: string) {
+  const [row] = await mutate(pg, db => rows<{ fully_synced: boolean, pending_full: boolean, archived_full: boolean }>(db, sql`
     SELECT
       EXISTS (SELECT 1 FROM public.plugin_state_sync_apps WHERE app_id = ${appId} AND full_synced_at IS NOT NULL) AS fully_synced,
       EXISTS (SELECT 1 FROM public.plugin_state_sync_pending WHERE app_id = ${appId} AND kind = 'full') AS pending_full,
-      EXISTS (SELECT 1 FROM public.plugin_state_sync_failed WHERE app_id = ${appId} AND kind = 'full') AS archived_full`)
+      EXISTS (SELECT 1 FROM public.plugin_state_sync_failed WHERE app_id = ${appId} AND kind = 'full') AS archived_full`))
   return row ?? { fully_synced: false, pending_full: false, archived_full: false }
 }
 
-async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp, deadline: number): Promise<AppOutcome> {
+async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp, deadline: number, syncStatus: Awaited<ReturnType<typeof readSyncStatus>> | null): Promise<AppOutcome> {
   const appId = item.app_id
   const completed: CompletedKey[] = []
   try {
@@ -853,7 +887,6 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
     const deviceIds = refsOf('device')
     const manifestIds = refsOf('manifest').map(Number).filter(id => Number.isSafeInteger(id) && id > 0)
     const wantsApp = item.jobs.some(job => job.kind === 'app') || deviceIds.length > 0
-    const syncStatus = wantsApp && fullJobs.length === 0 ? await readSyncStatus(source, appId) : null
     const needsFull = fullJobs.length > 0 || Boolean(syncStatus && !syncStatus.fully_synced && !syncStatus.archived_full)
 
     // Single keys first: they read the database now, so they are never older
@@ -900,6 +933,35 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
   }
   catch (error) {
     return { appId, ok: false, error, completed, deferred: error instanceof KvBudgetExhausted }
+  }
+}
+
+/** Inventory and cursor commits are separate: never hold a primary transaction
+ * open while enumerating EU. CAS makes concurrent/replaced pages harmless. */
+export async function inventoryPluginState(c: SyncContext, pg: Pg, deadline: number, kind: 'policy' | 'payload') {
+  const [prepared] = await mutate(pg, db => rows<{ page: { after: string | null, required_commit_at: string, epoch: string | null, known_ids: string[] } | null }>(db,
+    sql`SELECT public.prepare_plugin_state_inventory(${kind}) AS page`))
+  const page = prepared?.page
+  if (!page)
+    return
+  try {
+    const source = createPluginStateSourceReader(c, deadline, page.required_commit_at)
+    const limit = kind === 'policy' ? 100 : 25
+    const apps = await sourceRows<{ app_id: string }>(source, sql`
+      SELECT inventory.app_id FROM (
+        (SELECT app_id FROM public.apps WHERE app_id > ${page.after ?? ''} ORDER BY app_id LIMIT ${limit})
+        UNION SELECT known.app_id FROM pg_catalog.unnest(${sql.param(page.known_ids)}::text[]) AS known(app_id)
+      ) inventory ORDER BY inventory.app_id LIMIT ${limit}`)
+    // Let Postgres order the merged page using the cursor/index collation.
+    const ids = apps.map(app => app.app_id)
+    await mutate(pg, db => db.execute(sql`SELECT public.commit_plugin_state_inventory(
+      ${kind}, ${page.after}::text, ${page.required_commit_at}::timestamptz, ${page.epoch}::text, ${sql.param(ids)}::text[])`))
+  }
+  catch (error) {
+    // No cursor or coverage ACK on lag/outage. The existing tick retries it.
+    if (!(error instanceof PluginStateSourceUnavailable))
+      throw error
+    cloudlogErr({ message: 'plugin state inventory deferred', error: serializeError(error) })
   }
 }
 
@@ -994,16 +1056,17 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
   if (!pointers)
     return result
   const budget: PublicationBudget = { remaining: PROVIDER_OPERATION_BUDGET }
+  const sourceWork = createPluginStateSourceWork()
   const startedAt = Date.now()
   const deadline = startedAt + (options.budgetMs ?? DRAIN_BUDGET_MS)
   const policyDeadline = startedAt + Math.floor((deadline - startedAt) / 2)
-  const source = createPluginStateSourceReader(c, deadline)
   let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
     pg = await getPgClient(c)
+    await inventoryPluginState(c, pg, deadline, 'policy')
     const policyBudget: PublicationBudget = { remaining: POLICY_OPERATION_BUDGET }
     try {
-      await drainServingPolicies(pg, createPluginStateSourceReader(c, policyDeadline), pointers, policyBudget, policyDeadline, result)
+      await drainServingPolicies(c, pg, pointers, policyBudget, policyDeadline, result)
     }
     catch (error) {
       result.failed++
@@ -1017,6 +1080,7 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
     const [switches] = await mutate(pg, db => rows<{ enabled: boolean }>(db, sql`SELECT public.plugin_state_sync_enabled() AS enabled`))
     if (!switches?.enabled || !namespace)
       return result
+    await inventoryPluginState(c, pg, deadline, 'payload')
     let busyRetries = 0
     while (Date.now() < deadline && budget.remaining > 0) {
       const claimed = await claim(pg)
@@ -1039,14 +1103,22 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         throw new Error('plugin state claim has no publication generation')
       result.claims++
 
+      // Keep indexed control reads on the primary, serialized on its single
+      // Hyperdrive handle. Parallel app builders only own EU source handles.
+      const syncStatuses = new Map<string, Awaited<ReturnType<typeof readSyncStatus>>>()
+      for (const item of claimed.apps) {
+        if (!item.jobs.some(job => job.kind === 'full') && item.jobs.some(job => job.kind === 'app' || job.kind === 'device'))
+          syncStatuses.set(item.app_id, await readSyncStatus(pg, item.app_id))
+      }
       const appDeadline = Math.min(deadline, Date.now() + APP_BUDGET_MS)
       const outcomes = await runLimited(claimed.apps, APP_CONCURRENCY, async (item): Promise<AppOutcome> => {
         const store = createPluginStateSyncStore(namespace, pointers, claimed.generation!, budget)
-        const outcome = await syncApp(source, store, item, appDeadline)
+        const source = createPluginStateSourceReader(c, deadline, item.required_commit_at, sourceWork)
+        const outcome = await syncApp(source, store, item, appDeadline, syncStatuses.get(item.app_id) ?? null)
         // A prior attempt may have advanced a pointer without committing its
         // purge. Explicit reset repairs likewise invalidate conservatively.
         const retryOrReset = item.attempts > 1 || item.jobs.some(job => job.kind === 'full' && job.ref === '')
-        return { ...outcome, appPublished: store.hasPublished(await pluginStateAppKey(item.app_id)), changed: store.changed || retryOrReset }
+        return { ...outcome, appPublished: store.hasPublished(await pluginStateAppKey(item.app_id)), changed: store.changed || (retryOrReset && !(outcome.error instanceof PluginStateSourceUnavailable)) }
       })
       const done = outcomes.filter(outcome => outcome.ok)
       const failed = outcomes.filter(outcome => !outcome.ok && !outcome.deferred)
@@ -1097,17 +1169,19 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
   return result
 }
 
-export async function drainServingPolicies(pg: Pg, source: SourceReader, pointers: PointerStore, budget: PublicationBudget, deadline: number, result: PluginStateDrainResult) {
+export async function drainServingPolicies(c: SyncContext, pg: Pg, pointers: PointerStore, budget: PublicationBudget, deadline: number, result: PluginStateDrainResult) {
   // Reserve for all five CAS attempts before taking a lease. The claim cap
   // also bounds deleted/no-op rows, which consume no provider operations.
   const maxClaims = Math.floor(budget.remaining / POLICY_PUBLICATION_OPERATIONS)
   for (let claimed = 0; claimed < maxClaims && Date.now() < deadline && budget.remaining >= POLICY_PUBLICATION_OPERATIONS; claimed++) {
-    const [claim] = await mutate(pg, db => rows<{ token: string, generation: string, app_id: string, active_epoch: string | null }>(db, sql`SELECT * FROM public.claim_serving_policy_sync()`))
+    const [claim] = await mutate(pg, db => rows<{ token: string, generation: string, app_id: string, active_epoch: string | null, required_commit_at: string }>(db, sql`SELECT * FROM public.claim_serving_policy_sync_source()`))
     if (!claim)
       break
     result.claims++
     let ok = false
+    let deferred = false
     try {
+      const source = createPluginStateSourceReader(c, deadline, claim.required_commit_at)
       const [row] = await sourceRows<{ serving_regions: unknown, serving_region_mode: unknown }>(source, sql`SELECT serving_regions, serving_region_mode FROM public.apps WHERE app_id = ${claim.app_id}`)
       if (row) {
         const publish = createServingPolicyPublisher(pointers, claim.generation, budget)
@@ -1120,10 +1194,15 @@ export async function drainServingPolicies(pg: Pg, source: SourceReader, pointer
       result.apps++
     }
     catch (error) {
-      result.failed++
+      deferred = error instanceof PluginStateSourceUnavailable
+      if (!deferred)
+        result.failed++
       cloudlogErr({ message: 'serving policy sync failed', app_id: claim.app_id, error: serializeError(error) })
     }
-    await mutate(pg, db => db.execute(sql`SELECT public.ack_serving_policy_sync(${claim.token}::uuid, ${ok})`))
+    if (deferred)
+      await mutate(pg, db => db.execute(sql`SELECT public.defer_serving_policy_sync(${claim.token}::uuid)`))
+    else
+      await mutate(pg, db => db.execute(sql`SELECT public.ack_serving_policy_sync(${claim.token}::uuid, ${ok})`))
     if (!ok)
       break
   }

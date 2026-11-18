@@ -7,7 +7,7 @@ logic. Stats collection and device channel writes retain their existing sinks.
 
 The database remains the source of truth. Statement triggers enqueue changed
 apps, bundle names, manifests, and device overrides. The API worker reads the
-primary on this write path, writes immutable KV documents, and conditionally
+EU read replica on this write path, writes immutable KV documents, and conditionally
 publishes pointers to them in R2. It then queues the app's Cache API purge.
 Plugin requests never rebuild state from the primary.
 
@@ -165,7 +165,7 @@ fits one immutable KV document. Tests cover that size and a separate
 1,001-manifest pagination check that resumes across invocations. These are
 local checks, not a production throughput benchmark.
 
-Source reads use at most four concurrent primary transactions per drain.
+Source reads use at most four concurrent EU replica transactions per drain.
 Queue claims, acknowledgements, garbage-collection progress and explicit repair
 enqueue calls also use separate short read-write transactions. These functions
 mutate queue state even though they are invoked with `SELECT`; allowing
@@ -402,10 +402,37 @@ from the source. Do not assume that daily app refresh or a successful unrelated
 publication repaired non-app dependencies. Failed archive entries require an
 explicit repair; do not reset poison-job retry budgets automatically each day.
 
-Source snapshots use fresh, bounded internal repeatable-read transactions on
-the primary, after which provider I/O runs with the transaction released. This
-is background publication, not a device request or a request-path Hyperdrive
-cache bypass. Gate primary load before increasing writer/backfill work.
+Source snapshots use bounded internal repeatable-read transactions on EU,
+then release the transaction before provider I/O. Every source transaction
+checks its durable primary claim barrier against `read_replica_commit_marker`
+in that same snapshot. The marker transaction must have started after the
+producer commit became visible to the claim. All ten source tables must also
+be streaming in the marker's subscription; a heartbeat alone does not prove
+initial table-copy completion. Missing markers, unready subscriptions, replica
+lag, connection errors, or missing EU bindings defer publication without a
+primary source fallback or completion ACK. Deferral preserves the exact barrier
+and cursor and refunds the unused publication attempt; actual publication
+failures still have at most five attempts. Full continuations carry the barrier
+forward. Independently published keys can still settle on a later deferral.
+
+Backfill and policy inventory page `apps(app_id)` on EU, at most 25 and 100
+identities per wake respectively. Primary merges bounded bookkeeping identities
+for deleted apps, then atomically commits enqueue and cursor progress with a
+compare-and-swap check. The periodic database tick performs only control-plane
+work. An explicit `enqueue_plugin_state_full_sync(NULL)` now requests this
+asynchronous inventory and returns zero immediately; explicit app lists retain
+their synchronous enqueue behavior. Only an explicit repair can refresh poison
+budgets or restore archived exact keys. Normal backfill preserves the archive.
+
+The API worker's prod and alpha environments reuse the existing
+`HYPERDRIVE_CAPGO_READ_EU` resource used by plugin workers, under the dedicated
+`HYPERDRIVE_CAPGO_READ_PLUGIN_STATE_EU` binding. This leaves unrelated API
+read helpers on their existing routes. Preprod has no EU
+publisher binding and fails closed because its legacy plugin read resource
+points to a development primary. Local/CI must explicitly configure
+`LOCAL_READ_REPLICA_SUPABASE_DB_URL` in a `*-local` runtime; only that fixture
+mode omits the logical-subscription readiness check. No request-path cache
+bypass or shared Hyperdrive cache change is involved.
 
 Timing logs have `message=plugin_state_request_timing`, the path, method,
 response source, status, Cloudflare colo, duration in milliseconds, and sampling

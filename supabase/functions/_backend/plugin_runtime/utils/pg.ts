@@ -26,7 +26,7 @@ import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness.ts'
 import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isReplicaTooFarBehind, REPLICA_LAG_QUERY, replicationLagSecondsFromQueryRow, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
-import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
+import { shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
 import type { VersionManifestRow } from './version_manifest_sql.ts'
 import { completeVersionManifest, versionManifestRowsSql } from './version_manifest_sql.ts'
@@ -478,7 +478,8 @@ export function getDatabaseURL(c: Context, readOnly = false): string {
       return localReadOnlyDatabaseURL
   }
 
-  if (readOnly && shouldRequireReadReplica(c)) {
+  // Read routing fails closed in every runtime, including direct/Deno entrypoints.
+  if (readOnly) {
     throw new Error('Read replica is required for this endpoint')
   }
 

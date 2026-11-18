@@ -11,7 +11,7 @@ import { versionManifestJsonSql } from './version_manifest_sql.ts'
  * so both paths hand the endpoints the same row values.
  */
 
-/** Any Drizzle Postgres database (the plugin's request client or the sync's primary client). */
+/** Any Drizzle Postgres database (the plugin's request client or the sync's EU replica client). */
 type AnyPgDatabase = { select: (...args: any[]) => any }
 
 export function getAlias() {
