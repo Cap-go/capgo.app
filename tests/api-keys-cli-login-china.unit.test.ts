@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
-import { buildLoginCliCommand } from '../src/utils/onboardingSetupMode'
+
+/** Literal China login command (must match helper output; not derived from the helper in assertions). */
+const CHINA_LOGIN_COMMAND = 'npx @capgo/cli@latest login --api-host https://api.capgo.com.cn'
 
 vi.mock('@vuepic/vue-datepicker', () => ({ VueDatePicker: { template: '<div />' } }))
 vi.mock('~/components/permissions/ChannelPermissionOverridesPanel.vue', () => ({ default: { template: '<div />' } }))
@@ -85,11 +87,14 @@ function setChinaConsoleLocation() {
 describe('ApiKeys CLI login guidance on China console', () => {
   let container: HTMLDivElement
   let app: ReturnType<typeof createApp>
+  const writeText = vi.fn().mockResolvedValue(undefined)
 
   beforeEach(() => {
     vi.stubEnv('VITE_API_HOST', 'https://api.capgo.app')
     vi.stubEnv('VITE_APP_URL', 'https://console.capgo.com.cn')
     setChinaConsoleLocation()
+    writeText.mockClear()
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
     container = document.createElement('div')
     document.body.appendChild(container)
   })
@@ -102,7 +107,7 @@ describe('ApiKeys CLI login guidance on China console', () => {
     vi.resetModules()
   })
 
-  it('shows the login command with the China API host', async () => {
+  it('shows the login command with the China API host and copies the same literal', async () => {
     const ApiKeysPage = (await import('../src/pages/ApiKeys.vue')).default
     app = createApp(ApiKeysPage)
     app.component('DataTable', { template: '<div data-test="api-key-data-table" />' })
@@ -112,9 +117,14 @@ describe('ApiKeys CLI login guidance on China console', () => {
     app.mount(container)
     await nextTick()
     await vi.waitFor(() => expect(container.querySelector('[data-test="cli-login-guidance"] code')).not.toBeNull())
-    const command = container.querySelector('[data-test="cli-login-guidance"] code')?.textContent
-    const expected = buildLoginCliCommand(' --api-host https://api.capgo.com.cn')
-    expect(command).toBe(expected)
-    expect(command).not.toContain('api.capgo.app')
+    const code = container.querySelector('[data-test="cli-login-guidance"] code')
+    expect(code?.textContent).toBe(CHINA_LOGIN_COMMAND)
+    expect(code?.textContent).not.toContain('api.capgo.app')
+    expect(container.querySelector('[data-test="cli-login-guidance-description"]')?.textContent)
+      .toBe('cli-login-guidance-description-china-api')
+    const copyButton = container.querySelector('[data-test="cli-login-guidance-copy"]') as HTMLButtonElement | null
+    expect(copyButton).not.toBeNull()
+    copyButton!.click()
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(CHINA_LOGIN_COMMAND))
   })
 })

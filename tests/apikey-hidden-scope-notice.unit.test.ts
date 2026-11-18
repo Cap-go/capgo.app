@@ -64,7 +64,8 @@ vi.mock('~/services/permissions', () => ({
   checkPermissions: async () => true,
 }))
 
-vi.mock('~/services/console', () => {
+vi.mock('~/services/console', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/services/console')>()
   function createQuery(table: string) {
     let selectedId: string | null = null
     const query: Record<string, any> = {
@@ -121,14 +122,7 @@ vi.mock('~/services/console', () => {
   }
 
   return {
-    getLocalConfig: () => ({
-      apiHost: 'https://api.capgo.app',
-      host: 'https://console.capgo.app',
-      hostWeb: '',
-      stripeEnabled: true,
-    }),
-    getConsoleApiHost: () => 'https://api.capgo.app',
-    PROD_API_URL: 'https://api.capgo.app',
+    ...actual,
     useConsole: () => ({
       auth: {
         getClaims: async () => ({ data: { claims: { sub: 'user-id' } } }),

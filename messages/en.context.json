@@ -1705,6 +1705,7 @@
   "cli-login-expiration-warning": "Used in Capgo web console areas: pages. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cli-login-guidance-command-copied": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cli-login-guidance-description": "Used in Capgo web console areas: pages. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cli-login-guidance-description-china-api": "Used on console.capgo.com.cn ApiKeys CLI guidance when login includes --api-host. Role: helper text; explains paste flow because browser login is disabled with --api-host.",
   "cli-login-guidance-mcp-link": "Used in Capgo web console areas: pages. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cli-login-guidance-title": "Used in Capgo web console areas: pages. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cli-login-hashed-warning": "Used in Capgo web console areas: pages. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

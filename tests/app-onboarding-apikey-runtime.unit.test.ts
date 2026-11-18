@@ -292,32 +292,40 @@ describe('app onboarding API key runtime loading', () => {
   })
 
   it('shows China build init on the builder checklist when hosted on console.capgo.com.cn', async () => {
-    vi.stubEnv('VITE_API_HOST', 'https://api.capgo.app')
-    vi.stubEnv('VITE_APP_URL', 'https://console.capgo.com.cn')
-    Object.defineProperty(window, 'location', {
-      configurable: true,
-      value: {
-        hostname: 'console.capgo.com.cn',
-        origin: 'https://console.capgo.com.cn',
-        href: 'https://console.capgo.com.cn/',
-        search: '',
-      },
-    })
-    const chinaSuffix = ' --api-host https://api.capgo.com.cn'
-    const expectedBase = buildInitCliCommand('runtime-api-key', chinaSuffix)
-    const { container } = await mountFlow(
-      {},
-      {
-        onboarding: true,
-        setupAppId: runtimeMocks.app.app_id,
-        showChecklist: true,
-        initialChecklistPath: 'builder',
-      },
-    )
-    await vi.waitFor(() => expect(container.querySelector('[data-test="builder-checklist-command"] code')).not.toBeNull())
-    const command = container.querySelector('[data-test="builder-checklist-command"] code')?.textContent ?? ''
-    expect(command).toBe(`${expectedBase} --platform ios`)
-    expect(command).not.toContain('api.capgo.app')
+    const locationDescriptor = Object.getOwnPropertyDescriptor(window, 'location')
+    try {
+      vi.stubEnv('VITE_API_HOST', 'https://api.capgo.app')
+      vi.stubEnv('VITE_APP_URL', 'https://console.capgo.com.cn')
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: {
+          hostname: 'console.capgo.com.cn',
+          origin: 'https://console.capgo.com.cn',
+          href: 'https://console.capgo.com.cn/',
+          search: '',
+        },
+      })
+      const chinaSuffix = ' --api-host https://api.capgo.com.cn'
+      const expectedBase = buildInitCliCommand('runtime-api-key', chinaSuffix)
+      const { container } = await mountFlow(
+        {},
+        {
+          onboarding: true,
+          setupAppId: runtimeMocks.app.app_id,
+          showChecklist: true,
+          initialChecklistPath: 'builder',
+        },
+      )
+      await vi.waitFor(() => expect(container.querySelector('[data-test="builder-checklist-command"] code')).not.toBeNull())
+      const command = container.querySelector('[data-test="builder-checklist-command"] code')?.textContent ?? ''
+      expect(command).toBe(`${expectedBase} --platform ios`)
+      expect(command).not.toContain('api.capgo.app')
+    }
+    finally {
+      vi.unstubAllEnvs()
+      if (locationDescriptor)
+        Object.defineProperty(window, 'location', locationDescriptor)
+    }
   })
 
   it('shares an in-flight key load across concurrent onboarding component instances', async () => {
