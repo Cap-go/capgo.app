@@ -283,7 +283,8 @@ async function finalizeExpiredSimulatorSession(
   }
   if (!billingRecorded)
     return
-  await markSession(c, input.row.id, 'stopped')
+  const finishedAt = deviceStoppedAt ?? new Date(billEnd).toISOString()
+  await markSession(c, input.row.id, 'stopped', { finishedAt })
 }
 
 export async function stopOrphanedSimulatorDevices(c: Context, limit = 50): Promise<number> {
@@ -441,7 +442,7 @@ export function simulatorSessionPastExpiry(
   return now >= activity + SIMULATOR_IDLE_TIMEOUT_MINUTES * 60_000
 }
 
-export async function markSession(c: Context, id: string, status: 'in-progress' | 'stopped' | 'errored', extra?: { url?: string, emulatorId?: string }) {
+export async function markSession(c: Context, id: string, status: 'in-progress' | 'stopped' | 'errored', extra?: { url?: string, emulatorId?: string, finishedAt?: string }) {
   const rows = await queryWrite<{ id: string }>(c, `
     UPDATE public.simulator_sessions
     SET status = $2,
@@ -449,11 +450,11 @@ export async function markSession(c: Context, id: string, status: 'in-progress' 
         emulator_id = COALESCE($4, emulator_id),
         started_at = CASE WHEN $2 = 'in-progress' AND started_at IS NULL THEN now() ELSE started_at END,
         last_activity_at = CASE WHEN $2 = 'in-progress' THEN now() ELSE last_activity_at END,
-        finished_at = CASE WHEN $2 IN ('stopped', 'errored') THEN now() ELSE finished_at END,
+        finished_at = CASE WHEN $2 IN ('stopped', 'errored') THEN COALESCE($5::timestamptz, now()) ELSE finished_at END,
         updated_at = now()
     WHERE id = $1::uuid
     RETURNING id
-  `, [id, status, extra?.url ?? null, extra?.emulatorId ?? null])
+  `, [id, status, extra?.url ?? null, extra?.emulatorId ?? null, extra?.finishedAt ?? null])
   if (rows.length !== 1)
     throw simpleError('not_found', 'Simulator session not found.')
 }
@@ -964,7 +965,7 @@ export async function stopSimulator(c: Context, sessionId: string, body: Simulat
   }
   if (!canFinishSimulatorStop({ remoteStatus, billingRecorded, seconds }))
     throw quickError(503, 'simulator_billing_failed', 'Build minutes were not recorded. Retry stop.', { id: row.id }, undefined, { alert: false })
-  await markSession(c, row.id, 'stopped')
+  await markSession(c, row.id, 'stopped', { finishedAt: stoppedAt ?? new Date(billedAt).toISOString() })
   return c.json({ data: { id: row.id, url: row.url, status: 'stopped', platform, kind: 'simulator', build_time_seconds: seconds } })
 }
 

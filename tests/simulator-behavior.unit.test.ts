@@ -103,6 +103,16 @@ describe('simulator idle behavior', () => {
     expect(update).toContain('in-progress')
   })
 
+  it('records confirmed session end as finished_at when stopping', async () => {
+    const { markSession } = await import('../supabase/functions/_backend/public/build/simulator.ts')
+    const confirmedEnd = '2026-11-09T12:06:00.000Z'
+    await markSession(context, sessionId, 'stopped', { finishedAt: confirmedEnd })
+    const params = pgState.queryParams.find(entry => entry?.[1] === 'stopped')
+    expect(params?.[4]).toBe(confirmedEnd)
+    const update = pgState.queries.find(query => query.includes('finished_at = CASE'))
+    expect(update).toContain('$5::timestamptz')
+  })
+
   it('bumps activity through the shared SQL function', async () => {
     const { bumpSimulatorSessionActivity, simulatorActivityBumpSql } = await import('../supabase/functions/_backend/public/build/simulator.ts')
     expect(simulatorActivityBumpSql()).toContain('bump_simulator_session_activity')

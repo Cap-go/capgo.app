@@ -295,7 +295,7 @@ SELECT is(
 
 -- The device host stopped this one after a few minutes without input.
 INSERT INTO public.simulator_sessions (
-  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, device_stopped_at
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, last_activity_at, device_stopped_at
 )
 VALUES (
   '99000000-0000-4000-8000-000000000009',
@@ -306,6 +306,7 @@ VALUES (
   '6aa76066-55ef-4238-ade6-0b32334a4097',
   40,
   now() - interval '10 minutes',
+  now() - interval '8 minutes',
   now() - interval '3 minutes'
 );
 
