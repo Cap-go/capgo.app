@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const orgId = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
 const sessionId = '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4'
 const userId = '6aa76066-55ef-4238-ade6-0b32334a4097'
+const freshActivity = () => new Date(Date.now() - 60_000).toISOString()
+const sessionStarted = () => new Date(Date.now() - 20 * 60_000).toISOString()
 
 const pgState = vi.hoisted(() => ({
   queries: [] as string[],
@@ -12,6 +14,8 @@ const pgState = vi.hoisted(() => ({
     pgState.queries.push(sql)
     if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK')
       return { rowCount: 0, rows: [] }
+    if (sql.includes('last_activity_at = $2'))
+      return { rowCount: 1, rows: [{ last_activity_at: params?.[1] ?? freshActivity() }] }
     if (sql.includes('bump_simulator_session_activity'))
       return { rowCount: 1, rows: [{ bumped: 1 }] }
     if (sql.includes('WHERE id = $1::uuid AND owner_org'))
@@ -24,8 +28,8 @@ const pgState = vi.hoisted(() => ({
           status: 'in-progress',
           url: 'https://host.test/s/x/',
           emulator_id: 'emu-1',
-          started_at: '2026-11-17T09:00:00.000Z',
-          last_activity_at: '2026-11-17T09:00:00.000Z',
+          started_at: sessionStarted(),
+          last_activity_at: freshActivity(),
           device_stopped_at: null,
           requested_by: userId,
           max_duration_minutes: 40,
@@ -89,13 +93,57 @@ describe('simulator entrypoint activity bumps', () => {
   })
 
   it('bumps activity when a console command runs', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      JSON.stringify({ result: { data: null } }),
-      { status: 200 },
-    )))
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const target = typeof url === 'string' ? url : url instanceof Request ? url.url : url.toString()
+      if (target.includes('/v2/device-run-sessions/'))
+        return new Response(JSON.stringify({ data: { status: 'running', lastActivityAt: freshActivity() } }), { status: 200 })
+      return new Response(JSON.stringify({ result: { data: null } }), { status: 200 })
+    }))
     const { commandSimulator } = await import('../supabase/functions/_backend/public/build/simulator.ts')
     await commandSimulator(context, sessionId, { app_id: 'com.test.sim', command: 'home' }, userId, principal)
     expect(pgState.queries.some(query => query.includes('bump_simulator_session_activity'))).toBe(true)
+  })
+
+  it('accepts commands when the database looks idle but the host is still running', async () => {
+    const freshActivity = new Date(Date.now() - 60_000).toISOString()
+    const staleActivity = new Date(Date.now() - 10 * 60_000).toISOString()
+    pgState.query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      pgState.queries.push(sql)
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK')
+        return { rowCount: 0, rows: [] }
+      if (sql.includes('last_activity_at = $2'))
+        return { rowCount: 1, rows: [{ last_activity_at: freshActivity }] }
+      if (sql.includes('bump_simulator_session_activity'))
+        return { rowCount: 1, rows: [{ bumped: 1 }] }
+      if (sql.includes('WHERE id = $1::uuid AND owner_org'))
+        return {
+          rowCount: 1,
+          rows: [{
+            id: sessionId,
+            app_id: 'com.test.sim',
+            platform: 'ios',
+            status: 'in-progress',
+            url: 'https://host.test/s/x/',
+            emulator_id: 'emu-1',
+            started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+            last_activity_at: staleActivity,
+            device_stopped_at: null,
+            requested_by: userId,
+            max_duration_minutes: 40,
+          }],
+        }
+      return { rowCount: 0, rows: [] }
+    })
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const target = typeof url === 'string' ? url : url instanceof Request ? url.url : url.toString()
+      if (target.includes('/v2/device-run-sessions/'))
+        return new Response(JSON.stringify({ data: { status: 'running', lastActivityAt: freshActivity } }), { status: 200 })
+      return new Response(JSON.stringify({ result: { data: null } }), { status: 200 })
+    }))
+    const { commandSimulator } = await import('../supabase/functions/_backend/public/build/simulator.ts')
+    await expect(commandSimulator(context, sessionId, { app_id: 'com.test.sim', command: 'home' }, userId, principal)).resolves.toBeTruthy()
+    expect(pgState.queries.some(query => query.includes('bump_simulator_session_activity'))).toBe(true)
+    expect(pgState.queries.some(query => query.includes('SET status = $2'))).toBe(false)
   })
 
   it('bumps activity after a saved build install', async () => {

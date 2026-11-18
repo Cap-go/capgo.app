@@ -857,11 +857,15 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
     bundleId: typeof body.bundle_id === 'string' ? body.bundle_id.trim() : undefined,
   })
   const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
-  const touch = await touchSimulatorActivity(c, sessionId, { orgId, userId, appId, row })
-  if (touch === 'expired' || row.status !== 'in-progress' || !row.url)
+  const sync = await syncSimulatorSessionFromHost(c, row, { orgId, userId }, { hostTimeoutMs: SIMULATOR_ORG_HOST_SYNC_TIMEOUT_MS })
+  if (sync === 'finalized')
     throw simpleError('invalid_request', SIMULATOR_STOPPED_MESSAGE)
+  const { row: liveRow } = await ownedSession(c, principal, userId, appId, sessionId)
+  if (liveRow.status !== 'in-progress' || !liveRow.url)
+    throw simpleError('invalid_request', SIMULATOR_STOPPED_MESSAGE)
+  await bumpSimulatorSessionActivity(c, sessionId)
   const { accessKey } = simulatorConfig(c)
-  const response = await fetch(simulatorDeviceUrl(row.url, 'agent-device/rpc'), {
+  const response = await fetch(simulatorDeviceUrl(liveRow.url, 'agent-device/rpc'), {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${accessKey}`,
@@ -876,8 +880,8 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
   }
   let image: string | undefined
   if (rpc.params.command === 'screenshot') {
-    image = await simulatorScreenshot(row.url, accessKey, appId)
-    await touchSimulatorActivity(c, sessionId, { orgId, userId, appId, row })
+    image = await simulatorScreenshot(liveRow.url, accessKey, appId)
+    await bumpSimulatorSessionActivity(c, sessionId)
   }
   return c.json({
     data: {

@@ -84,6 +84,7 @@ const liveRow = {
 
 describe('simulator idle behavior', () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
     pgState.queries.length = 0
     pgState.queryParams.length = 0
     pgState.query.mockReset()
@@ -194,6 +195,33 @@ describe('simulator idle behavior', () => {
     const { syncInProgressSimulatorSessionsFromHost } = await import('../supabase/functions/_backend/public/build/simulator.ts')
     const synced = await syncInProgressSimulatorSessionsFromHost(context)
     expect(synced).toBe(1)
+  })
+
+  it('expires the next org when one org expiry throws', async () => {
+    const failingOrg = '91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57'
+    const nextOrg = orgId
+    let expireRpcCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 })))
+    pgState.query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('DISTINCT owner_org'))
+        return { rowCount: 2, rows: [{ owner_org: failingOrg }, { owner_org: nextOrg }] }
+      if (sql.includes('expire_simulator_sessions')) {
+        expireRpcCalls++
+        if (params?.[0] === failingOrg)
+          throw new Error('expire failed')
+        return { rowCount: 1, rows: [{ expire_simulator_sessions: 1 }] }
+      }
+      if (sql.includes('owner_org = $1::uuid') && sql.includes('emulator_id IS NOT NULL') && !sql.includes('FOR UPDATE'))
+        return { rowCount: 0, rows: [] }
+      return defaultPgQuery(sql, params)
+    })
+    const simulator = await import('../supabase/functions/_backend/public/build/simulator.ts')
+    vi.spyOn(simulator, 'syncInProgressSimulatorSessionsFromHost').mockResolvedValue(0)
+    vi.spyOn(simulator, 'stopOrphanedSimulatorDevices').mockResolvedValue(0)
+    vi.spyOn(simulator, 'syncInProgressSimulatorSessionsForOrgFromHost').mockResolvedValue({ synced: 0, hostUnreachableSessionIds: [] })
+    const { sweepDueSimulatorSessions } = await import('../supabase/functions/_backend/public/build/concurrency.ts')
+    await sweepDueSimulatorSessions(context)
+    expect(expireRpcCalls).toBe(2)
   })
 
   it('still expires orgs and stops orphans when one host sync row fails', async () => {

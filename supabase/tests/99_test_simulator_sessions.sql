@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(40);
+SELECT plan(45);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -306,8 +306,18 @@ VALUES (
   '6aa76066-55ef-4238-ade6-0b32334a4097',
   40,
   now() - interval '10 minutes',
-  now() - interval '8 minutes',
+  now() - interval '1 minute',
   now() - interval '3 minutes'
+);
+
+SELECT is(
+  (
+    SELECT COALESCE(last_activity_at, started_at) > now() - make_interval(mins => 5)
+    FROM public.simulator_sessions
+    WHERE id = '99000000-0000-4000-8000-000000000009'
+  ),
+  true,
+  'a device stopped session is not idle eligible from stored activity alone'
 );
 
 SELECT is(
@@ -387,7 +397,40 @@ SELECT is(
       AND build_id = '99000000-0000-4000-8000-000000000010'
   ),
   0::bigint,
-  'an unstarted session is not billed'
+  'a device stopped before start session is not billed'
+);
+
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, created_at, started_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000011',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'android',
+  'starting',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '45 minutes',
+  NULL
+);
+
+SELECT is(
+  public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+  1,
+  'a never started session past max duration is expired'
+);
+
+SELECT cmp_ok(
+  (
+    SELECT build_time_unit
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id = '99000000-0000-4000-8000-000000000011'
+  ),
+  '>=',
+  2400::bigint,
+  'a never started session is billed from created_at until max duration'
 );
 
 SELECT is(
@@ -429,16 +472,12 @@ SELECT throws_ok(
 SELECT set_config('capgo.allow_owner_org_transfer', 'false', true);
 
 UPDATE public.simulator_sessions
-SET status = 'stopped',
-    finished_at = now()
-WHERE app_id = 'com.test.simulator.session'
-  AND status = 'in-progress'
-  AND id <> '99000000-0000-4000-8000-000000000002';
-
-UPDATE public.simulator_sessions
 SET started_at = now() - interval '2 hours',
     last_activity_at = now() - interval '2 hours'
-WHERE id = '99000000-0000-4000-8000-000000000002';
+WHERE id IN (
+  '99000000-0000-4000-8000-000000000002',
+  '99000000-0000-4000-8000-000000000005'
+);
 
 SELECT set_config('capgo.allow_owner_org_transfer', 'true', true);
 
@@ -460,21 +499,50 @@ SELECT is(
 
 SELECT set_config('capgo.allow_owner_org_transfer', 'false', true);
 
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, last_activity_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000012',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'ios',
+  'in-progress',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '15 minutes',
+  now() - interval '2 minutes'
+);
+
+SELECT is(
+  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000012'),
+  'in-progress',
+  'an active simulator session is open before app delete'
+);
+
 DELETE FROM public.apps WHERE app_id = 'com.test.simulator.session';
 
 SELECT is(
   (
-    SELECT count(*)::integer
+    SELECT count(*)::bigint
     FROM public.build_logs
     WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
-      AND build_id IN (
-        '99000000-0000-4000-8000-000000000001',
-        '99000000-0000-4000-8000-000000000002',
-        '99000000-0000-4000-8000-000000000004'
-      )
+      AND build_id = '99000000-0000-4000-8000-000000000012'
   ),
-  3,
-  'deleting the app keeps the simulator minutes'
+  1::bigint,
+  'deleting the app settles an in progress simulator into build_logs'
+);
+
+SELECT cmp_ok(
+  (
+    SELECT build_time_unit
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id = '99000000-0000-4000-8000-000000000012'
+  ),
+  '>=',
+  300::bigint,
+  'deleting the app bills the running session up to the idle cap'
 );
 
 SELECT ok(

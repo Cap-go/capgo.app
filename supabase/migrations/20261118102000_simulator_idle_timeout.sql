@@ -93,11 +93,14 @@ BEGIN
       expired_count := expired_count + 1;
       CONTINUE;
     END IF;
+    opened_at := COALESCE(session_row.started_at, session_row.created_at);
     IF session_row.started_at IS NULL THEN
-      elapsed := 0;
       effective_stop := COALESCE(session_row.device_stopped_at, now());
+      elapsed := LEAST(
+        session_row.max_duration_minutes * 60,
+        GREATEST(1, round(extract(epoch FROM (effective_stop - opened_at)))::bigint)
+      );
     ELSE
-      opened_at := session_row.started_at;
       activity_at := COALESCE(session_row.last_activity_at, session_row.started_at);
       effective_stop := LEAST(
         COALESCE(session_row.device_stopped_at, now()),
@@ -170,22 +173,25 @@ BEGIN
     IF session_row.device_stopped_at IS NOT NULL AND session_row.started_at IS NULL THEN
       CONTINUE;
     END IF;
+    opened_at := COALESCE(session_row.started_at, session_row.created_at);
     IF session_row.started_at IS NULL THEN
-      elapsed := 0;
       effective_stop := COALESCE(session_row.device_stopped_at, now());
+      elapsed := LEAST(
+        session_row.max_duration_minutes * 60,
+        GREATEST(0, round(extract(epoch FROM (effective_stop - opened_at)))::bigint)
+      );
     ELSE
-    opened_at := session_row.started_at;
-    activity_at := COALESCE(session_row.last_activity_at, session_row.started_at);
-    effective_stop := LEAST(
-      COALESCE(session_row.device_stopped_at, now()),
-      opened_at + make_interval(mins => session_row.max_duration_minutes),
-      activity_at + make_interval(mins => 5)
-    );
-    elapsed := LEAST(
-      session_row.max_duration_minutes * 60,
-      GREATEST(1, round(extract(epoch FROM (effective_stop - opened_at)))::bigint)
-    );
-  END IF;
+      activity_at := COALESCE(session_row.last_activity_at, session_row.started_at);
+      effective_stop := LEAST(
+        COALESCE(session_row.device_stopped_at, now()),
+        opened_at + make_interval(mins => session_row.max_duration_minutes),
+        activity_at + make_interval(mins => 5)
+      );
+      elapsed := LEAST(
+        session_row.max_duration_minutes * 60,
+        GREATEST(0, round(extract(epoch FROM (effective_stop - opened_at)))::bigint)
+      );
+    END IF;
     IF elapsed > 0 THEN
       INSERT INTO public.build_logs (
         org_id, user_id, build_id, platform, build_time_unit, billable_seconds, app_id, created_at

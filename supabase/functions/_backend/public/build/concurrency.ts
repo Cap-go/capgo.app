@@ -234,8 +234,19 @@ export async function sweepDueSimulatorSessions(c: Context): Promise<{ orgs: num
       ORGS_WITH_DUE_SIMULATOR_SESSIONS_SQL,
       [SIMULATOR_IDLE_TIMEOUT_MINUTES],
     )
-    for (const row of orgs.rows)
-      await expireSimulatorSessions(c, row.owner_org)
+    for (const row of orgs.rows) {
+      try {
+        await expireSimulatorSessions(c, row.owner_org)
+      }
+      catch (error) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'Simulator expiry failed for one org',
+          orgId: row.owner_org,
+          error,
+        })
+      }
+    }
     const orphanedDevices = await stopOrphanedSimulatorDevices(c)
     return { orgs: orgs.rows.length, orphanedDevices, hostSync }
   }
@@ -245,14 +256,46 @@ export async function sweepDueSimulatorSessions(c: Context): Promise<{ orgs: num
   }
 }
 
+async function inProgressEmulatorSessionIds(c: Context, orgId: string): Promise<string[]> {
+  let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
+  try {
+    pgPool = await getPgClient(c, true)
+    const result = await pgPool.query<{ id: string }>(`
+      SELECT id::text AS id
+      FROM public.simulator_sessions
+      WHERE owner_org = $1::uuid
+        AND status IN ('new', 'queued', 'starting', 'in-progress')
+        AND emulator_id IS NOT NULL
+    `, [orgId])
+    return result.rows.map(row => row.id)
+  }
+  finally {
+    if (pgPool)
+      await closeClient(c, pgPool)
+  }
+}
+
 export async function expireSimulatorSessions(c: Context, orgId: string): Promise<void> {
   const { syncInProgressSimulatorSessionsForOrgFromHost, stopDevicesForDueSimulatorExpiry } = await import('./simulator.ts')
-  await recordStoppedSimulatorDevices(c, orgId)
-  const { hostUnreachableSessionIds } = await syncInProgressSimulatorSessionsForOrgFromHost(c, orgId)
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   let client: PgClient | null = null
   let dueForDeviceStop: Array<{ id: string, emulator_id: string | null, device_stopped_at: string | null }> = []
+  let hostUnreachableSessionIds: string[] = []
   try {
+    await recordStoppedSimulatorDevices(c, orgId)
+    try {
+      const sync = await syncInProgressSimulatorSessionsForOrgFromHost(c, orgId)
+      hostUnreachableSessionIds = sync.hostUnreachableSessionIds
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Simulator org host sync failed; idle expiry will be skipped',
+        orgId,
+        error,
+      })
+      hostUnreachableSessionIds = await inProgressEmulatorSessionIds(c, orgId)
+    }
     pgPool = await getPgClient(c)
     client = await checkoutPgClient(pgPool) as PgClient
     await beginWriteTransaction(client)

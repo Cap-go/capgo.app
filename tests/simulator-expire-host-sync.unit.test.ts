@@ -220,6 +220,29 @@ describe('simulator org expiry host sync', () => {
     stopSpy.mockRestore()
   })
 
+  it('still expires with idle skipped when org host sync read fails', async () => {
+    const simulator = await import('../supabase/functions/_backend/public/build/simulator.ts')
+    vi.spyOn(simulator, 'syncInProgressSimulatorSessionsForOrgFromHost').mockRejectedValue(new Error('read failed'))
+    vi.spyOn(simulator, 'stopDevicesForDueSimulatorExpiry').mockResolvedValue(undefined)
+    pgState.query.mockImplementation(async (sql: string, params?: unknown[]): Promise<PgQueryResult> => {
+      pgState.queries.push(sql)
+      pgState.queryParams.push(params ?? [])
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK')
+        return { rowCount: 0, rows: [] }
+      if (sql.includes('emulator_id IS NOT NULL') && sql.includes('owner_org = $1::uuid') && !sql.includes('FOR UPDATE'))
+        return { rowCount: 1, rows: [{ id: sessionId }] }
+      if (sql.includes('FOR UPDATE') && sql.includes('simulator_sessions'))
+        return { rowCount: 0, rows: [] }
+      if (sql.includes('expire_simulator_sessions'))
+        return { rowCount: 1, rows: [{ expire_simulator_sessions: 0 }] }
+      return { rowCount: 0, rows: [] }
+    })
+    const { expireSimulatorSessions } = await import('../supabase/functions/_backend/public/build/concurrency.ts')
+    await expireSimulatorSessions(context, orgId)
+    const expireIndex = pgState.queries.findIndex(query => query.includes('expire_simulator_sessions'))
+    expect(pgState.queryParams[expireIndex]).toEqual([orgId, [sessionId]])
+  })
+
   it('finishes org reserve sync within the org wall-clock budget', async () => {
     vi.stubGlobal('fetch', vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       await new Promise<void>((_resolve, reject) => {
