@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
 import { matchesComponent } from '../scripts/release-scope'
 import { MAX_SNIPPET_BYTES, SNIPPETS, SNIPPET_ZONE_ID } from '../scripts/snippet/catalog'
+import { CUSTOM_DOMAIN_PLUGIN_EXPRESSION } from '../scripts/snippet/custom-domains'
 import { deploySnippets } from '../scripts/snippet/deploy-snippets'
 
 const snippets = [{ name: 'one', code: 'export default { fetch() {} }\n' }, { name: 'two', code: 'export default { fetch() { return 1 } }\n' }]
@@ -63,8 +64,8 @@ function fixture(definitions = snippets) {
   return { definitions, live, rules, calls, writes, ruleWrites, fetcher, setFail: () => { failUpload = true }, setCorrupt: () => { corruptUpload = true }, setMulti: () => { multiModule = true }, setDrift: () => { ruleDrift = true }, setCorruptRules: () => { corruptRules = true }, setFailRules: () => { failRules = true } }
 }
 
-function run(f: ReturnType<typeof fixture>, apply = true, customDomains?: string[]) {
-  return deploySnippets({ token: 'test-token', snippets: f.definitions, customDomains, apply, fetcher: f.fetcher, log: () => {} })
+function run(f: ReturnType<typeof fixture>, apply = true) {
+  return deploySnippets({ token: 'test-token', snippets: f.definitions, apply, fetcher: f.fetcher, log: () => {} })
 }
 
 describe('snippet release deployment', () => {
@@ -149,39 +150,46 @@ describe('snippet release deployment', () => {
     const step = job.steps.find((step: { run?: string }) => step.run === 'bun run deploy:snippets')
     // eslint-disable-next-line no-template-curly-in-string
     expect(step.env.CLOUDFLARE_API_TOKEN).toBe('${{ secrets.CLOUDFLARE_API_TOKEN }}')
-    // eslint-disable-next-line no-template-curly-in-string
-    expect(step.env.SUPABASE_ACCESS_TOKEN).toBe('${{ secrets.SUPABASE_TOKEN }}')
+    expect(step.env.SUPABASE_ACCESS_TOKEN).toBeUndefined()
     expect(step.env.SUPABASE_PROJECT_ID_PROD).toBeUndefined()
     expect(matchesComponent('capgo', ['scripts/snippet/deploy-snippets.ts'])).toBe(true)
   })
 })
 
 describe('production custom domains in snippet deployment', () => {
-  const domains = ['updates.example.net']
   const create = () => fixture([{ ...snippets[0], name: 'plugin_load_balancer' }, snippets[1]])
 
-  it.concurrent('adds missing domains after code verification, preserving other rules and manual hosts', async () => {
+  it.concurrent('adds the stable predicate after code verification, preserving all existing branches and other rules', async () => {
     const f = create()
     f.rules[1].enabled = false
     const other = structuredClone(f.rules[1])
-    await run(f, true, domains)
+    await run(f)
     expect(f.ruleWrites).toHaveLength(1)
-    expect(f.rules[0].expression).toBe('((http.host eq "example.com")) or (http.host eq "updates.example.net")')
+    expect(f.rules[0].expression).toBe(`((http.host eq "example.com")) or ${CUSTOM_DOMAIN_PLUGIN_EXPRESSION}`)
     expect(f.rules[0].description).toBe('Rule for plugin_load_balancer')
     expect(f.rules[1]).toEqual(other)
     const rulePut = f.calls.findIndex(call => call.url.endsWith('/snippet_rules') && call.init?.method === 'PUT')
+    for (const { name } of f.definitions) {
+      const modulePut = f.calls.findIndex(call => call.url.endsWith(`/snippets/${name}`) && call.init?.method === 'PUT')
+      const readback = f.calls.findIndex((call, index) => index > modulePut && call.url.endsWith(`/snippets/${name}/content`))
+      expect(modulePut).toBeGreaterThanOrEqual(0)
+      expect(readback).toBeGreaterThan(modulePut)
+      expect(readback).toBeLessThan(rulePut)
+    }
     expect(f.calls.slice(rulePut).filter(call => call.url.endsWith('/content'))).toEqual([])
-    await run(f, true, domains)
+    await run(f)
     expect(f.ruleWrites).toHaveLength(1)
   })
 
-  it.concurrent('dry run and an empty database do not rewrite any rules', async () => {
+  it.concurrent('dry run reports the missing predicate without rewriting code or rules', async () => {
     const f = create()
-    await run(f, false, domains)
+    const messages: string[] = []
+    const currentLength = f.rules[0].expression.length
+    await deploySnippets({ token: 'test-token', snippets: f.definitions, fetcher: f.fetcher, log: message => messages.push(message) })
     expect(f.writes).toEqual([])
     expect(f.ruleWrites).toEqual([])
-    await run(f, true, [])
-    expect(f.ruleWrites).toEqual([])
+    expect(messages).toContain(`Custom-domain routing expression: current=${currentLength} planned=${currentLength + CUSTOM_DOMAIN_PLUGIN_EXPRESSION.length + 6} limit=4096`)
+    expect(messages.join('\n')).not.toContain('example.com')
   })
 
   it.concurrent.each(['disabled', 'duplicate', 'missing', 'oversized'] as const)('rejects %s plugin rules before uploading code', async (kind) => {
@@ -190,7 +198,7 @@ describe('production custom domains in snippet deployment', () => {
     if (kind === 'duplicate') f.rules.push({ ...f.rules[0] })
     if (kind === 'missing') f.rules.shift()
     if (kind === 'oversized') f.rules[0].expression = `http.request.uri.path eq "${'x'.repeat(4090)}"`
-    await expect(run(f, true, domains)).rejects.toThrow()
+    await expect(run(f)).rejects.toThrow()
     expect(f.writes).toEqual([])
     expect(f.ruleWrites).toEqual([])
   })
@@ -199,7 +207,7 @@ describe('production custom domains in snippet deployment', () => {
     const f = create()
     if (kind === 'upload') f.setFail()
     if (kind === 'concurrent') f.setDrift()
-    await expect(run(f, true, domains)).rejects.toThrow()
+    await expect(run(f)).rejects.toThrow()
     expect(f.ruleWrites).toEqual([])
   })
 
@@ -207,7 +215,7 @@ describe('production custom domains in snippet deployment', () => {
     const f = create()
     if (kind === 'provider') f.setFailRules()
     if (kind === 'readback') f.setCorruptRules()
-    await expect(run(f, true, domains)).rejects.toThrow(kind === 'provider' ? 'HTTP 403' : 'routing verification failed')
+    await expect(run(f)).rejects.toThrow(kind === 'provider' ? 'HTTP 403' : 'routing verification failed')
     expect(f.ruleWrites).toHaveLength(1)
   })
 })
