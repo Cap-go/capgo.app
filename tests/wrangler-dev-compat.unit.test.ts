@@ -18,11 +18,11 @@ describe('wrangler dev compatibility date override', () => {
 
   it('routes Cloudflare test worker startup through the compat wrapper', () => {
     const start = readFileSync(new URL('../scripts/start-cloudflare-workers.sh', import.meta.url), 'utf8')
-    expect(start).toContain('scripts/wrangler-dev-compat.sh')
+    const launcher = readFileSync(new URL('../scripts/local-cloudflare-workers.ts', import.meta.url), 'utf8')
+    expect(start).toContain('scripts/local-cloudflare-workers.ts')
     expect(start).not.toMatch(/exec bunx wrangler dev/)
-    expect(start).toMatch(/cloudflare_workers\/api[^\n]*\$\{WRANGLER_DEV\}/)
-    expect(start).toMatch(/cloudflare_workers\/plugin[^\n]*\$\{WRANGLER_DEV\}/)
-    expect(start).toMatch(/cloudflare_workers\/files[^\n]*\$\{WRANGLER_DEV\}/)
+    expect(launcher).toContain('scripts/wrangler-dev-compat.sh')
+    expect(launcher).toContain("'--env=local'")
   })
 
   it('spawn backend uses repo root paths for wrapper and env file', () => {
