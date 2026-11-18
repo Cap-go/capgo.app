@@ -18,6 +18,10 @@ import {
   readStatsVersionCF,
   readUpdateDeliveryTimingEventsCF,
 } from '../../supabase/functions/_backend/utils/cloudflare.ts'
+import {
+  buildRolloutLegacyFailsCFQuery,
+  buildRolloutVersionTotalsCFQuery,
+} from '../../supabase/functions/_backend/utils/cloudflare_rollout_stats.ts'
 import { getPublicLiveUpdateMetricsCF } from '../../supabase/functions/_backend/utils/public_live_update_metrics.ts'
 import {
   buildNotificationStatsQuery,
@@ -212,7 +216,13 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
       await fn()
     }
 
+    const rolloutWindows = [
+      { appId: SAMPLE_APP_ID, channel: { id: 42, name: 'production' }, versionName: '1.2.3', start: '2026-06-30 23:00:00' },
+      { appId: SAMPLE_APP_ID, channel: { id: 43, name: 'beta' }, versionName: '2.0.0', start: '2026-06-30 12:00:00' },
+    ]
     const staticFixtures: AnalyticsEngineSqlFixture[] = [
+      { name: 'buildRolloutVersionTotalsCFQuery.channels', query: buildRolloutVersionTotalsCFQuery(rolloutWindows, SAMPLE_END) },
+      { name: 'buildRolloutLegacyFailsCFQuery.channels', query: buildRolloutLegacyFailsCFQuery(rolloutWindows, SAMPLE_END) },
       {
         name: 'buildDeviceVersionCountsCFQuery.channelOverrides',
         query: buildDeviceVersionCountsCFQuery(SAMPLE_APP_ID, 'production', {

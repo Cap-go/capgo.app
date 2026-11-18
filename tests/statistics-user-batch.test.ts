@@ -66,13 +66,14 @@ async function getJson<T>(path: string) {
   return body
 }
 
-// Same merge as the /statistics/user handler: sum per date, storage_byte_hours of the first app.
+// Same merge as the /statistics/user handler: sum every metric per date.
 function mergePerApp(perApp: StatEntry[][]) {
   return Array.from(perApp.flat().reduce((acc, curr) => {
     const current = acc.get(curr.date)
     if (current) {
       current.mau += curr.mau
       current.storage += curr.storage
+      current.storage_byte_hours += curr.storage_byte_hours
       current.bandwidth += curr.bandwidth
       current.build_time_seconds += curr.build_time_seconds
     }
@@ -122,13 +123,8 @@ describe('[GET] /statistics/user batches per-app reads', () => {
         [app.appId, base, DAYS - 2],
       )
       await executeSQL(
-        `INSERT INTO public.daily_storage (app_id, date, storage)
-         SELECT $1, (CURRENT_DATE - day)::date, ($2 - day) * 10 FROM generate_series(0, $3) AS day`,
-        [app.appId, base, DAYS - 2],
-      )
-      await executeSQL(
-        `INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours)
-         SELECT $1, $2::uuid, (CURRENT_DATE - day)::date, ($3 + day) * 24 FROM generate_series(1, $4) AS day`,
+        `INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+         SELECT $1, $2::uuid, (CURRENT_DATE - day)::date, (CURRENT_DATE - day)::date, ($3 + day) * 24 FROM generate_series(1, $4) AS day`,
         [app.appId, app.orgId, base, DAYS - 2],
       )
       const [version] = await executeSQL<{ id: number }>(
@@ -159,7 +155,7 @@ describe('[GET] /statistics/user batches per-app reads', () => {
     await executeSQL(`DELETE FROM public.role_bindings WHERE principal_type = 'apikey' AND org_id = ANY($1::uuid[])`, [orgIds])
     await executeSQL('DELETE FROM public.app_versions_meta WHERE app_id = ANY($1::varchar[])', [appIds])
     await executeSQL('DELETE FROM public.app_versions WHERE app_id = ANY($1::varchar[])', [appIds])
-    for (const table of ['daily_mau', 'daily_bandwidth', 'daily_storage', 'daily_storage_hourly'])
+    for (const table of ['daily_mau', 'daily_bandwidth', 'daily_storage_hourly'])
       await executeSQL(`DELETE FROM public.${table} WHERE app_id = ANY($1::varchar[])`, [appIds])
     await executeSQL('DELETE FROM public.app_metrics_cache WHERE org_id = ANY($1::uuid[])', [orgIds])
     await executeSQL('DELETE FROM public.apps WHERE app_id = ANY($1::varchar[])', [appIds])
@@ -185,8 +181,7 @@ describe('[GET] /statistics/user batches per-app reads', () => {
 
   it.each([false, true])('matches the merged per-app statistics (noAccumulate=%s)', async (noAccumulate) => {
     const query = `from=${from}&to=${to}&noAccumulate=${noAccumulate}`
-    // Same order as get_accessible_apps_for_apikey_v2 (created_at DESC): the merge keeps the
-    // first app's storage_byte_hours.
+    // Same order as get_accessible_apps_for_apikey_v2 (created_at DESC).
     const orderedAppIds = [...keyAppIds].reverse()
 
     const batched = await getJson<StatEntry[]>(`/statistics/user?${query}`)

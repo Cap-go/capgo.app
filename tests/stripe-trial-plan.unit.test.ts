@@ -141,7 +141,7 @@ describe('trial plan schedules', () => {
     await cancelDuplicateTrialPlanSchedules(context, stripe, 'cus_1')
     expect(list).toHaveBeenCalledWith({ customer: 'cus_1', limit: 100 })
     expect(cancel).toHaveBeenCalledTimes(1)
-    expect(cancel).toHaveBeenCalledWith('sub_sched_b')
+    expect(cancel).toHaveBeenCalledWith('sub_sched_b', {}, expect.anything())
   })
 
   it('cancels every pending trial plan when checkout creates another subscription', async () => {
@@ -151,8 +151,8 @@ describe('trial plan schedules', () => {
     ])
     await cancelTrialPlanScheduleForSubscription(context, stripe, { id: 'sub_1', customer: 'cus_1', schedule: null, status: 'active' } as unknown as Stripe.Subscription)
     expect(list).toHaveBeenCalledWith({ customer: 'cus_1', limit: 100 })
-    expect(cancel).toHaveBeenCalledWith('sub_sched_trial')
-    expect(cancel).toHaveBeenCalledWith('sub_sched_dup')
+    expect(cancel).toHaveBeenCalledWith('sub_sched_trial', {}, expect.anything())
+    expect(cancel).toHaveBeenCalledWith('sub_sched_dup', {}, expect.anything())
   })
 
   it('keeps the schedule while the checkout subscription is still incomplete', async () => {
@@ -171,7 +171,7 @@ describe('trial plan schedules', () => {
       status: 'active',
       metadata: { capgo_trial_plan: 'true', capgo_trial_started_now: 'true' },
     } as unknown as Stripe.Subscription)
-    expect(cancel).toHaveBeenCalledWith('sub_sched_trial')
+    expect(cancel).toHaveBeenCalledWith('sub_sched_trial', {}, expect.anything())
   })
 
   it('keeps the schedule for the subscription a trial plan schedule started', async () => {
@@ -331,7 +331,7 @@ describe('cancel trial plan', () => {
     } as unknown as Stripe
     const ctx = { stripe, customerId: 'cus_1' } as any
     const result = await cancelTrialPlan(context, ctx, 'org_1')
-    expect(cancel).toHaveBeenCalledWith('sub_sched_trial')
+    expect(cancel).toHaveBeenCalledWith('sub_sched_trial', {}, expect.anything())
     expect(retrieve).toHaveBeenCalled()
     expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(retrieve.mock.invocationCallOrder[0])
     expect(result).toEqual({
@@ -362,6 +362,7 @@ describe('schedulable trial plans', () => {
     }
     const tierFor = (country: string, currency: string | null) => {
       const stripe = {
+        subscriptions: { list: async () => ({ data: [] }) },
         customers: { retrieve: vi.fn(async () => ({ id: 'cus_1', currency, address: null, invoice_settings: { default_payment_method: null } })) },
         prices: { retrieve: vi.fn(async (id: string) => ({ id, currency_options: { usd: {}, eur: {}, inr: {} } })) },
       } as unknown as Stripe
@@ -398,8 +399,15 @@ describe('start trial plan now', () => {
     metadata: { affonso_referral: 'ref_example' },
   }
 
+  it('passes the selected billing currency to Stripe when starting a trial plan', async () => {
+    const create = vi.fn(async (_params: Stripe.SubscriptionCreateParams, _options?: Stripe.RequestOptions) => ({ id: 'sub_now', created: 1 }))
+    const stripe = { subscriptions: { create, list: vi.fn(async () => ({ data: [] })) } } as unknown as Stripe
+    await createStartNowSubscription(stripe, { ...input, currency: 'eur' })
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ currency: 'eur', items: [{ price: 'price_solo', quantity: 1 }] }), expect.anything())
+  })
+
   it('charges the first invoice now and marks the subscription as a trial plan started now', async () => {
-    const create = vi.fn(async () => ({ id: 'sub_now', created: 1 }))
+    const create = vi.fn(async (_params: Stripe.SubscriptionCreateParams, _options?: Stripe.RequestOptions) => ({ id: 'sub_now', created: 1 }))
     const stripe = { subscriptions: { create, list: vi.fn(async () => ({ data: [] })) } } as unknown as Stripe
     await createStartNowSubscription(stripe, input)
     expect(create).toHaveBeenCalledWith({
@@ -410,7 +418,7 @@ describe('start trial plan now', () => {
       payment_behavior: 'error_if_incomplete',
       automatic_tax: { enabled: true },
       metadata: { affonso_referral: 'ref_example', org_id: 'org_1', capgo_trial_plan: 'true', capgo_trial_started_now: 'true' },
-    })
+    }, expect.objectContaining({ timeout: 10000, maxNetworkRetries: 1 }))
   })
 
   it('returns the started-now subscription instead of charging again', async () => {
@@ -432,10 +440,10 @@ describe('start trial plan now', () => {
   })
 
   it('lets a declined card be retried instead of replaying the decline', async () => {
-    const create = vi.fn(async () => ({ id: 'sub_now', created: 1 }))
+    const create = vi.fn(async (_params: Stripe.SubscriptionCreateParams, _options?: Stripe.RequestOptions) => ({ id: 'sub_now', created: 1 }))
     const stripe = { subscriptions: { create, list: vi.fn(async () => ({ data: [] })) } } as unknown as Stripe
     await createStartNowSubscription(stripe, input)
-    expect(create.mock.calls[0]).toHaveLength(1)
+    expect(create.mock.calls[0][1]).not.toHaveProperty('idempotencyKey')
   })
 
   it('reports a declined card without leaving a subscription behind', async () => {
@@ -623,7 +631,7 @@ describe('sync pending trial plan schedule with trial end', () => {
       return []
     }
     expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1')).toBe('canceled')
-    expect(cancel).toHaveBeenCalledWith('sub_sched_trial')
+    expect(cancel).toHaveBeenCalledWith('sub_sched_trial', {}, expect.anything())
   })
 
   it('ignores a stale queue trialAt when stripe_info still has a future trial end', async () => {
@@ -648,7 +656,7 @@ describe('sync pending trial plan schedule with trial end', () => {
     stripeClientMock.stripe = stripe
     expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1')).toBe('unchanged')
     expect(update).not.toHaveBeenCalled()
-    expect(cancel).toHaveBeenCalledWith('sub_sched_dup')
+    expect(cancel).toHaveBeenCalledWith('sub_sched_dup', {}, expect.anything())
   })
 
   it('cancels duplicate pending schedules after moving the kept schedule', async () => {
@@ -664,7 +672,7 @@ describe('sync pending trial plan schedule with trial end', () => {
     stripeClientMock.stripe = stripe
     expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1')).toBe('updated')
     expect(update).toHaveBeenCalled()
-    expect(cancel).toHaveBeenCalledWith('sub_sched_dup')
+    expect(cancel).toHaveBeenCalledWith('sub_sched_dup', {}, expect.anything())
     expect(cancel).not.toHaveBeenCalledWith('sub_sched_trial')
   })
 })

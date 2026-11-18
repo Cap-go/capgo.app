@@ -6,8 +6,8 @@ import { createI18n } from 'vue-i18n'
 import messages from '../messages/en.json'
 import BillingProfileSection from '../src/components/billing/BillingProfileSection.vue'
 
-const mocks = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn(), add: vi.fn(), remove: vi.fn(), permission: vi.fn() }))
-vi.mock('~/services/stripe', () => ({ getBillingProfile: mocks.load, updateBillingDetails: mocks.save, addBillingTaxId: mocks.add, removeBillingTaxId: mocks.remove }))
+const mocks = vi.hoisted(() => ({ currency: vi.fn(), load: vi.fn(), save: vi.fn(), add: vi.fn(), remove: vi.fn(), permission: vi.fn() }))
+vi.mock('~/services/stripe', () => ({ getBillingCurrencyState: mocks.currency, getBillingProfile: mocks.load, updateBillingDetails: mocks.save, addBillingTaxId: mocks.add, removeBillingTaxId: mocks.remove }))
 vi.mock('~/services/permissions', () => ({ checkPermissions: mocks.permission }))
 const profile = {
   name: 'Example Company', email: 'billing@example.com', phone: '',
@@ -117,7 +117,7 @@ describe('billing details editor', () => {
     remove().click()
     await settle()
     expect(mocks.remove).not.toHaveBeenCalled()
-    expect(document.querySelector('dialog')?.textContent).toContain('Remove this tax ID from future invoices?')
+    expect(document.querySelector('dialog')?.textContent).toContain('Remove this tax ID from your billing profile?')
     remove().click()
     await settle()
     expect(mocks.remove).toHaveBeenCalledWith('org_example', 'txi_example')

@@ -18,7 +18,7 @@ export function registerSimulatorTools(server: McpServer) {
   server.registerTool(
     'capgo_start_simulator',
     {
-      description: 'Start an iOS or Android cloud simulator. It uses one builder slot and build minutes. The result includes the session id, viewer URL, and remoteConfig in the Expo device-run shape (agentDeviceRemoteSessionUrl and token, webPreviewUrl and token, previewApiUrl). Drive it with capgo_simulator_command. Pass build_job_id to install a saved iOS build.',
+      description: 'Start an iOS or Android cloud simulator. It uses one builder slot and counts as build time while it runs. It stops by itself after 5 minutes without input (taps, typing, installs, or commands) and after 40 minutes at most, so stop it when done. iOS time counts double. The result includes the session id, viewer URL, and remoteConfig in the Expo device-run shape (agentDeviceRemoteSessionUrl and token, webPreviewUrl and token, previewApiUrl). Drive it with capgo_simulator_command. Pass build_job_id to install a saved iOS build.',
       inputSchema: mcpStartSimulatorInputSchema,
     },
     async ({ appId: id, platform, name, build_job_id }) => {

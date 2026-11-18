@@ -1088,7 +1088,8 @@ const statsTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_get_app_statistics,
     title: 'App statistics',
     description: 'Daily MAU, storage, bandwidth and build time for an app.'
-      + ' Returns data as dated usage records with mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.',
+      + ' Returns data as dated usage records with mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.'
+      + ' Storage is billed in GB-hours: storage_byte_hours / 2^30 is GB-hours.',
     input: { appId, ...statsRange },
     annotations: READ,
     refine: statsRangeLimit,
@@ -1111,7 +1112,7 @@ const statsTools: McpTool[] = [
     title: 'Account statistics',
     description: 'Daily usage summed across apps accessible to this connection\'s API key; a scoped key may return only part of the account usage.'
       + ' Returns data as dated totals for mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.'
-      + ' When records share a date, storage_byte_hours is retained from the first record, not summed.',
+      + ' Storage is billed in GB-hours: storage_byte_hours / 2^30 is GB-hours.',
     input: statsRange,
     annotations: READ,
     refine: statsRangeLimit,
@@ -1288,7 +1289,7 @@ const simulatorTools: McpTool[] = [
       name: 'capgo_start_simulator',
       outputSchema: MCP_OUTPUT_SCHEMAS.capgo_start_simulator,
       title: 'Start simulator',
-      description: 'Start an iOS or Android cloud simulator for an app. It uses one builder slot and build minutes. The result includes the session id, viewer URL, and remoteConfig in the Expo device-run shape (agentDeviceRemoteSessionUrl, agentDeviceRemoteSessionToken, webPreviewUrl, webPreviewToken, previewApiUrl). Drive the device with capgo_simulator_command. Pass build_job_id to install a saved iOS build.',
+      description: 'Start an iOS or Android cloud simulator for an app. It uses one builder slot and counts as build time while it runs. It stops by itself after 5 minutes without input (taps, typing, installs, or commands) and after 40 minutes at most, so stop it when done. iOS time counts double. The result includes the session id, viewer URL, and remoteConfig in the Expo device-run shape (agentDeviceRemoteSessionUrl, agentDeviceRemoteSessionToken, webPreviewUrl, webPreviewToken, previewApiUrl). Drive the device with capgo_simulator_command. Pass build_job_id to install a saved iOS build.',
       input: {
         appId,
         platform: z.enum(['ios', 'android']).describe('Choose the operating system of the cloud device used to run and inspect the app.'),
@@ -1325,7 +1326,7 @@ const simulatorTools: McpTool[] = [
       name: 'capgo_stop_simulator',
       outputSchema: MCP_OUTPUT_SCHEMAS.capgo_stop_simulator,
       title: 'Stop simulator',
-      description: 'Stop a cloud simulator belonging to appId; requires build permission on that app. Stops the remote device, records its build minutes and marks the session stopped, ending interactive access. Returns data with session id, url, status, platform and kind, plus build_time_seconds when recorded by this call. Already stopped or errored sessions return their existing state. Retry if billing recording fails.',
+      description: 'Stop a cloud simulator belonging to appId; requires build permission on that app. Stops the remote device, records its build minutes (up to when the device stopped, if it already stopped by itself) and marks the session stopped, ending interactive access. Returns data with session id, url, status, platform and kind, plus build_time_seconds when recorded by this call. Already stopped or errored sessions return their existing state. Retry if billing recording fails.',
       input: { appId, session_id: simulatorSessionId },
       annotations: DESTRUCTIVE,
       request: input => ({ method: 'POST', path: `/build/simulator/${enc(input.session_id)}/stop`, body: { app_id: input.appId } }),

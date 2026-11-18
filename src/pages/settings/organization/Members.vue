@@ -18,6 +18,7 @@ import SearchInput from '~/components/forms/SearchInput.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { getConsoleApiHost, useConsole } from '~/services/console'
+import { organizationIdentityKey } from '~/services/organizationWatchKeys'
 import { checkPermissions } from '~/services/permissions'
 import { fetchSsoManagedAccess } from '~/services/ssoManaged'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -464,7 +465,8 @@ async function reloadData() {
   }
 }
 
-watch(currentOrganization, reloadData)
+// Reload on organization switch (or role change), not on every refreshed copy.
+watch(() => organizationIdentityKey(currentOrganization.value), reloadData)
 
 watch([isInviteFormValid, isSubmittingInvite, isInviteNewUserDialogOpen], ([_valid, _submitting, open]) => {
   if (!open)

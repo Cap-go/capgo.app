@@ -6,6 +6,7 @@ import DashboardLayout from '../src/layouts/default.vue'
 const state = vi.hoisted(() => ({
   organizations: [] as { gid: string, app_count: number }[],
   indexedApps: [] as { app_id: string }[],
+  freshApps: undefined as { app_id: string, need_onboarding: boolean, onboarding?: unknown }[] | undefined,
   route: { path: '/app/com.example.pending', params: { app: 'com.example.pending' } },
   app: { app_id: 'com.example.pending', need_onboarding: true },
   from: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock('~/stores/organization', () => ({
     get organizations() { return state.organizations },
     awaitInitialLoad: async () => undefined,
     getAppsByOrgId: () => state.indexedApps,
+    getFreshOrgApps: () => state.freshApps,
   }),
 }))
 vi.mock('~/composables/useNativeChrome', () => ({
@@ -51,6 +53,7 @@ afterEach(() => {
   mountedApp = undefined
   document.body.innerHTML = ''
   localStorage.clear()
+  state.freshApps = undefined
   vi.clearAllMocks()
 })
 
@@ -96,5 +99,22 @@ describe('dashboard exploration banner eligibility', () => {
       expect(state.eq).toHaveBeenCalledWith('owner_org', 'example-org-0')
       expect(limit).toHaveBeenCalledWith(2)
     }
+  })
+
+  it('uses the organization store apps instead of querying the apps table', async () => {
+    state.route = { path: `/app/${state.app.app_id}`, params: { app: state.app.app_id } }
+    state.organizations = [{ gid: 'example-org-0', app_count: 1 }]
+    state.freshApps = [{ ...state.app, onboarding: {} }]
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    mountedApp = createApp(DashboardLayout)
+    mountedApp.component('RouterView', { render: () => null })
+    mountedApp.mount(container)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await nextTick()
+
+    expect(container.querySelector('[data-test="explore-banner"]')?.textContent ?? null).toBe(state.app.app_id)
+    expect(state.from).not.toHaveBeenCalled()
   })
 })

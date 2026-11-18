@@ -13,6 +13,7 @@ import {
   normalizeAutoTopUpThreshold,
   saveAutoTopUpSettings,
 } from '../utils/credit_auto_top_up.ts'
+import { getCreditQuote } from '../utils/credit_currency.ts'
 import { getFallbackCreditProductId, priceCreditTiers } from '../utils/credits.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
@@ -20,7 +21,7 @@ import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { authPrincipal, queryJson, servicePrincipal, withRlsTransaction } from '../utils/pg_rls.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { createOneTimeCheckout, getBillingAccountForCustomer, getCreditCheckoutDetails, getStripe, isStripeEmulatorEnabled, planProductIdOrFilter, resolvePlanCreditProductId } from '../utils/stripe.ts'
+import { createOneTimeCheckout, getBillingAccountForCustomer, getCreditCheckoutDetails, getOneTimePriceId, getStripe, isStripeEmulatorEnabled, planProductIdOrFilter, resolvePlanCreditProductId } from '../utils/stripe.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface CreditStep {
@@ -304,7 +305,7 @@ async function getCreditTopUpProductId(c: AppContext, db: CallerDb, customerId: 
   return { productId }
 }
 
-async function resolveOrgStripeContext(c: AppContext, db: CallerDb, orgId: string) {
+async function resolveOrgStripeContext(c: AppContext, db: CallerDb, orgId: string, permission: 'org.read_billing' | 'org.update_billing' = 'org.update_billing') {
   const rawAuthHeader = c.req.header('authorization')
     ?? c.req.header('Authorization')
     ?? c.get('authorization')
@@ -312,7 +313,7 @@ async function resolveOrgStripeContext(c: AppContext, db: CallerDb, orgId: strin
   if (!rawAuthHeader)
     throw simpleError('not_authorized', 'Not authorized')
 
-  if (!await checkPermission(c, 'org.update_billing', { orgId }))
+  if (!await checkPermission(c, permission, { orgId }))
     throw simpleError('not_authorized', 'Not authorized')
 
   // Run as the caller - RLS will block if user doesn't have access to the org
@@ -547,6 +548,22 @@ app.post('/', async (c) => {
   }
 
   return c.json(response)
+})
+
+app.post('/quote', middlewareAuth, async (c) => {
+  const body = await parseBody<{ orgId?: string }>(c)
+  if (!body.orgId)
+    throw simpleError('missing_org_id', 'Organization id is required')
+  const { customerId, productId } = await withCallerDb(c, async (db) => {
+    const { customerId } = await resolveOrgStripeContext(c, db, body.orgId!, 'org.read_billing')
+    return { customerId, ...await getCreditTopUpProductId(c, db, customerId) }
+  })
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  const priceId = await getOneTimePriceId(c, productId, billingAccount)
+  if (!priceId)
+    throw simpleError('credit_price_unavailable', 'Credit pricing is unavailable')
+  const { currency, unitAmount, unitPrice } = await getCreditQuote(getStripe(c, billingAccount), customerId, priceId, c)
+  return c.json({ currency, unitAmount, unitPrice })
 })
 
 app.post('/start-top-up', middlewareAuth, async (c) => {

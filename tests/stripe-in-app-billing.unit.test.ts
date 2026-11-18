@@ -1,3 +1,4 @@
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({ servicePrincipal: {}, withRlsContext: (_c: unknown, _p: unknown, run: (client: unknown) => unknown) => run({ query: async () => ({ rows: [] }) }) }))
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -5,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getActiveSubscriptionId: vi.fn(),
   lookupActiveSubscriptionId: vi.fn(),
   syncSubscriptionData: vi.fn(),
+  syncBillingProfile: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
@@ -14,6 +16,8 @@ vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
   getStripe: vi.fn(),
   syncSubscriptionData: mocks.syncSubscriptionData,
 }))
+
+vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile_sync.ts', () => ({ syncBillingProfile: mocks.syncBillingProfile }))
 
 function mockActiveSubscription(subscriptionId: string | null, known = true) {
   mocks.getActiveSubscriptionId.mockResolvedValue(subscriptionId)
@@ -29,6 +33,7 @@ async function expectSubscriptionLookupUnknown(promise: Promise<unknown>) {
 
 const {
   createCardSetupIntent,
+  getSubscriptionSummary,
   getSavedCards,
   parseCancelComment,
   parseCancelFeedback,
@@ -97,6 +102,7 @@ describe('scheduleSubscriptionCancel', () => {
 
     expect(stripe.subscriptions.update).toHaveBeenCalledWith('sub_123', {
       cancel_at_period_end: true,
+      metadata: { capgo_currency_transition: '', capgo_currency_transition_end: '' },
       cancellation_details: { feedback: 'missing_features', comment: 'Need SSO' },
     })
     expect(mocks.syncSubscriptionData).toHaveBeenCalledWith(expect.anything(), 'cus_123', 'sub_123')
@@ -115,13 +121,17 @@ describe('resumeSubscription', () => {
     mockActiveSubscription('sub_123')
     stripe.subscriptions.retrieve.mockResolvedValue({ status: 'active', cancel_at_period_end: false, cancel_at: null, items: { data: [] } })
 
+    stripe.subscriptions.update.mockResolvedValue({ currency: 'usd' })
     await resumeSubscription(createContext(), createBillingContext(stripe))
+    expect(stripe.customers.update).toHaveBeenCalledWith('cus_123', { metadata: { capgo_billing_currency: 'usd' } }, expect.anything())
+    expect(mocks.syncBillingProfile).toHaveBeenCalled()
 
     expect(stripe.subscriptions.update).toHaveBeenCalledWith('sub_123', {
       cancel_at: '',
       cancel_at_period_end: false,
+      metadata: { capgo_currency_transition: '', capgo_currency_transition_end: '' },
       cancellation_details: { feedback: '', comment: '' },
-    })
+    }, expect.anything())
   })
 })
 
@@ -520,4 +530,56 @@ describe('payOpenInvoice', () => {
     await expectSubscriptionLookupUnknown(payOpenInvoice(createContext(), createBillingContext(stripe)))
     expect(stripe.invoices.pay).toHaveBeenCalledTimes(1)
   })
+})
+
+it.each([
+  { cancel: false, laterWriteFails: false },
+  { cancel: true, laterWriteFails: false },
+  { cancel: false, laterWriteFails: true },
+  { cancel: true, laterWriteFails: true },
+])('clears replacement intent in every schedule phase on cancel/resume, even if a later write fails: %j', async ({ cancel, laterWriteFails }) => {
+  const stripe = { ...createStripe(), subscriptionSchedules: { retrieve: vi.fn(), update: vi.fn() } }
+  mockActiveSubscription('sub_123')
+  const periodEnd = Math.floor(Date.now() / 1000) + 30 * 86400
+  const discountEnd = periodEnd - 15 * 86400
+  stripe.subscriptions.retrieve.mockResolvedValue({
+    id: 'sub_123', status: 'active', currency: 'eur', schedule: 'sched_owned', cancel_at_period_end: false, cancel_at: null,
+    metadata: { capgo_currency_transition: 'usd', capgo_currency_transition_end: String(periodEnd), capgo_currency_replaces: 'sub_previous' },
+    discounts: [{ id: 'di_example', end: discountEnd, source: { coupon: { metadata: {} } } }],
+    items: { data: [{ price: { id: 'price_example' }, current_period_end: periodEnd }] },
+  })
+  const schedule = {
+    id: 'sched_owned', status: 'active', subscription: 'sub_123', end_behavior: 'cancel',
+    metadata: { capgo_currency_replaces: 'sub_previous' }, current_phase: { start_date: periodEnd - 30 * 86400 },
+    phases: [{ end_date: discountEnd }, { end_date: periodEnd }],
+  }
+  stripe.subscriptionSchedules.retrieve.mockResolvedValue(schedule)
+  stripe.subscriptionSchedules.update.mockImplementation(async (_id, params) => {
+    const subscription = await stripe.subscriptions.retrieve()
+    Object.assign(subscription.metadata, params.phases[0].metadata)
+    return Object.assign(schedule, params)
+  })
+  stripe.subscriptions.update.mockImplementation(async (_id, params) => {
+    if (laterWriteFails)
+      throw new Error('feedback write unavailable')
+    const subscription = await stripe.subscriptions.retrieve()
+    return Object.assign(subscription, params)
+  })
+  expect(await getSubscriptionSummary(createContext(), createBillingContext(stripe))).toMatchObject({
+    cancelAt: new Date(periodEnd * 1000).toISOString(), pendingCurrency: 'usd',
+  })
+  const change = cancel
+    ? scheduleSubscriptionCancel(createContext(), createBillingContext(stripe), 'too_expensive')
+    : resumeSubscription(createContext(), createBillingContext(stripe))
+  const expectedCancelAt = cancel ? new Date(periodEnd * 1000).toISOString() : null
+  if (laterWriteFails)
+    await expect(change).rejects.toThrow('feedback write unavailable')
+  else
+    expect(await change).toMatchObject({ cancelAt: expectedCancelAt })
+  expect(await getSubscriptionSummary(createContext(), createBillingContext(stripe))).toMatchObject({ cancelAt: expectedCancelAt })
+  expect(await getSubscriptionSummary(createContext(), createBillingContext(stripe))).not.toHaveProperty('pendingCurrency')
+  const phases = stripe.subscriptionSchedules.update.mock.calls[0][1].phases
+  expect(phases).toHaveLength(2)
+  for (const phase of phases)
+    expect(phase.metadata).toMatchObject({ capgo_currency_transition: '', capgo_currency_transition_end: '', capgo_currency_replaces: 'sub_previous' })
 })

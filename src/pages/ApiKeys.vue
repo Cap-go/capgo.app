@@ -600,29 +600,32 @@ async function fetchOrgAndAppNames() {
   const uncachedOrgIds = Array.from(uniqueOrgIds.value).filter(id => !orgCache.value.has(id))
   const uncachedAppIds = Array.from(uniqueAppIds.value).filter(id => !appCache.value.has(id))
 
-  // Fetch organization names in parallel
-  if (uncachedOrgIds.length > 0) {
-    const orgPromises = uncachedOrgIds.map(async (orgId) => {
-      try {
-        const { data, error } = await capgo
-          .from('orgs')
-          .select('id, name')
-          .eq('id', orgId)
-          .single()
+  // Organization names: the organization store already has every org the user
+  // belongs to; one query covers the rest instead of one query per org.
+  const knownOrgs = organizationStore.getAllOrgs()
+  const missingOrgIds: string[] = []
+  for (const orgId of uncachedOrgIds) {
+    const knownName = knownOrgs.get(orgId)?.name
+    if (knownName)
+      orgCache.value.set(orgId, knownName)
+    else
+      missingOrgIds.push(orgId)
+  }
+  if (missingOrgIds.length > 0) {
+    try {
+      const { data, error } = await capgo
+        .from('orgs')
+        .select('id, name')
+        .in('id', missingOrgIds)
 
-        if (error)
-          throw error
-        if (data)
-          orgCache.value.set(orgId, data.name)
-        return { id: orgId, name: data?.name }
-      }
-      catch (err) {
-        console.error(`Error fetching org name for ${orgId}:`, err)
-        return { id: orgId, name: 'Unknown' }
-      }
-    })
-
-    await Promise.all(orgPromises)
+      if (error)
+        throw error
+      for (const org of data ?? [])
+        orgCache.value.set(org.id, org.name)
+    }
+    catch (err) {
+      console.error('Error fetching org names:', err)
+    }
   }
 
   if (uncachedAppIds.length > 0) {

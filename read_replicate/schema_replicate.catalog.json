@@ -2034,6 +2034,26 @@
       "default": null,
       "generated": "",
       "identity": "",
+      "name": "billing_address",
+      "notNull": false,
+      "position": 29,
+      "table": "stripe_info",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "billing_currency",
+      "notNull": false,
+      "position": 30,
+      "table": "stripe_info",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
       "name": "app_version_id",
       "notNull": true,
       "position": 1,
@@ -2359,6 +2379,13 @@
     {
       "definition": "CHECK (billing_account = ANY (ARRAY['ee'::text, 'us'::text]))",
       "name": "stripe_info_billing_account_check",
+      "table": "stripe_info",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (billing_currency ~ '^[a-z]{3}$'::text)",
+      "name": "stripe_info_billing_currency_check",
       "table": "stripe_info",
       "type": "c",
       "valid": true

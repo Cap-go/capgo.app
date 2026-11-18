@@ -552,13 +552,6 @@ describe('chart refresh RPCs', () => {
     }, {
       onConflict: 'app_id,date',
     }).throwOnError()
-    await getSupabaseClient().from('daily_storage').upsert({
-      app_id: staleAppId,
-      date: metricDateText,
-      storage: 0,
-    }, {
-      onConflict: 'app_id,date',
-    }).throwOnError()
 
     const { data: initialMetrics, error: initialError } = await getDateRangeMetrics(scope, metricDateText)
 

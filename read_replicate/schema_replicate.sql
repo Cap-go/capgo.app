@@ -508,7 +508,10 @@ CREATE TABLE public.stripe_info (
     is_above_plan boolean,
     extra_mau bigint DEFAULT 0 NOT NULL,
     billing_account text DEFAULT 'ee'::text NOT NULL,
-    CONSTRAINT stripe_info_billing_account_check CHECK ((billing_account = ANY (ARRAY['ee'::text, 'us'::text])))
+    billing_address jsonb,
+    billing_currency text,
+    CONSTRAINT stripe_info_billing_account_check CHECK ((billing_account = ANY (ARRAY['ee'::text, 'us'::text]))),
+    CONSTRAINT stripe_info_billing_currency_check CHECK ((billing_currency ~ '^[a-z]{3}$'::text))
 );
 
 ALTER TABLE ONLY public.stripe_info REPLICA IDENTITY FULL;

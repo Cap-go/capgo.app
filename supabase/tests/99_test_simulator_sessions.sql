@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(15);
+SELECT plan(24);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -114,6 +114,102 @@ SELECT is(
   'expired usage is dated when the session ended'
 );
 
+-- The device host stopped this one after a few minutes without input.
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at, device_stopped_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000004',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'ios',
+  'in-progress',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '10 minutes',
+  now() - interval '3 minutes'
+);
+
+SELECT is(
+  public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+  1,
+  'a session whose device stopped is settled before its maximum duration'
+);
+
+SELECT is(
+  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000004'),
+  'stopped',
+  'a stopped device releases its builder slot'
+);
+
+SELECT is(
+  (
+    SELECT build_time_unit
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id = '99000000-0000-4000-8000-000000000004'
+  ),
+  420::bigint,
+  'a stopped device is billed up to its stop, not its maximum duration'
+);
+
+SELECT is(
+  (
+    SELECT billable_seconds
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id = '99000000-0000-4000-8000-000000000004'
+  ),
+  840::bigint,
+  'iOS simulator time counts double'
+);
+
+SELECT is(
+  (SELECT finished_at FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000004'),
+  (SELECT device_stopped_at FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000004'),
+  'the session ends when its device stopped'
+);
+
+-- Its device stopped before the session started: nothing ran, nothing is billed.
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, created_at, started_at, device_stopped_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000005',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.simulator.session',
+  'ios',
+  'starting',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '2 minutes',
+  NULL,
+  now() - interval '1 minute'
+);
+
+SELECT is(
+  public.expire_simulator_sessions('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+  1,
+  'a session whose device stopped before it started is settled'
+);
+
+SELECT is(
+  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000005'),
+  'stopped',
+  'an unstarted session releases its builder slot'
+);
+
+SELECT is(
+  (
+    SELECT count(*)
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id = '99000000-0000-4000-8000-000000000005'
+  ),
+  0::bigint,
+  'an unstarted session is not billed'
+);
+
 INSERT INTO public.orgs (id, created_by, management_email, name)
 VALUES (
   '99000000-0000-4000-8000-000000000098',
@@ -184,6 +280,17 @@ SELECT ok(
       AND indexname = 'simulator_sessions_app_active_idx'
   ),
   'active simulator sessions are indexed by app'
+);
+
+SELECT ok(
+  EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+      AND tablename = 'simulator_sessions'
+      AND indexname = 'simulator_sessions_org_app_recent_idx'
+  ),
+  'recent simulator sessions are indexed for the console list'
 );
 
 CREATE FUNCTION pg_temp.simulator_settlement_plan_uses_app_index()

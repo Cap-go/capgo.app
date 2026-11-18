@@ -13,14 +13,14 @@ SELECT ok(
             AND target LIKE '%"cron_stat_app"%'
     ) = 1
     AND (
-        SELECT batch_size = 5 AND minute_interval = 1 AND enabled
+        SELECT batch_size = 3 AND minute_interval = 1 AND enabled
         FROM public.cron_tasks
         WHERE
             name = 'stat_app_queue'
             AND task_type = 'function_queue'::public.cron_task_type
             AND target::jsonb = '["cron_stat_app"]'::jsonb
     ),
-    'cron_stat_app is dispatched only by stat_app_queue at 5 apps per call'
+    'cron_stat_app is dispatched only by stat_app_queue at 3 apps per call'
 );
 
 SELECT ok(

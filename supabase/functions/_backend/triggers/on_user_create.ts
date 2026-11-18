@@ -98,6 +98,6 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c
   // Server-side twin of the website pixel signup conversion (deduplicated by event id).
   // Invited users are not ad-driven self-signups, so they are not reported.
   if (!record.created_via_invite)
-    await backgroundTask(c, trackOpenAIRegistration(c, record))
+    await backgroundTask(c, trackOpenAIRegistration(c, { ...record, oppref: registrationMetadata.oppref }))
   return c.json(BRES)
 })

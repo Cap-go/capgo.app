@@ -917,11 +917,11 @@ const usageDay = z
   .object({
     date: text('UTC date of this usage bucket, serialized as an ISO timestamp.'),
     mau: number('Active device usage for this bucket; cumulative across buckets unless noAccumulate is true.'),
-    storage: number('Storage metric in bytes, reconstructed from storage changes; cumulative unless noAccumulate is true.'),
+    storage: number('Bytes stored on this day (its byte-hours divided by its hours; today counts the hours elapsed so far). With noAccumulate it is the change from the previous day.'),
     storage_byte_hours: z
       .number()
       .optional()
-      .describe('Storage integrated over time in byte-hours; cumulative unless noAccumulate is true. Account aggregation retains the first record when dates overlap.'),
+      .describe('Billed storage usage in byte-hours (divide by 2^30 for GB-hours); cumulative unless noAccumulate is true.'),
     bandwidth: number('Transferred bytes; cumulative unless noAccumulate is true.'),
     build_time_seconds: number('Native build time in seconds; cumulative unless noAccumulate is true.'),
     get: z

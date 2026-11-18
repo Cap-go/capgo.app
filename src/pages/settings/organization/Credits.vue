@@ -24,7 +24,7 @@ import { formatLocalDate } from '~/services/date'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
-import { completeCreditTopUp, getCreditAutoTopUp, saveCreditAutoTopUp, startCreditTopUp } from '~/services/stripe'
+import { completeCreditTopUp, getCreditAutoTopUp, getCreditQuote, saveCreditAutoTopUp, startCreditTopUp } from '~/services/stripe'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 import { rules, validateField } from '~/utils/formValidation'
@@ -84,7 +84,8 @@ const transactions = ref<UsageCreditLedgerRow[]>([])
 const pricingSteps = ref<CreditPricingStep[]>([])
 const isLoadingTransactions = ref(false)
 const loadError = ref<string | null>(null)
-const creditUsdRate = ref(1)
+const creditQuote = ref<{ currency: string, unitPrice: number } | null>(null)
+const creditQuoteFailed = ref(false)
 const isStartingCheckout = ref(false)
 const embeddedCheckout = ref<{ clientSecret: string, publishableKey: string, sessionId: string } | null>(null)
 const showCardModal = ref(false)
@@ -101,7 +102,6 @@ const CREDIT_PRICING_HASH = '#credit-pricing'
 const isCreditPricingOpen = ref(route.hash === CREDIT_PRICING_HASH)
 const DEFAULT_TOP_UP_QUANTITY = 100
 const QUICK_TOP_UP_OPTIONS = [50, 500, 5000] as const
-const CREDIT_TAX_MULTIPLIER = 1.2
 // `type="number"` v-model yields numbers (or '' when empty), so keep both shapes.
 const topUpQuantityInput = ref<string | number>(String(DEFAULT_TOP_UP_QUANTITY))
 const topUpQuantity = computed(() => {
@@ -111,7 +111,7 @@ const topUpQuantity = computed(() => {
   return parsed
 })
 const isTopUpQuantityValid = computed(() => topUpQuantity.value !== null)
-const topUpQuantityUsd = computed(() => (topUpQuantity.value ?? 0) * creditUsdRate.value * CREDIT_TAX_MULTIPLIER)
+const topUpQuantityValue = computed(() => topUpQuantity.value ?? 0)
 
 const MIN_AUTO_TOP_UP = 10
 const autoTopUpEnabled = ref(false)
@@ -126,7 +126,9 @@ let confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
 const autoTopUpMonthlyLimitInput = ref<string | number>('0')
 const autoTopUpMonthlyTotal = ref<number | null>(null)
 const confirmedAutoTopUpMonthlyLimit = ref(0)
-const isAutoTopUpControlsDisabled = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value)
+const isAutoTopUpBusy = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value)
+const isAutoTopUpControlsDisabled = computed(() => isAutoTopUpBusy.value || !creditQuote.value)
+const isAutoTopUpToggleDisabled = computed(() => isAutoTopUpBusy.value || (!creditQuote.value && !autoTopUpEnabled.value))
 const autoTopUpThreshold = computed(() => {
   const parsed = Number.parseInt(String(autoTopUpThresholdInput.value), 10)
   if (Number.isNaN(parsed))
@@ -179,8 +181,8 @@ const creditNextExpiration = computed(() => {
 })
 const hasCreditSummary = computed(() => creditTotal.value > 0 || creditAvailable.value > 0)
 
-const creditUsedUsd = computed(() => creditUsed.value * creditUsdRate.value)
-const creditsAvailableUsd = computed(() => creditAvailable.value * creditUsdRate.value)
+const creditUsedValue = computed(() => creditUsed.value)
+const creditsAvailableValue = computed(() => creditAvailable.value)
 
 const creditPricingSectionsMeta: Record<CreditMetricType, {
   icon: typeof UserGroupIcon
@@ -221,7 +223,7 @@ const creditPricingSections = computed(() =>
       .filter(step => step.type === metric)
       .map(step => ({
         label: formatCreditPricingTierLabel(step, t),
-        price: formatCreditPricingPrice(metric, step.price_per_unit, t, step.unit_factor),
+        price: creditQuote.value ? formatCreditPricingPrice(metric, step.price_per_unit * creditQuote.value.unitPrice, t, step.unit_factor, creditQuote.value.currency) : '—',
       }))
 
     if (!tiers.length)
@@ -245,7 +247,7 @@ function formatCredits(value: number) {
 }
 
 function formatCurrency(value: number) {
-  return formatNumber(value, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return creditQuote.value ? formatNumber(value * creditQuote.value.unitPrice, { style: 'currency', currency: creditQuote.value.currency.toUpperCase() }) : '—'
 }
 
 function formatMetricAmount(metric: Database['public']['Enums']['credit_metric_type'], value: number) {
@@ -508,6 +510,23 @@ async function goToNextLedgerPage() {
   if (currentPage.value >= totalPages.value && hasMoreTransactions.value)
     await loadMoreTransactions()
   currentPage.value = Math.min(totalPages.value, currentPage.value + 1)
+}
+
+async function loadCreditQuote() {
+  const orgId = currentOrganization.value?.gid
+  creditQuote.value = null
+  creditQuoteFailed.value = false
+  if (!orgId)
+    return
+  try {
+    const quote = await getCreditQuote(orgId)
+    if (currentOrganization.value?.gid === orgId)
+      creditQuote.value = quote
+  }
+  catch {
+    if (currentOrganization.value?.gid === orgId)
+      creditQuoteFailed.value = true
+  }
 }
 
 async function loadPricingSteps() {
@@ -862,7 +881,7 @@ onMounted(async () => {
   await handleCreditCheckoutReturn()
   if (!(await ensureReadBillingAccess()))
     return
-  await Promise.allSettled([loadTransactions(), loadPricingSteps(), loadAutoTopUpSettings()])
+  await Promise.allSettled([loadTransactions(), loadPricingSteps(), loadAutoTopUpSettings(), loadCreditQuote()])
 })
 
 onUnmounted(() => {
@@ -879,7 +898,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
   await handleCreditCheckoutReturn()
   if (!(await ensureReadBillingAccess(newOrgId)))
     return
-  await Promise.allSettled([loadTransactions(), loadPricingSteps(), loadAutoTopUpSettings()])
+  await Promise.allSettled([loadTransactions(), loadPricingSteps(), loadAutoTopUpSettings(), loadCreditQuote()])
 })
 </script>
 
@@ -939,7 +958,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
               {{ t('credits-used-dollars') }}
             </div>
             <div class="mt-3 text-3xl font-semibold text-gray-900 dark:text-white">
-              {{ formatCurrency(creditUsedUsd) }}
+              {{ formatCurrency(creditUsedValue) }}
             </div>
             <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
               {{ t('credits-used-dollars-description') }}
@@ -949,7 +968,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
               <span>{{ t('credits-available') }}</span>
               <span class="font-medium text-gray-900 dark:text-white">
-                {{ formatCurrency(creditsAvailableUsd) }}
+                {{ formatCurrency(creditsAvailableValue) }}
               </span>
             </div>
           </div>
@@ -987,8 +1006,8 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                     label-class="text-xs font-semibold uppercase tracking-wide"
                     message-class="text-xs text-rose-200 mt-1"
                   >
-                    <template #prefix>
-                      $
+                    <template #suffix>
+                      {{ t('credits-unit') }}
                     </template>
                   </FormField>
                 </div>
@@ -1003,26 +1022,32 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                       : 'border border-blue-200 bg-white text-blue-700 hover:border-blue-400 hover:bg-blue-50 dark:border-blue-500/60 dark:bg-gray-900 dark:text-blue-200 dark:hover:border-blue-400 dark:hover:bg-blue-900/40'"
                     @click="selectTopUpQuantity(amount)"
                   >
-                    {{ formatNumber(amount, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', maximumFractionDigits: 0 }) }}
+                    {{ formatCurrency(amount) }}
                   </button>
                 </div>
               </div>
               <button
                 type="submit"
                 data-test="credits-top-up-submit"
-                :disabled="isProcessingCheckout || !isTopUpQuantityValid"
-                :class="{ 'opacity-75 pointer-events-none': isProcessingCheckout || !isTopUpQuantityValid }"
+                :disabled="isProcessingCheckout || !isTopUpQuantityValid || !creditQuote"
+                :class="{ 'opacity-75 pointer-events-none': isProcessingCheckout || !isTopUpQuantityValid || !creditQuote }"
                 class="inline-flex w-full justify-center items-center py-2 px-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-sm font-semibold rounded-lg transition-all duration-200 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed sm:w-auto"
               >
                 <Spinner v-if="isProcessingCheckout" size="w-4 h-4" class="mr-2" color="white" />
                 <span>{{ t('buy-credits') }}</span>
               </button>
               <div class="text-xs opacity-90 space-y-1 font-medium text-gray-900 dark:text-white">
+                <p v-if="creditQuoteFailed" role="alert">
+                  {{ t('credits-currency-error') }} <button type="button" class="underline" @click="loadCreditQuote">
+                    {{ t('retry') }}
+                  </button>
+                </p>
                 <p>
                   {{ t('credits-top-up-quantity-help') }}
+                  <span v-if="creditQuote">{{ t('credits-billing-currency', { currency: creditQuote.currency.toUpperCase(), price: formatCurrency(1) }) }}</span>
                 </p>
-                <p class="font-medium">
-                  {{ t('credits-top-up-total-estimate', { amount: formatCurrency(topUpQuantityUsd) }) }}
+                <p v-if="creditQuote" class="font-medium">
+                  {{ t('credits-top-up-total-estimate', { amount: formatCurrency(topUpQuantityValue) }) }}
                 </p>
               </div>
             </div>
@@ -1049,7 +1074,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
               type="checkbox"
               class="d-toggle"
               :checked="autoTopUpEnabled"
-              :disabled="isAutoTopUpControlsDisabled"
+              :disabled="isAutoTopUpToggleDisabled"
               :aria-label="t('credits-auto-top-up-label')"
               @change="onAutoTopUpToggle"
             >
@@ -1087,8 +1112,8 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             :disabled="isAutoTopUpControlsDisabled"
             @blur="onAutoTopUpFieldBlur"
           >
-            <template #prefix>
-              $
+            <template #suffix>
+              {{ t('credits-unit') }}
             </template>
           </FormField>
           <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
@@ -1110,8 +1135,8 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             :disabled="isAutoTopUpControlsDisabled"
             @blur="onAutoTopUpFieldBlur"
           >
-            <template #prefix>
-              $
+            <template #suffix>
+              {{ t('credits-unit') }}
             </template>
           </FormField>
           <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">

@@ -239,6 +239,17 @@ function backToDeleteFeedback() {
   deletionConfirmation.value = ''
 }
 
+// Deleting or transferring an app settles its open simulator sessions at the current time. The
+// simulator list settles first the ones whose device already stopped, up to that stop.
+async function settleSimulators() {
+  try {
+    await invokeCapgoApi(`private/simulator/?app_id=${encodeURIComponent(props.appId)}`, { method: 'GET', retries: 0 })
+  }
+  catch {
+    // Best effort: the deletion or transfer settles anything left at the current time.
+  }
+}
+
 async function deleteApp() {
   if (deletionConfirmation.value !== props.appId || isDeletingApp.value)
     return
@@ -246,6 +257,7 @@ async function deleteApp() {
   isDeletingApp.value = true
   sendOnboardingEvent('app_deletion_confirmed', getDeletionEventProperties())
   try {
+    await settleSimulators()
     const org = organizationStore.getOrgByAppId(props.appId)
     const { error: errorIcon } = await capgo.storage
       .from(`images`)
@@ -397,8 +409,8 @@ async function submit(form: {
   try {
     await updateServingRegions()
   }
-  catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
+  catch {
+    toast.error(t('serving-region-save-error'))
   }
 
   try {
@@ -1413,7 +1425,7 @@ function confirmTransferAppOwnership(org: Organization) {
             toast.error(t('incorrect-app-id'))
             return false
           }
-          // Transfer logic will go here
+          await settleSimulators()
           const { error } = await capgo.rpc('transfer_app', {
             p_app_id: props.appId,
             p_new_org_id: org.gid,
@@ -1753,7 +1765,14 @@ async function transferAppOwnership() {
                   :label="t('block-provider-infra-requests')"
                   :help="t('block-provider-infra-requests-help')"
                 />
-                <AppServingRegions v-model:regions="servingRegionsInput" v-model:mode="servingRegionModeInput" :disabled="!canUpdateSettings" :app-id="props.appId" />
+                <AppServingRegions
+                  v-model:regions="servingRegionsInput"
+                  v-model:mode="servingRegionModeInput"
+                  :disabled="!canUpdateSettings"
+                  :app-id="props.appId"
+                  :saved-regions="appRef?.serving_regions ?? DEFAULT_SERVING_REGIONS"
+                  :saved-mode="appRef?.serving_region_mode ?? 'route'"
+                />
                 <details
                   id="device-data-collection"
                   class="pt-2 group"

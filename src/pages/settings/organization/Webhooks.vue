@@ -18,6 +18,7 @@ import Spinner from '~/components/Spinner.vue'
 import WebhookDeliveryLog from '~/components/WebhookDeliveryLog.vue'
 import WebhookForm from '~/components/WebhookForm.vue'
 import { formatLocalDateTime } from '~/services/date'
+import { organizationIdentityKey } from '~/services/organizationWatchKeys'
 import { checkPermissions } from '~/services/permissions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -54,7 +55,8 @@ onMounted(async () => {
   await webhooksStore.fetchWebhooks()
 })
 
-watch(currentOrganization, async () => {
+// Refetch on organization switch (or role change), not on every refreshed copy.
+watch(() => organizationIdentityKey(currentOrganization.value), async () => {
   await webhooksStore.fetchWebhooks()
 })
 

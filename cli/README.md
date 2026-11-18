@@ -2632,7 +2632,7 @@ npx @capgo/cli@latest mcp
 
 ## <a id="simulator"></a> 🔹 **Simulator**
 
-Start a cloud simulator. A running simulator uses one builder slot and build minutes.
+Start a cloud simulator. A running simulator uses one builder slot and counts as build time. It stops by itself after 5 minutes without input.
 
 ### <a id="simulator-start"></a> 🔹 **Start**
 
