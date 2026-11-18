@@ -93,12 +93,14 @@ function makeSubscriptionUpdatedEvent(
   currentProductId: string,
   previousPriceId: string,
   previousProductId: string,
+  stripeCustomerId: string,
+  subscriptionId: string,
 ): Stripe.CustomerSubscriptionUpdatedEvent {
   return {
     data: {
       object: {
-        customer: STRIPE_CUSTOMER_ID,
-        id: SUBSCRIPTION_ID,
+        customer: stripeCustomerId,
+        id: subscriptionId,
         items: {
           data: [makeSubscriptionItem(currentPriceId, currentProductId)],
         },
@@ -121,6 +123,7 @@ async function invokeCreatedOrUpdated(
   previousProductId: string,
   orgId: string,
   stripeCustomerId: string,
+  subscriptionId: string,
   stripeEventId = `evt_${randomUUID()}`,
 ) {
   const c = createBackendContext(stripeEventId)
@@ -129,6 +132,8 @@ async function invokeCreatedOrUpdated(
     currentProductId,
     previousPriceId,
     previousProductId,
+    stripeCustomerId,
+    subscriptionId,
   )
   const stripeData = extractDataEvent(c, stripeEvent)
   expect(shouldRecomputePlanStatusAfterStripeSubscriptionChange(stripeData)).toBe(true)
@@ -300,6 +305,7 @@ describe('build_time_exceeded after Stripe createdOrUpdated plan change', () => 
       MAKER_PRODUCT_ID,
       ORG_ID,
       STRIPE_CUSTOMER_ID,
+      SUBSCRIPTION_ID,
     )
 
     const { data: teamFitRows, error: teamFitError } = await supabase.rpc('get_plan_usage_and_fit', { orgid: ORG_ID })
@@ -338,6 +344,7 @@ describe('build_time_exceeded after Stripe createdOrUpdated plan change', () => 
       TEAM_PRODUCT_ID,
       ORG_ID,
       STRIPE_CUSTOMER_ID,
+      SUBSCRIPTION_ID,
     )
 
     const { data: stripeInfo } = await supabase
@@ -464,6 +471,7 @@ describe('build_time_exceeded after Stripe createdOrUpdated (builder-only org)',
       MAKER_PRODUCT_ID,
       BUILDER_ORG_ID,
       BUILDER_STRIPE_CUSTOMER_ID,
+      BUILDER_SUBSCRIPTION_ID,
     )
 
     const supabase = getSupabaseClient()
