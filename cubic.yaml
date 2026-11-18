@@ -12,3 +12,26 @@ reviews:
     # Public repo: never auto-approve external or unverified authors.
     exclude_external_contributors: true
     allow_open_issues: none
+  custom_rules:
+    - name: Visual screenshot required
+      description: |
+        Blocking check. If any changed file is visual and the pull request description has no real screenshot, open one blocking issue.
+        Visual files are src/**/*.vue, src/**/*.css, src/**/*.scss, src/**/*.sass, src/**/*.less, src/**/*.svg, supabase/templates/**/*.html, cloudflare_workers/api/email_templates/**/*.html, ios/**/*.storyboard, ios/**/*.xib, android/**/res/layout/**/*.xml, and android/**/res/drawable*/**/*.xml.
+        A screenshot is a markdown image, an HTML img, a GitHub user-attachments URL, a user-images.githubusercontent.com URL, or a link ending in png, jpg, jpeg, gif, webp, mp4, mov, or webm.
+        The word screenshot, an empty Screenshots heading, HTML comments, and images inside code fences do not count.
+        The issue body must contain exactly: missing screenshot for review
+        Tell the author to add the screenshot to the pull request description.
+        Do not flag this rule when a real screenshot is already in the description, or when no visual file changed.
+      include:
+        - "src/**/*.vue"
+        - "src/**/*.css"
+        - "src/**/*.scss"
+        - "src/**/*.sass"
+        - "src/**/*.less"
+        - "src/**/*.svg"
+        - "supabase/templates/**/*.html"
+        - "cloudflare_workers/api/email_templates/**/*.html"
+        - "ios/**/*.storyboard"
+        - "ios/**/*.xib"
+        - "android/**/res/layout/**/*.xml"
+        - "android/**/res/drawable*/**/*.xml"
