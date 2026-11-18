@@ -167,6 +167,7 @@ export async function recordStoppedSimulatorDevices(c: Context, orgId: string): 
         const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_MINUTES
         const openedAt = row.started_at ?? row.created_at
         const maxStop = simulatorMaxSessionStopIso(openedAt, maxMinutes, now)
+        // Ask the host first so an idle stop is never replaced by the cap.
         const found = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${encodeURIComponent(row.emulator_id)}`, 'GET', undefined, DEVICE_CHECK_TIMEOUT_MS)
         const responseNow = Date.now()
         const hostStop = deviceStopTime(found.data, responseNow)
