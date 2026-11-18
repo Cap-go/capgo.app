@@ -157,6 +157,44 @@ describe('stopped simulator devices', () => {
     }
   })
 
+  it('retries the same host idle stop after a transient device_stopped_at write failure', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(syncNow)
+      let stopWrites = 0
+      mockGetPgClient.mockResolvedValue({
+        connect: async () => ({
+          query: async (sql: string, params?: unknown[]) => {
+            queries.push({ sql, params })
+            if (sql.includes('SELECT id, emulator_id'))
+              return { rows: [{ id: maxed, emulator_id: maxed, started_at: maxedStartedAt, created_at: maxedStartedAt, max_duration_minutes: 40 }] }
+            if (sql.includes('device_stopped_at = COALESCE')) {
+              stopWrites += 1
+              if (stopWrites === 1)
+                throw new Error('transient write')
+              return { rows: [{ device_stopped_at: params?.[1] }] }
+            }
+            return { rows: [] }
+          },
+          release: () => {},
+        }),
+      })
+      vi.stubGlobal('fetch', vi.fn(async () => (
+        Response.json({ data: { id: maxed, url: 'u', status: 'stopped', finishedAt: '2026-11-09T11:12:00.000Z' } })
+      )))
+      await expect(recordStoppedSimulatorDevices(context, orgId)).resolves.toBeUndefined()
+      const stops = queries.filter(query => query.sql.includes('device_stopped_at = COALESCE'))
+      expect(stops).toHaveLength(2)
+      expect(stops.map(stop => stop.params)).toEqual([
+        [maxed, '2026-11-09T11:12:00.000Z'],
+        [maxed, '2026-11-09T11:12:00.000Z'],
+      ])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('writes the cap when the host rejects the device GET on a session past its maximum', async () => {
     vi.useFakeTimers()
     try {
