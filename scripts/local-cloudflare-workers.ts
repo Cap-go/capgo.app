@@ -152,11 +152,13 @@ export async function runLocalCloudflareWorkers(options: LocalWorkerOptions) {
         services: [{ binding: 'API', service: api }, { binding: 'PLUGIN', service: plugin }, { binding: 'FILES', service: files }],
       } },
     }))
-    const command = [join(ROOT, 'scripts/wrangler-dev-compat.sh'), '--local', '--env=local',
+    // No shell: wrangler gets an argument list. The compatibility date is the
+    // one scripts/wrangler-dev-compat.sh would pick (localCompatibilityDate).
+    const command = ['wrangler', 'dev', '--compatibility-date', compatibilityDate, '--local', '--env=local',
       '--port', String(options.apiPort), '--inspector-port', String(options.inspectorPort),
       '--persist-to', options.persistDir, '-c', routerConfig,
       ...configPaths.flatMap(path => ['-c', path])]
-    child = spawn('bash', command, { cwd: ROOT, detached: true, stdio: 'inherit', env: { ...process.env, WRANGLER_SEND_METRICS: 'false' } })
+    child = spawn('bunx', command, { cwd: ROOT, detached: true, stdio: 'inherit', env: { ...process.env, WRANGLER_SEND_METRICS: 'false' } })
     proxies.push(bun.serve({ hostname: '127.0.0.1', port: options.pluginPort, idleTimeout: 0,
       fetch: request => forwardLocalWorkerRequest(request, 'plugin', options.apiPort) }))
     proxies.push(bun.serve({ hostname: '127.0.0.1', port: options.filesPort, idleTimeout: 0,

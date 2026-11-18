@@ -16,12 +16,15 @@ describe('wrangler dev compatibility date override', () => {
     expect(script).toContain('exec bunx wrangler dev "$@"')
   })
 
-  it('routes Cloudflare test worker startup through the compat wrapper', () => {
+  it('routes Cloudflare test worker startup through the pinned compatibility date', () => {
     const start = readFileSync(new URL('../scripts/start-cloudflare-workers.sh', import.meta.url), 'utf8')
     const launcher = readFileSync(new URL('../scripts/local-cloudflare-workers.ts', import.meta.url), 'utf8')
     expect(start).toContain('scripts/local-cloudflare-workers.ts')
     expect(start).not.toMatch(/exec bunx wrangler dev/)
-    expect(launcher).toContain('scripts/wrangler-dev-compat.sh')
+    // The single-runtime launcher pins the same date itself and spawns wrangler without a shell.
+    expect(launcher).toContain("'--compatibility-date', compatibilityDate")
+    expect(launcher).toContain("spawn('bunx', command")
+    expect(launcher).not.toMatch(/spawn\('(?:bash|sh)'/)
     expect(launcher).toContain("'--env=local'")
   })
 
