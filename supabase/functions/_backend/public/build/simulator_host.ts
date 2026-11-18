@@ -161,39 +161,50 @@ export async function recordStoppedSimulatorDevices(c: Context, orgId: string): 
         AND emulator_id IS NOT NULL
         AND device_stopped_at IS NULL
     `, [orgId])
-    const now = Date.now()
     await Promise.all(running.map(async (row) => {
+      let stopAt: string | undefined
       try {
         const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_MINUTES
         const openedAt = row.started_at ?? row.created_at
-        const maxStop = simulatorMaxSessionStopIso(openedAt, maxMinutes, now)
         // Ask the host first so an idle stop is never replaced by the cap.
         const found = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${encodeURIComponent(row.emulator_id)}`, 'GET', undefined, DEVICE_CHECK_TIMEOUT_MS)
         const responseNow = Date.now()
+        const maxStop = simulatorMaxSessionStopIso(openedAt, maxMinutes, responseNow)
         const hostStop = deviceStopTime(found.data, responseNow)
         if (hostStop) {
           const maxMs = maxStop ? Date.parse(maxStop) : Number.NaN
           const hostMs = Date.parse(hostStop)
-          const stopAt = Number.isFinite(maxMs) && Number.isFinite(hostMs) && hostMs > maxMs ? maxStop! : hostStop
-          await rememberDeviceStop(c, row.id, stopAt)
-          return
+          stopAt = Number.isFinite(maxMs) && Number.isFinite(hostMs) && hostMs > maxMs ? maxStop! : hostStop
         }
-        if (maxStop)
-          await rememberDeviceStop(c, row.id, maxStop)
+        else if (maxStop) {
+          stopAt = maxStop
+        }
+        if (stopAt)
+          await rememberDeviceStop(c, row.id, stopAt)
       }
       catch (error) {
-        const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_MINUTES
-        const maxStop = simulatorMaxSessionStopIso(row.started_at ?? row.created_at, maxMinutes, Date.now())
-        if (maxStop) {
+        if (stopAt) {
           try {
-            await rememberDeviceStop(c, row.id, maxStop)
+            await rememberDeviceStop(c, row.id, stopAt)
           }
           catch (writeError) {
-            cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator max stop write failed', sessionId: row.id, error: writeError })
+            cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator stop write failed', sessionId: row.id, error: writeError })
           }
         }
         else {
-          cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator device check failed', sessionId: row.id, error })
+          const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_MINUTES
+          const maxStop = simulatorMaxSessionStopIso(row.started_at ?? row.created_at, maxMinutes, Date.now())
+          if (maxStop) {
+            try {
+              await rememberDeviceStop(c, row.id, maxStop)
+            }
+            catch (writeError) {
+              cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator max stop write failed', sessionId: row.id, error: writeError })
+            }
+          }
+          else {
+            cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator device check failed', sessionId: row.id, error })
+          }
         }
       }
     }))
