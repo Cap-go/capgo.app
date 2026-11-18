@@ -1,4 +1,5 @@
 export interface EmailContent {
+  attachments?: { filename: string, content: string, type: string, disposition: 'attachment' }[]
   subject: string
   html: string
   text: string

@@ -11,6 +11,7 @@ import { app as changelog } from '../../supabase/functions/_backend/private/chan
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as cli } from '../../supabase/functions/_backend/private/cli/index.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
+import { app as channel_impact } from '../../supabase/functions/_backend/private/channel_impact.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
 import { app as config } from '../../supabase/functions/_backend/private/config.ts'
 import { app as configBuilder } from '../../supabase/functions/_backend/private/config_builder.ts'
@@ -196,6 +197,7 @@ appPrivate.route('/invite_existing_user_to_org', invite_existing_user_to_org)
 appPrivate.route('/set_org_email', set_org_email)
 appPrivate.route('/validate_password_compliance', validate_password_compliance)
 appPrivate.route('/stats', stats_priv)
+appPrivate.route('/channel_impact', channel_impact)
 appPrivate.route('/channel_stats', channel_stats)
 appPrivate.route('/native_observe_stats', native_observe_stats)
 appPrivate.route('/observe', observe)

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MAX_DEVICES_PAGE_OFFSET } from './devicesPageOffset.ts'
 import { Constants } from './supabase.types.ts'
 import { deviceIdRegex, INVALID_STRING_APP_ID, INVALID_STRING_DEVICE_ID, reverseDomainRegex } from './utils.ts'
 
@@ -24,6 +25,8 @@ export const deviceIdListSchema = z.array(deviceIdSchema).max(MAX_DEVICE_ID_FILT
 export const safeQueryTextSchema = z.string().max(MAX_QUERY_TEXT_LENGTH)
 export const safeQueryDateSchema = z.string().max(128)
 export const cursorSchema = z.string().max(128)
+
+export const devicesPageOffsetSchema = z.number().int().min(0).max(MAX_DEVICES_PAGE_OFFSET)
 
 const queryLimitNumberSchema = z.number().int().min(1).refine(
   value => value <= MAX_QUERY_LIMIT,

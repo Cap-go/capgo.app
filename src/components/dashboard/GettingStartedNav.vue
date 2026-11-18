@@ -160,10 +160,15 @@ function dismiss(app: OrganizationApp, event: Event) {
     void router.push(`/app/${encodeURIComponent(app.app_id)}`)
 }
 
+// The store's catalog already carries onboarding state when it was just loaded
+// (app start): only refresh when it is older than this.
+const ONBOARDING_REFRESH_MAX_AGE_MS = 60_000
 watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
   if (!orgId)
     return
   await organizationStore.awaitInitialLoad()
+  if (organizationStore.getFreshOrgApps(orgId, ONBOARDING_REFRESH_MAX_AGE_MS))
+    return
   void organizationStore.refreshAppsOnboarding(orgId)
 }, { immediate: true })
 

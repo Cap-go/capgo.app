@@ -89,6 +89,7 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
   s3: {
     deleteObject,
     moveObjectToTrash,
+    getSizeDiagnostics: vi.fn(async () => ({ size: 4321, selectedCandidateKey: 'bundle.zip', lastModified: '2026-01-02T03:04:05.000Z' })),
   },
 }))
 
@@ -109,9 +110,12 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 
 const { deleteIt, onVersionUpdateTestUtils } = await import('../supabase/functions/_backend/triggers/on_version_update.ts')
 
+// When the deleting update fired its trigger (server-side), unlike the client-writable deleted_at.
+const OCCURRED_AT = '2026-01-02T03:04:05.000Z'
+
 function createContext() {
   return {
-    get: vi.fn(() => undefined),
+    get: vi.fn((key: string) => key === 'webhookOccurredAt' ? OCCURRED_AT : undefined),
     json: vi.fn((body: unknown, status = 200) => new Response(JSON.stringify(body), { status })),
   } as any
 }
@@ -165,7 +169,69 @@ describe('deleted version storage boundaries', () => {
     expect(statements.filter(sql => sql.startsWith('UPDATE public.channels'))).toHaveLength(2)
     expect(purgeFileReadCache).toHaveBeenCalledWith(createVersion().r2_path, createVersion().checksum)
     expect(pgQuery).toHaveBeenCalledWith('UPDATE public.app_versions_meta SET size = 0 WHERE id = $1', [123])
-    expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), 'com.cleanup.test', 123, -1234)
+    // Removed when the deleting update happened (server time), not when the job runs nor at the
+    // client-writable deleted_at.
+    expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), 'com.cleanup.test', 123, -1234, OCCURRED_AT)
+  })
+
+  it('fails without zeroing the size when the removal storage event is not recorded', async () => {
+    // Storage is billed from version_meta: the retry must still find the size to record it.
+    createStatsMeta.mockResolvedValue({ error: new Error('connection reset') })
+    await expect(deleteIt(createContext(), createVersion())).rejects.toThrow()
+    expect(pgQuery).not.toHaveBeenCalledWith('UPDATE public.app_versions_meta SET size = 0 WHERE id = $1', [123])
+    expect(moveObjectToTrash).not.toHaveBeenCalled()
+  })
+
+  it('fails the job when the version metadata cannot be read', async () => {
+    pgQuery.mockImplementation(async (query: string) => {
+      if (query.includes('SELECT deleted'))
+        return { rows: [{ deleted: true, deleted_at: null }] }
+      if (query.includes('SELECT size FROM public.app_versions_meta'))
+        throw new Error('connection reset')
+      return { rows: [], rowCount: 0 }
+    })
+    await expect(deleteIt(createContext(), createVersion())).rejects.toThrow()
+    expect(createStatsMeta).not.toHaveBeenCalled()
+    expect(moveObjectToTrash).not.toHaveBeenCalled()
+  })
+
+  it('closes the storage lifetime from the upload event when the size is missing', async () => {
+    versionMeta.value = null
+    const response = await deleteIt(createContext(), createVersion())
+    expect(response.status).toBe(200)
+    const statements = pgQuery.mock.calls.map(([sql]) => sql as string)
+    const close = pgQuery.mock.calls.find(([sql]) => (sql as string).includes('INSERT INTO public.version_meta') && (sql as string).includes('-added.size'))
+    expect(close).toBeDefined()
+    // Closed at the deleting update (server time), never before its upload event.
+    expect(close?.[1]).toEqual(['com.cleanup.test', 123, OCCURRED_AT])
+    expect(close?.[0]).toContain('GREATEST(added.timestamp')
+    expect(statements.length).toBeGreaterThan(0)
+    expect(createStatsMeta).not.toHaveBeenCalled()
+  })
+
+  it('fails the upload job when the bundle size cannot be saved', async () => {
+    pgQuery.mockImplementation(async (query: string) => {
+      if (query.includes('INSERT INTO public.app_versions_meta'))
+        throw new Error('connection reset')
+      return { rows: [], rowCount: 0 }
+    })
+    const { onVersionUpdateTestUtils } = await import('../supabase/functions/_backend/triggers/on_version_update.ts')
+    await expect(onVersionUpdateTestUtils.v2PathSize(createContext(), { query: pgQuery } as any, createVersion(), createVersion().r2_path)).rejects.toThrow()
+    // No storage event without the size the removal will need.
+    expect(createStatsMeta).not.toHaveBeenCalled()
+  })
+
+  it('dates the upload storage event when the upload completed, not when the job runs', async () => {
+    pgQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }))
+    const { onVersionUpdateTestUtils } = await import('../supabase/functions/_backend/triggers/on_version_update.ts')
+    await onVersionUpdateTestUtils.v2PathSize(createContext(), { query: pgQuery } as any, createVersion(), createVersion().r2_path)
+    expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), 'com.cleanup.test', 123, 4321, '2026-01-02T03:04:05.000Z')
+  })
+
+  it('treats an already zero size as recorded', async () => {
+    createStatsMeta.mockResolvedValue({ error: 'size is 0' })
+    const response = await deleteIt(createContext(), createVersion())
+    expect(response.status).toBe(200)
   })
 
   it('skips a noncanonical ZIP path', async () => {

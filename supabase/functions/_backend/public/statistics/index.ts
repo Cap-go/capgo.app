@@ -161,6 +161,7 @@ interface AppMetricRow {
   app_id: string
   date: string
   mau: number
+  /** Byte-hours the app stored that UTC day (daily_storage_hourly). */
   storage: number
   bandwidth: number
   build_time_unit: number
@@ -168,12 +169,6 @@ interface AppMetricRow {
   fail: number
   install: number
   uninstall: number
-}
-
-interface StorageHourlyMetricRow {
-  app_id: string
-  date: string
-  storage_byte_hours: number
 }
 
 interface QueryResult<T> {
@@ -395,6 +390,9 @@ function metricDayNumber(metricDate: string, from: Date, graphDays: number): num
 
 export const statisticsTestUtils = {
   withStatsDb,
+  assembleNormalStats,
+  buildStorageSeries,
+  storageBytesFromByteHours,
   getApiKeyAppsNormalStats,
   getNormalStats,
   checkOrganizationsAccess,
@@ -453,66 +451,6 @@ async function checkOrganizationsAccess(c: Context, orgIds: string[], db: StatsD
   }
 }
 
-async function getStorageByteHoursByApp(
-  c: Context,
-  ownerOrg: string | null,
-  appIds: string[],
-  from: Date,
-  to: Date,
-  graphDays: number,
-  db: StatsDb,
-) {
-  const storageByteHoursByApp = appIds.reduce((acc, appId) => {
-    acc[appId] = Array.from({ length: graphDays }).fill(0) as number[]
-    return acc
-  }, {} as Record<string, number[]>)
-
-  if (appIds.length === 0)
-    return { data: storageByteHoursByApp, error: null }
-
-  const fromDay = dayjs(from).utc().format('YYYY-MM-DD')
-  const toDay = dayjs(to).utc().format('YYYY-MM-DD')
-  const filters = ['date >= $1', 'date < $2']
-  const values: unknown[] = [fromDay, toDay]
-  if (ownerOrg) {
-    values.push(ownerOrg)
-    filters.push(`owner_org = $${values.length}::uuid`)
-  }
-  if (appIds.length === 1) {
-    values.push(appIds[0])
-    filters.push(`app_id = $${values.length}`)
-  }
-
-  const { data, error } = await executeStatsQueryWithRetry<StorageHourlyMetricRow[]>(
-    c,
-    'get_daily_storage_hourly_for_stats',
-    async () => ({
-      data: await db<StorageHourlyMetricRow>(
-        `SELECT app_id, date, storage_byte_hours FROM public.daily_storage_hourly WHERE ${filters.join(' AND ')} ORDER BY date ASC, app_id ASC`,
-        values,
-      ),
-      error: null,
-    }),
-  )
-
-  if (error)
-    return { data: storageByteHoursByApp, error }
-
-  const rows = data ?? []
-  for (const row of rows) {
-    if (!storageByteHoursByApp[row.app_id])
-      continue
-
-    const dayNumber = dayjs(row.date).utc().startOf('day').diff(dayjs(from).utc().startOf('day'), 'day')
-    if (dayNumber < 0 || dayNumber >= graphDays)
-      continue
-
-    storageByteHoursByApp[row.app_id][dayNumber] += Number(row.storage_byte_hours ?? 0)
-  }
-
-  return { data: storageByteHoursByApp, error: null }
-}
-
 interface NormalStatsEntry {
   date: string
   mau: number
@@ -544,34 +482,64 @@ function groupMetricsByApp(metrics: AppMetricRow[]) {
   }, {} as Record<string, AppMetricRow[]>)
 }
 
+const HOURS_PER_DAY = 24
+
+/**
+ * Bytes stored on each day: the byte-hours of the day divided by its hours. Today only counts the
+ * hours elapsed so far.
+ */
+function storageBytesFromByteHours(byteHours: number[], from: Date, now = dayjs().utc()): number[] {
+  const firstDay = dayjs(from).utc().startOf('day')
+  return byteHours.map((value, index) => {
+    // Fractional hours: at 00:30 a bundle stored since midnight used half a byte-hour per byte.
+    const hours = Math.min(HOURS_PER_DAY, now.diff(firstDay.add(index, 'day'), 'hour', true))
+    if (hours <= 0)
+      return 0
+    return Math.round((value ?? 0) / hours)
+  })
+}
+
+/** Day-over-day change of a level series, the shape `storage` had when noAccumulate is set. */
+function dailyChanges(levels: number[]): number[] {
+  return levels.map((value, index) => index === 0 ? value : value - levels[index - 1])
+}
+
+interface StorageSeries {
+  /** Bytes stored each day (average over the day), or its daily changes when noAccumulate is set. */
+  storage: number[]
+  /** Byte-hours used each day, accumulated unless noAccumulate is set. */
+  storageByteHours: number[]
+}
+
+function buildStorageSeries(dailyByteHours: number[], from: Date, noAccumulate: boolean): StorageSeries {
+  const levels = storageBytesFromByteHours(dailyByteHours, from)
+  return noAccumulate
+    ? { storage: dailyChanges(levels), storageByteHours: dailyByteHours }
+    : { storage: levels, storageByteHours: accumulateNumbers(dailyByteHours) }
+}
+
 /**
  * Turns the rows read for one app or one organization into the daily series the endpoints return.
  * Pure: every database read happens before, so the per-app and batched paths share this exactly.
+ *
+ * Storage has one source, the byte-hours in `get_app_metrics().storage`. `storage_byte_hours`
+ * returns them; the legacy `storage` field returns the bytes stored each day derived from them.
  */
 function assembleNormalStats(c: Context, params: {
   metricsByApp: Record<string, AppMetricRow[]>
-  storageByteHoursByApp: Record<string, number[]>
-  currentStorageBytes: number | null
   from: Date
   graphDays: number
   isDashboard: boolean
   includeBreakdown: boolean
   noAccumulate: boolean
 }): NormalStatsResult {
-  const { metricsByApp, storageByteHoursByApp, currentStorageBytes, from, graphDays, isDashboard, includeBreakdown, noAccumulate } = params
+  const { metricsByApp, from, graphDays, isDashboard, includeBreakdown, noAccumulate } = params
 
   let mau = createZeroArray(graphDays)
-  let storage = createZeroArray(graphDays)
+  const byteHours = createZeroArray(graphDays)
   let bandwidth = createZeroArray(graphDays)
   let buildTime = createZeroArray(graphDays)
   let gets = isDashboard ? createZeroArray(graphDays) : []
-
-  let storageByteHours = createZeroArray(graphDays)
-  Object.values(storageByteHoursByApp).forEach((appStorageByteHours) => {
-    appStorageByteHours.forEach((value, index) => {
-      storageByteHours[index] += value ?? 0
-    })
-  })
 
   Object.values(metricsByApp)
     .forEach((arrItem) => {
@@ -585,7 +553,7 @@ function assembleNormalStats(c: Context, params: {
           return
 
         mau[dayNumber] = (mau[dayNumber] ?? 0) + item.mau
-        storage[dayNumber] = (storage[dayNumber] ?? 0) + item.storage
+        byteHours[dayNumber] = (byteHours[dayNumber] ?? 0) + Number(item.storage ?? 0)
         bandwidth[dayNumber] = (bandwidth[dayNumber] ?? 0) + (item.bandwidth ?? 0)
         buildTime[dayNumber] = (buildTime[dayNumber] ?? 0) + (item.build_time_unit ?? 0)
 
@@ -594,18 +562,10 @@ function assembleNormalStats(c: Context, params: {
       })
     })
 
-  if (storage.length !== 0) {
-    // some magic, copied from the frontend without much understanding
-    const storageVariance = storage.reduce((p, c) => (p + (c ?? 0)), 0)
-    const currentStorage = currentStorageBytes ?? 0
-    const initValue = Math.max(0, (currentStorage - storageVariance + (storage[0] ?? 0)))
-    storage[0] = initValue
-  }
+  const storage = buildStorageSeries(byteHours, from, noAccumulate)
 
   // Accumulate data if requested (default behavior for backward compatibility)
   if (noAccumulate === false) {
-    storage = accumulateNumbers(storage)
-    storageByteHours = accumulateNumbers(storageByteHours)
     mau = accumulateNumbers(mau)
     bandwidth = accumulateNumbers(bandwidth)
     buildTime = accumulateNumbers(buildTime)
@@ -623,8 +583,8 @@ function assembleNormalStats(c: Context, params: {
       continue
     finalStats[i] = {
       mau: mau[i],
-      storage: storage[i],
-      storage_byte_hours: storageByteHours[i],
+      storage: storage.storage[i],
+      storage_byte_hours: storage.storageByteHours[i],
       bandwidth: bandwidth[i],
       build_time_seconds: buildTime[i],
       get: isDashboard ? gets[i] : undefined,
@@ -642,8 +602,7 @@ function assembleNormalStats(c: Context, params: {
 
       // Initialize arrays for this app
       let appMau = createZeroArray(graphDays)
-      let appStorage = createZeroArray(graphDays)
-      let appStorageByteHours = [...(storageByteHoursByApp[appId] ?? createZeroArray(graphDays))]
+      const appByteHours = createZeroArray(graphDays)
       let appBandwidth = createZeroArray(graphDays)
       let appBuildTime = createZeroArray(graphDays)
       let appGets = isDashboard ? createZeroArray(graphDays) : []
@@ -657,7 +616,7 @@ function assembleNormalStats(c: Context, params: {
           return
 
         appMau[dayNumber] = (appMau[dayNumber] ?? 0) + item.mau
-        appStorage[dayNumber] = (appStorage[dayNumber] ?? 0) + item.storage
+        appByteHours[dayNumber] = (appByteHours[dayNumber] ?? 0) + Number(item.storage ?? 0)
         appBandwidth[dayNumber] = (appBandwidth[dayNumber] ?? 0) + (item.bandwidth ?? 0)
         appBuildTime[dayNumber] = (appBuildTime[dayNumber] ?? 0) + (item.build_time_unit ?? 0)
 
@@ -665,10 +624,10 @@ function assembleNormalStats(c: Context, params: {
           appGets[dayNumber] = (appGets[dayNumber] ?? 0) + item.get
       })
 
+      const appStorage = buildStorageSeries(appByteHours, from, noAccumulate)
+
       // Accumulate data if requested (default behavior for backward compatibility)
       if (noAccumulate === false) {
-        appStorage = accumulateNumbers(appStorage)
-        appStorageByteHours = accumulateNumbers(appStorageByteHours)
         appMau = accumulateNumbers(appMau)
         appBandwidth = accumulateNumbers(appBandwidth)
         appBuildTime = accumulateNumbers(appBuildTime)
@@ -687,8 +646,8 @@ function assembleNormalStats(c: Context, params: {
           app_id: appId,
           date: day.toISOString(),
           mau: appMau[i],
-          storage: appStorage[i],
-          storage_byte_hours: appStorageByteHours[i],
+          storage: appStorage.storage[i],
+          storage_byte_hours: appStorage.storageByteHours[i],
           bandwidth: appBandwidth[i],
           build_time_seconds: appBuildTime[i],
           get: isDashboard ? appGets[i] : undefined,
@@ -749,40 +708,8 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
     metricsByApp[key] ??= []
   }
 
-  const metricAppIds = Object.keys(metricsByApp).filter(Boolean)
-  const { data: storageByteHoursByApp, error: storageByteHoursError } = await getStorageByteHoursByApp(
-    c,
-    ownerOrgId,
-    appId ? [appId] : metricAppIds,
-    from,
-    to,
-    graphDays,
-    db,
-  )
-  if (storageByteHoursError)
-    return { data: null, error: storageByteHoursError }
-
-  let currentStorageBytes: number | null = null
-  if (graphDays !== 0) {
-    const { data, error: storageError } = await executeStatsQueryWithRetry<number>(
-      c,
-      appId ? 'get_total_app_storage_size_orgs' : 'get_total_storage_size_org',
-      async () => {
-        const rows = appId
-          ? await db<{ size: number | null }>('SELECT public.get_total_app_storage_size_orgs(org_id => $1::uuid, app_id => $2::varchar) AS size', [ownerOrgId!, appId])
-          : await db<{ size: number | null }>('SELECT public.get_total_storage_size_org(org_id => $1::uuid) AS size', [ownerOrgId!])
-        return { data: rows[0]?.size ?? null, error: null }
-      },
-    )
-    if (storageError)
-      return { data: null, error: storageError }
-    currentStorageBytes = data
-  }
-
   return assembleNormalStats(c, {
     metricsByApp,
-    storageByteHoursByApp,
-    currentStorageBytes,
     from,
     graphDays,
     isDashboard,
@@ -798,11 +725,6 @@ interface StatsAppAccessRow {
   app_read: boolean | null
 }
 
-interface StatsAppStorageSizeRow {
-  app_id: string
-  size: number | null
-}
-
 /**
  * Account statistics for an API key, one result per app in `appIds` order.
  *
@@ -814,8 +736,7 @@ interface StatsAppStorageSizeRow {
  * - one `get_app_metrics` call per org the key can read, filtered to the key's apps here, so the
  *   per-org metrics cache JSON is decoded once per org instead of once per app. Orgs the key cannot
  *   read (app-scoped keys) keep the per-app call, which is what they returned before;
- * - one `daily_storage_hourly` read for all apps;
- * - one statement for every app's current storage size.
+ * - storage comes from the same `get_app_metrics` rows (byte-hours per day).
  */
 async function getApiKeyAppsNormalStats(c: Context, appIds: string[], from: Date, to: Date, db: StatsDb, noAccumulate: boolean): Promise<NormalStatsResult[]> {
   if (appIds.length === 0)
@@ -886,36 +807,7 @@ async function getApiKeyAppsNormalStats(c: Context, appIds: string[], from: Date
     return { appIds: group.appIds, rows: results.flatMap(result => result.data ?? []), error }
   }))
 
-  const storageHourlyTask = foundApps.length === 0
-    ? Promise.resolve({ data: [] as (StorageHourlyMetricRow & { owner_org: string | null })[], error: null })
-    : executeStatsQueryWithRetry<(StorageHourlyMetricRow & { owner_org: string | null })[]>(
-        c,
-        'get_daily_storage_hourly_for_stats_batch',
-        async () => ({
-          data: await db<StorageHourlyMetricRow & { owner_org: string | null }>(
-            'SELECT app_id, owner_org, date, storage_byte_hours FROM public.daily_storage_hourly WHERE date >= $1 AND date < $2 AND app_id = ANY($3::varchar[]) ORDER BY date ASC, app_id ASC',
-            [startDate, endDate, foundApps],
-          ),
-          error: null,
-        }),
-      )
-
-  const storageSizeTask = foundApps.length === 0 || graphDays === 0
-    ? Promise.resolve({ data: [] as StatsAppStorageSizeRow[], error: null })
-    : executeStatsQueryWithRetry<StatsAppStorageSizeRow[]>(
-        c,
-        'get_total_app_storage_size_orgs_batch',
-        async () => ({
-          data: await db<StatsAppStorageSizeRow>(
-            `SELECT input.app_id, public.get_total_app_storage_size_orgs(org_id => input.owner_org, app_id => input.app_id) AS size
-             FROM unnest($1::varchar[], $2::uuid[]) AS input(app_id, owner_org)`,
-            [foundApps, foundApps.map(appId => appRows.get(appId)!.owner_org)],
-          ),
-          error: null,
-        }),
-      )
-
-  const [metricGroups, storageHourly, storageSizes] = await Promise.all([metricsTask, storageHourlyTask, storageSizeTask])
+  const metricGroups = await metricsTask
 
   const metricsByAppId = new Map<string, AppMetricRow[]>()
   const metricsErrorByAppId = new Map<string, unknown>()
@@ -929,40 +821,15 @@ async function getApiKeyAppsNormalStats(c: Context, appIds: string[], from: Date
       metricsByAppId.get(row.app_id)?.push(row)
   }
 
-  const storageByteHoursByAppId = new Map(foundApps.map(appId => [appId, createZeroArray(graphDays)]))
-  if (!storageHourly.error) {
-    for (const row of storageHourly.data ?? []) {
-      const ownerOrg = appRows.get(row.app_id)?.owner_org
-      // The per-app read also filtered on the app's owner org.
-      if (ownerOrg && row.owner_org !== ownerOrg)
-        continue
-      const series = storageByteHoursByAppId.get(row.app_id)
-      if (!series)
-        continue
-      const dayNumber = dayjs(row.date).utc().startOf('day').diff(dayjs(from).utc().startOf('day'), 'day')
-      if (dayNumber < 0 || dayNumber >= graphDays)
-        continue
-      series[dayNumber] += Number(row.storage_byte_hours ?? 0)
-    }
-  }
-
-  const storageSizeByAppId = new Map((storageSizes.data ?? []).map(row => [row.app_id, row.size ?? null]))
-
   return appIds.map((appId) => {
     if (!appRows.has(appId))
       return { data: null, error: { error: 'app_not_found', status: 404, app_id: appId } }
     const metricsError = metricsErrorByAppId.get(appId)
     if (metricsError)
       return { data: null, error: metricsError }
-    if (storageHourly.error)
-      return { data: null, error: storageHourly.error }
-    if (storageSizes.error)
-      return { data: null, error: storageSizes.error }
 
     return assembleNormalStats(c, {
       metricsByApp: { [appId]: metricsByAppId.get(appId) ?? [] },
-      storageByteHoursByApp: { [appId]: storageByteHoursByAppId.get(appId)! },
-      currentStorageBytes: storageSizeByAppId.get(appId) ?? null,
       from,
       graphDays,
       isDashboard: false,
@@ -1539,6 +1406,7 @@ app.get('/user', async (c) => {
     date: string
     mau: number
     storage: number
+    storage_byte_hours: number
     bandwidth: number
     build_time_seconds: number
     get?: number
@@ -1549,6 +1417,7 @@ app.get('/user', async (c) => {
     if (current) {
       current.mau += curr.mau
       current.storage += curr.storage
+      current.storage_byte_hours += curr.storage_byte_hours
       current.bandwidth += curr.bandwidth
       current.build_time_seconds += curr.build_time_seconds
     }

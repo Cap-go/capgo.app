@@ -5,6 +5,7 @@ import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
+import { recordStoppedSimulatorDevices } from './simulator_host.ts'
 
 export const SIMULATOR_MAX_DURATION_MINUTES = 40
 export const SIMULATOR_IDLE_TIMEOUT_MINUTES = 5
@@ -246,6 +247,7 @@ export async function sweepDueSimulatorSessions(c: Context): Promise<{ orgs: num
 
 export async function expireSimulatorSessions(c: Context, orgId: string): Promise<void> {
   const { syncInProgressSimulatorSessionsForOrgFromHost, stopDevicesForDueSimulatorExpiry } = await import('./simulator.ts')
+  await recordStoppedSimulatorDevices(c, orgId)
   const { hostUnreachableSessionIds } = await syncInProgressSimulatorSessionsForOrgFromHost(c, orgId)
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   let client: PgClient | null = null

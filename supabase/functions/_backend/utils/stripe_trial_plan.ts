@@ -1,3 +1,4 @@
+import { billingRequestOptions, withBillingProfileLock } from './billing_profile_lock.ts'
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { InAppBillingContext } from './stripe_in_app.ts'
@@ -12,6 +13,7 @@ import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import type { BillingAccount } from './stripe_billing.ts'
 import type { PriceTier } from './country_price_tier.ts'
 import { FULL_PRICE_TIER, priceTierForCountries } from './country_price_tier.ts'
+import type { CustomerBilling } from './regional_price.ts'
 import { getCustomerBilling, isRegionalCurrency } from './regional_price.ts'
 import { getStripe } from './stripe.ts'
 import type { Database } from './supabase.types.ts'
@@ -73,6 +75,8 @@ export interface TrialPlanAttribution {
 }
 
 interface TrialState {
+  tier: PriceTier
+  currency: string
   planName: string
   productId: string
   priceId: string
@@ -116,7 +120,10 @@ async function getRegionalSoldCurrencies(c: Context, ctx: InAppBillingContext, t
 // The schedule bills in the customer's Stripe currency, USD until one is pinned: a regional price needs it
 // to be the region's currency, or USD where Stripe does not sell that one.
 export async function getTrialPriceTier(c: Context, ctx: InAppBillingContext): Promise<PriceTier> {
-  const { countries: billingCountries, currency } = await getCustomerBilling(ctx.stripe, ctx.customerId)
+  return trialPriceTierForBilling(c, ctx, await getCustomerBilling(ctx.stripe, ctx.customerId))
+}
+
+async function trialPriceTierForBilling(c: Context, ctx: InAppBillingContext, { countries: billingCountries, currency }: CustomerBilling): Promise<PriceTier> {
   const countries = [getRequestCountry(c), ...billingCountries]
   const billedCurrency = currency ?? 'usd'
   const tier = priceTierForCountries(countries)
@@ -146,7 +153,8 @@ async function loadTrialState(c: Context, ctx: InAppBillingContext): Promise<Tri
   if (!plan)
     return null
   // Outside the try: a Stripe failure must be retried, not read as a missing trial plan.
-  const tier = await getTrialPriceTier(c, ctx)
+  const billing = await getCustomerBilling(ctx.stripe, ctx.customerId)
+  const tier = await trialPriceTierForBilling(c, ctx, billing)
   let priceId: string
   let productId: string
   try {
@@ -158,7 +166,7 @@ async function loadTrialState(c: Context, ctx: InAppBillingContext): Promise<Tri
   }
   if (!priceId || !productId)
     return null
-  return { planName: plan.name, productId, priceId, startsAt }
+  return { planName: plan.name, productId, priceId, startsAt, tier, currency: billing.currency ?? 'usd' }
 }
 
 function isSchedulableTrialPlanName(name: string | null | undefined): boolean {
@@ -168,28 +176,30 @@ function isSchedulableTrialPlanName(name: string | null | undefined): boolean {
 // Monthly Solo/Maker/Team for the org's billing account so the prompt can switch before scheduling.
 export async function listSchedulableTrialPlans(c: Context, ctx: InAppBillingContext): Promise<TrialPlanOption[]> {
   const { billingAccount } = ctx
-  const [plans, tier] = await Promise.all([
+  const [plans, billing] = await Promise.all([
     adminQuery(c, client => queryJson<Pick<PlanRow, 'name' | 'price_m' | 'stripe_id' | 'price_m_id' | 'price_y_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us' | 'regional_price_ids'>>(
       client,
       'SELECT name, price_m, stripe_id, price_m_id, price_y_id, stripe_id_us, price_m_id_us, price_y_id_us, regional_price_ids FROM public.plans WHERE name = ANY($1::text[])',
       [[...SCHEDULABLE_TRIAL_PLAN_NAMES]],
     )),
-    getTrialPriceTier(c, ctx),
+    getCustomerBilling(ctx.stripe, ctx.customerId),
   ])
-  // Console Plans page lists these in USD; keep the picker consistent.
+  const tier = await trialPriceTierForBilling(c, ctx, billing)
+  const currency = billing.currency ?? 'usd'
   const options = await Promise.all(plans.map(async (plan): Promise<TrialPlanOption | null> => {
     try {
       const productId = getPlanProductId(plan, billingAccount)
       if (!productId || !isSchedulableTrialPlanName(plan.name))
         return null
-      // A regional discount shows the USD amount of the price the schedule will charge.
-      const regionalPriceId = getRegionalPlanPriceId(plan.regional_price_ids, tier, billingAccount, 'month')
-      // plans.price_m is a major-unit monthly list price (e.g. 14 for Solo).
-      const regularAmount = Math.round(Number(plan.price_m) * 100)
-      const amount = regionalPriceId ? (await ctx.stripe.prices.retrieve(regionalPriceId)).unit_amount ?? regularAmount : regularAmount
+      const priceId = getTrialPlanPriceId(plan, billingAccount, tier)
+      const regularId = getPlanPriceId(plan, billingAccount, 'month')
+      const price = await priceInCurrency(ctx, priceId, currency)
+      const regular = priceId === regularId ? price : await priceInCurrency(ctx, regularId, currency)
+      const amount = price.unit_amount ?? 0
+      const regularAmount = regular.unit_amount ?? amount
       if (!Number.isFinite(amount) || amount <= 0)
         return null
-      return { productId, planName: plan.name!, amount, currency: 'usd', ...(amount < regularAmount ? { regularAmount } : {}) }
+      return { productId, planName: plan.name!, amount, currency, ...(amount < regularAmount ? { regularAmount } : {}) }
     }
     catch {
       return null
@@ -209,7 +219,7 @@ async function applyTrialPlanProduct(c: Context, ctx: InAppBillingContext, produ
   if (!plan || !isSchedulableTrialPlanName(plan.name))
     throw simpleError('invalid_trial_plan', 'This plan cannot start automatically when the trial ends')
   // Outside the try: a Stripe failure must be retried, not reported as an invalid plan.
-  const tier = await getTrialPriceTier(c, ctx)
+  const tier = state.tier
   let nextProductId: string
   let priceId: string
   try {
@@ -222,7 +232,7 @@ async function applyTrialPlanProduct(c: Context, ctx: InAppBillingContext, produ
   if (nextProductId !== productId)
     throw simpleError('invalid_trial_plan', 'This plan cannot start automatically when the trial ends')
   await setStripeInfoProduct(c, ctx.customerId, nextProductId)
-  return { planName: plan.name!, productId: nextProductId, priceId, startsAt: state.startsAt }
+  return { planName: plan.name!, productId: nextProductId, priceId, startsAt: state.startsAt, tier, currency: state.currency }
 }
 
 async function listPendingTrialPlanSchedules(stripe: Stripe, customerId: string) {
@@ -354,23 +364,24 @@ export async function syncTrialPlanScheduleForCustomer(
   return syncPendingTrialPlanScheduleWithTrialAt(c, getStripe(c, billingAccount), customerId)
 }
 
-async function cancelSchedules(c: Context, stripe: Stripe, customerId: string, schedules: readonly Stripe.SubscriptionSchedule[], message: string) {
+async function cancelSchedules(c: Context, stripe: Stripe, customerId: string, schedules: readonly Stripe.SubscriptionSchedule[], message: string, assertHeld: () => Promise<void> = async () => {}) {
   await Promise.all(schedules.map(async (schedule) => {
-    await stripe.subscriptionSchedules.cancel(schedule.id)
+    await assertHeld()
+    await stripe.subscriptionSchedules.cancel(schedule.id, {}, billingRequestOptions)
     cloudlog({ requestId: c.get('requestId'), message, customerId, scheduleId: schedule.id })
   }))
 }
 
 // Keep the oldest pending schedule; concurrent requests may each have created one.
-export async function cancelDuplicateTrialPlanSchedules(c: Context, stripe: Stripe, customerId: string) {
+export async function cancelDuplicateTrialPlanSchedules(c: Context, stripe: Stripe, customerId: string, assertHeld?: () => Promise<void>) {
   const [, ...duplicates] = await listPendingTrialPlanSchedules(stripe, customerId)
-  await cancelSchedules(c, stripe, customerId, duplicates, 'duplicate trial plan schedule canceled')
+  await cancelSchedules(c, stripe, customerId, duplicates, 'duplicate trial plan schedule canceled', assertHeld)
 }
 
 // Cancel every pending trial plan schedule, duplicates included, so none can still charge.
-async function cancelAllPendingTrialPlanSchedules(c: Context, stripe: Stripe, customerId: string, message: string) {
+async function cancelAllPendingTrialPlanSchedules(c: Context, stripe: Stripe, customerId: string, message: string, assertHeld?: () => Promise<void>) {
   const schedules = await listPendingTrialPlanSchedules(stripe, customerId)
-  await cancelSchedules(c, stripe, customerId, schedules, message)
+  await cancelSchedules(c, stripe, customerId, schedules, message, assertHeld)
   return schedules.length
 }
 
@@ -380,11 +391,22 @@ async function cancelPendingTrialPlanSchedulesExcept(
   customerId: string,
   keepScheduleId: string,
   message: string,
+  assertHeld?: () => Promise<void>,
 ) {
   const schedules = (await listPendingTrialPlanSchedules(stripe, customerId))
     .filter(schedule => schedule.id !== keepScheduleId)
-  await cancelSchedules(c, stripe, customerId, schedules, message)
+  await cancelSchedules(c, stripe, customerId, schedules, message, assertHeld)
   return schedules.length
+}
+
+async function priceInCurrency(ctx: InAppBillingContext, priceId: string, currency: string) {
+  const price = await ctx.stripe.prices.retrieve(priceId, { expand: ['currency_options'] })
+  if (price.currency === currency)
+    return price
+  const option = price.currency_options?.[currency]
+  if (!option || option.unit_amount === null)
+    throw simpleError('invalid_currency', 'This plan is not available in your billing currency')
+  return { ...price, currency, unit_amount: option.unit_amount }
 }
 
 // Describes the pending schedule as Stripe will bill it, whether or not the org would be
@@ -395,7 +417,7 @@ async function summarizePendingSchedule(c: Context, ctx: InAppBillingContext, sc
   const priceId = typeof scheduledPrice === 'string' ? scheduledPrice : scheduledPrice?.id
   if (!phase || !priceId)
     return null
-  const price = await ctx.stripe.prices.retrieve(priceId)
+  const price = phase.currency ? await priceInCurrency(ctx, priceId, phase.currency) : await ctx.stripe.prices.retrieve(priceId)
   const productId = typeof price.product === 'string' ? price.product : price.product.id
   const { data: plan } = await findPlanByProductId(c, productId)
   return {
@@ -417,7 +439,7 @@ export async function getTrialPlanSummary(c: Context, ctx: InAppBillingContext):
   const state = await loadTrialState(c, ctx)
   if (!state)
     return null
-  const price = await ctx.stripe.prices.retrieve(state.priceId)
+  const price = await priceInCurrency(ctx, state.priceId, state.currency)
   return {
     planName: state.planName,
     productId: state.productId,
@@ -443,7 +465,7 @@ function attributionMetadata(attribution: TrialPlanAttribution): Record<string, 
 
 // Stripe Tax needs a customer location; the card form only fills the payment method's
 // billing address, so copy it to the customer when the customer has none.
-async function ensureCustomerTaxAddress(ctx: InAppBillingContext) {
+async function ensureCustomerTaxAddress(ctx: InAppBillingContext, assertHeld: () => Promise<void> = async () => {}) {
   const customer = await ctx.stripe.customers.retrieve(ctx.customerId, { expand: ['invoice_settings.default_payment_method'] })
   if (customer.deleted || customer.address?.country)
     return
@@ -451,6 +473,7 @@ async function ensureCustomerTaxAddress(ctx: InAppBillingContext) {
   const address = paymentMethod && typeof paymentMethod === 'object' ? paymentMethod.billing_details?.address : null
   if (!address?.country)
     return
+  await assertHeld()
   await ctx.stripe.customers.update(ctx.customerId, {
     address: {
       country: address.country,
@@ -537,7 +560,11 @@ export async function scheduleTrialPlan(
 
   // Same lock as Start now: a schedule created next to a started-now subscription would
   // charge the org a second time when the trial ends.
-  const notifiedNewSchedule = await withTrialPlanLock(c, ctx.customerId, async () => {
+  const notifiedNewSchedule = await withTrialPlanLock(c, ctx.customerId, async () => withBillingProfileLock(c, ctx.billingAccount, ctx.customerId, async (assertHeld) => {
+    const currency = (await getCustomerBilling(ctx.stripe, ctx.customerId)).currency ?? 'usd'
+    if (currency !== state.currency)
+      throw simpleError('billing_currency_quote_changed', 'Your billing currency changed. Review the plan and try again.')
+    await assertHeld()
     if (await findLiveSubscription(ctx.stripe, ctx.customerId))
       throw simpleError('trial_plan_already_subscribed', 'This organization already has a subscription')
     const existing = await findPendingTrialPlanSchedule(ctx.stripe, ctx.customerId)
@@ -546,12 +573,15 @@ export async function scheduleTrialPlan(
     const needsReplacement = !!existing && !!existingPriceId && existingPriceId !== state.priceId
     const createsSchedule = !existing || needsReplacement
     if (createsSchedule) {
-      await ensureCustomerTaxAddress(ctx)
+      await ensureCustomerTaxAddress(ctx, assertHeld)
       const metadata = attributionMetadata(attribution)
-      if (Object.keys(metadata).length)
-        await ctx.stripe.customers.update(ctx.customerId, { metadata })
+      if (Object.keys(metadata).length) {
+        await assertHeld()
+        await ctx.stripe.customers.update(ctx.customerId, { metadata }, billingRequestOptions)
+      }
       // Create the replacement before canceling any pending schedule so a Stripe failure
       // leaves the previously confirmed automatic start intact.
+      await assertHeld()
       const schedule = await ctx.stripe.subscriptionSchedules.create({
         customer: ctx.customerId,
         start_date: Math.floor(state.startsAt.getTime() / 1000),
@@ -561,9 +591,9 @@ export async function scheduleTrialPlan(
           collection_method: 'charge_automatically',
         },
         // Phase metadata lands on the subscription so the webhook can recognize it.
-        phases: [{ items: [{ price: state.priceId, quantity: 1 }], metadata: { ...metadata, org_id: orgId, [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: 'true' } }],
+        phases: [{ currency: state.currency, items: [{ price: state.priceId, quantity: 1 }], metadata: { ...metadata, org_id: orgId, [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: 'true' } }],
         metadata: { [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: 'true', org_id: orgId },
-      })
+      }, billingRequestOptions)
       cloudlog({ requestId: c.get('requestId'), message: 'trial plan scheduled', orgId, scheduleId: schedule.id, startsAt: state.startsAt.toISOString(), productId: state.productId })
       if (needsReplacement) {
         await cancelPendingTrialPlanSchedulesExcept(
@@ -572,14 +602,15 @@ export async function scheduleTrialPlan(
           ctx.customerId,
           schedule.id,
           'trial plan schedule replaced by plan change',
+          assertHeld,
         )
       }
     }
     // No idempotency key (it would replay a canceled schedule): drop duplicates from concurrent
     // submits instead, on every call so a retry repairs a cleanup that failed earlier.
-    await cancelDuplicateTrialPlanSchedules(c, ctx.stripe, ctx.customerId)
+    await cancelDuplicateTrialPlanSchedules(c, ctx.stripe, ctx.customerId, assertHeld)
     return createsSchedule
-  })
+  }))
 
   const summary = await getTrialPlanSummary(c, ctx)
   if (!summary)
@@ -590,6 +621,7 @@ export async function scheduleTrialPlan(
 }
 
 export interface StartNowSubscriptionInput {
+  currency?: string
   customerId: string
   orgId: string
   priceId: string
@@ -614,7 +646,7 @@ async function findLiveSubscription(stripe: Stripe, customerId: string) {
 // requests, other cards or other attribution cookies can never charge twice. No explicit
 // idempotency key: Stripe would replay a declined card for 24 hours, so a fixed card could
 // never be retried (stripe-node still adds one to its own network retries).
-export async function createStartNowSubscription(stripe: Stripe, input: StartNowSubscriptionInput): Promise<{ subscription: Stripe.Subscription, reused: boolean }> {
+export async function createStartNowSubscription(stripe: Stripe, input: StartNowSubscriptionInput, assertHeld: () => Promise<void> = async () => {}): Promise<{ subscription: Stripe.Subscription, reused: boolean }> {
   const live = await findLiveSubscription(stripe, input.customerId)
   if (live) {
     if (isTrialPlanStartedNow(live))
@@ -629,6 +661,7 @@ export async function createStartNowSubscription(stripe: Stripe, input: StartNow
   }
   const params: Stripe.SubscriptionCreateParams = {
     customer: input.customerId,
+    ...(input.currency ? { currency: input.currency } : {}),
     items: [{ price: input.priceId, quantity: 1 }],
     default_payment_method: input.paymentMethodId,
     collection_method: 'charge_automatically',
@@ -637,7 +670,8 @@ export async function createStartNowSubscription(stripe: Stripe, input: StartNow
     metadata,
   }
   try {
-    return { subscription: await stripe.subscriptions.create(params), reused: false }
+    await assertHeld()
+    return { subscription: await stripe.subscriptions.create(params, billingRequestOptions), reused: false }
   }
   catch (error) {
     const stripeError = error as { type?: string, statusCode?: number, code?: string }
@@ -756,32 +790,37 @@ export async function startTrialPlanNow(
   if (!paymentMethodId)
     throw simpleError('missing_payment_method', 'Add a card before starting the plan')
 
-  const { subscription, reused } = await withTrialPlanLock(c, ctx.customerId, async () => {
+  const { subscription, reused } = await withTrialPlanLock(c, ctx.customerId, async () => withBillingProfileLock(c, ctx.billingAccount, ctx.customerId, async (assertHeld) => {
+    const currency = (await getCustomerBilling(ctx.stripe, ctx.customerId)).currency ?? 'usd'
+    if (currency !== state.currency)
+      throw simpleError('billing_currency_quote_changed', 'Your billing currency changed. Review the plan and try again.')
+    await assertHeld()
     const created = await createStartNowSubscription(ctx.stripe, {
       customerId: ctx.customerId,
       orgId,
       priceId: state.priceId,
+      currency: state.currency,
       paymentMethodId,
       automaticTax: isAutomaticTaxEnabled(ctx.billingAccount),
       metadata,
-    })
+    }, assertHeld)
     // The plan already started: a pending trial-end schedule would bill a second subscription.
     // Cleaning up under the lock means no schedule can be created after it. The webhook
     // repeats this for the new subscription, so a failure here is retried there.
     try {
-      await cancelAllPendingTrialPlanSchedules(c, ctx.stripe, ctx.customerId, `trial plan schedule replaced by start now ${created.subscription.id}`)
+      await cancelAllPendingTrialPlanSchedules(c, ctx.stripe, ctx.customerId, `trial plan schedule replaced by start now ${created.subscription.id}`, assertHeld)
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'trial plan start now schedule cleanup failed', orgId, subscriptionId: created.subscription.id, error })
     }
     return created
-  })
+  }))
   cloudlog({ requestId: c.get('requestId'), message: reused ? 'trial plan already started now' : 'trial plan started now', orgId, subscriptionId: subscription.id, productId: state.productId })
   // A reused subscription may be on another plan than this request picked: report what Stripe
   // bills and put the org's selected product back to it.
   const subscribedPrice = subscription.items?.data[0]?.price
   const subscribedPriceId = typeof subscribedPrice === 'string' ? subscribedPrice : subscribedPrice?.id
-  const price = await ctx.stripe.prices.retrieve(reused && subscribedPriceId ? subscribedPriceId : state.priceId)
+  const price = await priceInCurrency(ctx, reused && subscribedPriceId ? subscribedPriceId : state.priceId, subscription.currency ?? state.currency)
   let planName = state.planName
   let planProductId = state.productId
   if (price.id !== state.priceId) {

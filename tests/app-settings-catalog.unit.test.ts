@@ -6,16 +6,20 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed, createApp, nextTick, reactive, ref, watch } from 'vue'
 import { createI18n } from 'vue-i18n'
 import AppSetting from '../src/components/dashboard/AppSetting.vue'
+import { invokeCapgoApi } from '../src/services/capgoApi'
 import { useDashboardAppsStore } from '../src/stores/dashboardApps'
 
 const mocks = vi.hoisted(() => ({
   deleteApp: vi.fn(),
+  openDialog: vi.fn(),
+  rpc: vi.fn(),
   push: vi.fn(),
   fetchOrganizations: vi.fn(),
   apps: [{ app_id: 'com.example.deleting', name: 'Example' }],
 }))
 vi.mock('~/services/console', () => ({
   useConsole: () => ({
+    rpc: (...args: unknown[]) => mocks.rpc(...args),
     storage: { from: () => ({ remove: async () => ({ error: null }) }) },
     from: () => ({
       delete: () => ({ eq: () => mocks.deleteApp() }),
@@ -28,9 +32,10 @@ vi.mock('~/stores/organization', () => ({ useOrganizationStore: () => ({
   dedupFetchOrganizations: async () => undefined,
   fetchOrganizations: mocks.fetchOrganizations,
   getOrgByAppId: () => ({ gid: 'org-example' }),
+  getFreshOrgApps: () => undefined,
 }) }))
 vi.mock('~/stores/display', () => ({ useDisplayStore: () => ({ setAppNameResolver: vi.fn() }) }))
-vi.mock('~/stores/dialogv2', () => ({ useDialogV2Store: () => ({ closeDialog: vi.fn() }) }))
+vi.mock('~/stores/dialogv2', () => ({ useDialogV2Store: () => ({ closeDialog: vi.fn(), openDialog: mocks.openDialog }) }))
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
 vi.mock('~/services/permissions', () => ({
   checkPermissions: async () => true,
@@ -78,7 +83,7 @@ async function mountSettings() {
   assert(settings && typeof settings === 'object')
   assert('deletionConfirmation' in settings && 'deleteApp' in settings && typeof settings.deleteApp === 'function')
   settings.deletionConfirmation = 'com.example.deleting'
-  return { catalog, deleteApp: settings.deleteApp }
+  return { catalog, deleteApp: settings.deleteApp, settings }
 }
 
 describe('app settings catalog invalidation', () => {
@@ -90,6 +95,9 @@ describe('app settings catalog invalidation', () => {
     expect(catalog.apps).toEqual([])
     expect(catalog.isLoaded).toBe(true)
     expect(mocks.push).toHaveBeenCalledWith('/apps')
+    // Simulators whose device stopped are settled before the deletion settles the rest.
+    expect(invokeCapgoApi).toHaveBeenCalledWith(expect.stringMatching(/^private\/simulator\/\?app_id=/), expect.objectContaining({ method: 'GET' }))
+    expect(vi.mocked(invokeCapgoApi).mock.invocationCallOrder[0]).toBeLessThan(mocks.deleteApp.mock.invocationCallOrder[0]!)
   })
 
   it('keeps the shared catalog if the app deletion fails', async () => {
@@ -101,5 +109,20 @@ describe('app settings catalog invalidation', () => {
     expect(catalog.isLoaded).toBe(true)
     expect(mocks.deleteApp).toHaveBeenCalledOnce()
     expect(mocks.fetchOrganizations).not.toHaveBeenCalled()
+  })
+
+  it('settles the app\'s simulators before transferring it', async () => {
+    mocks.rpc.mockResolvedValue({ error: null })
+    const { settings } = await mountSettings()
+    assert('confirmTransferAppOwnership' in settings && typeof settings.confirmTransferAppOwnership === 'function')
+    assert('transferAppIdInput' in settings)
+    settings.confirmTransferAppOwnership({ gid: 'org-target', name: 'Target' })
+    settings.transferAppIdInput = 'com.example.deleting'
+    const dialog = mocks.openDialog.mock.calls[0]?.[0] as { buttons: Array<{ role?: string, handler?: () => Promise<unknown> }> }
+    await dialog.buttons.find(button => button.role === 'danger')?.handler?.()
+
+    expect(mocks.rpc).toHaveBeenCalledWith('transfer_app', { p_app_id: 'com.example.deleting', p_new_org_id: 'org-target' })
+    expect(invokeCapgoApi).toHaveBeenCalledWith(expect.stringMatching(/^private\/simulator\/\?app_id=/), expect.objectContaining({ method: 'GET' }))
+    expect(vi.mocked(invokeCapgoApi).mock.invocationCallOrder[0]).toBeLessThan(mocks.rpc.mock.invocationCallOrder[0]!)
   })
 })

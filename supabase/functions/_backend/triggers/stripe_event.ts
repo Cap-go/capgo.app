@@ -1,3 +1,5 @@
+import { queueInvoiceEmail } from '../utils/invoice_email.ts'
+import { completeCurrencyTransition } from '../utils/billing_currency_transition.ts'
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { MiddlewareKeyVariablesStripe } from '../utils/hono_middleware_stripe.ts'
@@ -31,6 +33,7 @@ import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
 import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
+import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { buildTransferInvoiceFooter, getStripeCustomerEmailFromEvent, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import type { TrialPlanFirstInvoiceState } from '../utils/stripe_trial_plan.ts'
 import { cancelTrialPlanScheduleForSubscription, isTrialPlanFirstInvoiceUnpaid, isTrialPlanSubscription, settleTrialPlanFirstInvoice } from '../utils/stripe_trial_plan.ts'
@@ -1771,7 +1774,7 @@ async function handleCustomerProfileStripeEvent(
   if (org) {
     const customer = await loadStripeCustomer(c, stripeData)
     await assertStripeBillingAccount(c, customer)
-    await syncStripeCustomerCountry(c, stripeData.data.customer_id)
+    await syncBillingProfile(c, { customerId: stripeData.data.customer_id, billingAccount: getWebhookBillingAccount(c), stripe: getStripe(c, getWebhookBillingAccount(c)) })
     await ensureCustomerMetadata(c, stripeData.data.customer_id, org.id, org.created_by)
     const billingOrg = await syncOrgManagementEmailFromStripeCustomer(
       c,
@@ -1897,8 +1900,9 @@ async function scheduleOpenAIFirstPayment(c: Context, org: Org, paidAt: string, 
     planId,
     stripeEvent: c.get('stripeEvent'),
   }, {
-    loadUser: userId => withAdminPg(c, async pg => singleRowOrNull((await pg.query<{ id: string, email: string, first_name: string | null, last_name: string | null, country: string | null }>(
-      'SELECT id, email, first_name, last_name, country FROM public.users WHERE id = $1 LIMIT 2',
+    loadUser: userId => withAdminPg(c, async pg => singleRowOrNull((await pg.query<{ id: string, email: string, first_name: string | null, last_name: string | null, country: string | null, oppref: unknown }>(
+      `SELECT u.id, u.email, u.first_name, u.last_name, u.country, a.raw_user_meta_data->'oppref' AS oppref
+       FROM public.users u LEFT JOIN auth.users a ON a.id = u.id WHERE u.id = $1 LIMIT 2`,
       [userId],
     )).rows)),
     // Short, single-shot requests: the helper retries, inside the background budget.
@@ -1982,8 +1986,12 @@ async function handleInvoiceStripeEvent(
   if (await handleAutoTopUpInvoicePaid(c, stripeEvent, org.id))
     return c.json(BRES)
   await recoverOpenAIFirstPaymentFromInvoice(c, org, stripeEvent, customer)
-  if (stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded')
-    return invoicePaid(c, org, stripeEvent, stripeData, customer)
+  if (stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded') {
+    const response = await invoicePaid(c, org, stripeEvent, stripeData, customer)
+    // Commit paid access first. An outbox failure still retries the email via Stripe.
+    await queueInvoiceEmail(c, org.id, getWebhookBillingAccount(c), stripeEvent)
+    return response
+  }
   if (stripeEvent.type === 'invoice.upcoming')
     return invoiceUpcoming(c, org, stripeEvent, stripeData)
   if (stripeEvent.type === 'invoice.created' || stripeEvent.type === 'invoice.updated')
@@ -2300,6 +2308,15 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
   const customer = await loadStripeCustomer(c, stripeData)
 
   await assertStripeBillingAccount(c, customer)
+  if (stripeEvent.type === 'customer.subscription.deleted' && await completeCurrencyTransition(c, {
+    customerId: stripeData.data.customer_id,
+    currentSubscriptionId: customer.subscription_id,
+    billingAccount: getWebhookBillingAccount(c),
+    stripe: getStripe(c, getWebhookBillingAccount(c)),
+    publishableKey: '',
+  }, stripeEvent.data.object))
+    return c.json(BRES)
+
   await ensureCustomerMetadata(c, stripeData.data.customer_id, org.id, org.created_by)
   stripeData.data.customer_country = await syncStripeCustomerCountry(c, stripeData.data.customer_id)
 

@@ -40,12 +40,14 @@ plugin policy. No regional guarantee is added to any download URL.
 
 The database columns are requested settings. Once deployment enforcement is
 enabled, they become effective at the successful conditional R2 write of sr1:<app_id> in the existing pointer bucket.
-A save does not acknowledge activation. Settings show this distinction and let
-the user compare the published document with their choices. Publication failure
-leaves the previous policy effective and the requested change pending.
-Status checks use the console environment's configured policy gateway and CSP.
-Only the latest check can update the displayed status; changing the app or form
-invalidates a check that is still in flight.
+A save does not acknowledge activation. The console only offers these controls
+after the service reports that they are available. Once available, it checks
+saved settings automatically and shows a short applying/up-to-date status.
+Unsaved edits are never presented as applied. Publication failure leaves the
+previous policy effective and the requested change pending. Status checks use
+the console environment's configured policy gateway and CSP, with bounded
+retries and request timeouts. Only the latest check can update the displayed
+status; changing the app or saved settings cancels an older check.
 
 A dedicated durable policy queue is drained by the existing sync handler and
 existing periodic plugin_state_sync_tick. It operates independently of the
@@ -107,8 +109,9 @@ snippet serving, including warm on-prem/plan/synthetic answers. No policy read,
 gateway fetch, signing key, new binding or primary lookup is added to those
 request paths. Request headers, envclient, environment strings and KV misses
 cannot enable the feature. The policy gateway reports active:false without
-reading R2; the console reports requested settings as pending. Saving Block or
-a smaller Route set does not activate it.
+reading R2; the console hides unavailable regional controls. Existing requested
+settings remain stored for later activation. Saving Block or a smaller Route
+set through the API does not activate it.
 
 private.settings is the source of truth for deployment epochs. Hot paths use
 its immutable deployment artifact, never a database query or an eventually

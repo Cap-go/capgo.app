@@ -1,6 +1,6 @@
 # Organization custom domains
 
-Paying Enterprise organizations can manage one Live Updates API hostname in Organization settings. The private API provisions a Cloudflare for SaaS hostname and returns DNS ownership and certificate validation records. Refresh fetches live provider status; updater URLs are offered only when both the hostname and TLS certificate are active. Bundle download URLs are unchanged.
+Paying Enterprise organizations can manage one Live Updates API hostname in Organization settings. The private API provisions a Cloudflare for SaaS hostname and returns DNS ownership and certificate validation records. The console checks pending verification automatically with bounded retries and checks again when the page becomes visible. Updater URLs are offered only when both the hostname and TLS certificate are active. Bundle download URLs are unchanged.
 
 ## Existing Cloudflare setup
 

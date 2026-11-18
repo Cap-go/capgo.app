@@ -2,7 +2,7 @@ import type { SimulatorBody } from '../public/build/simulator.ts'
 import { Hono } from 'hono/tiny'
 import { savedOutputsForJobs } from '../public/build/outputs.ts'
 import { ensureBuildPermission, getBuildOwnerOrg } from '../public/build/request.ts'
-import { pingSimulatorActivity, readSimulator, startSimulator, stopSimulator } from '../public/build/simulator.ts'
+import { listSimulators, readSimulator, startSimulator, stopSimulator } from '../public/build/simulator.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { authPrincipal } from '../utils/pg_rls.ts'
@@ -28,6 +28,12 @@ app.get('/outputs', middlewareAuth, async (c) => {
   return c.json({ outputs: await savedOutputsForJobs(c, principal, appId, ownerOrg, jobIds) })
 })
 
+// The app's recent simulators, with the build time each one counted.
+app.get('/', middlewareAuth, async (c) => {
+  const id = userId(c)
+  return listSimulators(c, { app_id: c.req.query('app_id') }, id, authPrincipal(c))
+})
+
 app.post('/', middlewareAuth, async (c) => {
   const body = await parseBody<SimulatorBody>(c)
   const id = userId(c)
@@ -38,12 +44,6 @@ app.get('/:id', middlewareAuth, async (c) => {
   const body = await parseBody<SimulatorBody>(c).catch(() => c.req.query() as SimulatorBody)
   const id = userId(c)
   return readSimulator(c, c.req.param('id'), body, id, authPrincipal(c))
-})
-
-app.post('/:id/activity', middlewareAuth, async (c) => {
-  const body = await parseBody<SimulatorBody>(c)
-  const id = userId(c)
-  return pingSimulatorActivity(c, c.req.param('id'), body, id, authPrincipal(c))
 })
 
 app.post('/:id/stop', middlewareAuth, async (c) => {

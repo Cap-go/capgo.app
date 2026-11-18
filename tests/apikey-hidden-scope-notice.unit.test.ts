@@ -153,6 +153,7 @@ vi.mock('~/stores/organization', async () => {
       { gid: 'org-a', name: 'Organization A', role: 'org_admin' },
       { gid: 'org-b', name: 'Organization B', role: 'org_admin' },
     ],
+    getAllOrgs: () => new Map(store.organizations.map(org => [org.gid, org])),
   })
   return {
     getRbacRoleI18nKey: () => null,
