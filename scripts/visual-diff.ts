@@ -541,7 +541,7 @@ async function login(page: Page, credentials?: { email: string, password: string
 
 async function settlePage(page: Page) {
   await page.waitForLoadState('domcontentloaded')
-  await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {})
+  await page.waitForLoadState('networkidle', { timeout: 3_000 }).catch(() => {})
   await page.waitForTimeout(1200)
   await page.evaluate(() => {
     document.documentElement.style.caretColor = 'transparent'
@@ -896,7 +896,9 @@ async function runPipeline(options: CliOptions) {
     await stopBackendStack()
   }
   finally {
-    if (!options.skipGitCheckout) {
+    // GitHub Actions checks out the PR merge ref once; restoring it after capture only burns step time.
+    const skipGitRestore = process.env.GITHUB_ACTIONS === 'true'
+    if (!options.skipGitCheckout && !skipGitRestore) {
       try {
         const currentRef = git(['rev-parse', 'HEAD'])
         if (currentRef !== originalRef) {
