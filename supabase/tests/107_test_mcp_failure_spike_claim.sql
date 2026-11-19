@@ -1,4 +1,4 @@
--- Cooldown claim and restore for update.failure_spike MCP subscriptions.
+-- Cooldown claim and restore for update.failure_spike MCP subscriptions (matches runner SQL).
 BEGIN;
 
 SELECT plan(5);
