@@ -109,6 +109,12 @@ describe('production read-replica release gate', () => {
         refreshDef?.steps?.some(step => step.run?.includes('resolve-deploy-tag.ts --assert-current')),
         'read_replica_subscription must run an executable assert-current step',
       ).toBe(true)
+      const expectedIf = {
+        deploy_api: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.api == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\') && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
+        deploy_translation_worker: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.translation == \'true\' && (needs.supabase_deploy.result == \'success\' || (needs.supabase_deploy.result == \'skipped\' && needs.changes.outputs.supabase != \'true\')) && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
+        deploy_files: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.files == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\') && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
+        deploy_plugin_regions: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.plugins == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\') && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
+      }
       for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions', 'deploy_translation_worker']) {
         const jobDef = parsed.jobs?.[job]
         expect(jobDef, `${job} must exist in build_and_deploy.yml`).toBeDefined()
@@ -117,7 +123,7 @@ describe('production read-replica release gate', () => {
         expect(needsList, `${job} must not need read_replica_subscription`).not.toContain('read_replica_subscription')
         expect(jobDef?.if, `${job} must keep a job-level if`).toBeDefined()
         expect(jobDef?.if, `${job} must not be disabled with if: false`).not.toBe(false)
-        expect(String(jobDef?.if), `${job} must gate on needs.changes.result`).toContain('needs.changes.result == \'success\'')
+        expect(jobDef?.if, `${job} must keep its expected if`).toBe(expectedIf[job])
         expect(String(jobDef?.if), `${job} must not gate on read_replica_subscription`).not.toContain('read_replica_subscription')
       }
     },
