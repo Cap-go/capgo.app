@@ -30,6 +30,35 @@ export function isLocal(apiHost: string) {
   return apiHost !== PROD_API_URL && apiHost !== CHINA_API_HOST
 }
 
+function normalizeHostname(hostname: string): string {
+  return hostname.replace(/\.$/, '').toLowerCase()
+}
+
+/** Loopback console API hosts only (visual-diff / local preview); not preprod or self-hosted APIs. */
+export function isLoopbackConsoleApiHost(apiHost: string): boolean {
+  try {
+    const hostname = normalizeHostname(new URL(apiHost).hostname)
+    if (hostname === 'localhost' || hostname.endsWith('.localhost'))
+      return true
+    if (hostname === '::1' || hostname === '[::1]')
+      return true
+    const ipv4 = /^(\d+)\.\d+\.\d+\.\d+$/.exec(hostname)
+    if (ipv4 && Number(ipv4[1]) === 127)
+      return true
+    return false
+  }
+  catch {
+    return false
+  }
+}
+
+export function isValidRemoteConfigPayload(data: unknown): boolean {
+  if (data === null || typeof data !== 'object' || Array.isArray(data))
+    return false
+  const record = data as Record<string, unknown>
+  return typeof record.stripeEnabled === 'boolean'
+}
+
 export function getLocalConfig() {
   const stripeEnabledEnv = import.meta.env.VITE_STRIPE_ENABLED as string | undefined
   return {
@@ -150,8 +179,8 @@ async function probeChinaApiReachable(): Promise<boolean> {
     const response = await fetchWithConfigTimeout(`${CHINA_API_HOST}/private/config`)
     if (!response.ok)
       return false
-    await response.json()
-    return true
+    const data: unknown = await response.json()
+    return isValidRemoteConfigPayload(data)
   }
   catch {
     return false
@@ -183,8 +212,8 @@ export async function getRemoteConfig() {
     return localConfig
 
   const apiHost = getConsoleApiHost()
-  // Visual diff / local preview builds point at a worktree API host; skip remote config polling.
-  if (isLocal(apiHost))
+  // Visual diff / local preview builds point at a loopback API host; skip remote config polling only there.
+  if (isLoopbackConsoleApiHost(apiHost))
     return localConfig
   try {
     const response = await fetchWithConfigTimeout(`${apiHost}/private/config`)
