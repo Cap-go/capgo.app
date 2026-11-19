@@ -136,6 +136,8 @@ describe('cLI login key model', () => {
       channel: 'user-login',
       description: 'cli-login:different',
     }, session)).toBe(false)
+    expect(isMatchingCliLoginEvent(null, session)).toBe(false)
+    expect(isMatchingCliLoginEvent('User CLI login', session)).toBe(false)
   })
 
   it.concurrent('offers onboarding only for one accepted org and one pending app', () => {

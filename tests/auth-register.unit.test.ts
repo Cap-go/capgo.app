@@ -51,13 +51,12 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
       signUp: signUpMock,
     },
   }),
-  supabaseAdmin: () => ({
-    auth: {
-      admin: {
-        deleteUser: deleteUserMock,
-        updateUserById: updateUserByIdMock,
-      },
-    },
+}))
+
+vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
+  gotrueAdmin: () => ({
+    deleteUser: deleteUserMock,
+    updateUserById: updateUserByIdMock,
   }),
 }))
 
@@ -261,6 +260,9 @@ describe('pOST /auth/register unit', () => {
       utm_source: 'example-source',
       utm_medium: 'readme',
       utm_campaign: 'example-campaign',
+      utm_content: 'creative-a',
+      utm_term: 'capacitor-security',
+      oppref: 'opaque-Example_click+/==',
     }
     const response = await postRegister({
       ...validBody,
@@ -284,6 +286,14 @@ describe('pOST /auth/register unit', () => {
       opt_for_newsletters: newsletter,
       country: null,
     })
+  })
+
+
+  it.each([42, {}, '', 'x'.repeat(1025), 'bad\nreference'])('ignores malformed optional click references without blocking signup: %s', async (oppref) => {
+    const response = await postRegister({ ...validBody, oppref })
+    expect(response.status).toBe(200)
+    const request = signUpMock.mock.calls[0] as unknown as [{ options: { data: Record<string, unknown> } }]
+    expect(request[0].options.data).not.toHaveProperty('oppref')
   })
 
   it('rejects non-boolean newsletter preferences before signup', async () => {

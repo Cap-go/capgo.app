@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { Hono } from 'hono/tiny'
+import { describe, expect, it, vi } from 'vitest'
 import { buildFunctionsEnvFile, getTransientSupabaseStartFailure } from '../scripts/supabase-worktree'
+import { getDatabaseURL } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 
 describe('buildFunctionsEnvFile', () => {
   it('uses the isolated API port for storage and public file URLs', () => {
@@ -8,12 +10,37 @@ describe('buildFunctionsEnvFile', () => {
       'FILES_PUBLIC_URL=http://kong:8000/functions/v1',
       'MANIFEST_UPLOAD_CAPABILITY_KEY_ID=local-test',
       '',
-    ].join('\n'), 56521)
+    ].join('\n'), 56521, 'capgo-app-fixture')
 
     expect(generated).toContain('S3_ENDPOINT=127.0.0.1:56521/storage/v1/s3\n')
     expect(generated).toContain('FILES_PUBLIC_URL=http://127.0.0.1:56521/functions/v1\n')
     expect(generated).toContain('MANIFEST_UPLOAD_CAPABILITY_KEY_ID=local-test\n')
     expect(generated).not.toContain('kong:8000')
+  })
+
+  it('configures an isolated local replica fixture that plugin reads can use without primary fallback', async () => {
+    const generated = buildFunctionsEnvFile([
+      'ENV_NAME=capgo_api-prod',
+      'LOCAL_READ_REPLICA_SUPABASE_DB_URL=postgresql://stale-fixture',
+      '',
+    ].join('\n'), 56521, 'capgo-app-fixture')
+    const env = Object.fromEntries(generated.trim().split('\n').map(line => line.split(/=(.*)/s).slice(0, 2)))
+    const expected = 'postgresql://postgres:postgres@supabase_db_capgo-app-fixture:5432/postgres'
+    const app = new Hono()
+    app.get('/', c => c.json({ source: getDatabaseURL(c, true) }))
+    try {
+      vi.stubEnv('ENV_NAME', env.ENV_NAME)
+      vi.stubEnv('LOCAL_READ_REPLICA_SUPABASE_DB_URL', env.LOCAL_READ_REPLICA_SUPABASE_DB_URL)
+      const response = await app.request('/', {}, env)
+      expect(response.status).toBe(200)
+      // The runtime uses Supabase's per-network `db` alias inside Docker.
+      expect(await response.json()).toEqual({ source: 'postgresql://postgres:postgres@db:5432/postgres' })
+      expect(env.LOCAL_READ_REPLICA_SUPABASE_DB_URL).toBe(expected)
+      expect(env.ENV_NAME).toBe('capgo_api-local')
+    }
+    finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 

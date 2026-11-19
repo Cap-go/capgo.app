@@ -16,7 +16,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', async (importOriginal) => 
   const client = { query: mocks.transactionQuery, release: mocks.release }
   return {
     ...original,
-    getPgClient: async () => ({ query: mocks.catalog, connect: async () => client }),
+    getPgClient: async () => ({ connect: async () => client }),
     closeClient: vi.fn(),
     getDrizzleClient: (queryClient: unknown) => {
       expect(queryClient).toBe(client)
@@ -41,7 +41,9 @@ beforeEach(() => {
     return { rows: [{ columns: [{ table_name: 'orgs', column_name: 'id', udt: 'uuid' }], foreign_keys: [], functions: [] }] }
   })
   mocks.transactionQuery.mockImplementation(async (text: string) => {
-    mocks.events.push(text.startsWith('BEGIN') ? 'begin' : text)
+    if (text.includes('AS foreign_keys'))
+      return mocks.catalog()
+    mocks.events.push(text.startsWith('BEGIN') ? 'begin' : text.includes('SET LOCAL ROLE') ? 'role' : text)
     return { rows: [] }
   })
   mocks.execute.mockImplementation(async () => {
@@ -51,11 +53,15 @@ beforeEach(() => {
 })
 
 describe('console catalog caching and caller isolation', () => {
-  it('loads cold metadata outside the transaction and executes data under the caller role', async () => {
+  it('bounds cold metadata with a server timeout before assuming the caller role', async () => {
     const result = await runConsoleQuery(c, request, session)
     expect(result.error).toBeNull()
-    expect(mocks.events).toEqual(['catalog', 'begin', 'user query', 'COMMIT'])
-    const setup = mocks.transactionQuery.mock.calls[0][0] as string
+    expect(mocks.events).toEqual(['begin', 'catalog', 'role', 'user query', 'COMMIT'])
+    const begin = mocks.transactionQuery.mock.calls[0][0] as string
+    expect(begin).toContain('SET LOCAL statement_timeout = 10000')
+    expect(begin).toContain('SET LOCAL idle_in_transaction_session_timeout = 15000')
+    expect(begin).not.toContain('SET LOCAL ROLE')
+    const setup = mocks.transactionQuery.mock.calls[2][0] as string
     expect(setup).toContain('SET LOCAL ROLE authenticated')
     expect(setup).toContain(session.claims.sub)
     expect(setup).toContain('SET LOCAL row_security = on')
@@ -68,7 +74,7 @@ describe('console catalog caching and caller isolation', () => {
     await runConsoleQuery(c, request, other)
     expect(mocks.catalog).toHaveBeenCalledOnce()
     expect(mocks.execute).toHaveBeenCalledTimes(2)
-    const setup = mocks.transactionQuery.mock.calls[2][0] as string
+    const setup = mocks.transactionQuery.mock.calls[4][0] as string
     expect(setup).toContain(other.claims.sub)
     expect(setup).not.toContain(session.claims.sub)
   })
@@ -79,16 +85,20 @@ describe('console catalog caching and caller isolation', () => {
     expect(mocks.execute).toHaveBeenCalledTimes(2)
   })
 
-  it('retries failed metadata without opening a user transaction', async () => {
+  it('rolls back failed metadata and retries discovery on the next request', async () => {
     mocks.catalog.mockRejectedValueOnce(new Error('catalog unavailable'))
     await expect(runConsoleQuery(c, request, session)).rejects.toThrow('catalog unavailable')
-    expect(mocks.transactionQuery).not.toHaveBeenCalled()
+    expect(mocks.transactionQuery).toHaveBeenLastCalledWith('ROLLBACK')
+    expect(mocks.execute).not.toHaveBeenCalled()
     await runConsoleQuery(c, request, session)
     expect(mocks.catalog).toHaveBeenCalledTimes(2)
     expect(mocks.execute).toHaveBeenCalledOnce()
   })
 
   it('never executes a data query if assuming the caller role fails', async () => {
+    await runConsoleQuery(c, request, session)
+    mocks.execute.mockClear()
+    mocks.release.mockClear()
     mocks.transactionQuery.mockRejectedValueOnce(new Error('role setup failed'))
     await expect(runConsoleQuery(c, request, session)).rejects.toThrow('role setup failed')
     expect(mocks.execute).not.toHaveBeenCalled()

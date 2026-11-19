@@ -7,7 +7,7 @@ logic. Stats collection and device channel writes retain their existing sinks.
 
 The database remains the source of truth. Statement triggers enqueue changed
 apps, bundle names, manifests, and device overrides. The API worker reads the
-primary on this write path, writes immutable KV documents, and conditionally
+EU read replica on this write path, writes immutable KV documents, and conditionally
 publishes pointers to them in R2. It then queues the app's Cache API purge.
 Plugin requests never rebuild state from the primary.
 
@@ -100,7 +100,7 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 
 | Setting | Scope | Default and purpose |
 | --- | --- | --- |
-| `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | Vault | Disabled. Set to `true` to enqueue changes and run backfill. |
+| `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | `private.settings` | Disabled. Set to `true` to enqueue changes and run backfill. |
 | `PLUGIN_STATE_KV` | Plugin Worker runtime | Off. Accepts `off`, `on`, or a percentage such as `1%`. Sampling is stable by app and device across endpoints. |
 | `PLUGIN_STATE_KV_AUTHORITATIVE` | Plugin Worker runtime | False. Trust published app-deletion pointers only after verifying complete coverage. Unpublished app pointers always use replicas. Leave false during rollout. |
 | `PLUGIN_STATE_KV_STRICT` | Plugin Worker runtime | False. Tests enable it to reject database reads that escape a KV session. |
@@ -165,7 +165,15 @@ fits one immutable KV document. Tests cover that size and a separate
 1,001-manifest pagination check that resumes across invocations. These are
 local checks, not a production throughput benchmark.
 
-Source reads use at most four concurrent primary transactions per drain.
+Source reads use at most four concurrent EU replica transactions per drain.
+Queue claims, acknowledgements, garbage-collection progress and explicit repair
+enqueue calls also use separate short read-write transactions. These functions
+mutate queue state even though they are invoked with `SELECT`; allowing
+Hyperdrive to cache a custom function's result can replay a settled lease rather
+than claim new work. Each mutation commits before KV/R2 operations start. The
+writer does not hold a database transaction across provider I/O or disable
+shared Hyperdrive caching.
+
 Each bounded app snapshot, manifest, or source page uses
 `REPEATABLE READ, READ ONLY` through `withPgTransaction`. Its data is
 materialized, the transaction commits, and the checked-out client is released
@@ -288,7 +296,7 @@ every delayed publisher.
 
 R2 can outlive a PostgreSQL restore. Restoring an older sequence while retaining
 newer R2 pointers makes valid restored writes look obsolete. Before restoring,
-turn off plugin KV reads and the Vault sync switch, stop all old writer and GC
+turn off plugin KV reads and the `private.settings` sync switch, stop all old writer and GC
 invocations, and verify none can resume against the retained buckets. Keep
 replicas available during recovery.
 
@@ -310,7 +318,7 @@ work without replacing higher-generation pointers.
    establish primary-load, replica-QPS/result-bytes, purge-rate/queue-depth and
    existing edge/snippet-hit baselines and stop conditions. Do not change
    public API or CLI permissions.
-2. Enable the Vault sync switch. Run `public.plugin_state_sync_tick()` through
+2. Enable the `private.settings` sync switch. Run `public.plugin_state_sync_tick()` through
    internal operations to begin or resume automatic backfill. Watch those
    baseline metrics while the writer runs. The read percentage does not limit
    synchronization/backfill or garbage-collection work. An off deployment still
@@ -355,7 +363,7 @@ rollback. Keep the writer running while investigating a read-path problem.
 
 ### Writer pause and recovery
 
-Turn KV reads off in **every enabled region before** disabling the Vault writer
+Turn KV reads off in **every enabled region before** disabling the `private.settings` writer
 switch. While that switch is off, source changes are intentionally not queued.
 Daily app-document reconciliation does not reconstruct all version-name,
 per-device or manifest keys, including deletion markers. Do not turn reads back
@@ -394,10 +402,60 @@ from the source. Do not assume that daily app refresh or a successful unrelated
 publication repaired non-app dependencies. Failed archive entries require an
 explicit repair; do not reset poison-job retry budgets automatically each day.
 
-Source snapshots use fresh, bounded internal repeatable-read transactions on
-the primary, after which provider I/O runs with the transaction released. This
-is background publication, not a device request or a request-path Hyperdrive
-cache bypass. Gate primary load before increasing writer/backfill work.
+Source snapshots use bounded internal repeatable-read transactions on EU,
+then release the transaction before provider I/O. Every source transaction
+checks its durable primary claim barrier against `read_replica_commit_marker`
+in that same snapshot. A claim reserves a strictly increasing marker value
+in its primary control transaction after observing committed producer rows.
+The existing heartbeat preserves this ordering even if the primary clock moves
+backward. One marker write is needed per newly claimed payload batch, policy
+claim, or new inventory pass; deferrals reuse their durable barrier. All ten source tables must also
+be streaming in the marker's subscription; a heartbeat alone does not prove
+initial table-copy completion. Missing markers, unready subscriptions, replica
+lag, connection errors, or missing EU bindings defer publication without a
+primary source fallback or completion ACK. Deferral preserves the exact barrier
+and cursor and refunds the unused publication attempt; actual publication
+failures still have at most five attempts. Full continuations carry the barrier
+forward. Independently published keys can still settle on a later deferral.
+
+Parallel work retains every failure. A provider write failure consumes its
+publication attempt even if another worker loses the source snapshot. Only a
+pure source/deadline/capacity stop defers unfinished payload work; serving-policy
+capacity failures after provider I/O still consume an attempt. Source loss
+inside a full scan retains the original full cursor instead of acknowledging a
+replacement continuation. Ordinary capacity yields may advance proven pages.
+
+When full history work also carries a current app or device change, it reserves
+app-key publication capacity and time before scanning. The reservation covers a
+pointer GET, immutable KV PUT and five CAS/GET pairs within the shared 800-operation
+cap. A yielded scan publishes the bounded current snapshot before acknowledging
+that change; a terminal scan writes only its complete snapshot. If that refresh
+cannot complete, current work and the original full cursor remain queued.
+Queued serving policies run before inventory. Inventory errors are reported
+separately and leave their cursor unchanged without aborting queued publication.
+
+Backfill and policy inventory page `apps(app_id)` on EU, at most 25 and 100
+identities per wake respectively. Primary merges bounded bookkeeping identities
+for deleted apps, then atomically commits enqueue and cursor progress with a
+compare-and-swap check. The periodic database tick performs only control-plane
+work. An explicit `enqueue_plugin_state_full_sync(NULL)` now requests this
+asynchronous inventory and returns zero immediately; explicit app lists retain
+their synchronous enqueue behavior. Only an explicit repair can refresh poison
+budgets or restore archived exact keys. Normal backfill preserves the archive.
+Repeated explicit repairs reuse a never-claimed fresh full job. Claim coordination
+serializes this check with claims; an already claimed or source-deferred job keeps
+its durable barrier and cannot absorb a newer repair request. Archived exact-key
+restoration still runs when a fresh full job is reused.
+
+The API worker's prod and alpha environments reuse the existing
+`HYPERDRIVE_CAPGO_READ_EU` resource used by plugin workers, under the dedicated
+`HYPERDRIVE_CAPGO_READ_PLUGIN_STATE_EU` binding. This leaves unrelated API
+read helpers on their existing routes. Preprod has no EU
+publisher binding and fails closed because its legacy plugin read resource
+points to a development primary. Local/CI must explicitly configure
+`LOCAL_READ_REPLICA_SUPABASE_DB_URL` in a `*-local` runtime; only that fixture
+mode omits the logical-subscription readiness check. No request-path cache
+bypass or shared Hyperdrive cache change is involved.
 
 Timing logs have `message=plugin_state_request_timing`, the path, method,
 response source, status, Cloudflare colo, duration in milliseconds, and sampling
@@ -460,9 +518,9 @@ manifest sizes. The cache-tag-purge scenario is reported separately from warm
 reads; it removes tagged entries only. DB caches that are intentionally
 untagged, including the original v1 manifest-size maps, keep their normal TTL.
 Before creating any fixture, it checks `public.plugin_state_sync_enabled()`.
-A fresh local database must have the Vault secret
-`CAPGO_PLUGIN_STATE_SYNC_ENABLED` enabled first, either through local Vault
-setup or the strict KV test setup shown above. Otherwise the standalone
+A fresh local database must have the `private.settings` switch
+`CAPGO_PLUGIN_STATE_SYNC_ENABLED` enabled first, either directly in
+`private.settings` or the strict KV test setup shown above. Otherwise the standalone
 benchmark stops with a prerequisite error instead of timing unsynchronized
 state. It does not modify or restore the switch implicitly.
 Local KV itself remains warm. Propagation probes bypass the setup's automatic

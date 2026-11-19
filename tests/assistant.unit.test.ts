@@ -1,4 +1,5 @@
 import type { McpToolInfo } from '../src/services/assistantAgent.ts'
+import { pushEvent } from '../src/services/posthog'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { nativePlatform, nativeRequest, getSession } = vi.hoisted(() => ({
@@ -7,7 +8,8 @@ const { nativePlatform, nativeRequest, getSession } = vi.hoisted(() => ({
   getSession: vi.fn<() => Promise<{ data: { session: { access_token: string } | null }, error: Error | null }>>(async () => ({ data: { session: { access_token: 'console-session' } }, error: null })),
 }))
 
-vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: nativePlatform }, CapacitorHttp: { request: nativeRequest } }))
+vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: () => 'web', isNativePlatform: nativePlatform }, CapacitorHttp: { request: nativeRequest } }))
+vi.mock('~/services/posthog', () => ({ pushEvent: vi.fn() }))
 vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.test', useConsole: () => ({ auth: { getSession } }) }))
 
 const { tokenizeAssistantText } = await import('../src/utils/assistantText.ts')
@@ -96,7 +98,72 @@ describe('assistant helpers', () => {
   it.concurrent('renders bold, code and lists as plain text tokens', () => {
     expect(tokenizeAssistantText('Live on **production**: `1.2.3`\n\n- one')).toEqual([
       { type: 'paragraph', spans: [{ text: 'Live on ', style: 'plain' }, { text: 'production', style: 'bold' }, { text: ': ', style: 'plain' }, { text: '1.2.3', style: 'code' }] },
-      { type: 'list', items: [[{ text: 'one', style: 'plain' }]] },
+      { type: 'list', ordered: false, items: [[{ text: 'one', style: 'plain' }]] },
+    ])
+  })
+
+  it.concurrent('renders tables, code blocks, headings and links without turning HTML into markup', () => {
+    expect(tokenizeAssistantText([
+      '## Channels',
+      '',
+      '| Channel | Version |',
+      '| --- | --- |',
+      '| **prod** | `1.2.3` |',
+      '| beta | `a\\|b` |',
+      '',
+      '```ts',
+      '**not bold**',
+      '```',
+      '',
+      'See [docs](https://example.com/docs) and [bad](javascript:alert(1)).',
+      'https://example.com/Markdown_(x).',
+      '',
+      'app_id and *live* and ~~old~~',
+      '',
+      '1. first',
+      '',
+      '> quoted',
+      '',
+      '---',
+      '',
+      '![chart](https://example.com/chart.png)',
+      '',
+      '<b>nope</b>',
+    ].join('\n'))).toEqual([
+      { type: 'heading', level: 2, spans: [{ text: 'Channels', style: 'plain' }] },
+      {
+        type: 'table',
+        headers: [[{ text: 'Channel', style: 'plain' }], [{ text: 'Version', style: 'plain' }]],
+        rows: [
+          [[{ text: 'prod', style: 'bold' }], [{ text: '1.2.3', style: 'code' }]],
+          [[{ text: 'beta', style: 'plain' }], [{ text: 'a|b', style: 'code' }]],
+        ],
+      },
+      { type: 'code', language: 'ts', text: '**not bold**' },
+      {
+        type: 'paragraph',
+        spans: [
+          { text: 'See ', style: 'plain' },
+          { text: 'docs', style: 'link', href: 'https://example.com/docs' },
+          { text: ' and bad.\n', style: 'plain' },
+          { text: 'https://example.com/Markdown_(x)', style: 'link', href: 'https://example.com/Markdown_(x)' },
+          { text: '.', style: 'plain' },
+        ],
+      },
+      {
+        type: 'paragraph',
+        spans: [
+          { text: 'app_id and ', style: 'plain' },
+          { text: 'live', style: 'italic' },
+          { text: ' and ', style: 'plain' },
+          { text: 'old', style: 'strike' },
+        ],
+      },
+      { type: 'list', ordered: true, items: [[{ text: 'first', style: 'plain' }]] },
+      { type: 'quote', spans: [{ text: 'quoted', style: 'plain' }] },
+      { type: 'rule' },
+      { type: 'image', alt: 'chart', href: 'https://example.com/chart.png' },
+      { type: 'paragraph', spans: [{ text: '<b>nope</b>', style: 'plain' }] },
     ])
   })
 
@@ -202,6 +269,8 @@ describe('assistant loop in the browser', () => {
     expect(result.reply).toBe('Your channels are here.')
     expect(result.cards).toEqual([{ type: 'link', title: 'Channels', description: undefined, path: '/app/com.example.app/channels' }])
     expect(result.actions).toEqual([{ tool: 'capgo_list_apps', title: 'List apps', ok: true }])
+    expect(pushEvent).toHaveBeenCalledWith('Assistant Tool Finished', expect.any(String), expect.objectContaining({ tool_name: 'capgo_list_apps', outcome: 'success' }))
+    expect(JSON.stringify(vi.mocked(pushEvent).mock.calls)).not.toMatch(/chatgpt-token|capgo-key-1|com.example.app/)
     expect(openai.every(call => call.url === 'https://api.capgo.test/private/assistant/responses' && call.auth === 'Bearer console-session' && call.token === 'chatgpt-token')).toBe(true)
     expect(openai.every(call => call.body.store === false && call.body.stream === true && call.body.model === 'gpt-plan-default')).toBe(true)
     expect(openai[1].body.input.map((item: any) => item.type ?? item.role)).toEqual(['user', 'function_call', 'function_call_output'])

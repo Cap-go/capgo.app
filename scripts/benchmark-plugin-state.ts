@@ -147,6 +147,7 @@ const syncResult = z.object({ claims: z.number(), failed: z.number() })
 
 export async function syncPluginState(appIds: string[] = []) {
   for (let round = 0; round < 100; round++) {
+    await executeSQL('SELECT public.touch_read_replica_commit_marker()')
     const response = await localRequest(CLOUDFLARE_API_URL, '/triggers/plugin_state_sync', 'POST', {
       drain: true,
       ...(round === 0 && appIds.length > 0 ? { apps: appIds } : {}),
@@ -340,7 +341,7 @@ export async function runPluginStateBenchmark(samples = 40) {
   assertLocal(POSTGRES_URL)
   const [sync] = await executeSQL<{ enabled: boolean }>('SELECT public.plugin_state_sync_enabled() AS enabled')
   if (sync?.enabled !== true)
-    throw new Error('Plugin state benchmark requires CAPGO_PLUGIN_STATE_SYNC_ENABLED in local Vault. Enable sync or run the strict KV test setup documented in docs/plugin-state-kv.md before benchmarking.')
+    throw new Error('Plugin state benchmark requires CAPGO_PLUGIN_STATE_SYNC_ENABLED in local private.settings. Enable sync or run the strict KV test setup documented in docs/plugin-state-kv.md before benchmarking.')
   const fixture = await createPluginStateFixture()
   try {
     await syncPluginState([fixture.appId])

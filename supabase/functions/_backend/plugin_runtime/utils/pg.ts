@@ -1,5 +1,9 @@
+import { isRestrictedServingPolicy } from './servingRegions.ts'
+import { requestServingPolicy } from './servingPolicy.ts'
+import { quickError } from './hono.ts'
 import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
+import type { ServingRegion } from './servingRegions.ts'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { getRuntimeKey } from 'hono/adapter'
@@ -21,8 +25,8 @@ import { activeChannelVersionJoin, getAlias, getAppOwnerSelect, getOwnerOrgAlias
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness.ts'
-import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isReplicaTooFarBehind, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
-import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
+import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isReplicaTooFarBehind, REPLICA_LAG_QUERY, replicationLagSecondsFromQueryRow, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
+import { shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
 import type { VersionManifestRow } from './version_manifest_sql.ts'
 import { completeVersionManifest, versionManifestRowsSql } from './version_manifest_sql.ts'
@@ -142,7 +146,7 @@ function getReplicationLagInflight(c: Context) {
   return inflight
 }
 
-const READ_REPLICA_ROUTES: { region: string, binding: ReadReplicaHyperdriveBinding }[] = [
+const READ_REPLICA_ROUTES: { region: ServingRegion, binding: ReadReplicaHyperdriveBinding }[] = [
   { region: 'AS_JAPAN', binding: 'HYPERDRIVE_CAPGO_READ_AS_JAPAN' },
   { region: 'AS_INDIA', binding: 'HYPERDRIVE_CAPGO_READ_AS_INDIA' },
   { region: 'NA', binding: 'HYPERDRIVE_CAPGO_READ_NA' },
@@ -219,13 +223,6 @@ function fixSupabaseHost(host: string): string {
   return host
 }
 
-function toReplicationLagSeconds(value: unknown): number | null {
-  if (value === null || value === undefined)
-    return null
-  const lagSeconds = Number(value)
-  return Number.isFinite(lagSeconds) ? lagSeconds : null
-}
-
 /**
  * Query replication lag from the REPLICA database (see REPLICA_LAG_QUERY).
  * Uses the existing pool - no new connections.
@@ -233,7 +230,7 @@ function toReplicationLagSeconds(value: unknown): number | null {
 async function queryReplicaLag(c: Context, pool: PluginPgClient): Promise<ReplicationLagStatus> {
   try {
     const result = await pool.query(REPLICA_LAG_QUERY)
-    const lagSeconds = toReplicationLagSeconds(result.rows[0]?.lag_seconds)
+    const lagSeconds = replicationLagSecondsFromQueryRow(result.rows[0])
 
     let status: ReplicationStatus = 'unknown'
     if (lagSeconds !== null) {
@@ -405,6 +402,17 @@ function findRegionalReadReplicaRoute(c: Context, dbRegion: string | undefined) 
  * measured more than READ_REPLICA_FALLBACK_LAG_SECONDS behind it.
  */
 function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
+  const policy = requestServingPolicy(c)
+  if (policy && isRestrictedServingPolicy(policy)) {
+    const candidates = READ_REPLICA_ROUTES.filter(route => policy.regions.includes(route.region) && c.env[route.binding])
+    const regional = candidates.find(route => route.region === dbRegion)
+    const selected = regional && !isReplicaTooFarBehind(regional.binding)
+      ? regional
+      : candidates.find(route => !isReplicaTooFarBehind(route.binding))
+    if (!selected)
+      throw quickError(503, 'serving_region_unavailable', 'No allowed regional backend is available')
+    return selected
+  }
   const route = findRegionalReadReplicaRoute(c, dbRegion)
   if (!route || route === EU_READ_REPLICA_ROUTE || !c.env[EU_READ_REPLICA_ROUTE.binding] || !isReplicaTooFarBehind(route.binding))
     return route
@@ -417,6 +425,11 @@ function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
  * their edge cache TTL keeps the regional replica's lag cap.
  */
 export function getReadReplicaBinding(c: Context): string | null {
+  const policy = requestServingPolicy(c)
+  if (policy && isRestrictedServingPolicy(policy)) {
+    const source = c.get('databaseSource')
+    return READ_REPLICA_ROUTES.find(route => route.binding === source && policy.regions.includes(route.region))?.binding ?? null
+  }
   const route = findRegionalReadReplicaRoute(c, getClientDbRegionSB(c))
   if (route)
     return route.binding
@@ -431,7 +444,7 @@ function getReadOnlyDatabaseURL(c: Context, dbRegion: string | undefined): strin
     return null
 
   if (selectedRoute.region !== dbRegion)
-    cloudlog({ requestId: c.get('requestId'), message: 'Regional read replica too far behind, reading from EU replica', dbRegion })
+    cloudlog({ requestId: c.get('requestId'), message: 'Reading from an alternate regional replica', dbRegion, selectedRegion: selectedRoute.region })
   setDatabaseSource(c, selectedRoute.binding)
   return c.env[selectedRoute.binding].connectionString
 }
@@ -448,8 +461,11 @@ function getLocalReadOnlyDatabaseURL(c: Context): string | null {
   return fixSupabaseHost(getEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL'))
 }
 
-export function getDatabaseURL(c: Context, readOnly = false): string {
-  const dbRegion = getClientDbRegionSB(c)
+export function getDatabaseURL(c: Context, readOnly = false, preferredReadRegion?: ServingRegion): string {
+  const policy = requestServingPolicy(c)
+  if (!readOnly && policy && isRestrictedServingPolicy(policy))
+    throw quickError(503, 'serving_region_unavailable', 'Legacy server storage is unavailable with regional serving restrictions')
+  const dbRegion = readOnly ? preferredReadRegion ?? getClientDbRegionSB(c) : getClientDbRegionSB(c)
 
   // For read-only queries, use region to avoid Network latency
   if (readOnly) {
@@ -462,7 +478,8 @@ export function getDatabaseURL(c: Context, readOnly = false): string {
       return localReadOnlyDatabaseURL
   }
 
-  if (readOnly && shouldRequireReadReplica(c)) {
+  // Read routing fails closed in every runtime, including direct/Deno entrypoints.
+  if (readOnly) {
     throw new Error('Read replica is required for this endpoint')
   }
 
@@ -511,7 +528,7 @@ function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
  *
  * Non-Hyperdrive (local/direct/pooler): `Pool` + explicit `closeClient`/`end()`.
  */
-export async function getPgClient(c: Context, readOnly = false): Promise<PluginPgClient> {
+export async function getPgClient(c: Context, readOnly = false, preferredReadRegion?: ServingRegion): Promise<PluginPgClient> {
   if (isPluginStateServed(c)) {
     // A request answered from the KV plugin state reached Postgres: a query
     // the state does not cover. Strict mode (tests) fails it.
@@ -519,7 +536,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
       throw new PluginStateMiss('strict mode: database connection requested by a request served from KV')
     cloudlog({ requestId: c.get('requestId'), message: 'plugin state request opened a database connection', path: c.req.path })
   }
-  const dbUrl = getDatabaseURL(c, readOnly)
+  const dbUrl = getDatabaseURL(c, readOnly, preferredReadRegion)
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')
@@ -1622,6 +1639,31 @@ export async function queryAppVersionPostgres(
   return appVersion ?? null
 }
 
+export interface AppVersionLookup {
+  value: { id: number, owner_org: string } | null
+  /** The read failed: `value` is null without the bundle being known missing. */
+  failed: boolean
+}
+
+/** getAppVersionPostgres that tells a failed read from a missing bundle (callers that memoize must not keep a failure). */
+export async function lookupAppVersionPostgres(
+  c: Context,
+  appId: string,
+  versionName: string,
+  allowedDeleted: boolean | undefined,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+): Promise<AppVersionLookup> {
+  try {
+    return { value: await queryAppVersionPostgres(appId, versionName, allowedDeleted, drizzleClient), failed: false }
+  }
+  catch (e: unknown) {
+    logPgError(c, 'getAppVersionPostgres', e)
+    if (isPluginStateMiss(e))
+      throw e
+    return { value: null, failed: true }
+  }
+}
+
 export async function getAppVersionPostgres(
   c: Context,
   appId: string,
@@ -1629,15 +1671,7 @@ export async function getAppVersionPostgres(
   allowedDeleted: boolean | undefined,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<{ id: number, owner_org: string } | null> {
-  try {
-    return await queryAppVersionPostgres(appId, versionName, allowedDeleted, drizzleClient)
-  }
-  catch (e: unknown) {
-    logPgError(c, 'getAppVersionPostgres', e)
-    if (isPluginStateMiss(e))
-      throw e
-    return null
-  }
+  return (await lookupAppVersionPostgres(c, appId, versionName, allowedDeleted, drizzleClient)).value
 }
 
 export async function getAppVersionsByAppIdPg(

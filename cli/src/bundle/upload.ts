@@ -38,6 +38,7 @@ import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-
 import { checkIndexPosition, searchInDirectory } from './check'
 import { summarizeUploadCompatibility } from './compatibility'
 import { isManifestUploadAutoEnabled, MANIFEST_UPLOAD_PROTOCOL_VERSION, manifestUploadFileHashFormat, requestManifestUpload } from './manifest-upload'
+import { ManifestPayloadCache } from './manifest-payload-cache'
 import { PartialUploadValidationError, prepareBundlePartialFiles, prepareManifestUploadEntries, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
 import { ManifestUploadAbandonError, resolveManifestUploadAbandonScope } from './upload-abandon-error'
@@ -1303,10 +1304,21 @@ export async function getDefaultUploadChannel(
 }
 
 export async function uploadBundleInternal(preAppid: string, options: OptionsUpload, silent = false, reporter?: UploadReporter): Promise<UploadBundleResult> {
-  return runWithUploadReporter(reporter, () => uploadBundleInternalWithReporter(preAppid, options, silent))
+  return runWithUploadReporter(reporter, async () => {
+    // Every exit path (version persistence, manifest authorization, ZIP upload or delta failures)
+    // must remove the prepared delta bytes; a long-lived SDK/MCP process would otherwise keep a
+    // bundle-sized temp directory per failed upload until it exits.
+    const payloadCaches = new Set<ManifestPayloadCache>()
+    try {
+      return await uploadBundleInternalWithReporter(preAppid, options, silent, payloadCaches)
+    }
+    finally {
+      await Promise.all([...payloadCaches].map(cache => cache.dispose()))
+    }
+  })
 }
 
-async function uploadBundleInternalWithReporter(preAppid: string, options: OptionsUpload, silent: boolean): Promise<UploadBundleResult> {
+async function uploadBundleInternalWithReporter(preAppid: string, options: OptionsUpload, silent: boolean, payloadCaches: Set<ManifestPayloadCache>): Promise<UploadBundleResult> {
   if (!silent)
     getUploadReporter().intro(`Uploading with CLI version ${pack.version}`)
   let sessionKey: Buffer | undefined
@@ -1735,11 +1747,17 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     options.delta = false
   }
   let manifestUploadEntries: Awaited<ReturnType<typeof prepareManifestUploadEntries>> | undefined
+  // Prepared delta bytes live in a temp directory until uploadPartial sends them.
+  let manifestPayloadCache: ManifestPayloadCache | undefined
   if (shouldRequestManifestUpload && options.delta) {
     try {
-      manifestUploadEntries = await prepareManifestUploadEntries(manifest, path, encryptionData, options)
+      manifestPayloadCache = await ManifestPayloadCache.create()
+      payloadCaches.add(manifestPayloadCache)
+      manifestUploadEntries = await prepareManifestUploadEntries(manifest, path, encryptionData, options, undefined, manifestPayloadCache)
     }
     catch (error) {
+      await manifestPayloadCache?.dispose()
+      manifestPayloadCache = undefined
       if (!manifestUploadAutoEnabled || !(error instanceof PartialUploadValidationError))
         throw error
       log.warn(`${error.message} Continuing with ZIP-only upload.`)
@@ -1902,6 +1920,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
           encryptionData,
           options,
           manifestUploadAuthorization,
+          manifestPayloadCache,
         )
       }
 
@@ -1941,6 +1960,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         if (options.verbose)
           log.info(`[Verbose] Delta upload error details: ${formatError(err)}`)
       }
+    }
+    finally {
+      await manifestPayloadCache?.dispose()
     }
 
     if (finalManifest?.length) {

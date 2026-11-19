@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { getDrizzleClient } from './pg.ts'
 import { parseCronExpression } from 'cron-schedule'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { trackBentoEvent } from './bento.ts'
 import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
@@ -103,11 +103,13 @@ async function getNotification(
   orgId: string,
   eventName: string,
   uniqId: string,
-): Promise<{ last_send_at: Date, total_send: number } | null | undefined> {
+): Promise<{ last_send_at: Date, last_send_at_exact: string, total_send: number } | null | undefined> {
   try {
     const notif = await drizzleClient
       .select({
         last_send_at: schema.notifications.last_send_at,
+        // Keep PostgreSQL microseconds for the claim; Date is only for cron and response formatting.
+        last_send_at_exact: sql<string>`${schema.notifications.last_send_at}::text`,
         total_send: schema.notifications.total_send,
       })
       .from(schema.notifications)
@@ -181,7 +183,7 @@ async function deleteNotificationClaim(
 
 type NotificationClaimRollback
   = | { claimedAt: Date, kind: 'insert' }
-    | { claimedAt: Date, kind: 'update', previousLastSendAt: Date, previousTotalSend: number }
+    | { claimedAt: Date, kind: 'update', previousLastSendAtExact: string, previousTotalSend: number }
 
 async function rollbackNotificationClaim(
   c: Context,
@@ -207,7 +209,7 @@ async function rollbackNotificationClaim(
     await writeClient
       .update(schema.notifications)
       .set({
-        last_send_at: claim.previousLastSendAt,
+        last_send_at: sql`${claim.previousLastSendAtExact}::timestamptz`,
         total_send: claim.previousTotalSend,
       })
       .where(and(
@@ -288,7 +290,7 @@ export async function sendNotifOrg(
           eq(schema.notifications.event, eventName),
           eq(schema.notifications.uniq_id, uniqId),
           eq(schema.notifications.owner_org, orgId),
-          eq(schema.notifications.last_send_at, notif.last_send_at), // Optimistic lock: only update if timestamp unchanged
+          eq(schema.notifications.last_send_at, sql`${notif.last_send_at_exact}::timestamptz`), // Optimistic lock: only update if timestamp unchanged
         ))
         .returning()
 
@@ -298,7 +300,7 @@ export async function sendNotifOrg(
         cloudlog({ requestId: c.get('requestId'), message: 'notif update race lost', event: eventName, orgId })
         return false
       }
-      claimRollback = { kind: 'update', claimedAt, previousLastSendAt: notif.last_send_at, previousTotalSend: notif.total_send }
+      claimRollback = { kind: 'update', claimedAt, previousLastSendAtExact: notif.last_send_at_exact, previousTotalSend: notif.total_send }
     }
 
     // Only send if we successfully claimed the notification

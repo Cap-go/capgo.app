@@ -11,6 +11,7 @@ import { app as changelog } from '../../supabase/functions/_backend/private/chan
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as cli } from '../../supabase/functions/_backend/private/cli/index.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
+import { app as channel_impact } from '../../supabase/functions/_backend/private/channel_impact.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
 import { app as config } from '../../supabase/functions/_backend/private/config.ts'
 import { app as configBuilder } from '../../supabase/functions/_backend/private/config_builder.ts'
@@ -117,6 +118,7 @@ import { app as pluginNotifications } from '../../supabase/functions/_backend/tr
 import { app as queue_consumer } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
 import { app as stripe_event } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
 import { app as stripe_event_us } from '../../supabase/functions/_backend/triggers/stripe_event_us.ts'
+import { app as sync_trial_plan_schedule } from '../../supabase/functions/_backend/triggers/sync_trial_plan_schedule.ts'
 import { app as plugin_state_sync } from '../../supabase/functions/_backend/triggers/plugin_state_sync.ts'
 import { app as updates_cache_purge } from '../../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
@@ -193,6 +195,7 @@ appPrivate.route('/invite_existing_user_to_org', invite_existing_user_to_org)
 appPrivate.route('/set_org_email', set_org_email)
 appPrivate.route('/validate_password_compliance', validate_password_compliance)
 appPrivate.route('/stats', stats_priv)
+appPrivate.route('/channel_impact', channel_impact)
 appPrivate.route('/channel_stats', channel_stats)
 appPrivate.route('/native_observe_stats', native_observe_stats)
 appPrivate.route('/observe', observe)
@@ -261,6 +264,7 @@ appTriggers.route('/on_manifest_create', on_manifest_create)
 appTriggers.route('/on_deploy_history_create', on_deploy_history_create)
 appTriggers.route('/stripe_event', stripe_event)
 appTriggers.route('/stripe_event_us', stripe_event_us)
+appTriggers.route('/sync_trial_plan_schedule', sync_trial_plan_schedule)
 appTriggers.route('/updates_cache_purge', updates_cache_purge)
 // Writes the KV plugin state (PLUGIN_STATE) from the primary database.
 appTriggers.route('/plugin_state_sync', plugin_state_sync)

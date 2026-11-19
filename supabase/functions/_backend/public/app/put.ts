@@ -24,9 +24,14 @@ import { trackPosthogEvent } from '../../utils/posthog.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { MAX_BUILD_TIMEOUT_SECONDS, MIN_BUILD_TIMEOUT_SECONDS, normalizeBuildTimeoutSeconds } from '../../utils/build_timeout.ts'
+import { isBundleIncompatibleAlert } from '../../utils/bundle_compatibility_recovery.ts'
 import { backgroundTask, isValidAppId } from '../../utils/utils.ts'
 
+import { parseServingRegions, parseServingRegionMode } from '../../plugin_runtime/utils/servingRegions.ts'
+
 interface UpdateApp {
+  serving_regions?: unknown
+  serving_region_mode?: unknown
   name?: string
   icon?: string
   retention?: number
@@ -35,6 +40,7 @@ interface UpdateApp {
   allow_preview?: boolean
   build_timeout_seconds?: number
   default_upload_channel?: string
+  bundle_incompatible_alert?: 'default' | 'all'
   need_onboarding?: boolean
   existing_app?: boolean
   block_provider_infra_requests?: boolean
@@ -46,8 +52,8 @@ interface UpdateApp {
 
 type AppSettings = Pick<Database['public']['Tables']['apps']['Update'], 'name' | 'icon_url' | 'retention' | 'expose_metadata' | 'allow_device_custom_id'
   | 'need_onboarding' | 'existing_app' | 'block_provider_infra_requests' | 'device_data_collection'
-  | 'allow_preview' | 'build_timeout_seconds' | 'default_upload_channel'
-  | 'ios_store_url' | 'android_store_url'>
+  | 'allow_preview' | 'build_timeout_seconds' | 'default_upload_channel' | 'bundle_incompatible_alert'
+  | 'ios_store_url' | 'android_store_url' | 'serving_regions' | 'serving_region_mode'>
 
 function validateDeviceDataCollectionPatch(patch: unknown): Record<string, boolean> {
   if (patch === null || typeof patch !== 'object' || Array.isArray(patch))
@@ -262,6 +268,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     throw quickError(400, 'invalid_allow_preview', 'allow_preview must be a boolean', { allow_preview: body.allow_preview })
   if (body.default_upload_channel !== undefined && (typeof body.default_upload_channel !== 'string' || body.default_upload_channel.trim() === ''))
     throw quickError(400, 'invalid_default_upload_channel', 'default_upload_channel must be a channel name', { default_upload_channel: body.default_upload_channel })
+  if (body.bundle_incompatible_alert !== undefined && !isBundleIncompatibleAlert(body.bundle_incompatible_alert))
+    throw quickError(400, 'invalid_bundle_incompatible_alert', 'bundle_incompatible_alert must be default or all', { bundle_incompatible_alert: body.bundle_incompatible_alert })
 
   if (body.build_timeout_seconds !== undefined) {
     // Validate the raw value: normalizeBuildTimeoutSeconds clamps, so checking after it never fails.
@@ -271,6 +279,16 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       throw quickError(400, 'invalid_build_timeout_seconds', 'Build timeout must be between 5 and 360 minutes', { build_timeout_seconds: body.build_timeout_seconds })
     }
     body.build_timeout_seconds = normalizeBuildTimeoutSeconds(rawTimeout)
+  }
+
+  let servingRegions: string[] | undefined
+  let servingRegionMode: string | undefined
+  try {
+    servingRegions = body.serving_regions === undefined ? undefined : parseServingRegions(body.serving_regions)
+    servingRegionMode = body.serving_region_mode === undefined ? undefined : parseServingRegionMode(body.serving_region_mode)
+  }
+  catch {
+    throw quickError(400, 'invalid_serving_policy', 'Choose supported serving regions and route or block mode')
   }
 
   const onboardingPatch = parseAppOnboardingPatch(body.onboarding)
@@ -321,6 +339,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   // Single source of truth for settings fields. `need_onboarding` is writable on the
   // onboarding-completion path, so it is tracked separately.
   const extraSettingsValues = [
+    body.serving_regions,
+    body.serving_region_mode,
     body.name,
     body.icon,
     body.retention,
@@ -329,6 +349,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     body.allow_preview,
     body.build_timeout_seconds,
     body.default_upload_channel,
+    body.bundle_incompatible_alert,
     body.existing_app,
     body.block_provider_infra_requests,
     body.allow_preview,
@@ -386,6 +407,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   ].some(value => value !== undefined)
 
   const settingsPayload: AppSettings = {
+    serving_regions: servingRegions,
+    serving_region_mode: servingRegionMode,
     name: body.name,
     icon_url: normalizedIcon ?? body.icon,
     retention: body.retention,
@@ -394,6 +417,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     allow_preview: body.allow_preview,
     build_timeout_seconds: body.build_timeout_seconds,
     default_upload_channel: body.default_upload_channel,
+    bundle_incompatible_alert: body.bundle_incompatible_alert,
     need_onboarding: body.need_onboarding,
     existing_app: body.existing_app,
     block_provider_infra_requests: body.block_provider_infra_requests,

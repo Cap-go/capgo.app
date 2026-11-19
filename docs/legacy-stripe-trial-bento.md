@@ -29,8 +29,8 @@ Stripe event ledger is specific to revenue metrics, not Bento delivery. There
 is no new delivery ledger or exactly-once enrollment guarantee, and no claim
 that a Bento details key deduplicates workflow starts.
 
-This event is an additive compatibility path. It does not replace Bento's native
-Stripe trigger. Switching the Trial flow root from native Stripe CustomerCreated
-to `org:legacy_stripe_trial_started` is a separate later step. This change does
-not edit that flow, Stripe integrations/settings, templates, delays, paid checks,
-or running sessions, and does not require new-emails-v2.
+The live Trial and Onboarding workflows both use this compatibility event.
+Its name is not proof of trial eligibility. Preserve forwarding for all new
+customers and apply trial-only suppression in Bento immediately before each
+send, including contacts already waiting in delays. See the
+[tested gate and manual rollout](bento/trial-email-rollout.md).

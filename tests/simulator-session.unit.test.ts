@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, multipartIpaStream, SAVED_IPA_MAX_BYTES, savedIpaContentLength, simulatorBillableSeconds, simulatorBillingInstant, simulatorCreateWasInterrupted, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, ipaUploadStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, SIMULATOR_STOPPED_MESSAGE, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorListItem, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { deviceStopTime } from '../supabase/functions/_backend/public/build/simulator_host.ts'
 
 describe('simulator sessions', () => {
   it('asks the device host for one session tied to the Capgo org', () => {
@@ -15,7 +16,54 @@ describe('simulator sessions', () => {
       name: 'Checkout',
       type: 'agent-device',
       maxDurationMinutes: 40,
+      maxIdleTimeMinutes: 5,
     })
+  })
+
+  it('bills a device the host stopped for lack of input up to that stop', () => {
+    const now = Date.parse('2026-11-09T12:30:00.000Z')
+    expect(deviceStopTime({ id: 'a', url: 'u', status: 'in-progress', finishedAt: null }, now)).toBeUndefined()
+    expect(deviceStopTime(undefined, now)).toBeUndefined()
+    const stoppedAt = deviceStopTime({ id: 'a', url: 'u', status: 'stopped', finishedAt: '2026-11-09T12:07:00.000Z' }, now)
+    expect(stoppedAt).toBe('2026-11-09T12:07:00.000Z')
+    // Seven minutes, not the 40 minute maximum.
+    expect(simulatorBillableSeconds('2026-11-09T12:00:00.000Z', simulatorUsageEnd(stoppedAt ?? null, now))).toBe(420)
+    // A host clock ahead of ours never bills past now.
+    expect(deviceStopTime({ id: 'a', url: 'u', status: 'stopped', finishedAt: '2026-11-09T13:00:00.000Z' }, now)).toBe('2026-11-09T12:30:00.000Z')
+    expect(deviceStopTime({ id: 'a', url: 'u', status: 'errored' }, now)).toBe('2026-11-09T12:30:00.000Z')
+    expect(SIMULATOR_STOPPED_MESSAGE).toContain('5 minutes without input')
+  })
+
+  it('lists a session with the build time it counted', () => {
+    expect(simulatorListItem({
+      id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4',
+      platform: 'ios',
+      status: 'stopped',
+      url: 'https://ios-emulator.capgo.app/s/6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4/',
+      started_at: '2026-11-09T12:00:00.000Z',
+      finished_at: '2026-11-09T12:07:00.000Z',
+      build_time_unit: '420',
+      billable_seconds: '840',
+    })).toEqual({
+      id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4',
+      platform: 'ios',
+      status: 'stopped',
+      url: null,
+      started_at: '2026-11-09T12:00:00.000Z',
+      finished_at: '2026-11-09T12:07:00.000Z',
+      build_time_seconds: 420,
+      billable_seconds: 840,
+    })
+    expect(simulatorListItem({
+      id: '7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5',
+      platform: 'android',
+      status: 'in-progress',
+      url: 'https://ios-emulator.capgo.app/s/7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5/',
+      started_at: '2026-11-09T12:00:00.000Z',
+      finished_at: null,
+      build_time_unit: null,
+      billable_seconds: null,
+    })).toMatchObject({ url: 'https://ios-emulator.capgo.app/s/7b1e0d3f-2c50-4f9b-8d44-1c8f6e3b22d5/', finished_at: null, build_time_seconds: null })
   })
 
   it('bills the seconds the simulator stayed open', () => {
@@ -29,6 +77,35 @@ describe('simulator sessions', () => {
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', simulatorUsageEnd(stoppedAt, retryAt), 40)).toBe(300)
     const nextDay = Date.parse('2026-10-30T08:00:00.000Z')
     expect(simulatorBillingInstant('2026-10-29T23:50:00.000Z', nextDay, 40)).toBe(Date.parse('2026-10-30T00:30:00.000Z'))
+  })
+
+  it('builds an agent-device command against the session URL', () => {
+    expect(simulatorDeviceUrl('https://ios-emulator.capgo.app/s/11111111-1111-4111-8111-111111111111', 'agent-device/rpc')).toBe('https://ios-emulator.capgo.app/s/11111111-1111-4111-8111-111111111111/agent-device/rpc')
+    expect(simulatorCommandRpc({ command: 'tap', x: 0.5, y: 0.25 })).toMatchObject({
+      method: 'agent_device.command',
+      params: { command: 'tap', positionals: ['0.5', '0.25'], flags: { x: 0.5, y: 0.25 }, input: { x: 0.5, y: 0.25 } },
+    })
+    expect(simulatorCommandRpc({ command: 'open', bundleId: 'app.capgo.capdemo' }).params.flags).toEqual({ bundleId: 'app.capgo.capdemo' })
+    expect(simulatorCommandRpc({ command: 'screenshot' }).params).toMatchObject({ command: 'screenshot', positionals: [] })
+  })
+
+  it('stops reading a screenshot once it passes the byte cap', async () => {
+    const chunk = new Uint8Array([1, 2, 3])
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(chunk)
+        controller.enqueue(chunk)
+        controller.close()
+      },
+    })
+    await expect(readCappedBytes(stream, 4)).rejects.toThrow('too-large')
+    const small = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(chunk)
+        controller.close()
+      },
+    })
+    await expect(readCappedBytes(small, 4)).resolves.toEqual(chunk)
   })
 
   it('rejects a request that is not the simulator contract', () => {
@@ -68,10 +145,10 @@ describe('simulator sessions', () => {
     expect(savedIpaContentLength(null)).toBeUndefined()
     expect(savedIpaContentLength(String(SAVED_IPA_MAX_BYTES))).toBe(SAVED_IPA_MAX_BYTES)
     expect(savedIpaContentLength(String(SAVED_IPA_MAX_BYTES + 1))).toBeGreaterThan(SAVED_IPA_MAX_BYTES)
-    const text = new TextDecoder().decode(await new Response(multipartIpaStream(new Blob(['ipa']).stream(), 'bound')).arrayBuffer())
-    expect(text.startsWith('--bound\r\nContent-Disposition: form-data; name="ipa"; filename="app.ipa"\r\n')).toBe(true)
-    expect(text.endsWith('ipa\r\n--bound--\r\n')).toBe(true)
-    await expect(new Response(multipartIpaStream(new Blob([new Uint8Array(8)]).stream(), 'bound', 4)).arrayBuffer()).rejects.toThrow('too large')
+    // The raw IPA, not a multipart form: the simulator host challenges large multipart uploads.
+    const text = new TextDecoder().decode(await new Response(ipaUploadStream(new Blob(['ipa']).stream())).arrayBuffer())
+    expect(text).toBe('ipa')
+    await expect(new Response(ipaUploadStream(new Blob([new Uint8Array(8)]).stream(), 4)).arrayBuffer()).rejects.toThrow('too large')
     const chunks = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array(3))
@@ -79,6 +156,6 @@ describe('simulator sessions', () => {
         controller.close()
       },
     })
-    await expect(new Response(multipartIpaStream(chunks, 'bound', 4)).arrayBuffer()).rejects.toThrow('too large')
+    await expect(new Response(ipaUploadStream(chunks, 4)).arrayBuffer()).rejects.toThrow('too large')
   })
 })

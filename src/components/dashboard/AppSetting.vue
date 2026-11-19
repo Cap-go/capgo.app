@@ -13,6 +13,7 @@ import Pencil from '~icons/heroicons/pencil-square'
 import IconTransfer from '~icons/mingcute/transfer-horizontal-line'
 import IconGearSix from '~icons/ph/gear-six'
 import IconName from '~icons/ph/user'
+import AppServingRegions from '~/components/dashboard/AppServingRegions.vue'
 import AppSetupGuides from '~/components/dashboard/AppSetupGuides.vue'
 import FormCheckbox from '~/components/forms/FormCheckbox.vue'
 import FormField from '~/components/forms/FormField.vue'
@@ -21,7 +22,7 @@ import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
-import { checkPermissions } from '~/services/permissions'
+import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -238,6 +239,17 @@ function backToDeleteFeedback() {
   deletionConfirmation.value = ''
 }
 
+// Deleting or transferring an app settles its open simulator sessions at the current time. The
+// simulator list settles first the ones whose device already stopped, up to that stop.
+async function settleSimulators() {
+  try {
+    await invokeCapgoApi(`private/simulator/?app_id=${encodeURIComponent(props.appId)}`, { method: 'GET', retries: 0 })
+  }
+  catch {
+    // Best effort: the deletion or transfer settles anything left at the current time.
+  }
+}
+
 async function deleteApp() {
   if (deletionConfirmation.value !== props.appId || isDeletingApp.value)
     return
@@ -245,6 +257,7 @@ async function deleteApp() {
   isDeletingApp.value = true
   sendOnboardingEvent('app_deletion_confirmed', getDeletionEventProperties())
   try {
+    await settleSimulators()
     const org = organizationStore.getOrgByAppId(props.appId)
     const { error: errorIcon } = await capgo.storage
       .from(`images`)
@@ -292,11 +305,17 @@ const buildTimeoutMinutesInput = ref<number | string>(Math.trunc(DEFAULT_BUILD_T
 const exposeMetadataInput = ref(false)
 const allowPreviewInput = ref(false)
 const allowDeviceCustomIdInput = ref(false)
+const DEFAULT_SERVING_REGIONS = ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME']
+const servingRegionsInput = ref<string[]>([])
+const servingRegionModeInput = ref('route')
 const blockProviderInfraRequestsInput = ref(false)
+const bundleIncompatibleAlertInput = ref<'default' | 'all'>('default')
 const collectInputs = reactive<DeviceDataCollection>(parseAppRowDeviceDataCollection(null))
 const isAppFormVisible = computed(() => !isFirstLoading.value && !isLoading.value)
 
 function seedAppForm() {
+  servingRegionsInput.value = [...(appRef.value?.serving_regions ?? DEFAULT_SERVING_REGIONS)]
+  servingRegionModeInput.value = appRef.value?.serving_region_mode ?? 'route'
   appNameInput.value = appRef.value?.name ?? ''
   iosStoreUrlInput.value = appRef.value?.ios_store_url ?? ''
   androidStoreUrlInput.value = appRef.value?.android_store_url ?? ''
@@ -305,6 +324,7 @@ function seedAppForm() {
   allowPreviewInput.value = appRef.value?.allow_preview ?? false
   allowDeviceCustomIdInput.value = appRef.value?.allow_device_custom_id ?? false
   blockProviderInfraRequestsInput.value = appRef.value?.block_provider_infra_requests ?? false
+  bundleIncompatibleAlertInput.value = appRef.value?.bundle_incompatible_alert === 'all' ? 'all' : 'default'
   Object.assign(collectInputs, deviceDataCollection.value)
 }
 watch(isAppFormVisible, (visible) => {
@@ -325,6 +345,10 @@ let isSaving = false
 async function onSubmit() {
   if (isSaving || isDeletingApp.value)
     return
+  if (servingRegionsInput.value.length === 0) {
+    toast.error(t('serving-regions-required'))
+    return
+  }
   isSaving = true
   try {
     await submitAppForm()
@@ -343,6 +367,7 @@ async function submitAppForm() {
     allow_preview: allowPreviewInput.value,
     allow_device_custom_id: allowDeviceCustomIdInput.value,
     block_provider_infra_requests: blockProviderInfraRequestsInput.value,
+    bundle_incompatible_alert: bundleIncompatibleAlertInput.value,
     collect_country: collectInputs.country,
     collect_platform: collectInputs.platform,
     collect_os_version: collectInputs.os_version,
@@ -363,6 +388,7 @@ async function submit(form: {
   allow_preview: boolean
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
+  bundle_incompatible_alert: 'default' | 'all'
   collect_country: boolean
   collect_platform: boolean
   collect_os_version: boolean
@@ -378,6 +404,13 @@ async function submit(form: {
     toast.error(t('no-permission'))
     isLoading.value = false
     return
+  }
+
+  try {
+    await updateServingRegions()
+  }
+  catch {
+    toast.error(t('serving-region-save-error'))
   }
 
   try {
@@ -434,6 +467,13 @@ async function submit(form: {
   try {
     if (typeof form.block_provider_infra_requests === 'boolean')
       await updateBlockProviderInfraRequests(form.block_provider_infra_requests)
+  }
+  catch (error) {
+    toast.error(error as string)
+  }
+
+  try {
+    await updateBundleIncompatibleAlert(form.bundle_incompatible_alert)
   }
   catch (error) {
     toast.error(error as string)
@@ -665,6 +705,20 @@ async function updateExposeMetadata(newExposeMetadata: boolean) {
     appRef.value.expose_metadata = newExposeMetadata
 }
 
+async function updateBundleIncompatibleAlert(next: 'default' | 'all') {
+  const current = appRef.value?.bundle_incompatible_alert === 'all' ? 'all' : 'default'
+  if (next === current)
+    return
+
+  const { error } = await capgo.from('apps').update({ bundle_incompatible_alert: next }).eq('app_id', props.appId)
+  if (error)
+    throw t('cannot-change-bundle-incompatible-alert')
+
+  toast.success(t('changed-bundle-incompatible-alert'))
+  if (appRef.value)
+    appRef.value.bundle_incompatible_alert = next
+}
+
 async function updateAllowPreview(newAllowPreview: boolean) {
   if (newAllowPreview === appRef.value?.allow_preview) {
     return Promise.resolve()
@@ -717,6 +771,28 @@ async function updateDeviceDataCollection(next: DeviceDataCollection) {
   toast.success(t('changed-device-data-collection'))
   if (appRef.value)
     Object.assign(appRef.value, { device_data_collection: merged })
+}
+
+async function updateServingRegions() {
+  const regions = [...servingRegionsInput.value]
+  const mode = servingRegionModeInput.value
+  const savedRegions = appRef.value?.serving_regions ?? DEFAULT_SERVING_REGIONS
+  if (mode === (appRef.value?.serving_region_mode ?? 'route')
+    && regions.length === savedRegions.length
+    && savedRegions.every(region => regions.includes(region))) {
+    return
+  }
+
+  const { error } = await capgo.from('apps').update({
+    serving_regions: regions,
+    serving_region_mode: mode,
+  }).eq('app_id', props.appId)
+  if (error)
+    throw error
+  if (appRef.value) {
+    appRef.value.serving_regions = regions
+    appRef.value.serving_region_mode = mode
+  }
 }
 
 async function updateBlockProviderInfraRequests(enabled: boolean) {
@@ -1349,7 +1425,7 @@ function confirmTransferAppOwnership(org: Organization) {
             toast.error(t('incorrect-app-id'))
             return false
           }
-          // Transfer logic will go here
+          await settleSimulators()
           const { error } = await capgo.rpc('transfer_app', {
             p_app_id: props.appId,
             p_new_org_id: org.gid,
@@ -1408,14 +1484,13 @@ async function transferAppOwnership() {
     return
 
   // Step 2: Organization selection - filter orgs where user has transfer permission
-  const destinationOrgs = await Promise.all(
-    organizationStore.organizations
-      .filter(org => org.gid !== appRef.value?.owner_org.id)
-      .map(async (org) => {
-        const hasTransferPermission = await checkPermissions('app.transfer', { orgId: org.gid })
-        return hasTransferPermission ? org : null
-      }),
-  ).then(results => results.filter((org): org is NonNullable<typeof org> => org !== null))
+  const candidateOrgs = organizationStore.organizations
+    .filter(org => org.gid !== appRef.value?.owner_org.id)
+  const canTransferTo = await checkPermissionsBatch(candidateOrgs.map(org => ({
+    permissions: 'app.transfer' as const,
+    scope: { orgId: org.gid },
+  })))
+  const destinationOrgs = candidateOrgs.filter((_org, idx) => canTransferTo[idx])
 
   if (destinationOrgs.length === 0) {
     toast.error(t('no-super-admin-organizations'))
@@ -1565,6 +1640,28 @@ async function transferAppOwnership() {
                     </template>
                   </FormField>
                 </div>
+                <div class="mb-4">
+                  <label for="bundle-incompatible-alert" class="inline-flex mb-1 text-sm font-bold text-neutral-700 dark:text-neutral-300">{{ t('bundle-incompatible-alert') }}</label>
+                  <div class="flex items-center w-full px-3 py-2 text-base border border-neutral-400 rounded-lg shadow bg-white dark:bg-transparent dark:border-neutral-500 focus-within:ring-1 focus-within:ring-blue-500 focus-within:border-blue-500">
+                    <IconGearSix class="mr-2 -ml-1 w-[1em] h-[1em] shrink-0 text-neutral-600 dark:text-neutral-300" aria-hidden="true" />
+                    <select
+                      id="bundle-incompatible-alert"
+                      v-model="bundleIncompatibleAlertInput"
+                      name="bundle_incompatible_alert"
+                      class="w-full min-w-0 p-0 text-base bg-transparent border-none outline-hidden focus:ring-0 text-neutral-700 dark:text-neutral-300"
+                    >
+                      <option value="default">
+                        {{ t('bundle-incompatible-alert-default') }}
+                      </option>
+                      <option value="all">
+                        {{ t('bundle-incompatible-alert-all') }}
+                      </option>
+                    </select>
+                  </div>
+                  <p class="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+                    {{ t('bundle-incompatible-alert-help') }}
+                  </p>
+                </div>
                 <div
                   :key="`download-${forceDownloadBump}`"
                   class="flex flex-row mt-3 cursor-pointer"
@@ -1667,6 +1764,14 @@ async function transferAppOwnership() {
                   name="block_provider_infra_requests"
                   :label="t('block-provider-infra-requests')"
                   :help="t('block-provider-infra-requests-help')"
+                />
+                <AppServingRegions
+                  v-model:regions="servingRegionsInput"
+                  v-model:mode="servingRegionModeInput"
+                  :disabled="!canUpdateSettings"
+                  :app-id="props.appId"
+                  :saved-regions="appRef?.serving_regions ?? DEFAULT_SERVING_REGIONS"
+                  :saved-mode="appRef?.serving_region_mode ?? 'route'"
                 />
                 <details
                   id="device-data-collection"
@@ -1771,7 +1876,7 @@ async function transferAppOwnership() {
           </section>
         </div>
         <footer class="px-6 pb-6">
-          <button type="submit" class="d-btn d-btn-primary min-w-20" :disabled="isLoading || isDeletingApp">
+          <button type="submit" class="d-btn d-btn-primary min-w-20" :disabled="isLoading || isDeletingApp || !canUpdateSettings">
             <Spinner v-if="isLoading" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
             <span v-else>{{ t('save') }}</span>
           </button>

@@ -15,6 +15,8 @@ vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
     c.set('apikey', { key: 'test-build-key', user_id: 'test-user', rbac_id: '00000000-0000-0000-0000-000000000001' })
     await next()
   },
+  // Only /build/logs_token uses it; this test never calls that route.
+  middlewareAuth: () => async (_c: Context, next: Next) => next(),
 }))
 vi.mock('../supabase/functions/_backend/utils/pg.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>(),

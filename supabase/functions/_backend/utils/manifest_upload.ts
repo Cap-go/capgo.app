@@ -45,7 +45,12 @@ export interface ManifestUploadResponse {
   entries: Array<{
     id: number
     s3_path_suffix: string
-    upload_token: string
+    /** Absent for `reuse` entries: the object already exists, nothing is uploaded. */
+    upload_token?: string
+    /** Only set to `reuse`; every other entry follows `default_action`. */
+    action?: 'reuse'
+    /** Signed size receipt for a `reuse` entry, same format the files read route returns. */
+    file_size_receipt?: string
   }>
 }
 
@@ -58,6 +63,12 @@ export interface ManifestUploadCapabilityOptions {
   publicBaseUrl: string
   nowUnix?: number
   concurrency?: number
+  /**
+   * Optional server-side existence check. Returns a size receipt for each exact
+   * path that already exists; those entries become `reuse`. Failures are ignored
+   * so the client falls back to its own existence check.
+   */
+  resolveReuseReceipts?: (prefix: string, paths: string[]) => Promise<Map<string, string>>
 }
 
 const TOP_LEVEL_FIELDS = new Set([
@@ -277,10 +288,22 @@ export async function createManifestUploadResponse(
   )
 
   const suffixes = originalSuffixes
-  const entries = await mapWithConcurrency(suffixes, DEFAULT_CRYPTO_CONCURRENCY, async (suffix, index) => {
+  const paths = suffixes.map((suffix, index) => {
     const path = `${defaultS3PathPrefix}${suffix}`
     if (path.length > MAX_S3_PATH_LENGTH || !suffix || suffixes.length !== request.entries.length)
       invalidEntry(index, 'file_name')
+    return path
+  })
+  let reuseReceipts = new Map<string, string>()
+  if (options.resolveReuseReceipts) {
+    reuseReceipts = await options.resolveReuseReceipts(defaultS3PathPrefix, paths)
+      .catch(() => new Map<string, string>())
+  }
+  const entries = await mapWithConcurrency(suffixes, DEFAULT_CRYPTO_CONCURRENCY, async (suffix, index) => {
+    const path = paths[index]!
+    const receipt = reuseReceipts.get(path)
+    if (receipt)
+      return { id: request.entries[index].id, s3_path_suffix: suffix, action: 'reuse' as const, file_size_receipt: receipt }
     const capability = await capabilitySigner.create(path)
     return { id: request.entries[index].id, s3_path_suffix: suffix, upload_token: capability.uploadToken }
   })

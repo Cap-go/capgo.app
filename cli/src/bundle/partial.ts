@@ -15,8 +15,10 @@ import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
 import { CliUserError } from '../shared/cli-user-error'
 import { isTransientNetworkError } from '../shared/network-error'
+import { defaultCpuConcurrency, runWorkerPool } from '../shared/worker-pool'
 import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findProjectRoot, formatVerboseError, generateManifest, getContentType, getInstalledVersion, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import type { ManifestUploadRequestEntry, ResolvedManifestUpload, ResolvedManifestUploadEntry } from './manifest-upload'
+import type { ManifestPayloadCache } from './manifest-payload-cache'
 import { getUploadReporter } from './reporter'
 import { getManifestUploadAbandonError, ManifestUploadAbandonController, ManifestUploadAbandonError, parseManifestUploadAbandonBody } from './upload-abandon-error'
 
@@ -67,26 +69,37 @@ function manifestExistenceCheckHttpError(status: number): CliUserError {
   return new CliUserError(`Cannot check whether manifest file exists (HTTP ${status})`, { status })
 }
 
-export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, filename: string): Promise<{ exists: boolean, receipt?: string }> {
-  const url = new URL(`${existenceCheckUrlPrefix}${encodeURIComponent(filename)}`)
+type ExistenceProbeResult
+  = | { kind: 'missing' }
+    | { kind: 'exists', receipt?: string }
+    | { kind: 'method_not_supported' }
+
+async function discardResponseBody(response: Response): Promise<void> {
+  // An unread body keeps the socket busy and, for GET, may stream a whole file.
+  await response.body?.cancel().catch(() => undefined)
+}
+
+async function probeUploadTarget(url: URL, method: 'HEAD' | 'GET'): Promise<ExistenceProbeResult> {
   const retryDelays = TUS_UPLOAD_RETRY_DELAYS.slice(0, 3)
 
   for (let attempt = 0; ; attempt++) {
     url.searchParams.set('nocache', `${Date.now()}`)
     try {
       const response = await fetch(url.toString(), {
-        method: 'GET',
+        method,
         redirect: 'manual',
         headers: buildCliRequestHeaders({ 'cache-control': 'no-cache' }),
       })
+      await discardResponseBody(response)
       if (response.status === 404)
-        return { exists: false }
+        return { kind: 'missing' }
+      if (method === 'HEAD' && (response.status === 405 || response.status === 501))
+        return { kind: 'method_not_supported' }
       if (!response.ok) {
         const retryDelay = isRetryableExistenceCheckHttpStatus(response.status)
           ? getExistenceCheckRetryDelayMs(response, retryDelays, attempt)
           : undefined
         if (retryDelay !== undefined) {
-          await response.body?.cancel()
           if (retryDelay > 0)
             await new Promise(resolve => setTimeout(resolve, retryDelay))
           continue
@@ -94,7 +107,7 @@ export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, 
         throw manifestExistenceCheckHttpError(response.status)
       }
       return {
-        exists: true,
+        kind: 'exists',
         receipt: response.headers.get('X-Capgo-Manifest-Size-Receipt') ?? undefined,
       }
     }
@@ -106,6 +119,25 @@ export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, 
         await new Promise(resolve => setTimeout(resolve, retryDelay))
     }
   }
+}
+
+/**
+ * Fallback existence check for servers that answer `upload_if_doesnt_exist`
+ * instead of deciding `reuse` themselves. Uses HEAD (metadata only) and falls
+ * back to GET only when HEAD is not supported or carries no size receipt.
+ */
+export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, filename: string): Promise<{ exists: boolean, receipt?: string }> {
+  const url = new URL(`${existenceCheckUrlPrefix}${encodeURIComponent(filename)}`)
+  const head = await probeUploadTarget(url, 'HEAD')
+  if (head.kind === 'missing')
+    return { exists: false }
+  if (head.kind === 'exists' && head.receipt)
+    return { exists: true, receipt: head.receipt }
+
+  const get = await probeUploadTarget(url, 'GET')
+  if (get.kind === 'exists')
+    return { exists: true, receipt: get.receipt ?? (head.kind === 'exists' ? head.receipt : undefined) }
+  return { exists: false }
 }
 
 // Minimum size for Brotli compression according to RFC
@@ -320,14 +352,33 @@ export async function prepareManifestUploadEntries(
   path: string,
   encryptionOptions: PartialEncryptionOptions | undefined,
   options: OptionsUpload,
-  /** Receives the exact bytes the delta upload would send for each entry (used by the offline delta pack). */
+  /** Receives the exact bytes the delta upload would send for each entry, in manifest order (used by the offline delta pack). */
   onPayload?: (entry: ManifestUploadRequestEntry, uploadedBytes: Buffer) => void | Promise<void>,
+  /** Keeps the prepared bytes on disk so `uploadPartial` does not compress and encrypt them again. */
+  payloadCache?: ManifestPayloadCache,
 ): Promise<ManifestUploadRequestEntry[]> {
   await validatePartialUpload(manifest, options)
   if (manifest.length === 0)
     throw new CliUserError('Cannot request a manifest upload for an empty manifest')
-  const entries: ManifestUploadRequestEntry[] = []
-  for (const [id, file] of manifest.entries()) {
+
+  // onPayload consumers expect manifest order; hold early finishers until their turn.
+  const ready = new Map<number, { entry: ManifestUploadRequestEntry, buffer: Buffer }>()
+  let nextToEmit = 0
+  let emitChain: Promise<void> = Promise.resolve()
+  const emitReady = () => {
+    emitChain = emitChain.then(async () => {
+      while (ready.has(nextToEmit)) {
+        const { entry, buffer } = ready.get(nextToEmit)!
+        ready.delete(nextToEmit)
+        nextToEmit++
+        await onPayload!(entry, buffer)
+      }
+    })
+    return emitChain
+  }
+
+  return runWorkerPool(manifest.length, defaultCpuConcurrency(), async (id) => {
+    const file = manifest[id]!
     const payload = await preparePartialPayload(file, path, encryptionOptions, options)
     const entry: ManifestUploadRequestEntry = {
       id,
@@ -337,14 +388,23 @@ export async function prepareManifestUploadEntries(
       uploaded_bytes_sha256: payload.uploadedBytesSha256,
       uploaded_bytes_size: payload.uploadedBytesSize,
     }
-    entries.push(entry)
-    if (onPayload)
-      await onPayload(entry, payload.buffer)
-  }
-  return entries
+    if (payloadCache) {
+      await payloadCache.set(id, {
+        fileName: payload.fileName,
+        compression: payload.compression,
+        uploadedBytesSha256: payload.uploadedBytesSha256,
+        uploadedBytesSize: payload.uploadedBytesSize,
+      }, payload.buffer)
+    }
+    if (onPayload) {
+      ready.set(id, { entry, buffer: payload.buffer })
+      await emitReady()
+    }
+    return entry
+  })
 }
 
-function assertPreparedPayloadMatches(entry: ResolvedManifestUploadEntry, payload: PreparedPartialPayload) {
+function assertPreparedPayloadMatches(entry: ResolvedManifestUploadEntry, payload: Omit<PreparedPartialPayload, 'buffer'>) {
   if (
     entry.request.file_name !== payload.fileName
     || entry.request.compression !== payload.compression
@@ -370,6 +430,8 @@ export async function uploadPartial(
   encryptionOptions: PartialEncryptionOptions | undefined,
   options: OptionsUpload,
   manifestUpload: ResolvedManifestUpload,
+  /** Bytes prepared by `prepareManifestUploadEntries`; entries missing from it are prepared again. */
+  payloadCache?: ManifestPayloadCache,
 ): Promise<any[] | null> {
   const spinner = getUploadReporter().spinner()
   spinner.start('Preparing delta update with TUS protocol')
@@ -390,20 +452,31 @@ export async function uploadPartial(
   try {
     spinner.message(`Uploading ${totalFiles} files using TUS protocol`)
 
+    // Only files that are really uploaded need their bytes; reuse and existing files never read them.
+    const loadUploadBytes = async (file: manifestType[number], manifestUploadEntry: ResolvedManifestUploadEntry): Promise<Buffer> => {
+      const cached = payloadCache?.get(manifestUploadEntry.request.id)
+      if (cached) {
+        const bytes = await payloadCache!.read(manifestUploadEntry.request.id)
+        if (bytes) {
+          assertPreparedPayloadMatches(manifestUploadEntry, cached)
+          return bytes
+        }
+      }
+      const payload = await preparePartialPayload(file, path, encryptionOptions, options)
+      assertPreparedPayloadMatches(manifestUploadEntry, payload)
+      return payload.buffer
+    }
+
     // Helper function to upload a single file
     const uploadFile = async (file: manifestType[number], index: number) => {
       abandonController.throwIfAbandoned()
       const filePathUnix = convertToUnixPath(file.file)
-      const payload = await preparePartialPayload(file, path, encryptionOptions, options)
-      const finalBuffer = payload.buffer
-      abandonController.throwIfAbandoned()
 
       const manifestUploadEntry = manifestUpload.entries[index]!
       if (manifestUploadEntry.request.file_hash !== file.hash)
         throw new CliUserError(`Manifest upload authorization does not match the local manifest entry ${index}`)
-      assertPreparedPayloadMatches(manifestUploadEntry, payload)
 
-      const uploadPathUnix = payload.fileName
+      const uploadPathUnix = manifestUploadEntry.request.file_name
       const filename = manifestUploadEntry.s3Path
 
       if (manifestUploadEntry.action === 'reuse') {
@@ -430,13 +503,16 @@ export async function uploadPartial(
       abandonController.throwIfAbandoned()
       if (existing.exists) {
         uploadedFiles++
-        return Promise.resolve({
+        return {
           file_name: uploadPathUnix,
           s3_path: filename,
           file_hash: file.hash,
           file_size_receipt: existing.receipt,
-        })
+        }
       }
+
+      const finalBuffer = await loadUploadBytes(file, manifestUploadEntry)
+      abandonController.throwIfAbandoned()
 
       return new Promise((resolve, reject) => {
         spinner.message(`Prepare upload delta file: ${filePathUnix}`)
@@ -517,23 +593,16 @@ export async function uploadPartial(
       })
     }
 
-    // Process files in bounded batches to avoid overwhelming the server
-    const BATCH_SIZE = options.deltaUploadConcurrency ?? 50
-    const results: any[] = []
-
-    for (let i = 0; i < manifest.length; i += BATCH_SIZE) {
+    // Sliding pool: a free slot starts the next file at once, so one slow upload
+    // never stalls a whole batch. The cap still bounds load on the server.
+    const concurrency = options.deltaUploadConcurrency ?? 50
+    const results: any[] = await runWorkerPool(manifest.length, concurrency, async (index) => {
       abandonController.throwIfAbandoned()
-      const batch = manifest.slice(i, i + BATCH_SIZE)
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1
-      const totalBatches = Math.ceil(manifest.length / BATCH_SIZE)
-
-      if (totalBatches > 1) {
-        spinner.message(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} files)`)
-      }
-
-      const batchResults = await Promise.all(batch.map((file, batchIndex) => uploadFile(file, i + batchIndex)))
-      results.push(...batchResults)
-    }
+      const result = await uploadFile(manifest[index]!, index)
+      if (totalFiles > 1)
+        spinner.message(`Processed ${uploadedFiles}/${totalFiles} delta files`)
+      return result
+    })
     if (results.some(entry => !entry.file_size_receipt))
       throw new CliUserError('Manifest upload did not return a size receipt for every file')
     const endTime = performance.now()

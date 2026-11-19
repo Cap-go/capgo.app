@@ -1,3 +1,4 @@
+import { enforceServingPolicy } from '../utils/servingPolicy.ts'
 // channel self old function
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
@@ -16,7 +17,7 @@ import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
 import { sendNotifToOrgMembersCached } from '../utils/org_email_notifications.ts'
-import { closeClient, createLazyPgClient, deleteChannelDevicePg, getAppByIdPg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getMainChannelsPg, getPgClient, refreshReplicationLag, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
+import { closeClient, createLazyPgClient, deleteChannelDevicePg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getMainChannelsPg, getPgClient, logPgError, queryAppOwnerPostgres, refreshReplicationLag, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
 import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
@@ -597,6 +598,21 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
   return c.json(BRES)
 }
 
+/**
+ * Owner read for the channel list. Every failure is rethrown: null means "app
+ * missing" and answers a publicly cached on_premise_app 429, so a failed read
+ * must surface as a retryable 503 instead.
+ */
+async function getListAppOwnerPg(c: Context, appId: string, drizzleClient: ReturnType<typeof getDrizzleClient>) {
+  try {
+    return await queryAppOwnerPostgres(c, appId, drizzleClient, PLAN_MAU_ACTIONS)
+  }
+  catch (e: unknown) {
+    logPgError(c, 'getListAppOwnerPg', e)
+    throw e
+  }
+}
+
 async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult, edgeCache = false): Promise<Response> {
   const { app_id, platform, is_emulator, is_prod } = body
   c.set('deviceDataCollection', parseDeviceDataCollection(cachedAppStatus.device_data_collection))
@@ -605,12 +621,14 @@ async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<type
     return cachedLimit
   }
 
-  // With the edge cache, the cached owner answers both the existence check and the owner lookup.
-  const cachedOwner = edgeCache ? (await getAppOwnerWithEdgeCache(c, app_id, drizzleClient, PLAN_MAU_ACTIONS)).value : null
-  // First check if app exists - Read operation can use v2 flag
-  const appExists = edgeCache ? cachedOwner : await getAppByIdPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+  // One owner read answers both the existence check and the owner lookup: the
+  // owner row already carries owner_org and plan_valid, so a separate
+  // apps-by-id read would fetch the same row (and run the plan check) twice.
+  const appOwner = edgeCache
+    ? (await getAppOwnerWithEdgeCache(c, app_id, drizzleClient, PLAN_MAU_ACTIONS)).value
+    : await getListAppOwnerPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>)
 
-  if (!appExists) {
+  if (!appOwner) {
     const blocked = await blockProviderInfrastructure(c, 'GET', true)
     if (blocked)
       return blocked
@@ -618,7 +636,6 @@ async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<type
     // App doesn't exist in database - normalize response to avoid oracle
     return onPremiseAppResponse(c)
   }
-  const appOwner = edgeCache ? cachedOwner : await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   c.set('deviceDataCollection', parseDeviceDataCollection(appOwner?.device_data_collection ?? cachedAppStatus.device_data_collection))
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
@@ -679,6 +696,7 @@ async function parseChannelSelfPluginRequest(
 
   const bodyParsed = parsePluginBody<DeviceLink>(c, body, schema, requireDevice)
 
+  await enforceServingPolicy(c, bodyParsed.app_id)
   const ipLimit = await assertChannelSelfIPRateLimit(c, bodyParsed.app_id)
   if (ipLimit) {
     return { response: ipLimit }

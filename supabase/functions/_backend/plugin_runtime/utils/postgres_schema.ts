@@ -6,6 +6,8 @@ export const disableUpdatePgEnum = pgEnum('disable_update', ['major', 'minor', '
 export const channelUpdatePackagePgEnum = pgEnum('channel_update_package', ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'])
 
 export const apps = pgTable('apps', {
+  serving_regions: text('serving_regions').array().notNull(),
+  serving_region_mode: text('serving_region_mode').notNull(),
   created_at: timestamp('created_at').notNull().defaultNow(),
   app_id: varchar('app_id').notNull(),
   icon_url: varchar('icon_url').notNull(),
@@ -83,6 +85,7 @@ export const channels = pgTable('channels', {
   android: boolean('android').notNull().default(true),
   electron: boolean('electron').notNull().default(true),
   allow_device_self_set: boolean('allow_device_self_set').default(false).notNull(),
+  bundle_alert_enabled: boolean('bundle_alert_enabled'),
   allow_emulator: boolean('allow_emulator').notNull().default(true),
   allow_device: boolean('allow_device').notNull().default(true),
   allow_dev: boolean('allow_dev').notNull().default(true),

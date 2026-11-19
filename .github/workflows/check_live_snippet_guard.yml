@@ -1,0 +1,77 @@
+name: Read-only live snippet guard
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: ${{ github.repository == 'Cap-go/capgo.app' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Update only after reviewing a new accepted production release.
+      ACCEPTED_RELEASE_SHA: c0fcaab5a3c0645225655f91a73f4dc2bc5bdfa6
+      CHECKER_SHA: ${{ github.workflow_sha }}
+      BUN_BUILD_VERSION: 1.4.4
+    steps:
+      - name: Checkout immutable checker from this main workflow
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout accepted production source
+        uses: actions/checkout@v6
+        with:
+          ref: c0fcaab5a3c0645225655f91a73f4dc2bc5bdfa6
+          path: release
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Build pinned module without production credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -m 700 "$RUNNER_TEMP/snippet-guard"
+          test "$(git -C release rev-parse HEAD)" = "$ACCEPTED_RELEASE_SHA"
+          bun --eval '
+            const { buildSnippets } = await import("./release/scripts/snippet/build-snippets.ts")
+            const module = (await buildSnippets()).find(item => item.name === "plugin_load_balancer")
+            if (!module) throw new Error("Missing plugin module")
+            const hash = new Bun.CryptoHasher("sha256").update(module.code).digest("hex")
+            if (Bun.version !== "1.4.4" || Buffer.byteLength(module.code) !== 22163
+              || hash !== "5fb83dbcf7e4da0bced39264cdbcbd7ee2bec89b0c8e30ec672f62bbdfdeca72")
+              throw new Error("Pinned build differs from the accepted deployment artifact")
+            await Bun.write(`${process.env.RUNNER_TEMP}/snippet-guard/expected.mjs`, module.code)
+          '
+      - name: Read live content and rule metadata using GET only
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node tooling/scripts/check-live-snippet-guard.mjs capture "$RUNNER_TEMP/snippet-guard"
+      - name: Validate exact captured module without credentials or real providers
+        run: |
+          node --experimental-vm-modules tooling/scripts/check-live-snippet-guard.mjs validate "$RUNNER_TEMP/snippet-guard"
+          {
+            echo 'Accepted release: c0fcaab5a3c0645225655f91a73f4dc2bc5bdfa6'
+            echo '```json'
+            cat "$RUNNER_TEMP/snippet-guard/result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain sanitized proof only
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-snippet-guard-proof
+          path: ${{ runner.temp }}/snippet-guard/result.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove private runner files
+        if: ${{ always() }}
+        run: rm -rf -- "$RUNNER_TEMP/snippet-guard"

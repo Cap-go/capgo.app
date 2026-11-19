@@ -199,13 +199,6 @@ describe('onboarding demo reset', () => {
     )
 
     await executeSQL(
-      `INSERT INTO public.daily_storage (app_id, date, storage) VALUES
-        ($1, $2, 1000),
-        ($1, $3, 200)`,
-      [appId, realDate, demoDate],
-    )
-
-    await executeSQL(
       `INSERT INTO public.daily_version (
         app_id,
         date,

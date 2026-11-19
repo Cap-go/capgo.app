@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockFindBestPlan = vi.fn()
 const mockGetAllDashboard = vi.fn()
-const mockGetTotalStorage = vi.fn()
 const mockIsPlatformAdmin = vi.fn()
 const mockNormalizeDashboardDateRange = vi.fn()
 const mockSetWebsitePaidUserCookie = vi.fn()
@@ -16,7 +15,6 @@ vi.mock('~/services/console', () => ({
   findBestPlan: mockFindBestPlan,
   getAllDashboard: mockGetAllDashboard,
   getLocalConfig: () => ({ apiHost: 'https://supabase.capgo.test' }),
-  getTotalStorage: mockGetTotalStorage,
   isPlatformAdmin: mockIsPlatformAdmin,
   normalizeDashboardDateRange: mockNormalizeDashboardDateRange,
   clearSpoof: vi.fn(),
@@ -46,6 +44,8 @@ function createGlobalDashboard() {
     get: index,
     mau: index,
     storage: index,
+    // 2 GiB stored for every hour of the day.
+    storage_byte_hours: 2 * 1024 ** 3 * 24,
   }))
 }
 
@@ -76,7 +76,6 @@ describe('main store dashboard range normalization', () => {
       byApp: [],
       global,
     })
-    mockGetTotalStorage.mockResolvedValue(321)
     mockFindBestPlan.mockResolvedValue('team')
     mockIsPlatformAdmin.mockResolvedValue(false)
   })
@@ -99,6 +98,17 @@ describe('main store dashboard range normalization', () => {
     )
     expect(store.totalDevices).toBe(111)
     expect(store.totalDownload).toBe(2220)
+  })
+
+  it('feeds the GB-hour average of the range to the plan suggestion', async () => {
+    const { useMainStore } = await import('../src/stores/main.ts')
+    const store = useMainStore()
+
+    await store.updateDashboard('org-123')
+
+    // 30 days of 2 GiB stored all day over a 30 day range average to 2 GiB.
+    expect(store.totalStats.storage).toBe(2 * 1024 ** 3)
+    expect(mockFindBestPlan).toHaveBeenCalledWith(expect.objectContaining({ storage: 2 * 1024 ** 3 }))
   })
 
   it('coalesces concurrent global dashboard statistics requests but still allows a later refresh', async () => {
@@ -186,14 +196,13 @@ describe('main store dashboard range normalization', () => {
     expect(store.dashboardPlanOrgId).toBe('org-next')
   })
 
-  it.each(['storage', 'plan'])('keeps metrics ready but clears a previous organization plan when %s fails', async (stage) => {
+  it('keeps metrics ready but clears a previous organization plan when the plan suggestion fails', async () => {
     const { useMainStore } = await import('../src/stores/main.ts')
     const store = useMainStore()
     await store.updateDashboard('org-previous')
     expect(store.bestPlan).toBe('team')
 
-    const failedStage = stage === 'storage' ? mockGetTotalStorage : mockFindBestPlan
-    failedStage.mockRejectedValueOnce(new Error('Recommendation unavailable'))
+    mockFindBestPlan.mockRejectedValueOnce(new Error('Recommendation unavailable'))
     await expect(store.updateDashboard('org-next')).rejects.toThrow('Recommendation unavailable')
 
     expect(store.dashboardOrgId).toBe('org-next')

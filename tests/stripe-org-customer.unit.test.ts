@@ -23,7 +23,11 @@ vi.mock('../supabase/functions/_backend/utils/stripe.ts', async (importOriginal)
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   getDefaultPlan: getDefaultPlanMock,
   getStripeCustomer: getStripeCustomerMock,
-  supabaseAdmin: supabaseAdminMock,
+}))
+
+// The creator lookup goes through gotrueAdmin; serve it from the same fake client.
+vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
+  gotrueAdmin: () => supabaseAdminMock().auth.admin,
 }))
 
 // stripe_org now runs SQL directly; replay each statement against the supabase-js style mock

@@ -176,13 +176,13 @@ export function isAgentClaimPath(path: string): boolean {
   return path.replace(/\/+$/, '') === '/agent/claim'
 }
 
-export function isMatchingCliLoginEvent(
-  payload: { event?: string, channel?: string, description?: string },
-  session: string,
-): boolean {
-  return payload.event === 'User CLI login'
-    && payload.channel === 'user-login'
-    && payload.description === `cli-login:${session}`
+export function isMatchingCliLoginEvent(payload: unknown, session: string): boolean {
+  if (!payload || typeof payload !== 'object')
+    return false
+  const event: { event?: unknown, channel?: unknown, description?: unknown } = payload
+  return event.event === 'User CLI login'
+    && event.channel === 'user-login'
+    && event.description === `cli-login:${session}`
 }
 
 export function getCliLoginDestination(

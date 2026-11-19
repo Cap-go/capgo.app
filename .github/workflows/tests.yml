@@ -364,6 +364,36 @@ jobs:
       - name: Run DB tests against Tinbase
         run: bash scripts/test-db-tinbase.sh
 
+  test_local_db:
+    needs: changes
+    if: needs.changes.outputs.run_capgo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Local Postgres provision, pgTAP and SQL tests (no Supabase stack)
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6 # v6
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+      - name: Start local Postgres
+        run: bun run db:up
+      - name: Provision (bootstrap, migrations, seed)
+        run: bun run db:provision
+      - name: Provision again (must be a no-op)
+        run: bun run db:provision
+      - name: Run pgTAP tests (supabase/tests)
+        run: bun run db:test
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+      - name: Install dependencies
+        run: bun install
+      - name: Run SQL-only integration tests (tests/local-db-sql-tests.txt)
+        run: bun run test:db:sql
+
   test_backend:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
@@ -502,7 +532,7 @@ jobs:
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
-        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/read-replica-schema-catalog.test.ts --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* --exclude=tests/channel-rate-limit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --shard="$VITEST_SHARD"
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/read-replica-schema-catalog.test.ts --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* --exclude=tests/channel-rate-limit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') $(sed 's|^|--exclude=|' tests/local-db-sql-tests.txt | tr '\n' ' ') --shard="$VITEST_SHARD"
       - name: Show Edge server logs after backend test failure
         if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         run: |
@@ -738,8 +768,7 @@ jobs:
           PG_DUMP_BIN: /usr/lib/postgresql/17/bin/pg_dump
           PG_RESTORE_BIN: /usr/lib/postgresql/17/bin/pg_restore
         run: bun run readreplicate:check-schema
-      - name: Run Supabase Test DB
-        run: bun scripts/supabase-worktree.ts test db
+      # pgTAP (supabase/tests) runs in test_local_db, on the local Postgres container.
       - name: Lint SQL
         run: bun scripts/supabase-worktree.ts db lint -s public --fail-on warning
       # Catalog test runs last on the same stack: it needs the Edge server, the SQL checks do not.
@@ -879,7 +908,7 @@ jobs:
       - name: Run Cloudflare Workers integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
-        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/*.unit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --config vitest.config.cloudflare.ts --shard="$VITEST_SHARD"
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/*.unit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') $(sed 's|^|--exclude=|' tests/local-db-sql-tests.txt | tr '\n' ' ') --config vitest.config.cloudflare.ts --shard="$VITEST_SHARD"
       - name: Show Cloudflare Worker logs after Cloudflare test failure
         if: failure() && steps.start_cloudflare_workers.outputs.log_path != ''
         run: |
@@ -930,6 +959,11 @@ jobs:
           - name: kv-2
             state: kv
             shard: 2/2
+          # This file took 124s on its own; combining it with the other KV
+          # tests exhausted the five-minute job budget after service startup.
+          - name: kv-state
+            state: kv
+            shard: 1/1
     permissions:
       contents: read
     concurrency:
@@ -1028,8 +1062,10 @@ jobs:
           done
       - name: Run Cloudflare plugin integration tests (serial)
         run: |
-          if [ "${{ matrix.state }}" = "kv" ]; then
-            bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin:kv --shard=${{ matrix.shard }}
+          if [ "${{ matrix.name }}" = "kv-state" ]; then
+            USE_CLOUDFLARE_WORKERS=true bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/plugin-kv-state.test.ts --config vitest.config.cloudflare-plugin-kv.ts
+          elif [ "${{ matrix.state }}" = "kv" ]; then
+            bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin:kv --exclude=tests/plugin-kv-state.test.ts --shard=${{ matrix.shard }}
           else
             bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin
           fi
@@ -1356,6 +1392,8 @@ jobs:
         run: bun install --cwd cli/test/test_upload
       - name: Build CLI
         run: bun run cli:build
+      - name: Test MCP build spawn on Windows
+        run: bun run --cwd cli test:mcp-build-spawn && bun run --cwd cli test:mcp-build-job
       - name: Test CLI runner spawn on Windows
         run: bun run --cwd cli test:cli-runner-spawn
       - name: Create a zip test
@@ -1763,6 +1801,7 @@ jobs:
       - lint_typecheck
       - test_unit
       - test_db
+      - test_local_db
       - test_backend
       - test_backend_plugin
       - test_backend_sql

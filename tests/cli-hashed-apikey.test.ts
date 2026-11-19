@@ -80,7 +80,7 @@ describe('cli operations with hashed API key', () => {
     const sdk = createHashedKeySDK()
     const result = await sdk.listBundles(APPNAME)
 
-    expect(result.success).toBe(true)
+    expect(result.success, result.error).toBe(true)
     expect(Array.isArray(result.data)).toBe(true)
   }, 30000)
 

@@ -18,7 +18,7 @@ import {
 } from '../supabase/functions/_backend/mcp/oauth_utils.ts'
 import { hostedMcpToolEvent } from '../supabase/functions/_backend/mcp/index.ts'
 import { LATEST_LEGACY_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
-import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
+import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools, SERVER_INSTRUCTIONS } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS } from '../supabase/functions/_backend/mcp/tools.ts'
 import * as buildStatus from '../supabase/functions/_backend/public/build/status.ts'
 
@@ -155,6 +155,13 @@ describe('hosted MCP protocol', () => {
       if (destructiveHint || idempotentHint === false)
         expect(readOnlyHint, tool.name).toBe(false)
     }
+  })
+
+  it.concurrent('keeps agent-facing metadata within the Claude Code UTF-8 byte limit', () => {
+    const encoder = new TextEncoder()
+    expect(encoder.encode(SERVER_INSTRUCTIONS).byteLength, 'server instructions').toBeLessThanOrEqual(2048)
+    for (const tool of MCP_TOOLS)
+      expect(encoder.encode(tool.description).byteLength, tool.name).toBeLessThanOrEqual(2048)
   })
 
   it.concurrent('uses delta terms, never the deprecated partial ones, in hosted and local MCP tools', () => {
@@ -303,6 +310,20 @@ describe('hosted MCP protocol', () => {
       { method: 'GET', path: '/user' },
       { method: 'PUT', path: '/user', body: { first_name: 'Ada', email_preferences: { weekly_stats: false } } },
     ])
+  })
+
+  it.concurrent('pages organization members and bounds notification limits', async () => {
+    const { ctx, calls } = fakeContext()
+    const call = (id: number, name: string, args: Record<string, unknown>) => handleJsonRpcMessage({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }, ctx)
+    const orgId = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    await call(30, 'capgo_list_organization_members', { orgId, limit: 50, offset: 100 })
+    expect(calls).toEqual([{ method: 'GET', path: '/organization/members', query: { orgId, limit: 50, offset: 100 } }])
+    const tooMany = await call(31, 'capgo_list_organization_members', { orgId, limit: 1001 })
+    const sendTooMany = await call(32, 'capgo_send_notification', { appId: 'com.example.app', target: { broadcast: true }, limit: 100_001 })
+    const checkTooMany = await call(33, 'capgo_trigger_update_check', { appId: 'com.example.app', limit: 100_001 })
+    expect(calls).toHaveLength(1)
+    for (const response of [tooMany, sendTooMany, checkTooMany])
+      expect(response?.result).toMatchObject({ isError: true })
   })
 
   it.concurrent('rejects build timeouts outside the API range before calling it', async () => {
@@ -673,6 +694,10 @@ describe('hosted MCP errors always give a way out', () => {
       'capgo_subscribe_events',
       'capgo_list_event_subscriptions',
       'capgo_unsubscribe_events',
+      'capgo_plan_mobile_app',
+      'capgo_recommend_plugins',
+      'capgo_get_mobile_checklist',
+      'capgo_check_mobile_readiness',
     ])
     const tools = (listTools() as Array<{ name: string, inputSchema: Record<string, any> }>).filter(tool => !localTools.has(tool.name))
     for (const tool of tools) {
@@ -815,5 +840,58 @@ describe('hosted MCP tool analytics', () => {
   it('ignores non-tool messages and notifications', () => {
     expect(hostedMcpToolEvent({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { jsonrpc: '2.0', id: 1, result: {} }, 'user-1')).toBeNull()
     expect(hostedMcpToolEvent({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'capgo_list_apps' } }, null, 'user-1')).toBeNull()
+  })
+})
+
+describe('hosted simulator MCP', () => {
+  it('sends a tap and returns a screenshot image from a screenshot command', async () => {
+    const sessionId = '11111111-1111-4111-8111-111111111111'
+    const tool = MCP_TOOLS.find(entry => entry.name === 'capgo_simulator_command')
+    const tap = fakeContext({ data: { id: sessionId, command: 'tap', result: { x: 0.5, y: 0.2 } } })
+    await tool!.run({
+      appId: 'ee.forgr.capgo',
+      session_id: sessionId,
+      command: 'tap',
+      x: 0.5,
+      y: 0.2,
+    }, tap.ctx)
+    expect(tap.calls[0]).toMatchObject({
+      method: 'POST',
+      path: `/build/simulator/${sessionId}/command`,
+      body: { app_id: 'ee.forgr.capgo', command: 'tap', x: 0.5, y: 0.2 },
+    })
+    const shot = fakeContext({
+      data: {
+        id: sessionId,
+        command: 'screenshot',
+        result: { width: 402, height: 874 },
+        image_base64: 'aW1n',
+        image_media_type: 'image/jpeg',
+      },
+    })
+    const result = await tool!.run({
+      appId: 'ee.forgr.capgo',
+      session_id: sessionId,
+      command: 'screenshot',
+    }, shot.ctx)
+    expect(shot.calls[0]?.body).toMatchObject({ command: 'screenshot' })
+    expect(result.content[0] && 'text' in result.content[0] ? result.content[0].text : '').not.toContain('aW1n')
+    expect(result.content[1]).toEqual({ type: 'image', data: 'aW1n', mimeType: 'image/jpeg' })
+    expect(result.structuredContent).toEqual({ data: { id: sessionId, command: 'screenshot', result: { width: 402, height: 874 } } })
+  })
+
+  it('stops a simulator on the stop route', async () => {
+    const sessionId = '11111111-1111-4111-8111-111111111111'
+    const tool = MCP_TOOLS.find(entry => entry.name === 'capgo_stop_simulator')
+    const stop = fakeContext({ data: { id: sessionId, status: 'stopped' } })
+    await tool!.run({
+      appId: 'ee.forgr.capgo',
+      session_id: sessionId,
+    }, stop.ctx)
+    expect(stop.calls[0]).toMatchObject({
+      method: 'POST',
+      path: `/build/simulator/${sessionId}/stop`,
+      body: { app_id: 'ee.forgr.capgo' },
+    })
   })
 })

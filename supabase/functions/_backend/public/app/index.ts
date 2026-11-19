@@ -63,6 +63,7 @@ app.put('/:id', middlewareAuth({ preferApiKey: true }), async (c) => {
     allow_preview?: boolean
     build_timeout_seconds?: number
     default_upload_channel?: string
+    bundle_incompatible_alert?: 'default' | 'all'
     device_data_collection?: unknown
     ios_store_url?: string | null
     android_store_url?: string | null

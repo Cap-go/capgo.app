@@ -6,8 +6,7 @@
  *
  * Usage: bun scripts/audit_unused_versions.ts
  */
-import { createClient } from '@supabase/supabase-js'
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import { connectScriptDb, getDatabaseUrl } from './script_db.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const OUTPUT_DIR = './tmp/unused_versions'
@@ -56,11 +55,7 @@ async function loadJsonArray<T>(path: string): Promise<T[] | null> {
 
 async function main() {
   const env = await loadEnv(ENV_FILE)
-  const supabase = createClient<Database>(
-    env.SUPABASE_URL,
-    env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-  )
+  const db = await connectScriptDb(getDatabaseUrl(env))
 
   await Bun.write(`${OUTPUT_DIR}/.gitkeep`, '')
 
@@ -93,15 +88,13 @@ async function main() {
   let totalVersionsLoaded = 0
   const versionIdChunks = chunkArray(brokenVersionIdList, PAGE_SIZE)
   for (const idChunk of versionIdChunks) {
-    const { data, error } = await supabase
-      .from('app_versions')
-      .select('id, app_id, owner_org, name, deleted, r2_path, manifest_count')
-      .in('id', idChunk)
-
-    if (error) {
+    const { rows: data } = await db.query(
+      'SELECT id, app_id, owner_org, name, deleted, r2_path, manifest_count FROM public.app_versions WHERE id = ANY($1::bigint[])',
+      [idChunk],
+    ).catch((error) => {
       console.error('Error fetching broken app_versions:', error)
       process.exit(1)
-    }
+    })
     if (!data || data.length === 0) continue
 
     for (const row of data) {
@@ -122,15 +115,13 @@ async function main() {
   const appMap = new Map<string, { owner_org: string; default_upload_channel: string }>()
   const appIdChunks = chunkArray(brokenAppIds, PAGE_SIZE)
   for (const appChunk of appIdChunks) {
-    const { data, error } = await supabase
-      .from('apps')
-      .select('app_id, owner_org, default_upload_channel')
-      .in('app_id', appChunk)
-
-    if (error) {
+    const { rows: data } = await db.query(
+      'SELECT app_id, owner_org, default_upload_channel FROM public.apps WHERE app_id = ANY($1::text[])',
+      [appChunk],
+    ).catch((error) => {
       console.error('Error fetching apps:', error)
       process.exit(1)
-    }
+    })
     if (!data || data.length === 0) continue
 
     for (const row of data) {
@@ -146,17 +137,13 @@ async function main() {
   for (const appChunk of appIdChunks) {
     let from = 0
     while (true) {
-      const to = from + PAGE_SIZE - 1
-      const { data, error } = await supabase
-        .from('channels')
-        .select('id, app_id, owner_org, name, version')
-        .in('app_id', appChunk)
-        .range(from, to)
-
-      if (error) {
+      const { rows: data } = await db.query(
+        'SELECT id, app_id, owner_org, name, version FROM public.channels WHERE app_id = ANY($1::text[]) ORDER BY id LIMIT $2 OFFSET $3',
+        [appChunk, PAGE_SIZE, from],
+      ).catch((error) => {
         console.error('Error fetching channels:', error)
         process.exit(1)
-      }
+      })
       if (!data || data.length === 0) break
 
       for (const row of data) {
@@ -250,3 +237,4 @@ async function main() {
 }
 
 await main()
+process.exit(0)

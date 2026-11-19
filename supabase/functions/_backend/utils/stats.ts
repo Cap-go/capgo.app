@@ -5,8 +5,10 @@ import type { MiddlewareKeyVariables } from './hono.ts'
 import type { RlsPrincipal } from './pg_rls.ts'
 import type { StatsLogDimensions, VersionAction } from './plugin_stats.ts'
 import type { Database } from './supabase.types.ts'
+import type { ChannelDevicePopulation } from './channel_impact_population.ts'
 import type { ChannelDeviceOverrideIds, DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadDevicesResponse, ReadStatsInsightsParams, ReadStatsParams, StatsActions, StatsInsightAction, StatsInsightDaily, StatsInsightDevice, StatsInsightsResult, StatsInsightVersion, StatsMetadata, VersionCompareFilter, VersionUsage, VersionUsageChannel } from './types.ts'
 import { getRuntimeKey } from 'hono/adapter'
+import { readChannelDevicePopulationCF, readChannelDevicePopulationSB } from './channel_impact_population.ts'
 import { countDevicesCF, countInstallSourcesCF, countUpdatesFromLogsCF, countUpdatesFromLogsExternalCF, getAppsFromCF, readBandwidthUsageCF, readDevicesCF, readDeviceUsageCF, readDeviceVersionCountsCF, readNativeActiveDevicesSummaryCF, readNativeDailyPlatformActiveCF, readNativeVersionUsageCF, readStatsCF, readStatsInsightsCF, readStatsVersionCF, trackDevicesCF } from './cloudflare.ts'
 import { isDemoApp } from './demo.ts'
 import { normalizeDeviceCountryCode } from './deviceComparison.ts'
@@ -25,7 +27,7 @@ import {
   onPremStats,
 } from './plugin_stats.ts'
 import { normalizeStatsInsightDate, normalizeStatsInsightNumber, sortStatsInsightTotals } from './statsInsights.ts'
-import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, readBandwidthUsageSB, readChannelDefaultPlatformsSB, readChannelDeviceOverrideIdsSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
+import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, readBandwidthUsageSB, readChannelDefaultPlatformsSB, readChannelDeviceOverrideIdsSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsVersionSB, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
 import { DEFAULT_LIMIT } from './types.ts'
 import { backgroundTask, getEnv, isInternalVersionName } from './utils.ts'
@@ -155,15 +157,16 @@ export function sendStatsAndDevice(c: Context, device: DeviceWithoutCreatedAt, s
   return Promise.all(jobs)
 }
 
-export function createStatsMeta(c: Context, app_id: string, version_id: number, size: number) {
+/** Records a bundle storage event; `at` is when it happened (defaults to now, capped at now). */
+export function createStatsMeta(c: Context, app_id: string, version_id: number, size: number, at?: string | null) {
   if (size === 0)
     return { error: 'size is 0' }
-  cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size })
+  cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size, at })
   if (shouldSkipSupabaseStatsFallback(c)) {
     logSkippedSupabaseWrite(c, 'trackMetaSB')
     return { error: 'supabase_write_forbidden' }
   }
-  return trackMetaSB(c, app_id, version_id, size)
+  return trackMetaSB(c, app_id, version_id, size, at)
 }
 
 export function readStatsMau(c: Context, app_id: string, start_date: string, end_date: string) {
@@ -180,11 +183,6 @@ export function readStatsBandwidth(c: Context, app_id: string, start_date: strin
     return readBandwidthUsageSB(c, app_id, start_date, end_date)
   assertAnalyticsEngineReadConfig(c, 'bandwidth usage')
   return readBandwidthUsageCF(c, app_id, start_date, end_date, { throwOnError: true })
-}
-
-export function readStatsStorage(c: Context, app_id: string, start_date: string, end_date: string) {
-  // No cloudflare implementation, postgrest is enough
-  return readStatsStorageSB(c, app_id, start_date, end_date)
 }
 
 export function readStatsVersion(c: Context, app_id: string, start_date: string, end_date: string, channel?: VersionUsageChannel | string, options: VersionUsageChannelFilterOptions = {}): Promise<VersionUsage[]> {
@@ -263,6 +261,28 @@ export async function readDeviceVersionCounts(c: Context, app_id: string, channe
   if (!shouldUseAnalyticsEngine(c))
     return readDeviceVersionCountsSB(c, app_id, channelName, overrides)
   return readDeviceVersionCountsCF(c, app_id, channelName, overrides)
+}
+
+/**
+ * Device setups of the effective channel (same scope as readDeviceVersionCounts),
+ * active in the last CHANNEL_IMPACT_WINDOW_DAYS days. Used by the channel impact preview.
+ */
+export async function readChannelDevicePopulation(c: Context, app_id: string, channel: VersionUsageChannel & { name: string }): Promise<ChannelDevicePopulation> {
+  const [deviceOverrides, defaultForPlatforms] = await Promise.all([
+    readChannelDeviceOverrideIdsSB(c, app_id, channel),
+    // A failed lookup must not read as "default for no platform": devices that
+    // report no channel would be dropped and the smaller population cached.
+    readChannelDefaultPlatformsSB(c, app_id, channel, { throwOnError: true }),
+  ])
+  // A failed override lookup must not read as "no overrides": forced devices
+  // would be missed and the wrong population cached.
+  if (!deviceOverrides)
+    throw new Error('channel_devices overrides unavailable')
+  const overrides: ChannelDeviceOverrideIds = { into: deviceOverrides.into, elsewhere: deviceOverrides.elsewhere, defaultForPlatforms }
+  const population = shouldUseAnalyticsEngine(c)
+    ? await readChannelDevicePopulationCF(c, app_id, channel.name, overrides)
+    : await readChannelDevicePopulationSB(c, app_id, channel.name, overrides)
+  return { ...population, overrides_truncated: !!deviceOverrides.truncated }
 }
 
 /**

@@ -52,7 +52,14 @@ export interface BuildChild {
 
 export interface BuildJobDeps {
   /** Spawn the build command, streaming stdout+stderr to `logPath`. Returns a handle. */
-  spawnBuild: (args: { appId: string, platform: Platform, recordPath: string, logPath: string }) => BuildChild
+  spawnBuild: (args: {
+    appId: string
+    platform: Platform
+    recordPath: string
+    logPath: string
+    /** Called when the child fails to start or exits before writing a build record. */
+    onProcessFailure?: (message: string) => void
+  }) => BuildChild
   buildRecordPath: (appId: string, platform: Platform) => string
   /** Read the build record; resolves null when absent, THROWS on a present-but-corrupt record. */
   readBuildRecord: (path: string) => Promise<BuildOutputRecord | null>
@@ -81,6 +88,8 @@ interface JobEntry {
   exitCode: number | null | undefined
   cloudJobId?: string
   cancelled: boolean
+  /** Set when the local build child fails to start or dies before Capgo writes a record. */
+  processFailure?: string
 }
 
 /** Bounded wait window (seconds), kept under the ~60s client tool-call timeout. */
@@ -142,18 +151,25 @@ export async function startBuild(deps: BuildJobDeps, args: { appId: string, plat
     }
   }
 
-  const child = deps.spawnBuild({ appId, platform, recordPath, logPath: logsPath })
   const entry: JobEntry = {
     jobId,
     appId,
     platform,
     recordPath,
     logsPath,
-    child,
+    child: { pid: -1, kill: () => {}, exited: Promise.resolve(null) },
     startedAt: deps.now(),
     exitCode: undefined,
     cancelled: false,
   }
+  const child = deps.spawnBuild({
+    appId,
+    platform,
+    recordPath,
+    logPath: logsPath,
+    onProcessFailure: (message) => { entry.processFailure = message },
+  })
+  entry.child = child
   registry.set(jobId, entry)
   // Track exit without blocking; status derivation uses this to catch a build
   // process that died without writing a terminal record.
@@ -200,6 +216,8 @@ async function deriveStatus(deps: BuildJobDeps, entry: JobEntry): Promise<BuildJ
 
   // The build process exited but wrote no terminal record — the "failed without
   // a record" gap. Report failed rather than polling 'running' forever.
+  if (entry.processFailure)
+    return { ...base, status: 'failed', error: entry.processFailure }
   return { ...base, status: 'failed', error: `The build process exited (code ${entry.exitCode ?? 'unknown'}) without writing a result.` }
 }
 
@@ -253,11 +271,15 @@ export async function buildLogs(
   const slice = await deps.readLogSlice(logsPath, cursor)
 
   let terminal = false
+  let failureText: string | undefined
   if (entry) {
     const s = await deriveStatus(deps, entry)
     terminal = s.status !== 'running'
+    if (terminal && slice.text.length === 0 && s.error)
+      failureText = s.error
   }
-  return { jobId: args.jobId, text: slice.text, nextCursor: slice.nextCursor, eof: terminal && slice.eof }
+  const text = failureText ?? slice.text
+  return { jobId: args.jobId, text, nextCursor: slice.nextCursor, eof: terminal && slice.eof }
 }
 
 /** Cancel a running build: kill the local child + best-effort cloud cancel. */

@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(20);
+SELECT plan(21);
 
 CREATE OR REPLACE FUNCTION pg_temp.on_user_org_access_messages(
     p_binding_id uuid
@@ -14,12 +14,39 @@ BEGIN
         RETURN;
     END IF;
 
+    -- occurred_at (when the change happened) varies per call; it is checked
+    -- separately so the envelope comparisons stay exact.
     RETURN QUERY EXECUTE
-        'SELECT message
+        'SELECT message #- ''{payload,occurred_at}''
          FROM pgmq.q_on_user_org_access
          WHERE message -> ''payload'' -> ''record'' ->> ''id'' = $1
             OR message -> ''payload'' -> ''old_record'' ->> ''id'' = $1'
         USING p_binding_id::text;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.on_user_org_access_occurred_at(
+    p_binding_id uuid
+)
+RETURNS timestamptz
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+DECLARE
+    v_occurred_at timestamptz;
+BEGIN
+    IF pg_catalog.to_regclass('pgmq.q_on_user_org_access') IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    EXECUTE
+        'SELECT (message -> ''payload'' ->> ''occurred_at'')::timestamptz
+         FROM pgmq.q_on_user_org_access
+         WHERE message -> ''payload'' -> ''record'' ->> ''id'' = $1
+         LIMIT 1'
+        INTO v_occurred_at
+        USING p_binding_id::text;
+    RETURN v_occurred_at;
 END;
 $$;
 
@@ -126,10 +153,11 @@ SELECT is(
         "credit_usage_posthog",
         "on_user_org_access",
         "canceled_org_retention_alerts",
-        "send_email"
+        "send_email",
+        "sync_trial_plan_schedule"
     ]'::jsonb,
     'high-frequency queues retain order and append on_user_org_access,'
-    ' canceled_org_retention_alerts, then send_email'
+    ' canceled_org_retention_alerts, send_email, then sync_trial_plan_schedule'
 );
 
 SELECT is(
@@ -324,6 +352,13 @@ SELECT is(
         WHERE rb.id = '66000000-0000-4000-8000-000000000001'::uuid -- noqa: RF03
     ),
     'active direct user/org INSERT queues the exact generic envelope'
+);
+
+SELECT ok(
+    pg_temp.on_user_org_access_occurred_at(
+        '66000000-0000-4000-8000-000000000001'::uuid
+    ) <= pg_catalog.clock_timestamp(),
+    'the queued envelope carries when the change happened'
 );
 
 INSERT INTO public.role_bindings (

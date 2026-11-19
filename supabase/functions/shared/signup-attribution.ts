@@ -38,11 +38,7 @@ export type ResolvedSignupAttribution = {
   first_utm_term?: string
 }
 
-export type SignupAttributionEventTags = {
-  signup_plugin?: string
-  signup_source?: string
-  first_touch_type?: FirstTouchType
-}
+export type SignupAttributionEventTags = Pick<ResolvedSignupAttribution, 'signup_plugin' | 'signup_source' | 'first_touch_type' | FirstSignupUtmKey>
 
 type AttributionRecord = Record<string, unknown>
 
@@ -438,6 +434,13 @@ export function signupAttributionEventTags(
     tags.signup_source = attribution.signup_source
   if (attribution.first_touch_type)
     tags.first_touch_type = attribution.first_touch_type
+  // Carry creative attribution through checkout and payment events as well as
+  // person properties; opaque OpenAI references are deliberately not event tags.
+  for (const key of SIGNUP_UTM_KEYS) {
+    const firstKey = `first_${key}` as FirstSignupUtmKey
+    if (attribution[firstKey])
+      tags[firstKey] = attribution[firstKey]
+  }
   return tags
 }
 

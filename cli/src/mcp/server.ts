@@ -54,6 +54,7 @@ import { withCwd } from '../build/cwd'
 import { registerLiveUpdateTools } from '../init/mcp/live-update-tools'
 import { withErrorGuidance, withGuidedErrorResults } from './error-guidance'
 import { buildServerInstructions } from './instructions'
+import { registerSimulatorTools } from './simulator-tools'
 import { registerSkillTools } from './skills'
 import { installMcpStdoutGuard } from './stdout-guard'
 import { createProjectDirQueue, describeProjectDir, pickProjectDirFromRoots, resolveProjectDirInput, resolveProjectDirOptions } from './project-dir'
@@ -983,6 +984,8 @@ function createMcpServer(era: ProtocolEra): McpServer {
       }
     },
   )
+
+  registerSimulatorTools(server)
 
   // ============================================================================
   // Build Management Tools

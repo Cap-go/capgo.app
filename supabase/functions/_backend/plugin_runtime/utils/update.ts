@@ -1,3 +1,4 @@
+import { enforceServingPolicy, requestServingPolicy } from './servingPolicy.ts'
 import type { SemVer } from '@std/semver'
 import type { Context } from 'hono'
 import type { ManifestEntry } from './downloadUrl.ts'
@@ -29,6 +30,7 @@ import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss
 import { pluginStateQueriesFor } from './pluginStateRegistry.ts'
 import { getClientIP } from './rate_limit.ts'
 import { onPremiseAppResponse } from './rateLimitInfo.ts'
+import { hasServingRegionExclusions } from './servingRegions.ts'
 import { s3 } from './s3.ts'
 import { getSnippetEdgeAnswerBps, getSnippetEdgeReplay, setSnippetUpdatesFill } from './snippetEdgeAnswer.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
@@ -900,6 +902,11 @@ export async function updateWithPG(
     return updateError200(c, 'revert_to_builtin_plugin_version_too_old', 'revert_to_builtin used, but plugin version is too old')
   }
   const startBundleUrl = performance.now()
+  // An external provider cannot enforce a later regional preference change.
+  const servingPolicy = requestServingPolicy(c)
+  if (version.external_url && servingPolicy && hasServingRegionExclusions(servingPolicy))
+    return updateError200(c, 'external_delivery_unavailable', 'This bundle cannot be delivered with these update regions')
+
   let signedURL = serveZip ? (version.external_url ?? '') : ''
   let manifest: ManifestEntry[] = []
   let manifestFetchMs = 0
@@ -1030,6 +1037,7 @@ async function upToDateFromReadCache(c: Context, body: AppInfos, appStatus: Awai
  * cache, not from the snippet header (the device can read that header).
  */
 export async function recordSnippetUpToDate(c: Context, body: AppInfos, answer: { versionName: string }) {
+  await enforceServingPolicy(c, body.app_id)
   const pluginState = await startPluginStateRequest(c, body.app_id, body.device_id ?? '')
   const stateDatabase = pluginState ? createPluginStateDatabase(c, pluginState) : null
   const lazyClient = stateDatabase ? stateDatabase.lazy : createLazyPgClient(c, true)
@@ -1054,6 +1062,7 @@ export async function recordSnippetUpToDate(c: Context, body: AppInfos, answer: 
 }
 
 export async function update(c: Context, body: AppInfos) {
+  await enforceServingPolicy(c, body.app_id)
   const startUpdate = performance.now()
   const appStatus = await getAppStatus(c, body.app_id)
   const appStatusMs = Math.round(performance.now() - startUpdate)

@@ -3,7 +3,7 @@ import type { Permission } from '~/services/permissions'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconUserCircle from '~icons/heroicons/user-circle'
-import { userHasPermission } from '~/services/permissions'
+import { userHasPermissionsBatch } from '~/services/permissions'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -78,15 +78,15 @@ async function loadContacts() {
 
     // Keep only members who actually hold (any of) the required permission(s) and are
     // not the blocked user themselves - those are the people worth contacting.
-    const eligible = await Promise.all(members.map(async (member) => {
-      if (isCurrentUser(member) || !member.uid)
-        return null
-      for (const permission of permissions) {
-        if (await userHasPermission(permission, member.uid, { orgId }))
-          return member
-      }
-      return null
-    }))
+    const candidates = members.filter(member => !isCurrentUser(member) && !!member.uid)
+    // One batched RPC for every member x permission pair (a member needs any of them).
+    const holdsPermission = await userHasPermissionsBatch(candidates.map(member => ({
+      permissions,
+      userId: member.uid,
+      scope: { orgId },
+      mode: 'any' as const,
+    })))
+    const eligible = candidates.filter((_member, idx) => holdsPermission[idx])
 
     // A newer load started while we were awaiting; discard this stale result.
     if (myLoadId !== loadId)

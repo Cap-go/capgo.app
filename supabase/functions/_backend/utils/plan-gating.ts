@@ -179,3 +179,9 @@ export async function hasFeature(c: Context, orgId: string, feature: string): Pr
     return false
   }
 }
+
+/** Paid AI features exclude trials, overdue and cancelled subscriptions. */
+export async function requirePaidPlan(c: Context, orgId: string, feature: string): Promise<void> {
+  if (!await getActivePlanNameOrg(c, orgId, true))
+    throw quickError(403, 'paid_plan_required', `${feature} requires an active paid subscription`)
+}

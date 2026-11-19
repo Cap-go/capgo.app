@@ -28,6 +28,9 @@ async function drainOnce() {
   const pool = new Pool({ connectionString: POSTGRES_URL, max: 1 })
   try {
     while (Date.now() < deadline) {
+      // CI quiesces the scheduler. Advance the local fixture's real marker
+      // explicitly; claims still have to defer until a later committed marker.
+      await pool.query('SELECT public.touch_read_replica_commit_marker()')
       const response = await originalFetch(`${CLOUDFLARE_API_URL}/triggers/plugin_state_sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'apisecret': API_SECRET },
@@ -40,7 +43,8 @@ async function drainOnce() {
         throw new Error(`plugin state sync failed for ${body.failed} app(s)`)
       // A claim can be empty during the per-app KV write cooldown. Only an
       // empty pending queue proves that the writer has caught up with fixtures.
-      const { rows } = await pool.query<{ pending: boolean }>('SELECT EXISTS (SELECT 1 FROM public.plugin_state_sync_pending) AS pending')
+      const { rows } = await pool.query<{ pending: boolean }>(`SELECT EXISTS (SELECT 1 FROM public.plugin_state_sync_pending)
+        OR EXISTS (SELECT 1 FROM public.plugin_state_sync_state WHERE id AND backfill_done_at IS NULL) AS pending`)
       if (!rows[0].pending)
         return
       await new Promise(resolve => setTimeout(resolve, 250))
@@ -113,19 +117,9 @@ beforeAll(async () => {
   const pool = new Pool({ connectionString: POSTGRES_URL, max: 1 })
   try {
     await pool.query(`
-      SELECT vault.update_secret(id, 'true')
-      FROM vault.secrets WHERE name = 'CAPGO_PLUGIN_STATE_SYNC_ENABLED'`)
-    await pool.query(`
-      SELECT vault.create_secret('true', 'CAPGO_PLUGIN_STATE_SYNC_ENABLED', 'plugin KV state tests')
-      WHERE NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'CAPGO_PLUGIN_STATE_SYNC_ENABLED')`)
-    await pool.query(`
-      SELECT public.enqueue_plugin_state_full_sync(ARRAY(
-        SELECT a.app_id::text FROM public.apps a
-        WHERE NOT EXISTS (
-          SELECT 1 FROM public.plugin_state_sync_apps s
-          WHERE s.app_id = a.app_id AND s.full_synced_at IS NOT NULL
-        )
-      ))`)
+      INSERT INTO private.settings (name, value) VALUES ('CAPGO_PLUGIN_STATE_SYNC_ENABLED', 'true')
+      ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`)
+    await pool.query('SELECT public.enqueue_plugin_state_full_sync(NULL)')
   }
   finally {
     await pool.end()

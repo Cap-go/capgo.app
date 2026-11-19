@@ -9,7 +9,7 @@ const {
   emptySupabaseMock,
   getPgClientMock,
   signInMock,
-  supabaseAdminMock,
+  gotrueAdminMock,
 } = vi.hoisted(() => ({
   captureInvitationEventMock: vi.fn(),
   closeClientMock: vi.fn(),
@@ -19,7 +19,7 @@ const {
   emptySupabaseMock: vi.fn(),
   getPgClientMock: vi.fn(),
   signInMock: vi.fn(),
-  supabaseAdminMock: vi.fn(),
+  gotrueAdminMock: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -38,9 +38,12 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: getPgClientMock,
 }))
 
+vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
+  gotrueAdmin: gotrueAdminMock,
+}))
+
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   emptySupabase: emptySupabaseMock,
-  supabaseAdmin: supabaseAdminMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/user_preferences.ts', () => ({
@@ -95,12 +98,8 @@ function buildPgClient(options: {
 }
 
 const adminClient = {
-  auth: {
-    admin: {
-      createUser: createUserMock,
-      deleteUser: deleteUserMock,
-    },
-  },
+  createUser: createUserMock,
+  deleteUser: deleteUserMock,
 }
 
 function acceptRequest(extraBody: Record<string, unknown> = {}, country?: string) {
@@ -129,7 +128,7 @@ function signInAsExistingUser() {
 describe('accept invitation logging', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    supabaseAdminMock.mockReturnValue(adminClient)
+    gotrueAdminMock.mockReturnValue(adminClient)
     getPgClientMock.mockResolvedValue(buildPgClient())
     emptySupabaseMock.mockReturnValue({})
     createUserMock.mockResolvedValue({
@@ -159,7 +158,7 @@ describe('magic-link invitation acceptance telemetry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     captureInvitationEventMock.mockResolvedValue(true)
-    supabaseAdminMock.mockReturnValue(adminClient)
+    gotrueAdminMock.mockReturnValue(adminClient)
     emptySupabaseMock.mockReturnValue({ auth: { signInWithPassword: signInMock } })
     signInMock.mockResolvedValue({
       data: {

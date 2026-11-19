@@ -7,8 +7,7 @@
  * Optional:
  *   --input=./tmp/unused_versions/unused_versions.json
  */
-import { createClient } from '@supabase/supabase-js'
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import { connectScriptDb, getDatabaseUrl } from './script_db.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const DEFAULT_INPUT = './tmp/unused_versions/broken_versions_unreferenced.json'
@@ -70,26 +69,17 @@ async function main() {
   }
 
   const env = await loadEnv(ENV_FILE)
-  const supabase = createClient<Database>(
-    env.SUPABASE_URL,
-    env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-  )
+  const db = await connectScriptDb(getDatabaseUrl(env))
 
   const chunks = chunkArray(ids, CHUNK_SIZE)
   let updated = 0
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i]
-    const { error } = await supabase
-      .from('app_versions')
-      .update({ deleted: true })
-      .in('id', chunk)
-
-    if (error) {
+    await db.query('UPDATE public.app_versions SET deleted = true WHERE id = ANY($1::bigint[])', [chunk]).catch((error) => {
       console.error(`Error updating chunk ${i + 1}/${chunks.length}:`, error)
       process.exit(1)
-    }
+    })
 
     updated += chunk.length
     process.stdout.write(`\rUpdated ${updated}/${ids.length}`)
@@ -100,3 +90,4 @@ async function main() {
 }
 
 await main()
+process.exit(0)

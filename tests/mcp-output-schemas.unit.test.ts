@@ -21,6 +21,10 @@ import {
 import { MCP_EVENT_CATALOG } from '../supabase/functions/_backend/utils/mcp_events.ts'
 import { getBuildStatus } from '../supabase/functions/_backend/public/build/status.ts'
 
+vi.mock('../supabase/functions/_backend/mcp/mobile_app.ts', async original => ({
+  ...(await original<typeof import('../supabase/functions/_backend/mcp/mobile_app.ts')>()),
+  latestCapacitorRelease: async () => ({ latest: '8.6.2', next: '9.0.0-rc.0', source: 'npm' }),
+}))
 vi.mock('../supabase/functions/_backend/utils/docs_search.ts', () => ({
   DOCS_SEARCH_MAX_RESULTS: 20,
   searchCapgoDocs: async () => [docsPage],
@@ -46,7 +50,6 @@ vi.mock(
     ...(await original<
       typeof import('../supabase/functions/_backend/mcp/events_rpc.ts')
     >()),
-    loadApikeyRbacId: async () => 'example-rbac',
     handleCapgoListEventSubscriptions: async () => [subscription],
   }),
 )
@@ -279,7 +282,12 @@ const payloads = {
   },
   capgo_get_account_statistics: [day],
   capgo_get_bundle_usage: versionUsage,
-  capgo_get_native_usage: versionUsage,
+  capgo_get_native_usage: {
+    ...versionUsage,
+    activeDevices: { android: 1, ios: 2, electron: 0, unknown: 0, total: 3 },
+    previousPeriodActiveDevices: { android: 0, ios: 1, electron: 0, unknown: 0, total: 1 },
+    dailyPlatformActive: { labels: versionUsage.labels, android: [1], ios: [2], electron: [0], unknown: [0], total: [3] },
+  },
   capgo_observe: {
     app_id: appId,
     view: 'errors',
@@ -396,18 +404,52 @@ const payloads = {
   capgo_update_notification_settings: settings,
   capgo_list_notification_providers: {
     data: [
-      { id: 'example-provider', provider: 'fcm', status: 'active', config: {} },
+      { id: 'example-provider', app_id: appId, owner_org: orgId, platform: 'android', status: 'configured', config: {}, secret_ref: null, has_secret: true, created_at: stamp, updated_at: stamp },
     ],
   },
   capgo_send_notification: send,
   capgo_trigger_update_check: send,
   capgo_list_notification_campaigns: {
-    data: [{ id: 'example-campaign', app_id: appId, name: null }],
+    data: [{ id: 'example-campaign', app_id: appId, owner_org: orgId, name: null, kind: 'alert', status: 'queued', audience: { broadcast: true }, payload: { title: 'Example alert' }, counters: {}, created_at: stamp, updated_at: stamp, scheduled_at: null, queued_at: stamp, completed_at: null }],
   },
   capgo_get_notification_stats: { data: [{ event: 'delivered', count: 1 }] },
   capgo_list_skills: { skills: listSkills() },
   capgo_get_skill: { skill: getSkill(uri), contents: [readSkillResource(uri)] },
   capgo_search_docs: { results: [docsPage] },
+  capgo_start_simulator: {
+    id: '11111111-1111-4111-8111-111111111111',
+    url: 'https://ios-emulator.capgo.app/s/11111111-1111-4111-8111-111111111111/',
+    status: 'in-progress',
+    platform: 'ios',
+    kind: 'simulator',
+  },
+  capgo_get_simulator: {
+    id: '11111111-1111-4111-8111-111111111111',
+    url: 'https://ios-emulator.capgo.app/s/11111111-1111-4111-8111-111111111111/',
+    status: 'in-progress',
+    platform: 'ios',
+    kind: 'simulator',
+  },
+  capgo_stop_simulator: {
+    id: '11111111-1111-4111-8111-111111111111',
+    url: 'https://ios-emulator.capgo.app/s/11111111-1111-4111-8111-111111111111/',
+    status: 'stopped',
+    platform: 'ios',
+    kind: 'simulator',
+    build_time_seconds: 30,
+  },
+  capgo_simulator_command: {
+    data: {
+      id: '11111111-1111-4111-8111-111111111111',
+      command: 'devices',
+      result: { devices: [] },
+    },
+  },
+  // Guidance tools answer without the API; the payload is unused.
+  capgo_plan_mobile_app: null,
+  capgo_recommend_plugins: null,
+  capgo_get_mobile_checklist: null,
+  capgo_check_mobile_readiness: null,
 } satisfies Record<McpToolName, unknown>
 
 function context(payload: unknown): McpToolContext {
@@ -516,6 +558,11 @@ describe('every hosted MCP tool has a usable output contract', () => {
           name: 'build.succeeded',
           uri,
           subscriptionId: subscription.id,
+          session_id: '11111111-1111-4111-8111-111111111111',
+          platform: 'ios',
+          command: 'devices',
+          source: 'existing_web_app',
+          features: ['camera'],
         },
         context(payload),
       )
@@ -525,6 +572,26 @@ describe('every hosted MCP tool has a usable output contract', () => {
         tool.outputSchema.safeParse(result.structuredContent).success,
         name,
       ).toBe(true)
+    },
+  )
+
+  it.concurrent.each([null, { devices: [] }, [{ name: 'Example device' }], 'ok', 1, true])(
+    'preserves command-specific JSON from the device service: %j',
+    async (commandResult) => {
+      const tool = MCP_TOOLS_BY_NAME.get('capgo_simulator_command')!
+      const data = { id: 'example-session', command: 'devices', result: commandResult }
+      const result = await tool.run({ appId, session_id: data.id, command: data.command }, context({ data }))
+      expect(result.isError).not.toBe(true)
+      expect(result.structuredContent).toEqual({ data })
+    },
+  )
+
+  it.concurrent.each(['capgo_get_app_statistics', 'capgo_get_account_statistics'])(
+    '%s declares dated records rather than an organization breakdown',
+    (name) => {
+      const schema = MCP_TOOLS_BY_NAME.get(name)!.outputSchema
+      expect(schema.safeParse({ data: [day] }).success).toBe(true)
+      expect(schema.safeParse({ data: { global: [day], byApp: [] } }).success).toBe(false)
     },
   )
 

@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { MonthlyCreateStatsBatchRow, WeeklyInstallStatsBatchRow, WeeklyInstallStatsInput } from '../utils/cron_email_stats.ts'
 import type { DeployReportState } from '../utils/deploy_report.ts'
 import type { PgClient } from '../utils/pg.ts'
 import { Hono } from 'hono/tiny'
@@ -7,8 +8,13 @@ import {
   buildWeeklyEmailMetadata,
   computeWeeklyInstallStats,
   getPreviousMonthUtcRange,
+  getWeeklyReportRange,
+  MONTHLY_REPORT_BATCH_SQL,
   shouldSendDeployInstallStatsEmail,
+  sumVersionFailures,
   sumVersionInstalls,
+  WEEKLY_REPORT_BATCH_SQL,
+  WEEKLY_REPORT_SQL,
 } from '../utils/cron_email_stats.ts'
 import { DEPLOY_REPORT_CONSUME_SQL, DEPLOY_REPORT_RELEASE_SQL, DEPLOY_REPORT_SELECT_SQL } from '../utils/deploy_report.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
@@ -51,6 +57,7 @@ app.post('/', middlewareAPISecret, async (c) => {
   const {
     email,
     appId,
+    appIds,
     orgId,
     type,
     deployId,
@@ -62,9 +69,12 @@ app.post('/', middlewareAPISecret, async (c) => {
     totalFails,
     failPercentage,
     reportDate,
+    windowAnchor,
   } = await parseBody<{
     email: string
     appId?: string
+    appIds?: unknown
+    windowAnchor?: unknown
     orgId?: string
     type: string
     deployId?: number
@@ -105,6 +115,20 @@ app.post('/', middlewareAPISecret, async (c) => {
     })
   }
 
+  // Weekly/monthly producers queue one message per org with the apps that
+  // have something to report, so recipients are resolved once per org.
+  if (appIds !== undefined && (type === 'weekly_install_stats' || type === 'monthly_create_stats')) {
+    if (!isStringArray(appIds) || appIds.length === 0) {
+      throw simpleError('invalid_appIds', 'Invalid appIds', { email, type })
+    }
+    // Use the producer's clock so the report window matches the one that
+    // selected these apps, even when the message is consumed on a later day.
+    const anchor = parseWindowAnchor(windowAnchor)
+    return type === 'weekly_install_stats'
+      ? await handleWeeklyInstallStatsBatch(c, appIds, anchor)
+      : await handleMonthlyCreateStatsBatch(c, appIds, anchor)
+  }
+
   // All other types require appId
   if (!appId) {
     throw simpleError('missing_appId', 'Missing appId', { email, type })
@@ -142,13 +166,14 @@ async function handleWeeklyInstallStats(c: Context, appId: string) {
 }
 
 async function sendWeeklyInstallStats(c: Context, pg: PgClient, appId: string) {
-  let weeklyStats: { all_updates: number, failed_updates: number, open_app: number } | null = null
+  const range = getWeeklyReportRange()
+  let weeklyStats: WeeklyInstallStatsInput | null = null
   let generateStatsError: unknown = null
   try {
-    const rows = await queryJson<{ all_updates: number, failed_updates: number, open_app: number }>(
+    const rows = await queryJson<WeeklyInstallStatsInput>(
       pg,
-      'SELECT * FROM public.get_weekly_stats(app_id => $1)',
-      [appId],
+      WEEKLY_REPORT_SQL,
+      [appId, range.start, range.end],
     )
     if (rows.length === 1)
       weeklyStats = rows[0]
@@ -163,15 +188,13 @@ async function sendWeeklyInstallStats(c: Context, pg: PgClient, appId: string) {
     throw simpleError('cannot_generate_stats', 'Cannot generate stats', { error: generateStatsError })
   }
 
-  // get_weekly_stats.all_updates is SUM(install); failed_updates is SUM(fail).
-  // Those are independent counters, so rates use install / (install + fail).
   const stats = computeWeeklyInstallStats(weeklyStats)
 
-  if (stats.totalUpdates === 0) {
+  if (stats.successfulInstalls === 0 && stats.failedUpdates === 0) {
     return c.json({ status: 'No updates this week' }, 200)
   }
 
-  const metadata = buildWeeklyEmailMetadata(appId, stats)
+  const metadata = buildWeeklyEmailMetadata(appId, stats, range)
 
   await sendEmailToOrgMembers(c, 'user:weekly_stats', 'weekly_stats', metadata, await getOrgIdForApp(c, appId, pg))
 
@@ -237,6 +260,90 @@ async function sendMonthlyCreateStats(c: Context, pg: PgClient, appId: string) {
   return c.json(BRES)
 }
 
+export function parseWindowAnchor(value: unknown): Date {
+  if (value === undefined || value === null)
+    return new Date()
+  const anchor = typeof value === 'string' ? new Date(value) : null
+  if (!anchor || Number.isNaN(anchor.getTime()))
+    throw simpleError('invalid_windowAnchor', 'Invalid windowAnchor', { windowAnchor: value })
+  return anchor
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(item => typeof item === 'string' && item.length > 0)
+}
+
+interface OrgReport {
+  orgId: string
+  metadata: Record<string, unknown>
+}
+
+// Resolve every org's recipients before the first send, so a lookup failure
+// retries the message without having emailed part of its apps.
+async function sendOrgReports(c: Context, eventName: string, preferenceKey: 'weekly_stats' | 'monthly_stats', reports: OrgReport[]) {
+  const deliveries = new Map<string, Awaited<ReturnType<typeof prepareEmailToOrgMembers>>>()
+  for (const { orgId } of reports) {
+    if (!deliveries.has(orgId))
+      deliveries.set(orgId, await prepareEmailToOrgMembers(c, eventName, preferenceKey, orgId, undefined, { requireCompleteRecipients: true }))
+  }
+  for (const { orgId, metadata } of reports)
+    deliveries.get(orgId)?.send(metadata)
+}
+
+async function handleWeeklyInstallStatsBatch(c: Context, appIds: string[], anchor: Date) {
+  const range = getWeeklyReportRange(anchor)
+  const pg = await getPgClient(c)
+  let rows: WeeklyInstallStatsBatchRow[]
+  try {
+    rows = await queryJson<WeeklyInstallStatsBatchRow>(pg, WEEKLY_REPORT_BATCH_SQL, [appIds, range.start, range.end])
+  }
+  catch (error) {
+    throw simpleError('cannot_generate_stats', 'Cannot generate stats', { error })
+  }
+  finally {
+    closeClient(c, pg)
+  }
+
+  // Validate every app before sending anything: malformed analytics retry the whole message.
+  const reports = rows.map(row => ({ row, stats: computeWeeklyInstallStats(row) }))
+    .filter(({ stats }) => stats.successfulInstalls > 0 || stats.failedUpdates > 0)
+    .map(({ row, stats }) => ({ orgId: row.owner_org, metadata: buildWeeklyEmailMetadata(row.app_id, stats, range) }))
+
+  cloudlog({ requestId: c.get('requestId'), message: 'weekly_install_stats batch', apps: appIds.length, found: rows.length, reports: reports.length })
+  await sendOrgReports(c, 'user:weekly_stats', 'weekly_stats', reports)
+  return c.json(BRES)
+}
+
+async function handleMonthlyCreateStatsBatch(c: Context, appIds: string[], anchor: Date) {
+  const { startIso, endExclusiveIso, monthName } = getPreviousMonthUtcRange(anchor)
+  const pg = await getPgClient(c)
+  let rows: MonthlyCreateStatsBatchRow[]
+  try {
+    rows = await queryJson<MonthlyCreateStatsBatchRow>(pg, MONTHLY_REPORT_BATCH_SQL, [appIds, startIso, endExclusiveIso])
+  }
+  catch (error) {
+    throw simpleError('cannot_fetch_monthly_stats', 'Cannot fetch monthly stats', { error })
+  }
+  finally {
+    closeClient(c, pg)
+  }
+
+  const reports = rows.filter(row => row.bundle_count > 0 || row.publish_count > 0)
+    .map(row => ({
+      orgId: row.owner_org,
+      metadata: {
+        app_id: row.app_id,
+        month_name: monthName,
+        monthly_bundles_created: row.bundle_count.toString(),
+        monthly_publishes: row.publish_count.toString(),
+      },
+    }))
+
+  cloudlog({ requestId: c.get('requestId'), message: 'monthly_create_stats batch', apps: appIds.length, found: rows.length, reports: reports.length })
+  await sendOrgReports(c, 'org:monthly_create_stats', 'monthly_stats', reports)
+  return c.json(BRES)
+}
+
 async function handleDeployInstallStats(
   c: Context,
   payload: { appId: string, deployId?: number, reportClaimedAt?: string },
@@ -256,12 +363,14 @@ async function handleDeployInstallStats(
     const windowStart = new Date(deploy.deployed_at).toISOString()
     const windowEnd = new Date(Date.parse(windowStart) + 24 * 60 * 60 * 1000).toISOString()
     let installs: number
+    let failures: number
     try {
       // This is app-wide bundle activity, including legacy rows without channels.
       const rows = await readStatsVersion(c, appId, windowStart, windowEnd, undefined, { throwOnError: true })
       if (rows.some(row => row.app_id !== appId))
         throw new Error('Analytics returned rows for another app')
       installs = sumVersionInstalls(rows, deploy.version_name, deploy.version_id)
+      failures = sumVersionFailures(rows, deploy.version_name, deploy.version_id)
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'Deploy report analytics unavailable or invalid; deferring email', deployId, error })
@@ -270,7 +379,7 @@ async function handleDeployInstallStats(
       return c.json({ status: 'deferred', reason: 'invalid_or_unavailable_analytics' })
     }
 
-    if (!shouldSendDeployInstallStatsEmail(installs)) {
+    if (!shouldSendDeployInstallStatsEmail(installs, failures)) {
       await pg.query(DEPLOY_REPORT_RELEASE_SQL, claim)
       return c.json({ status: 'deferred', reason: 'not_enough_installs' })
     }
@@ -287,7 +396,7 @@ async function handleDeployInstallStats(
       return c.json({ status: 'skipped', reason: 'deployment_changed_or_claim_consumed' })
 
     delivery.send({
-      report_schema_version: '2',
+      report_schema_version: '3',
       app_id: current.app_id,
       app_name: current.app_name || current.app_id,
       deploy_id: current.id.toString(),
@@ -300,6 +409,7 @@ async function handleDeployInstallStats(
       window_start: windowStart,
       window_end: windowEnd,
       install_count_24h: installs.toString(),
+      failure_count_24h: failures.toString(),
       install_count_is_estimate: c.env.VERSION_USAGE ? 'true' : 'false',
       window_hours: '24',
     })
@@ -450,10 +560,14 @@ async function sendBillingPeriodStats(c: Context, pg: PgClient, orgId: string, c
   let metrics: { mau: number, bandwidth: number, storage: number, build_time_unit: number } | null = null
   let metricsError: unknown = null
   try {
+    // Storage is the GB-hour average over the cycle. Its helper takes the exclusive end date
+    // (cycle length and the boundary day's hours of this cycle), unlike the other metrics.
     const rows = await queryJson<{ mau: number, bandwidth: number, storage: number, build_time_unit: number }>(
       pg,
-      'SELECT * FROM public.get_total_metrics(org_id => $1, start_date => $2::date, end_date => $3::date)',
-      [orgId, periodStart, metricsEndInclusive],
+      `SELECT metrics.mau, metrics.bandwidth, metrics.build_time_unit,
+         public.get_org_storage_billable_bytes(p_org_id => $1, p_start_date => $2::date, p_end_date => $4::date) AS storage
+       FROM public.get_total_metrics(org_id => $1, start_date => $2::date, end_date => $3::date) AS metrics`,
+      [orgId, periodStart, metricsEndInclusive, periodEndExclusive],
     )
     if (rows.length === 1)
       metrics = rows[0]

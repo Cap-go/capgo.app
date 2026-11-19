@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertCurrentDeployTag,
+  resolveAttemptDeployTag,
   resolveDeployTag,
   resolveLatestDeployTag,
 } from '../scripts/resolve-deploy-tag.ts'
@@ -171,5 +172,28 @@ describe('latest deployment tag resolution', () => {
     expect(() => resolveLatestDeployTag(false, run)).toThrow(
       'did not resolve to a full commit SHA',
     )
+  })
+})
+
+describe('immutable target resolution per attempt', () => {
+  it.concurrent('retargets an old-created full rerun to newest stable without using event head_sha', () => {
+    const run = gitStub({
+      'tag --list capgo-[0-9]* --sort=-version:refname --sort=-creatordate': 'capgo-12.10.0\ncapgo-12.9.0',
+      'rev-list -n 1 capgo-12.10.0': stableSha,
+    })
+    expect(resolveAttemptDeployTag('capgo-12.9.0', 2, run)).toEqual({ tag: 'capgo-12.10.0', sha: stableSha, isAlpha: false })
+    expect(() => resolveAttemptDeployTag('capgo-12.9.0', 0, run)).toThrow('Invalid deployment attempt')
+  })
+
+  it.concurrent('keeps alpha retry selection separate and rejects stale initial attempts', () => {
+    const run = gitStub({
+      'tag --list capgo-[0-9]* --sort=-version:refname --sort=-creatordate': 'capgo-12.11.0\ncapgo-12.10.0-alpha.2',
+      'rev-list -n 1 capgo-12.10.0-alpha.2': alphaSha,
+      'rev-list -n 1 capgo-12.9.0': stableSha,
+      'rev-list -n 1 capgo-12.11.0': stableSha,
+    })
+    expect(resolveAttemptDeployTag('capgo-12.9.0-alpha.1', 3, run)).toEqual({ tag: 'capgo-12.10.0-alpha.2', sha: alphaSha, isAlpha: true })
+    expect(() => resolveAttemptDeployTag('capgo-12.9.0', 1, run)).toThrow('is stale')
+    expect(() => assertCurrentDeployTag('capgo-12.9.0', run)).toThrow('is stale')
   })
 })
