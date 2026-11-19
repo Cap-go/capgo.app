@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS public.daily_storage (
   storage bigint
 );
 
+-- Schema-clone DBs have pgmq extension but not every queue table from seed; skip HTTP/audit triggers for fixture rows.
+SET session_replication_role = replica;
+
 INSERT INTO auth.users (
   instance_id,
   id,
@@ -91,3 +94,5 @@ VALUES (
   'Demo'
 )
 ON CONFLICT (app_id) DO NOTHING;
+
+SET session_replication_role = DEFAULT;
