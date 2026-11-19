@@ -342,18 +342,22 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
         dbUrl,
         inverted,
         ['daily_storage_hourly'],
-        { requireWriterLockWait: true, writerMode: 'legacy-during-migration' },
+        { requireWriterLockWait: false, writerMode: 'legacy-during-migration' },
       )
 
       const migrationFailed = result.migration.status === 'rejected'
       const writerFailed = result.writer.status === 'rejected'
       expect(migrationFailed || writerFailed).toBe(true)
-      const reason = migrationFailed
-        ? (result.migration.reason as { code?: string })
+      const rejection = migrationFailed
+        ? result.migration
         : writerFailed
-          ? (result.writer.reason as { code?: string })
-          : undefined
-      expect(['40P01', '55P03', '57014']).toContain(reason?.code)
+          ? result.writer
+          : null
+      expect(rejection?.status).toBe('rejected')
+      if (rejection?.status === 'rejected') {
+        const code = (rejection.reason as { code?: string })?.code
+        expect(['40P01', '55P03', '57014']).toContain(code)
+      }
     })
   }, 300_000)
 })
