@@ -13,13 +13,19 @@ function createContext() {
 }
 
 describe('Stripe webhook replay dedupe (same event.id)', () => {
-  const orgId = randomUUID()
-  const customerId = `cus_subscribe_replay_${orgId.slice(0, 8)}`
-  const ownerId = randomUUID()
-  const eventOccurredAt = '2026-11-01T12:00:00.000Z'
-  const email = `stripe_subscribe_replay_${orgId.slice(0, 8)}@capgo.app`
+  let orgId: string
+  let customerId: string
+  let ownerId: string
+  let eventOccurredAt: string
+  let email: string
 
   beforeEach(async () => {
+    orgId = randomUUID()
+    customerId = `cus_subscribe_replay_${orgId.slice(0, 8)}`
+    ownerId = randomUUID()
+    eventOccurredAt = '2026-11-01T12:00:00.000Z'
+    email = `stripe_subscribe_replay_${orgId.slice(0, 8)}@capgo.app`
+
     await executeSQL(
       `INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at)
        VALUES ($1, $2, $3, now(), now(), now())
