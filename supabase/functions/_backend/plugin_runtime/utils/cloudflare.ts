@@ -1345,6 +1345,8 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const summaryQuery = `SELECT
     ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
+    min(if(double2 > 1, double2, 1.0)) AS sample_rate_min,
+    max(if(double2 > 1, double2, 1.0)) AS sample_rate_max,
     COUNT(DISTINCT blob2) AS action_count
   FROM app_log
   WHERE ${baseWhere}`
@@ -1412,6 +1414,8 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
       runQueryToCFA<StatsInsightRawDevice>(c, devicesQuery),
     ])
 
+    if (summaryRows[0])
+      scaleCohortDeviceCount(summaryRows[0])
     for (const row of actionRows)
       scaleCohortDeviceCount(row)
     for (const row of versionRows)

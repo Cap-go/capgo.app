@@ -137,6 +137,8 @@ describe('analytics engine write volume', () => {
     expect(deviceQuery).not.toContain('double2')
     expect(actionQuery).toContain('sum(_sample_interval * if(double2 > 0, double2, 1.0))')
     expect(actionQuery).toContain('sample_rate_min')
+    const summaryQuery = bodies.find(body => !body.includes('GROUP BY'))
+    expect(summaryQuery).toContain('sample_rate_min')
   })
 
   it('samples APP_LOG_EXTERNAL and stores the sample rate in double2', async () => {

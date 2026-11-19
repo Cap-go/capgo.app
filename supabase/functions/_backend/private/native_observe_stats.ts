@@ -381,35 +381,57 @@ function parseMetaDurationMs(metadata: Record<string, string> | null | undefined
   return parseStatsDurationMs(metadata)
 }
 
-function percentileCont(sorted: number[], q: number): number | null {
-  if (!sorted.length)
+interface WeightedDuration {
+  value: number
+  weight: number
+}
+
+function durationAt(sorted: WeightedDuration[], index: number) {
+  let cursor = 0
+  for (const sample of sorted) {
+    const end = cursor + sample.weight
+    if (index < end)
+      return sample.value
+    cursor = end
+  }
+  return sorted[sorted.length - 1]!.value
+}
+
+// Same interpolation as percentile_cont, with each stored row repeated by its sample weight.
+function percentileContWeighted(samples: WeightedDuration[], q: number): number | null {
+  if (!samples.length)
     return null
-  if (sorted.length === 1)
-    return sorted[0]!
-  const index = (sorted.length - 1) * q
+  const sorted = [...samples].sort((a, b) => a.value - b.value)
+  const total = sorted.reduce((sum, sample) => sum + sample.weight, 0)
+  if (total <= 0)
+    return null
+  if (total === 1)
+    return sorted[0]!.value
+  const index = (total - 1) * q
   const lower = Math.floor(index)
   const upper = Math.ceil(index)
+  const lowerValue = durationAt(sorted, lower)
   if (lower === upper)
-    return sorted[lower]!
-  const weight = index - lower
-  return sorted[lower]! * (1 - weight) + sorted[upper]! * weight
+    return lowerValue
+  const fraction = index - lower
+  return lowerValue * (1 - fraction) + durationAt(sorted, upper) * fraction
 }
 
 // Cap duration samples kept for percentiles so one busy app cannot pin unbounded arrays.
 const MAX_DURATION_SAMPLES = 10_000
 
-function pushDurationSample(target: number[], value: number) {
-  // Keep the first N samples only (deterministic; matches a stable Postgres-like refresh).
+function pushDurationSample(target: WeightedDuration[], value: number, weight = 1) {
+  // Keep the first N stored rows. The weight stays on the row so a sampled
+  // point still counts as several original loads next to unsampled history.
   if (target.length < MAX_DURATION_SAMPLES)
-    target.push(value)
+    target.push({ value, weight: weight >= 1 ? weight : 1 })
 }
 
-function metricFromDurations(durations: number[]): Pick<NativeObserveMetricRow, 'p50_ms' | 'p90_ms' | 'p99_ms'> {
-  const sorted = [...durations].sort((a, b) => a - b)
+function metricFromDurations(durations: WeightedDuration[]): Pick<NativeObserveMetricRow, 'p50_ms' | 'p90_ms' | 'p99_ms'> {
   return {
-    p50_ms: percentileCont(sorted, 0.5),
-    p90_ms: percentileCont(sorted, 0.9),
-    p99_ms: percentileCont(sorted, 0.99),
+    p50_ms: percentileContWeighted(durations, 0.5),
+    p90_ms: percentileContWeighted(durations, 0.9),
+    p99_ms: percentileContWeighted(durations, 0.99),
   }
 }
 
@@ -476,8 +498,8 @@ interface NativeObserveVersionBucket {
   issueDevices: Set<string>
   events: number
   issueCount: number
-  launchDurations: number[]
-  webviewDurations: number[]
+  launchDurations: WeightedDuration[]
+  webviewDurations: WeightedDuration[]
 }
 
 interface NativeObserveAggregateState {
@@ -489,8 +511,8 @@ interface NativeObserveAggregateState {
   issueDevices: Set<string>
   issueCount: number
   launchTimeoutCount: number
-  launchDurations: number[]
-  webviewDurations: number[]
+  launchDurations: WeightedDuration[]
+  webviewDurations: WeightedDuration[]
   /** Stored rows read. The 100k cap counts these, not the weighted event total. */
   rowsRead: number
   /** Event total after multiplying each stored point by its sample weight. */
@@ -528,17 +550,17 @@ function bumpMetricBucket(
   bucket.events += weight
   noteCohortDevice(bucket.devices, deviceId, weight)
   if (durationMs !== null)
-    pushDurationSample(bucket.durations, durationMs)
+    pushDurationSample(bucket.durations, durationMs, weight)
   map.set(key, bucket)
 }
 
-function pushTimedActionDuration(action: string, durationMs: number | null, launch: number[], webview: number[]) {
+function pushTimedActionDuration(action: string, durationMs: number | null, weight: number, launch: WeightedDuration[], webview: WeightedDuration[]) {
   if (durationMs === null)
     return
   if (action === launchReadyAction)
-    pushDurationSample(launch, durationMs)
+    pushDurationSample(launch, durationMs, weight)
   else if (action === webviewPageLoadedAction)
-    pushDurationSample(webview, durationMs)
+    pushDurationSample(webview, durationMs, weight)
 }
 
 function foldOverviewCounters(state: NativeObserveAggregateState, sample: NativeObserveEventSample) {
@@ -552,7 +574,7 @@ function foldOverviewCounters(state: NativeObserveAggregateState, sample: Native
   }
   if (sample.action === 'app_launch_timeout')
     state.launchTimeoutCount += weight
-  pushTimedActionDuration(sample.action, sample.duration_ms, state.launchDurations, state.webviewDurations)
+  pushTimedActionDuration(sample.action, sample.duration_ms, weight, state.launchDurations, state.webviewDurations)
 }
 
 function foldVersionBucket(state: NativeObserveAggregateState, sample: NativeObserveEventSample) {
@@ -586,7 +608,7 @@ function foldVersionBucket(state: NativeObserveAggregateState, sample: NativeObs
     version.issueCount += weight
     version.issueDevices.add(sample.device_id)
   }
-  pushTimedActionDuration(sample.action, sample.duration_ms, version.launchDurations, version.webviewDurations)
+  pushTimedActionDuration(sample.action, sample.duration_ms, weight, version.launchDurations, version.webviewDurations)
   state.versionMap.set(key, version)
 }
 
@@ -665,8 +687,8 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
     })
     .slice(0, versionLimit)
 
-  const launchSorted = [...state.launchDurations].sort((a, b) => a - b)
-  const webviewSorted = [...state.webviewDurations].sort((a, b) => a - b)
+  const launchMetrics = metricFromDurations(state.launchDurations)
+  const webviewMetrics = metricFromDurations(state.webviewDurations)
 
   return {
     dailyRows,
@@ -678,10 +700,10 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
       issue_count: state.issueCount,
       affected_devices: state.issueDevices.size,
       launch_timeout_count: state.launchTimeoutCount,
-      launch_p50_ms: percentileCont(launchSorted, 0.5),
-      launch_p90_ms: percentileCont(launchSorted, 0.9),
-      webview_load_p50_ms: percentileCont(webviewSorted, 0.5),
-      webview_load_p90_ms: percentileCont(webviewSorted, 0.9),
+      launch_p50_ms: launchMetrics.p50_ms,
+      launch_p90_ms: launchMetrics.p90_ms,
+      webview_load_p50_ms: webviewMetrics.p50_ms,
+      webview_load_p90_ms: webviewMetrics.p90_ms,
     },
   }
 }
@@ -1113,7 +1135,7 @@ export const nativeObserveStatsTestUtils = {
   normalizeNativeObserveVersionGroup,
   normalizeNativeObserveView,
   parseMetaDurationMs,
-  percentileCont,
+  percentileCont: (sorted: number[], q: number) => percentileContWeighted(sorted.map(value => ({ value, weight: 1 })), q),
   toNativeObserveEventSamples,
   versionGroupBucketKey,
 }

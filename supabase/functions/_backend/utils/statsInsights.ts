@@ -3,6 +3,8 @@ import type { StatsInsightsResult } from './types.ts'
 export interface StatsInsightRawSummary {
   total?: unknown
   device_count?: unknown
+  sample_rate_min?: unknown
+  sample_rate_max?: unknown
   action_count?: unknown
 }
 
