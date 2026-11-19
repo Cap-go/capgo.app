@@ -1,10 +1,10 @@
+import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { parseMigrationFiles } from '../scripts/local-db.ts'
 import {
   invertStorageMigrationLockOrder,
   readStorageGbHoursMigrationSql,
@@ -12,7 +12,6 @@ import {
 import { ORG_ID, POSTGRES_URL } from './test-utils.ts'
 
 const DEMO_APP = 'com.demo.app'
-const STORAGE_MIGRATION_VERSION = '20261118193000'
 
 const REPLACE_HOURLY_SQL = `SELECT public.replace_app_storage_hourly(
   $1::varchar,
@@ -69,12 +68,6 @@ GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(
 ) TO service_role;
 `
 
-function supabaseAdminUrl(baseUrl: string) {
-  const url = new URL(baseUrl)
-  url.username = 'supabase_admin'
-  return url.toString()
-}
-
 function databaseUrl(baseUrl: string, database: string) {
   const url = new URL(baseUrl)
   url.pathname = `/${database}`
@@ -105,38 +98,60 @@ async function runSqlFile(client: Client, sql: string, label: string) {
   }
 }
 
-async function provisionBeforeStorageMigration(targetUrl: string) {
-  const repoRoot = resolve(fileURLToPath(new URL('../', import.meta.url)))
-  const supabaseDir = resolve(repoRoot, 'supabase')
-  const bootstrapClient = new Client({ connectionString: supabaseAdminUrl(targetUrl) })
-  await bootstrapClient.connect()
-  try {
-    await runSqlFile(
-      bootstrapClient,
-      readFileSync(resolve(repoRoot, 'tests/fixtures/local-db-disposable-auth-stub.sql'), 'utf8'),
-      'local-db-disposable-auth-stub.sql',
-    )
-    await runSqlFile(
-      bootstrapClient,
-      readFileSync(resolve(supabaseDir, 'bootstrap.sql'), 'utf8'),
-      'bootstrap.sql',
-    )
-  }
-  finally {
-    await bootstrapClient.end()
-  }
+function filterSchemaDumpForDisposableDb(sql: string): string {
+  return sql
+    .split('\n')
+    .filter((line) => {
+      if (/^\s*CREATE\s+EXTENSION/i.test(line) && /pg_cron/i.test(line))
+        return false
+      if (/^\s*COMMENT ON EXTENSION pg_cron/i.test(line))
+        return false
+      return true
+    })
+    .join('\n')
+}
 
-  const client = new Client({ connectionString: targetUrl })
+async function cloneProvisionedSchema(sourceUrl: string, targetUrl: string) {
+  const dump = spawnSync('pg_dump', [
+    sourceUrl,
+    '--schema-only',
+    '--no-owner',
+    '--no-privileges',
+    '--exclude-schema=cron',
+  ], {
+    encoding: 'utf8',
+    maxBuffer: 512 * 1024 * 1024,
+  })
+  if (dump.status !== 0 || dump.error)
+    throw new Error(`pg_dump failed: ${dump.error?.message ?? dump.stderr ?? dump.stdout}`)
+  const client = new Client({ connectionString: targetUrl, connectionTimeoutMillis: 10_000 })
   await client.connect()
   try {
-    const migrations = parseMigrationFiles(readdirSync(resolve(supabaseDir, 'migrations')))
-      .filter(migration => migration.version < STORAGE_MIGRATION_VERSION)
-    for (const migration of migrations) {
-      const sql = readFileSync(resolve(supabaseDir, 'migrations', migration.file), 'utf8')
-      await runSqlFile(client, sql, migration.file)
-    }
+    await client.query('SET statement_timeout = 0')
+    await runSqlFile(client, filterSchemaDumpForDisposableDb(dump.stdout ?? ''), 'pg_dump schema clone')
+  }
+  finally {
+    await client.end()
+  }
+}
 
-    await runSqlFile(client, readFileSync(resolve(repoRoot, 'supabase/seed.sql'), 'utf8'), 'seed.sql')
+async function provisionBeforeStorageMigration(adminUrl: string, targetUrl: string) {
+  const repoRoot = resolve(fileURLToPath(new URL('../', import.meta.url)))
+  const client = new Client({ connectionString: targetUrl, connectionTimeoutMillis: 10_000 })
+  await client.connect()
+  try {
+    await client.query('SET statement_timeout = 0')
+    await runSqlFile(
+      client,
+      readFileSync(resolve(repoRoot, 'tests/fixtures/local-db-disposable-extensions-stub.sql'), 'utf8'),
+      'local-db-disposable-extensions-stub.sql',
+    )
+    await cloneProvisionedSchema(adminUrl, targetUrl)
+    await runSqlFile(
+      client,
+      readFileSync(resolve(repoRoot, 'tests/fixtures/storage-gb-hours-revert-migration.sql'), 'utf8'),
+      'storage-gb-hours-revert-migration.sql',
+    )
     await runSqlFile(client, LEGACY_CRON_WRITER_SQL, 'legacy replace_app_storage_hourly')
   }
   finally {
@@ -243,12 +258,12 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
     await admin.connect()
     try {
       await admin.query(`CREATE DATABASE ${templateDb}`)
-      await provisionBeforeStorageMigration(databaseUrl(adminUrl, templateDb))
+      await provisionBeforeStorageMigration(adminUrl, databaseUrl(adminUrl, templateDb))
     }
     finally {
       await admin.end()
     }
-  }, 600_000)
+  }, 900_000)
 
   afterAll(async () => {
     const admin = new Client({ connectionString: adminUrl })
