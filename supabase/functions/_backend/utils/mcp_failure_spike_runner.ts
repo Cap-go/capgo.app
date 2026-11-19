@@ -157,7 +157,7 @@ export async function evaluateMcpFailureSpikeSubscriptionFromMetrics(
   const cooldownDeadline = new Date(now.getTime() - thresholds.cooldown_minutes * 60 * 1000)
   const previousFiredAt = webhook.mcp_spike_last_fired_at
 
-  const claim = await pg.query<{ id: number }>(
+  const claim = await pg.query<{ id: string }>(
     `
     UPDATE public.webhooks
     SET mcp_spike_last_fired_at = $2::timestamptz

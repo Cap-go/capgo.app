@@ -20,9 +20,11 @@ const EVALUATION_BUDGET_MS = 12_000
 const EVALUATION_CONCURRENCY = 1
 const METRICS_KEY_SEP = '\u0001'
 
+const KEYSET_START_ID = '00000000-0000-0000-0000-000000000000'
+
 async function loadMcpFailureSpikeSubscriptions(pg: Awaited<ReturnType<typeof getPgClient>>) {
   const webhooks: McpFailureSpikeWebhookRow[] = []
-  let page = 0
+  let afterId = KEYSET_START_ID
 
   while (true) {
     const { rows } = await pg.query<McpFailureSpikeWebhookRow>(
@@ -45,15 +47,16 @@ async function loadMcpFailureSpikeSubscriptions(pg: Awaited<ReturnType<typeof ge
         AND mcp_event = 'update.failure_spike'
         AND mcp_verified_at IS NOT NULL
         AND (expires_at IS NULL OR expires_at > now())
+        AND id > $2::uuid
       ORDER BY id ASC
-      LIMIT $1 OFFSET $2
+      LIMIT $1
       `,
-      [SUBSCRIPTION_PAGE_SIZE, page * SUBSCRIPTION_PAGE_SIZE],
+      [SUBSCRIPTION_PAGE_SIZE, afterId],
     )
     webhooks.push(...rows)
     if (rows.length < SUBSCRIPTION_PAGE_SIZE)
       break
-    page += 1
+    afterId = rows[rows.length - 1]!.id
   }
 
   return webhooks

@@ -1,4 +1,7 @@
 -- Ordered after 20261118170054_plugin_state_eu_source on main.
+-- process_all_cron_tasks extends 20261111225650_cron_task_duration_diagnostics.
+SET LOCAL lock_timeout = '2s';
+
 ALTER TABLE public.webhooks
   ADD COLUMN IF NOT EXISTS mcp_spike_last_fired_at timestamp with time zone;
 
