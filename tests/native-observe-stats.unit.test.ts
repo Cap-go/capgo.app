@@ -309,7 +309,76 @@ describe('native observe stats helpers', () => {
         version_name: '1.0.0',
         device_id: 'd1',
         duration_ms: 450,
+        weight: 1,
       },
     ])
+  })
+
+  it.concurrent('counts a sampled observe point as its stored weight', () => {
+    const aggregates = nativeObserveStatsTestUtils.aggregateNativeObserveSamples([
+      {
+        day: '2026-07-01',
+        action: 'webview_page_loaded',
+        version_name: '1.0.0',
+        device_id: 'd1',
+        duration_ms: 800,
+        weight: 20,
+      },
+    ])
+    expect(aggregates.overviewRow.events).toBe(20)
+    expect(aggregates.overviewRow.devices).toBe(20)
+    expect(aggregates.overviewRow.webview_load_p50_ms).toBe(800)
+    expect(aggregates.actionRows[0]).toEqual(expect.objectContaining({
+      action: 'webview_page_loaded',
+      events: 20,
+      devices: 20,
+    }))
+  })
+
+  it.concurrent('does not scale a device that still has an unsampled row', () => {
+    const aggregates = nativeObserveStatsTestUtils.aggregateNativeObserveSamples([
+      {
+        day: '2026-07-01',
+        action: 'app_launch_ready',
+        version_name: '1.0.0',
+        device_id: 'full',
+        duration_ms: 400,
+        weight: 1,
+      },
+      {
+        day: '2026-07-01',
+        action: 'webview_page_loaded',
+        version_name: '1.0.0',
+        device_id: 'cohort',
+        duration_ms: 800,
+        weight: 5,
+      },
+    ])
+    expect(aggregates.overviewRow.devices).toBe(6)
+    expect(aggregates.actionRows.find(row => row.action === 'app_launch_ready')?.devices).toBe(1)
+    expect(aggregates.actionRows.find(row => row.action === 'webview_page_loaded')?.devices).toBe(5)
+  })
+
+  it.concurrent('weights a new page-load duration against older unsampled history', () => {
+    const aggregates = nativeObserveStatsTestUtils.aggregateNativeObserveSamples([
+      {
+        day: '2026-07-01',
+        action: 'webview_page_loaded',
+        version_name: '1.0.0',
+        device_id: 'old',
+        duration_ms: 100,
+        weight: 1,
+      },
+      {
+        day: '2026-07-02',
+        action: 'webview_page_loaded',
+        version_name: '1.0.0',
+        device_id: 'new',
+        duration_ms: 500,
+        weight: 5,
+      },
+    ])
+    expect(aggregates.overviewRow.webview_load_p50_ms).toBe(500)
+    expect(aggregates.actionRows.find(row => row.action === 'webview_page_loaded')?.p50_ms).toBe(500)
   })
 })

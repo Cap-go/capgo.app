@@ -12,6 +12,7 @@ const {
   logPgErrorMock,
   sendNotifOrgMock,
   sendNotifOrgOnceMock,
+  trackBentoEventMock,
 } = vi.hoisted(() => ({
   closeClientMock: vi.fn(),
   claimNotifOrgOnceMock: vi.fn(),
@@ -23,11 +24,12 @@ const {
   logPgErrorMock: vi.fn(),
   sendNotifOrgMock: vi.fn(),
   sendNotifOrgOnceMock: vi.fn(),
+  trackBentoEventMock: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   isBentoConfigured: isBentoConfiguredMock,
-  trackBentoEvent: vi.fn(),
+  trackBentoEvent: trackBentoEventMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -59,6 +61,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
 
 const {
   orgEmailNotificationTestUtils,
+  prepareEmailToOrgMembers,
   sendEmailToOrgMembers,
   sendNotifToOrgMembersOnce,
   sendNotifToOrgMembersOnceWithResult,
@@ -66,6 +69,8 @@ const {
 
 function createContext() {
   return {
+    env: {},
+    req: { header: () => undefined },
     get: (key: string) => key === 'requestId' ? 'request-id' : undefined,
   } as any
 }
@@ -239,6 +244,37 @@ describe('sendNotifToOrgMembersOnce', () => {
     await sendEmailToOrgMembers(createContext(), 'user:need_onboarding', 'onboarding', {}, 'test-org', createDrizzleStub({ failTables: ['orgs'] }))
     expect(getPgClientMock).not.toHaveBeenCalled()
     expect(closeClientMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['orgs', 'role_bindings', 'users'])('strict report preparation rejects a failed %s lookup before any send', async (table) => {
+    getDrizzleClientMock.mockReturnValue(createDrizzleStub({
+      adminUsers: [{ id: 'admin-1', email: 'admin@example.com' }],
+      failTables: [table],
+    }))
+    await expect(prepareEmailToOrgMembers(createContext(), 'bundle:install_stats_24h', 'deploy_stats_24h', 'test-org', undefined, { requireCompleteRecipients: true })).rejects.toThrow('Email recipient resolution failed')
+    expect(trackBentoEventMock).not.toHaveBeenCalled()
+    expect(closeClientMock).toHaveBeenCalledOnce()
+  })
+
+  it('propagates a connection failure before preparing a delivery', async () => {
+    getPgClientMock.mockRejectedValueOnce(new Error('connection unavailable'))
+    await expect(prepareEmailToOrgMembers(createContext(), 'bundle:install_stats_24h', 'deploy_stats_24h', 'test-org', undefined, { requireCompleteRecipients: true })).rejects.toThrow('connection unavailable')
+    expect(trackBentoEventMock).not.toHaveBeenCalled()
+  })
+
+  it('prepares 24h report recipients without sending and respects their preferences', async () => {
+    getDrizzleClientMock.mockReturnValue(createDrizzleStub({
+      managementEmail: '',
+      adminUsers: [
+        { id: 'admin-1', email: 'enabled@example.com', email_preferences: { deploy_stats_24h: true } },
+        { id: 'admin-2', email: 'disabled@example.com', email_preferences: { deploy_stats_24h: false } },
+      ],
+    }))
+    const delivery = await prepareEmailToOrgMembers(createContext(), 'bundle:install_stats_24h', 'deploy_stats_24h', 'test-org', undefined, { requireCompleteRecipients: true })
+    expect(trackBentoEventMock).not.toHaveBeenCalled()
+    expect(closeClientMock).toHaveBeenCalledOnce()
+    expect(delivery?.send({ install_count_24h: '10' })).toBe(1)
+    expect(trackBentoEventMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'enabled@example.com', { install_count_24h: '10' }, 'bundle:install_stats_24h')
   })
 
   it('treats an existing org-level claim as already delivered without sending recipients again', async () => {

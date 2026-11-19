@@ -23,6 +23,7 @@ import { createCiSecretEntries, detectCiSecretTargets, getCiSecretRepoLabelAsync
 import { defaultExportPath, exportCredentialsToEnv } from '../env-export.js'
 import { generateWorkflow } from '../workflow-generator.js'
 import { writeWorkflowFile } from '../workflow-writer.js'
+import { readScopedMcpCredentialFile } from './scoped-credential-path.js'
 import { fetchUserInfo, revokeToken, runOAuthFlow, startOAuthFlow } from '../android/oauth-google.js'
 import open from 'open'
 
@@ -113,6 +114,8 @@ function buildAndroidEffectDeps(
 
     // ── File system ───────────────────────────────────────────────────────────
     readFile: (path: string) => readFile(path) as Promise<Buffer>,
+    readMcpServiceAccountJson: (path: string) => readScopedMcpCredentialFile(path, 'service-account-json', cwd),
+    readMcpKeystore: (path: string) => readScopedMcpCredentialFile(path, 'keystore', cwd),
     copyFile,
 
     // ── OAuth ─────────────────────────────────────────────────────────────────
@@ -241,7 +244,7 @@ function buildIosEffectDeps(cwd: string, getAppIdFn: () => Promise<string | unde
     const carriedP8 = getSession(appId).iosCarried.p8Content
     let content = carriedP8 ? carriedP8.toString('utf-8') : undefined
     if (!content && prog.p8Path)
-      content = await readFile(prog.p8Path, 'utf-8')
+      content = (await readScopedMcpCredentialFile(prog.p8Path, 'p8', cwd)).toString('utf8')
     if (!content)
       throw new Error('The .p8 key file is unavailable — provide the p8Path again.')
     return generateJwt(prog.keyId, prog.issuerId, content)
@@ -324,6 +327,8 @@ function buildIosEffectDeps(cwd: string, getAppIdFn: () => Promise<string | unde
 
     // ── file system ──
     readFile: (path: string) => readFile(path) as Promise<Buffer>,
+    readMcpP8: (path: string) => readScopedMcpCredentialFile(path, 'p8', cwd),
+    readMcpMobileprovision: (path: string) => readScopedMcpCredentialFile(path, 'mobileprovision', cwd),
     copyFile,
     isMacOS: () => process.platform === 'darwin',
 

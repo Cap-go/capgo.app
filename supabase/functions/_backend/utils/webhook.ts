@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { PgClient } from './pg.ts'
 import type { Database } from './supabase.types.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getPgClient, withPgTransaction } from './pg.ts'
 import { queryJson } from './pg_rls.ts'
 import { getPublicHostnameValidationError, getPublicUrlSyntaxValidationError } from './publicUrl.ts'
 import { getEnv } from './utils.ts'
@@ -232,7 +232,11 @@ export async function findWebhooksForEvent(
   try {
     return await withAdminPg(c, pg => queryJson<WebhookRow>(
       pg,
-      'SELECT * FROM public.webhooks WHERE org_id = $1 AND enabled = true AND events @> ARRAY[$2]::text[]',
+      `SELECT * FROM public.webhooks
+       WHERE org_id = $1
+         AND enabled = true
+         AND COALESCE(source, 'console') = 'console'
+         AND events @> ARRAY[$2]::text[]`,
       [orgId, tableName],
     ))
   }
@@ -478,6 +482,7 @@ export async function deliverWebhook(
   payload: WebhookDeliveryPayload,
   secret: string,
   deliveryVersion: WebhookDeliveryVersion = 'legacy',
+  mcpSubscriptionId?: string,
 ): Promise<{ success: boolean, status?: number, body?: string, duration?: number, retryAfter?: string | null }> {
   const startTime = Date.now()
   const urlInfo = getWebhookLogUrlMetadata(url)
@@ -504,26 +509,33 @@ export async function deliverWebhook(
   const deliveryPayload = buildWebhookDeliveryPayload(payload, deliveryVersion)
   const payloadString = JSON.stringify(deliveryPayload)
   const timestamp = Math.floor(Date.now() / 1000).toString()
-  const eventId = getWebhookPayloadEventId(deliveryPayload)
-  const event = getWebhookPayloadEvent(deliveryPayload)
-
-  const legacySignature = await generateWebhookSignature(secret, timestamp, payloadString)
+  const mcpEnvelope = deliveryPayload as { eventId?: string, name?: string }
+  const isMcpDelivery = Boolean(mcpSubscriptionId && mcpEnvelope.eventId && mcpEnvelope.name)
+  const eventId = isMcpDelivery ? String(mcpEnvelope.eventId) : getWebhookPayloadEventId(deliveryPayload)
+  const event = isMcpDelivery ? String(mcpEnvelope.name) : getWebhookPayloadEvent(deliveryPayload)
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'User-Agent': 'Capgo-Webhook/1.0',
-    'X-Capgo-Event': event,
-    'X-Capgo-Event-ID': eventId,
-    'X-Capgo-Timestamp': timestamp,
-    'X-Capgo-Signature': legacySignature,
+    'User-Agent': isMcpDelivery ? 'Capgo-MCP-Events/1.0' : 'Capgo-Webhook/1.0',
   }
 
-  if (deliveryVersion === 'standard') {
+  if (!isMcpDelivery) {
+    const legacySignature = await generateWebhookSignature(secret, timestamp, payloadString)
+    headers['X-Capgo-Event'] = event
+    headers['X-Capgo-Event-ID'] = eventId
+    headers['X-Capgo-Timestamp'] = timestamp
+    headers['X-Capgo-Signature'] = legacySignature
+  }
+
+  if (deliveryVersion === 'standard' || isMcpDelivery) {
     const standardSignature = await generateStandardWebhookSignature(secret, eventId, timestamp, payloadString)
     headers['webhook-id'] = eventId
     headers['webhook-timestamp'] = timestamp
     headers['webhook-signature'] = standardSignature
   }
+
+  if (isMcpDelivery && mcpSubscriptionId)
+    headers['X-MCP-Subscription-Id'] = mcpSubscriptionId
 
   try {
     const controller = new AbortController()
@@ -778,7 +790,7 @@ export async function queueWebhookDelivery(
   webhookId: string,
   url: string,
   payload: WebhookDeliveryPayload,
-): Promise<void> {
+): Promise<boolean> {
   const message = {
     function_name: 'webhook_delivery',
     function_type: 'cloudflare',
@@ -802,12 +814,85 @@ export async function queueWebhookDelivery(
       deliveryId,
       webhookId,
     })
+    return true
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error queuing webhook delivery', error: serializeError(error) })
+    return false
   }
   finally {
     closeClient(c, db)
+  }
+}
+
+export interface WebhookDeliveryTarget {
+  webhookId: string
+  orgId: string
+  url: string
+}
+
+/**
+ * Creates one pending delivery per target with a single multi-row INSERT, then queues them all with
+ * one pgmq.send_batch, both on one pg client. Returns the queued delivery rows ({ id, webhook_id }).
+ * Both statements run in one transaction, so a queue failure rolls the rows back and is logged.
+ */
+export async function createAndQueueWebhookDeliveries(
+  c: Context,
+  targets: WebhookDeliveryTarget[],
+  eventType: string,
+  payload: WebhookDeliveryPayload,
+  deliveryVersion: WebhookDeliveryVersion = 'legacy',
+): Promise<{ id: string, webhook_id: string }[]> {
+  if (targets.length === 0)
+    return []
+  const requestPayload = buildWebhookDeliveryPayload(payload, deliveryVersion)
+  let pg: PgClient | undefined
+  try {
+    pg = await getPgClient(c)
+    const urlByWebhook = new Map(targets.map(target => [target.webhookId, target.url]))
+    // Insert and send_batch commit together: a failed send rolls the rows back instead of
+    // leaving every target in the batch pending with no queue message.
+    const deliveries = await withPgTransaction(pg, async (client) => {
+      const inserted = await queryJson<{ id: string, webhook_id: string }>(
+        client,
+        `INSERT INTO public.webhook_deliveries (webhook_id, org_id, audit_log_id, event_type, request_payload, delivery_version, status)
+         SELECT target.webhook_id, target.org_id, NULL, $3, $4::jsonb, $5, 'pending'
+         FROM unnest($1::uuid[], $2::uuid[]) AS target(webhook_id, org_id)
+         -- Skip subscriptions deleted since dispatch read them, so one deletion cannot fail
+         -- the foreign key for the whole batch.
+         JOIN public.webhooks AS webhook ON webhook.id = target.webhook_id
+         RETURNING id, webhook_id`,
+        [targets.map(target => target.webhookId), targets.map(target => target.orgId), eventType, JSON.stringify(requestPayload), deliveryVersion],
+      )
+      if (inserted.length === 0)
+        return inserted
+      const messages = inserted.map(delivery => ({
+        function_name: 'webhook_delivery',
+        function_type: 'cloudflare',
+        payload: {
+          delivery_id: delivery.id,
+          webhook_id: delivery.webhook_id,
+          url: urlByWebhook.get(delivery.webhook_id),
+          payload,
+        },
+      }))
+      await client.query(
+        'SELECT pgmq.send_batch($1::text, ARRAY(SELECT jsonb_array_elements($2::jsonb)))',
+        ['webhook_delivery', JSON.stringify(messages)],
+      )
+      return inserted
+    })
+    if (deliveries.length > 0)
+      cloudlog({ requestId: c.get('requestId'), message: 'Queued webhook deliveries', count: deliveries.length })
+    return deliveries
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error creating and queuing webhook deliveries', error: serializeError(error) })
+    return []
+  }
+  finally {
+    if (pg)
+      closeClient(c, pg)
   }
 }
 

@@ -1,3 +1,4 @@
+import type { UserResponse } from '../supabase/functions/_backend/utils/gotrue_admin.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { computeNewOrgTrialEnd, DEFAULT_TRIAL_DAYS, getDirectOfferStatus, isDirectOfferMetadata, isDirectOfferUser, resolveNewOrgTrialEnd } from '../supabase/functions/_backend/utils/direct_offer.ts'
 
@@ -28,7 +29,7 @@ describe('direct offer trial', () => {
 
   const context = { get: () => 'direct-offer-test' } as any
   function admin(result: { metadata?: Record<string, unknown>, userMetadata?: Record<string, unknown>, error?: Error }) {
-    return { auth: { admin: { getUserById: vi.fn(async () => ({ data: { user: result.error ? null : { app_metadata: result.metadata ?? {}, user_metadata: result.userMetadata ?? {} } }, error: result.error ?? null })) } } }
+    return { getUserById: vi.fn(async () => ({ data: { user: result.error ? null : { id: 'user-id', app_metadata: result.metadata ?? {}, user_metadata: result.userMetadata ?? {} } }, error: result.error ?? null }) as UserResponse) }
   }
 
   it.concurrent('resolveNewOrgTrialEnd rethrows a failed lookup instead of granting a trial', async () => {
@@ -41,7 +42,7 @@ describe('direct offer trial', () => {
     const before = Date.now()
     const noCreator = await resolveNewOrgTrialEnd(context, lookup, null)
     expect(noCreator.getTime() - before).toBeGreaterThan(14 * 24 * 60 * 60 * 1000)
-    expect(lookup.auth.admin.getUserById).not.toHaveBeenCalled()
+    expect(lookup.getUserById).not.toHaveBeenCalled()
     const direct = await resolveNewOrgTrialEnd(context, lookup, 'user-id')
     expect(direct.getTime()).toBeGreaterThanOrEqual(before)
     expect(direct.getTime()).toBeLessThanOrEqual(Date.now())

@@ -34,7 +34,7 @@ import { shouldShowCliLoginGuidance } from '~/services/cliLogin'
 import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { checkPermissions } from '~/services/permissions'
+import { checkPermissionsBatch } from '~/services/permissions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -600,29 +600,32 @@ async function fetchOrgAndAppNames() {
   const uncachedOrgIds = Array.from(uniqueOrgIds.value).filter(id => !orgCache.value.has(id))
   const uncachedAppIds = Array.from(uniqueAppIds.value).filter(id => !appCache.value.has(id))
 
-  // Fetch organization names in parallel
-  if (uncachedOrgIds.length > 0) {
-    const orgPromises = uncachedOrgIds.map(async (orgId) => {
-      try {
-        const { data, error } = await capgo
-          .from('orgs')
-          .select('id, name')
-          .eq('id', orgId)
-          .single()
+  // Organization names: the organization store already has every org the user
+  // belongs to; one query covers the rest instead of one query per org.
+  const knownOrgs = organizationStore.getAllOrgs()
+  const missingOrgIds: string[] = []
+  for (const orgId of uncachedOrgIds) {
+    const knownName = knownOrgs.get(orgId)?.name
+    if (knownName)
+      orgCache.value.set(orgId, knownName)
+    else
+      missingOrgIds.push(orgId)
+  }
+  if (missingOrgIds.length > 0) {
+    try {
+      const { data, error } = await capgo
+        .from('orgs')
+        .select('id, name')
+        .in('id', missingOrgIds)
 
-        if (error)
-          throw error
-        if (data)
-          orgCache.value.set(orgId, data.name)
-        return { id: orgId, name: data?.name }
-      }
-      catch (err) {
-        console.error(`Error fetching org name for ${orgId}:`, err)
-        return { id: orgId, name: 'Unknown' }
-      }
-    })
-
-    await Promise.all(orgPromises)
+      if (error)
+        throw error
+      for (const org of data ?? [])
+        orgCache.value.set(org.id, org.name)
+    }
+    catch (err) {
+      console.error('Error fetching org names:', err)
+    }
   }
 
   if (uncachedAppIds.length > 0) {
@@ -1050,20 +1053,22 @@ function canSelectOrgForKey(orgId: string) {
 // Must run once apps and org-level rights are loaded.
 async function loadAppKeyManageableApps() {
   const candidates = availableApps.value.filter(app => !manageableOrgIds.value.has(app.owner_org))
-  const allowed = await Promise.all(candidates.map(async app =>
-    await checkPermissions('app.manage_apikeys', { orgId: app.owner_org, appId: app.app_id }) ? app : null,
-  ))
-  const apps = allowed.filter((app): app is typeof candidates[number] => app !== null)
+  const allowed = await checkPermissionsBatch(candidates.map(app => ({
+    permissions: 'app.manage_apikeys' as const,
+    scope: { orgId: app.owner_org, appId: app.app_id },
+  })))
+  const apps = candidates.filter((_app, idx) => allowed[idx])
   appKeyManageableAppIds.value = new Set(apps.map(app => app.id))
   appKeyManageableOrgIds.value = new Set(apps.map(app => app.owner_org))
 }
 
 async function loadManageableOrganizations() {
-  const checks = await Promise.all(organizationStore.organizations.map(async (org) => {
-    const canManage = await checkPermissions('org.update_user_roles', { orgId: org.gid })
-    return canManage ? org.gid : null
-  }))
-  manageableOrgIds.value = new Set(checks.filter((orgId): orgId is string => !!orgId))
+  const organizations = organizationStore.organizations
+  const canManage = await checkPermissionsBatch(organizations.map(org => ({
+    permissions: 'org.update_user_roles' as const,
+    scope: { orgId: org.gid },
+  })))
+  manageableOrgIds.value = new Set(organizations.filter((_org, idx) => canManage[idx]).map(org => org.gid))
 }
 
 function validateApiKeyScope() {

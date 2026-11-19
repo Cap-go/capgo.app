@@ -42,12 +42,17 @@ describe('v3 checklist SQL security and bounded lookups', () => {
       restoreQuery()
       expect((await client.query('SELECT name, onboarding FROM public.apps WHERE app_id = $1', [appId])).rows[0]).toEqual(before)
 
-      const result = await persistAppOnboarding(context, appId, patch, apikey, client, false, { name: 'After' })
+      // Settings beside an onboarding patch go through Drizzle, which drops columns missing from its schema.
+      const settings = { name: 'After', allow_preview: true, default_upload_channel: 'beta', bundle_incompatible_alert: 'all' as const }
+      const result = await persistAppOnboarding(context, appId, patch, apikey, client, false, settings)
       expect(result?.app.name).toBe('After')
       // New apps use the OTA v4 checklist, which nests steps under steps.ota.
       expect((result?.app.onboarding as any).setup.steps.ota.add_code.status).toBe('done')
-      const committed = (await client.query('SELECT name, onboarding FROM public.apps WHERE app_id = $1', [appId])).rows[0]
+      const committed = (await client.query('SELECT name, onboarding, allow_preview, default_upload_channel, bundle_incompatible_alert FROM public.apps WHERE app_id = $1', [appId])).rows[0]
       expect(committed.name).toBe('After')
+      expect(committed.allow_preview).toBe(true)
+      expect(committed.default_upload_channel).toBe('beta')
+      expect(committed.bundle_incompatible_alert).toBe('all')
       expect(committed.onboarding.setup.steps.ota.add_code.status).toBe('done')
       expect((await client.query('SELECT current_user AS role')).rows[0].role).toBe(originalRole)
     }

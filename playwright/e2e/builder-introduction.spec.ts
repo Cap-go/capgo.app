@@ -63,7 +63,7 @@ test('offers a secondary first-build action to the left of Next and opens the ch
   const start = page.getByRole('button', { name: 'Get started with my first build', exact: true })
   const next = page.getByRole('button', { name: 'Next →', exact: true })
   await expect(start).toBeVisible()
-  await expect(page.getByRole('heading', { name: "There's more in your plan than you're using.", exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Two native platforms. One build workflow.', exact: true })).toBeVisible()
   await expect(page).toHaveURL(url => url.searchParams.get('page') === '1' && url.searchParams.get('sort_created_at') === 'desc')
   const inlineUrl = canonicalUrl(page.url())
   const startBox = await start.boundingBox()

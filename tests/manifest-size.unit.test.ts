@@ -1,5 +1,7 @@
+import { Hono } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildCompleteManifestVersionSizes, buildManifestVersionSizesQuery, buildManifestSizeLookupQuery as buildPluginManifestSizeLookupQuery, getManifestDownloadSize as getPluginManifestDownloadSize } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
+import { buildCompleteManifestVersionSizes, buildManifestVersionSizesQuery, buildManifestSizeLookupQuery as buildPluginManifestSizeLookupQuery, getManifestDownloadSize as getPluginManifestDownloadSize, MAX_MANIFEST_SIZE_FILES, MAX_MANIFEST_SIZE_VERSIONS } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
+import { MAX_MANIFEST_ENTRIES } from '../supabase/functions/_backend/utils/manifest_limits.ts'
 import { buildManifestDownloadSizeResult, buildManifestSizeLookupQuery, normalizeManifestSizeFiles, parseManifestSizeVersionId } from '../supabase/functions/_backend/utils/manifest_size.ts'
 
 describe('manifest download size helpers', () => {
@@ -124,15 +126,22 @@ describe('manifest download size helpers', () => {
   })
 
   it.concurrent('returns unknown sizes without querying postgres when no version scope exists', async () => {
-    const result = await getPluginManifestDownloadSize({
-      get(key: string) {
+    const app = new Hono()
+    const contextReads = vi.fn()
+    app.get('/', async (c) => {
+      vi.spyOn(c, 'get').mockImplementation((key) => {
+        contextReads(key)
         throw new Error(`postgres context was read: ${key}`)
-      },
-    } as never, 'com.example.app', undefined, undefined, [
-      { file_name: 'main.js', file_hash: 'hash-b' },
-    ])
+      })
+      return c.json(await getPluginManifestDownloadSize(c, 'com.example.app', undefined, undefined, [
+        { file_name: 'main.js', file_hash: 'hash-b' },
+      ]))
+    })
+    const response = await app.request('/')
 
-    expect(result).toEqual({
+    expect(response.status).toBe(200)
+    expect(contextReads).not.toHaveBeenCalled()
+    expect(await response.json()).toEqual({
       totalSize: 0,
       knownFiles: 0,
       unknownFiles: 1,
@@ -277,5 +286,74 @@ describe('manifest download size cache', () => {
     expect(result.totalSize).toBe(125)
     expect(result.knownFiles).toBe(2)
     expect(result.unknownFiles).toBe(1)
+  })
+})
+
+describe('plugin manifest size request bounds', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const untouchedContext = {
+    req: { url: 'https://plugin.capgo.test/updates/manifest_size' },
+    get(key: string) {
+      throw new Error(`postgres context was read: ${key}`)
+    },
+  } as never
+
+  it('caps a file list at the bundle upload limit', () => {
+    expect(MAX_MANIFEST_SIZE_FILES).toBe(MAX_MANIFEST_ENTRIES)
+  })
+
+  it('refuses a file list over the cap before any lookup', async () => {
+    vi.stubGlobal('caches', {
+      open: async () => {
+        throw new Error('cache was opened')
+      },
+    })
+    const files = Array.from({ length: MAX_MANIFEST_SIZE_FILES + 1 }, (_, index) => ({
+      file_name: `file-${index}.js`,
+      file_hash: `hash-${index}`,
+      download_url: 'https://plugin.capgo.test/files/read/attachments/a?key=42',
+    }))
+
+    await expect(getPluginManifestDownloadSize(untouchedContext, 'com.example.app', undefined, undefined, files))
+      .rejects
+      .toMatchObject({ status: 400, cause: { error: 'too_many_files', moreInfo: { max: MAX_MANIFEST_SIZE_FILES, count: MAX_MANIFEST_SIZE_FILES + 1 } } })
+  })
+
+  it('refuses files spanning more bundles than the cap before reading any manifest', async () => {
+    vi.stubGlobal('caches', {
+      open: async () => {
+        throw new Error('cache was opened')
+      },
+    })
+    const files = Array.from({ length: MAX_MANIFEST_SIZE_VERSIONS + 1 }, (_, index) => ({
+      file_name: `file-${index}.js`,
+      file_hash: `hash-${index}`,
+      download_url: `https://plugin.capgo.test/files/read/attachments/a?key=${index + 1}`,
+    }))
+
+    await expect(getPluginManifestDownloadSize(untouchedContext, 'com.example.app', undefined, undefined, files))
+      .rejects
+      .toMatchObject({ status: 400, cause: { error: 'too_many_versions', moreInfo: { max: MAX_MANIFEST_SIZE_VERSIONS, count: MAX_MANIFEST_SIZE_VERSIONS + 1 } } })
+  })
+
+  it('still serves a single-bundle manifest at the file cap', async () => {
+    vi.stubGlobal('caches', {
+      open: async () => ({
+        match: async () => new Response(JSON.stringify({ 'hash-0': 10 })),
+      }),
+    })
+    const files = Array.from({ length: MAX_MANIFEST_SIZE_FILES }, (_, index) => ({
+      file_name: `file-${index}.js`,
+      file_hash: `hash-${index}`,
+      download_url: 'https://plugin.capgo.test/files/read/attachments/a?key=42',
+    }))
+
+    const result = await getPluginManifestDownloadSize(untouchedContext, 'com.example.app', undefined, undefined, files)
+
+    expect(result.knownFiles).toBe(1)
+    expect(result.unknownFiles).toBe(MAX_MANIFEST_SIZE_FILES - 1)
   })
 })

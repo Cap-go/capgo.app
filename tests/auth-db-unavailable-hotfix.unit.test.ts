@@ -84,6 +84,7 @@ describe('auth database unavailable hotfix', () => {
   it.each([
     ['find_apikey_by_value', 'SELECT * FROM find_apikey_by_value($1)', 'super-secret-api-key'],
     ['rbac_check_permission_direct', 'SELECT public.rbac_check_permission_direct($1, $2::uuid, $3::uuid, $4, $5::bigint, $6) AS allowed', 'capgo_secret_key'],
+    ['rbac_check_permissions', 'SELECT idx, allowed FROM public.rbac_check_permissions($1::jsonb)', '[{"permission_key":"org.read","apikey":"capgo_batch_secret_key"}]'],
   ])('redacts %s api key bind parameters in drizzle query logs', (_label, query, secret) => {
     new CapgoDrizzleQueryLogger().logQuery(query, [secret])
     expect(cloudlogMock).toHaveBeenCalledWith({ message: `Query: ${query} -- params: [redacted]` })

@@ -21,10 +21,16 @@ function uniqueKeyName(prefix: string) {
 
 async function openCreateKeyDialog(page: Page) {
   await page.click('[data-test="create-key"]')
-  const dialog = page.locator('#dialog-v2-content')
+  const dialog = page.getByRole('dialog')
   await expect(dialog.locator('input[name="key-type"]')).toHaveCount(0)
   await expect(dialog.locator('[data-test="create-key-org-role-org_member"]')).toBeChecked()
   return dialog
+}
+
+async function closeCreateKeyDropdown(dialog: Locator, trigger: Locator) {
+  // Its overlay covers pointer targets; keyboard activation keeps the dialog open.
+  await trigger.press('Space')
+  await expect(dialog.locator('.fixed.inset-0.z-10')).toHaveCount(0)
 }
 
 async function expectApiKeyRow(page: Page, keyName: string) {
@@ -39,7 +45,7 @@ async function expectApiKeyRow(page: Page, keyName: string) {
   return keyRow
 }
 
-async function selectOnlyOrgForCreation(page: Page, dialog: Locator, orgId: string) {
+async function selectOnlyOrgForCreation(dialog: Locator, orgId: string) {
   await dialog.locator('[data-test="create-key-org-dropdown"]').click()
   const orgCheckboxes = dialog.locator('[data-test="create-key-org-checkbox"]')
   await expect(orgCheckboxes.first()).toBeVisible()
@@ -62,8 +68,7 @@ async function selectOnlyOrgForCreation(page: Page, dialog: Locator, orgId: stri
 
   const selectedOrg = dialog.locator(`[data-test="create-key-org-checkbox"][data-org-id="${orgId}"]`)
   await expect(selectedOrg).toBeChecked()
-  await page.mouse.click(5, 5)
-  await expect(dialog.locator('.fixed.inset-0.z-10')).toHaveCount(0)
+  await closeCreateKeyDropdown(dialog, dialog.locator('[data-test="create-key-org-dropdown"]'))
 }
 
 async function fillApiKeyName(page: Page, dialog: Locator, keyName: string) {
@@ -77,7 +82,7 @@ async function fillApiKeyName(page: Page, dialog: Locator, keyName: string) {
 
 async function createRbacApiKey(page: Page, keyName: string) {
   const dialog = await openCreateKeyDialog(page)
-  await selectOnlyOrgForCreation(page, dialog, INHERITED_ORG_ID)
+  await selectOnlyOrgForCreation(dialog, INHERITED_ORG_ID)
   await fillApiKeyName(page, dialog, keyName)
   await page.getByRole('button', { name: 'Create' }).click()
   await expect(page.getByText('Added new API key successfully').first()).toBeVisible()
@@ -87,7 +92,7 @@ async function createRbacApiKey(page: Page, keyName: string) {
 
 async function createSeededAppApiKey(page: Page, keyName: string) {
   const dialog = await openCreateKeyDialog(page)
-  await selectOnlyOrgForCreation(page, dialog, INHERITED_ORG_ID)
+  await selectOnlyOrgForCreation(dialog, INHERITED_ORG_ID)
   await fillApiKeyName(page, dialog, keyName)
 
   await dialog.locator('[data-test="create-key-add-app"]').click()
@@ -98,8 +103,7 @@ async function createSeededAppApiKey(page: Page, keyName: string) {
   const selectedApp = dialog.locator('[data-test="create-key-selected-app"]', { hasText: 'Seeded App' }).first()
   await expect(selectedApp).toBeVisible()
   await selectedApp.locator('[data-test="create-key-app-role-select"]').selectOption('app_developer')
-  await page.mouse.click(5, 5)
-  await expect(dialog.locator('.fixed.inset-0.z-10')).toHaveCount(0)
+  await closeCreateKeyDropdown(dialog, dialog.locator('[data-test="create-key-add-app"]'))
 
   await page.getByRole('button', { name: 'Create' }).click()
   await expect(page.getByText('Added new API key successfully').first()).toBeVisible()
@@ -108,7 +112,7 @@ async function createSeededAppApiKey(page: Page, keyName: string) {
 
 async function createInheritedOrgAdminApiKey(page: Page, keyName: string) {
   const dialog = await openCreateKeyDialog(page)
-  await selectOnlyOrgForCreation(page, dialog, INHERITED_ORG_ID)
+  await selectOnlyOrgForCreation(dialog, INHERITED_ORG_ID)
   await fillApiKeyName(page, dialog, keyName)
 
   const orgAdminRole = dialog.locator('[data-test="create-key-org-role-org_admin"]')
@@ -236,8 +240,10 @@ test.describe('API Key Management', () => {
       await expect(orgCheckboxes.nth(index)).toBeChecked()
     }
 
-    await page.mouse.click(5, 5)
-    await page.getByRole('button', { name: 'Cancel' }).click()
+    await closeCreateKeyDropdown(dialog, orgDropdown)
+    await expect(orgDropdown).toHaveAttribute('aria-expanded', 'false')
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(dialog).not.toBeVisible()
   })
 
   test('should configure app-level role bindings in the create dialog', async ({ page }) => {
@@ -254,14 +260,15 @@ test.describe('API Key Management', () => {
     await roleSelect.selectOption('app_reader')
     await expect(roleSelect).toHaveValue('app_reader')
 
-    await page.mouse.click(5, 5)
-    await page.getByRole('button', { name: 'Cancel' }).click()
+    await closeCreateKeyDropdown(dialog, dialog.locator('[data-test="create-key-add-app"]'))
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(dialog).not.toBeVisible()
   })
 
   test('should create and preserve an app-only preview key', async ({ page }) => {
     const keyName = uniqueKeyName('App Preview')
     const dialog = await openCreateKeyDialog(page)
-    await selectOnlyOrgForCreation(page, dialog, INHERITED_ORG_ID)
+    await selectOnlyOrgForCreation(dialog, INHERITED_ORG_ID)
 
     const appOnlyScope = dialog.locator('[data-test="create-key-app-only-scope"]')
     await appOnlyScope.check()
@@ -278,7 +285,7 @@ test.describe('API Key Management', () => {
     await expect(selectedApp).toBeVisible()
     const roleSelect = selectedApp.locator('[data-test="create-key-app-role-select"]')
     await roleSelect.selectOption('app_preview')
-    await page.mouse.click(5, 5)
+    await closeCreateKeyDropdown(dialog, dialog.locator('[data-test="create-key-add-app"]'))
 
     await page.getByRole('button', { name: 'Create' }).click()
     await expect(page.getByText('Added new API key successfully').first()).toBeVisible()
@@ -353,7 +360,7 @@ test.describe('API Key Management', () => {
   test('should create org-admin API key with organization creation permission', async ({ page }) => {
     const keyName = uniqueKeyName('Org Create')
     const dialog = await openCreateKeyDialog(page)
-    await selectOnlyOrgForCreation(page, dialog, INHERITED_ORG_ID)
+    await selectOnlyOrgForCreation(dialog, INHERITED_ORG_ID)
     await fillApiKeyName(page, dialog, keyName)
 
     const orgCreatePermission = dialog.locator('[data-test="create-key-org-create-permission"]')

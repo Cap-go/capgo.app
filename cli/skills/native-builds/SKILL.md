@@ -7,6 +7,12 @@ description: Use when working with Capgo Cloud native iOS and Android build requ
 
 Use this skill for Capgo Cloud native iOS and Android build workflows.
 
+Capgo Build is generally available for production releases on both platforms. It works from Windows, Linux, macOS, and CI without a local Mac or Xcode. One CLI supports guided signing, live logs, downloadable artifacts, and optional App Store Connect and Google Play submission.
+
+For AI-assisted signing setup, [configure your agent's MCP client](https://capgo.app/docs/cli/reference/mcp/) to launch `npx @capgo/cli@latest mcp`. Once connected, use the local MCP `start_capgo_builder_onboarding` tool and follow its `next` instructions. If that tool is unavailable, run `npx @capgo/cli@latest build init` in a terminal in your Capacitor project. For a configured project, use `capgo_request_build`, then inspect status and logs. The hosted MCP supports archive upload and build start as separate steps; follow its tool instructions. Never paste signing secrets into chat.
+
+Use [current pricing](https://capgo.app/pricing/) for included minutes and prepaid credits, and [public build data](https://capgo.app/builder-data/) for measured performance. Do not invent speed or success-rate claims. Store accounts, signing permissions, and store review requirements still apply.
+
 ## Build prescan overrides
 
 Before `build request` uploads, Capgo runs a local/remote **prescan**. Prefer per-check overrides over disabling the whole scan:
@@ -335,7 +341,7 @@ npx @capgo/cli@latest build credentials export ANDROID_KEYSTORE_FILE \
 
 ## Cloud simulator
 
-A running simulator uses one native builder slot, the same limit as a native build. Stopping it records the open time as build minutes. Each session has its own URL.
+A running simulator uses one native builder slot, the same limit as a native build, and counts as build time while it runs (iOS time counts double). It stops by itself after 5 minutes without input (taps, typing, installs, or `simulator command` calls) and after 40 minutes at most; the build time recorded ends when the device stopped. Stop it as soon as you are done. Each session has its own URL.
 
 ### `simulator start [appId]`
 
@@ -349,7 +355,23 @@ npx @capgo/cli@latest simulator start com.example.app --platform android --name 
 - `--json`: print the session JSON instead of the session id and URL.
 - `-a, --apikey <apikey>` and `--api-host <apiHost>`: same authentication override as the other commands.
 
-The command prints the session id, then the session URL. `simulator get` and `simulator stop` need that id. An iOS session boots a slim device. An Android session uses a small profile: 1536 MB RAM, 2 cores, no audio, no snapshot, and no boot animation.
+The command prints the session id, then the session URL. `--json` also prints `remoteConfig` in the Expo device-run shape: `agentDeviceRemoteSessionUrl`, `agentDeviceRemoteSessionToken`, `webPreviewUrl`, `webPreviewToken`, and `previewApiUrl`. `simulator get`, `simulator command`, and `simulator stop` need the session id. An iOS session boots a slim device. An Android session uses a small profile: 1536 MB RAM, 2 cores, no audio, no snapshot, and no boot animation.
+
+- `--build-job <buildJobId>`: install that saved iOS build into the new simulator.
+
+Both the hosted Capgo MCP and `capgo mcp` expose `capgo_start_simulator`, `capgo_get_simulator`, `capgo_simulator_command`, and `capgo_stop_simulator`. `capgo_simulator_command` speaks the same agent-device commands as an Expo simulator session: `devices`, `screenshot`, `snapshot`, `home`, `lock`, `tap`, and `open`.
+
+### `simulator command <deviceCommand> [sessionId] [appId]`
+
+```bash
+npx @capgo/cli@latest simulator command screenshot <session-id> com.example.app
+npx @capgo/cli@latest simulator command tap <session-id> com.example.app --x 0.5 --y 0.4
+npx @capgo/cli@latest simulator command open <session-id> com.example.app --bundle-id app.capgo.capdemo
+```
+
+- `<deviceCommand>`: `devices`, `screenshot`, `snapshot`, `home`, `lock`, `tap`, or `open`.
+- `--x <x>` and `--y <y>`: tap position. `0` to `1` is a fraction of the screen. A number above `1` is a point.
+- `--bundle-id <bundleId>`: bundle id for `open`.
 
 ### `simulator get [sessionId] [appId]`
 
@@ -363,7 +385,7 @@ npx @capgo/cli@latest simulator get <session-id> com.example.app
 npx @capgo/cli@latest simulator stop <session-id> com.example.app
 ```
 
-Stop ends the device and records build minutes. If the device host is still running, or the minute write fails, the session stays open so the same command can be retried. A session also ends by itself after its duration, which releases the builder slot and records the capped time.
+Stop ends the device and records build minutes. If the device host is still running, or the minute write fails, the session stays open so the same command can be retried. A session also ends by itself after 5 minutes without input or after 40 minutes, which releases the builder slot and records the time up to that stop. Commands sent to it after that fail with a message to start a new simulator.
 
 ## Supporting docs
 

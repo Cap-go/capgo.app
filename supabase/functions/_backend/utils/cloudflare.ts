@@ -1,12 +1,14 @@
 import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue, SendEmail } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { DeviceInfoWriteCachePayload } from './deviceComparison.ts'
+import type { LegacyDownloadFailLogRow } from './legacyDownloadFail.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
 import type { Database } from './supabase.types.ts'
 import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { canSkipDeviceInfoWrite, DEVICE_INFO_REFRESH_TTL_SECONDS, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
+import { devicesOffsetClause } from './devicesPageOffset.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { DEFAULT_LIMIT } from './types.ts'
 import { legacyDownloadFailKey, legacyDownloadFailPluginSqlCF, subtractLegacyDownloadFails, summarizeLegacyCheckFailures, sumLegacyDownloadFails } from './legacyDownloadFail.ts'
@@ -54,6 +56,7 @@ type AiBinding = {
 
 // eslint-disable-next-line ts/consistent-type-definitions
 export type Bindings = {
+  SERVING_REGION_SIGNING_KEY?: string
   DEVICE_USAGE: AnalyticsEngineDataset
   BANDWIDTH_USAGE: AnalyticsEngineDataset
   VERSION_USAGE: AnalyticsEngineDataset
@@ -72,6 +75,8 @@ export type Bindings = {
   NOTIFICATION_QUEUE?: Queue
   AUTH_EMAIL?: SendEmail
   CONSOLE_EVENTS?: DurableObjectNamespace
+  // Self-hosted GoTrue (cloudflare_workers/gotrue); bound only in the local_gotrue API env.
+  GOTRUE?: Fetcher
   QUEUE_DISPATCHER?: DurableObjectNamespace
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace
@@ -278,14 +283,81 @@ function appLogDimensionBlobs(dimensions?: AppLogDimensions) {
   ]
 }
 
+// Measured 2026-11-18, app_log ~120.5M points that day.
+// Foreground, background, noNew and getChannel were 58.5% and are not used by
+// failure insights or native observe. They are not stored.
+// Launch start, dom loaded, page loaded and under-native were 20.4%. One device
+// in 5 is kept in full (stable hash, not a per-event coin flip) and double2
+// holds 5 so population totals scale back. Launch-ready, failures, installs
+// and crashes stay complete. That mix removes ~75% of the day's writes.
+export const APP_LOG_VOLUME_SAMPLE_RATE = 5
+
+export const APP_LOG_DROPPED_ACTIONS = [
+  'app_moved_to_background',
+  'app_moved_to_foreground',
+  'getChannel',
+  'noNew',
+] as const
+
+export const APP_LOG_VOLUME_SAMPLED_ACTIONS = [
+  'app_launch_start',
+  'disableAutoUpdateUnderNative',
+  'webview_dom_content_loaded',
+  'webview_page_loaded',
+] as const
+
+const APP_LOG_DROPPED_ACTION_SET: ReadonlySet<string> = new Set(APP_LOG_DROPPED_ACTIONS)
+const APP_LOG_VOLUME_SAMPLED_ACTION_SET: ReadonlySet<string> = new Set(APP_LOG_VOLUME_SAMPLED_ACTIONS)
+
+// Population totals. A single device's own rows are complete, so do not use this
+// when the query is grouped by device id.
+const APP_LOG_EVENT_COUNT_SQL = 'sum(_sample_interval * if(double2 > 0, double2, 1.0))'
+const APP_LOG_OWN_EVENT_COUNT_SQL = 'sum(_sample_interval)'
+
+function scaleCohortDeviceCount(row: { device_count?: unknown, sample_rate_min?: unknown, sample_rate_max?: unknown }) {
+  const min = Number(row.sample_rate_min)
+  const max = Number(row.sample_rate_max)
+  const seen = Number(row.device_count)
+  // Mixed windows still contain unsampled history (double2 = 0). Scaling those
+  // would multiply every historical device. Only scale when the whole group
+  // was written at one rate.
+  if (Number.isFinite(min) && Number.isFinite(max) && max > 1 && min === max && Number.isFinite(seen))
+    row.device_count = seen * max
+}
+
+function appLogDeviceHash(deviceId: string) {
+  let hash = 2166136261
+  for (let i = 0; i < deviceId.length; i++)
+    hash = Math.imul(hash ^ deviceId.charCodeAt(i), 16777619)
+  return hash >>> 0
+}
+
+export function appLogDeviceKept(deviceId: string) {
+  const limit = Math.floor((2 ** 32) / APP_LOG_VOLUME_SAMPLE_RATE)
+  return appLogDeviceHash(deviceId) < limit
+}
+
+function keepAppLogVolumeSample(action: string, deviceId: string) {
+  if (APP_LOG_DROPPED_ACTION_SET.has(action))
+    return false
+  if (!APP_LOG_VOLUME_SAMPLED_ACTION_SET.has(action))
+    return true
+  return appLogDeviceKept(deviceId)
+}
+
 export function trackLogsCF(c: Context, app_id: string, device_id: string, action: string, version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
   if (!c.env.APP_LOG)
     return Promise.resolve()
+  if (!keepAppLogVolumeSample(action, device_id))
+    return Promise.resolve()
 
   const durationMs = parseStatsDurationMs(metadata)
+  const doubles = APP_LOG_VOLUME_SAMPLED_ACTION_SET.has(action)
+    ? [durationMs ?? 0, APP_LOG_VOLUME_SAMPLE_RATE]
+    : (durationMs !== null ? [durationMs] : null)
   c.env.APP_LOG.writeDataPoint({
     blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
-    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
+    ...(doubles ? { doubles } : {}),
     indexes: [app_id],
   })
 
@@ -671,6 +743,7 @@ interface StoreApp {
 }
 
 export interface VersionUsageChannelFilterOptions {
+  throwOnError?: boolean
   /**
    * Also match `get` rows written without any channel. /updates only started
    * recording the serving channel on `get` rows recently, so dashboards that
@@ -706,7 +779,7 @@ export function buildVersionUsageChannelFilterCF(channel?: VersionUsageChannel |
   return `AND ${match}`
 }
 
-const DAY_BUCKET_CF = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+export const DAY_BUCKET_CF = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
 
 /**
  * app_log failure rows carry the channel in blob8 (name) and blob9 (id). Rows
@@ -738,18 +811,21 @@ export interface LegacyDownloadFailQuery {
 
 /**
  * Legacy download_fail per bucket and version (see legacyDownloadFail.ts) that
- * version_usage still counted as fails. Never throws: without it, a read keeps
- * the recorded counts.
+ * version_usage still counted as fails. Dashboards keep recorded counts on error;
+ * strict report reads require the correction to succeed.
  */
-export async function readLegacyDownloadFailsCF(c: Context, query: LegacyDownloadFailQuery): Promise<Map<string, number>> {
-  if (!c.env.APP_LOG)
+export async function readLegacyDownloadFailsCF(c: Context, query: LegacyDownloadFailQuery, options: { throwOnError?: boolean } = {}): Promise<Map<string, number>> {
+  if (!c.env.APP_LOG) {
+    if (options.throwOnError)
+      throw new Error('Legacy failure correction requires APP_LOG')
     return new Map()
+  }
   const versionFilter = query.versionName === undefined ? '' : `AND blob3 = '${escapeSqlString(query.versionName)}'`
   const sql = `SELECT
   ${query.bucket} AS bucket,
   blob3 AS version_name,
   blob7 AS plugin_version,
-  sum(_sample_interval) AS count
+  ${APP_LOG_EVENT_COUNT_SQL} AS count
 FROM app_log
 WHERE
   index1 = '${escapeSqlString(query.appId)}'
@@ -762,10 +838,18 @@ WHERE
   ${buildAppLogFailureChannelFilterCF(query.channel)}
 GROUP BY bucket, version_name, plugin_version`
   try {
-    return sumLegacyDownloadFails(await runQueryToCFA(c, sql))
+    const rows = await runQueryToCFA<LegacyDownloadFailLogRow>(c, sql)
+    if (options.throwOnError && rows.some(row => !Number.isSafeInteger(Number(row.count)) || Number(row.count) < 0 || row.count == null))
+      throw new Error('Invalid legacy failure count')
+    const counts = sumLegacyDownloadFails(rows)
+    if (options.throwOnError && [...counts.values()].some(count => !Number.isSafeInteger(count)))
+      throw new Error('Legacy failure count overflow')
+    return counts
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading legacy download_fail', error: serializeError(e), query: sql })
+    if (options.throwOnError)
+      throw e
     return new Map()
   }
 }
@@ -792,7 +876,7 @@ export function buildLegacyCheckFailuresQueryCF(query: LegacyCheckFailuresQuery)
   return `SELECT
   blob3 AS version_name,
   blob7 AS plugin_version,
-  sum(_sample_interval) AS count
+  ${APP_LOG_EVENT_COUNT_SQL} AS count
 FROM app_log
 WHERE
   index1 = '${escapeSqlString(query.appId)}'
@@ -849,12 +933,16 @@ ORDER BY date`
   try {
     const [usage, legacyFails] = await Promise.all([
       runQueryToCFA<VersionUsage>(c, query),
-      readLegacyDownloadFailsCF(c, { appId: app_id, start: period_start, end: period_end, bucket: DAY_BUCKET_CF, channel }),
+      readLegacyDownloadFailsCF(c, { appId: app_id, start: period_start, end: period_end, bucket: DAY_BUCKET_CF, channel }, options),
     ])
+    if (options.throwOnError && usage.some(row => !Number.isSafeInteger(row.fail) || row.fail < 0))
+      throw new Error('Invalid version failure count')
     return subtractLegacyDownloadFails(usage, row => legacyDownloadFailKey(row.date, row.version_name), legacyFails)
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading version usage', error: serializeError(e), query })
+    if (options.throwOnError)
+      throw e
   }
   return []
 }
@@ -1025,8 +1113,9 @@ const DEVICE_INFO_PLATFORM_VALUES: Record<ChannelDevicePlatform, number> = { and
 export function buildDeviceChannelScopeCF(channelName: string, overrides?: ChannelDeviceOverrideIds): string {
   const reportedMatch = `default_channel = '${escapeSqlString(channelName)}'`
   const defaultPlatforms = (overrides?.defaultForPlatforms ?? []).map(platform => DEVICE_INFO_PLATFORM_VALUES[platform])
+  // platform is a Double column: Analytics Engine rejects an IN list of Integer literals.
   const defaultChannelMatch = defaultPlatforms.length
-    ? `(${reportedMatch} OR (default_channel = '' AND platform IN (${defaultPlatforms.join(', ')})))`
+    ? `(${reportedMatch} OR (default_channel = '' AND platform IN (${defaultPlatforms.map(value => value.toFixed(1)).join(', ')})))`
     : reportedMatch
   const elsewhere = overrides?.elsewhere ?? []
   const into = overrides?.into ?? []
@@ -1438,6 +1527,7 @@ export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode:
     outerFilter,
     `ORDER BY ${orderBy}`,
     `LIMIT ${limit + 1}`,
+    devicesOffsetClause(params.offset),
   ].filter(Boolean).join('\n')
 }
 
@@ -1699,6 +1789,8 @@ export interface UpdateDeliveryTimingEventCF {
   metadata: StatsMetadata | null
   /** Duration from Analytics Engine double1 when plugins report timing. */
   duration_ms: number | null
+  /** Client sample rate from double2. Missing or 0 means the row was not sampled. */
+  sample_weight?: number
   created_at: string
 }
 
@@ -1771,6 +1863,7 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
   blob3 AS version_name,
   blob4 AS metadata,
   double1 AS duration_ms,
+  if(double2 > 0, double2, 1.0) AS sample_weight,
   timestamp AS created_at
 FROM app_log
 WHERE
@@ -1808,10 +1901,12 @@ export async function readUpdateDeliveryTimingEventsCF(
       version_name: string
       metadata: string | null
       duration_ms: number | string | null
+      sample_weight: number | string | null
       created_at: string
     }>(c, query)
     return rows.map((row) => {
       const rawDuration = Number(row.duration_ms)
+      const rawWeight = Number(row.sample_weight)
       return {
         app_id: row.app_id,
         device_id: row.device_id,
@@ -1819,6 +1914,7 @@ export async function readUpdateDeliveryTimingEventsCF(
         version_name: row.version_name || 'unknown',
         metadata: parseStatsMetadata(row.metadata),
         duration_ms: Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : null,
+        sample_weight: Number.isFinite(rawWeight) && rawWeight >= 1 ? rawWeight : 1,
         created_at: row.created_at,
       }
     })
@@ -1932,16 +2028,20 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
     ${versionFilter}`
 
   const summaryQuery = `SELECT
-    sum(_sample_interval) AS total,
+    ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
+    min(if(double2 > 1, double2, 1.0)) AS sample_rate_min,
+    max(if(double2 > 1, double2, 1.0)) AS sample_rate_max,
     COUNT(DISTINCT blob2) AS action_count
   FROM app_log
   WHERE ${baseWhere}`
 
   const actionsQuery = `SELECT
     blob2 AS action,
-    sum(_sample_interval) AS total,
+    ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
+    min(if(double2 > 1, double2, 1.0)) AS sample_rate_min,
+    max(if(double2 > 1, double2, 1.0)) AS sample_rate_max,
     COUNT(DISTINCT blob3) AS version_count,
     min(timestamp) AS first_seen,
     max(timestamp) AS last_seen,
@@ -1956,7 +2056,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const dailyQuery = `SELECT
     formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
     blob2 AS action,
-    sum(_sample_interval) AS total
+    ${APP_LOG_EVENT_COUNT_SQL} AS total
   FROM app_log
   WHERE ${baseWhere}
   GROUP BY date, action
@@ -1965,8 +2065,10 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const versionsQuery = `SELECT
     blob2 AS action,
     blob3 AS version_name,
-    sum(_sample_interval) AS total,
+    ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
+    min(if(double2 > 1, double2, 1.0)) AS sample_rate_min,
+    max(if(double2 > 1, double2, 1.0)) AS sample_rate_max,
     max(timestamp) AS last_seen
   FROM app_log
   WHERE ${baseWhere}
@@ -1977,7 +2079,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const devicesQuery = `SELECT
     blob2 AS action,
     blob1 AS device_id,
-    sum(_sample_interval) AS total,
+    ${APP_LOG_OWN_EVENT_COUNT_SQL} AS total,
     argMax(blob3, timestamp) AS version_name,
     max(timestamp) AS last_seen
   FROM app_log
@@ -1996,6 +2098,13 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
       runQueryToCFA<StatsInsightRawVersion>(c, versionsQuery),
       runQueryToCFA<StatsInsightRawDevice>(c, devicesQuery),
     ])
+
+    if (summaryRows[0])
+      scaleCohortDeviceCount(summaryRows[0])
+    for (const row of actionRows)
+      scaleCohortDeviceCount(row)
+    for (const row of versionRows)
+      scaleCohortDeviceCount(row)
 
     return normalizeStatsInsightsResult({
       summary: summaryRows[0],

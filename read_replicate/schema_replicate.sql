@@ -1,6 +1,6 @@
 BEGIN;
 
-DROP TABLE IF EXISTS public.version_files, public.delta_files, public.delta_sessions, public.channel_devices, public.manifest, public.onboarding_demo_data, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
+DROP TABLE IF EXISTS public.version_files, public.delta_files, public.delta_sessions, public.channel_devices, public.manifest, public.onboarding_demo_data, public.read_replica_commit_marker, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
 DROP SEQUENCE IF EXISTS public.app_versions_id_seq, public.channel_devices_id_seq, public.channel_id_seq, public.manifest_id_seq, public.org_users_id_seq, public.stripe_info_id_seq CASCADE;
 DROP FUNCTION IF EXISTS public.one_month_ahead();
 DROP TYPE IF EXISTS public.channel_update_package, public.manifest_entry, public.disable_update, public.stripe_status;
@@ -117,7 +117,17 @@ CREATE TABLE public.apps (
     onboarding_completed_at timestamp with time zone,
     onboarding jsonb DEFAULT '{}'::jsonb NOT NULL,
     device_data_collection jsonb DEFAULT '{"country": true, "is_prod": true, "platform": true, "os_version": true, "is_emulator": true, "version_build": true, "install_source": true, "plugin_version": true}'::jsonb NOT NULL,
-    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600)))
+    bundle_incompatible_alert text DEFAULT 'default'::text NOT NULL,
+    serving_regions text[] DEFAULT ARRAY['EU'::text, 'NA'::text, 'SA'::text, 'OC'::text, 'AS_INDIA'::text, 'AS_JAPAN'::text, 'HK'::text, 'AF'::text, 'ME'::text] NOT NULL,
+    serving_region_mode text DEFAULT 'route'::text NOT NULL,
+    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600))),
+    CONSTRAINT apps_bundle_incompatible_alert_check CHECK ((bundle_incompatible_alert = ANY (ARRAY['default'::text, 'all'::text]))),
+    CONSTRAINT apps_serving_region_mode_valid CHECK ((serving_region_mode = ANY (ARRAY['route'::text, 'block'::text]))),
+    CONSTRAINT apps_serving_regions_valid CHECK (
+CASE
+    WHEN (array_ndims(serving_regions) = 1) THEN (((cardinality(serving_regions) >= 1) AND (cardinality(serving_regions) <= 9)) AND (serving_regions <@ ARRAY['EU'::text, 'NA'::text, 'SA'::text, 'OC'::text, 'AS_INDIA'::text, 'AS_JAPAN'::text, 'HK'::text, 'AF'::text, 'ME'::text]) AND (array_position(serving_regions, NULL::text) IS NULL) AND (cardinality(array_positions(serving_regions, 'EU'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'NA'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'SA'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'OC'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'AS_INDIA'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'AS_JAPAN'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'HK'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'AF'::text)) <= 1) AND (cardinality(array_positions(serving_regions, 'ME'::text)) <= 1))
+    ELSE false
+END)
 );
 
 ALTER TABLE ONLY public.apps REPLICA IDENTITY FULL;
@@ -247,6 +257,7 @@ CREATE TABLE public.channels (
     auto_pause_last_checked_at timestamp with time zone,
     update_package public.channel_update_package DEFAULT 'all'::public.channel_update_package NOT NULL,
     paused_at timestamp with time zone,
+    bundle_alert_enabled boolean,
     CONSTRAINT channels_auto_pause_action_check CHECK ((auto_pause_action = ANY (ARRAY['pause'::text, 'rollback'::text, 'notify'::text]))),
     CONSTRAINT channels_auto_pause_confidence_check CHECK (((auto_pause_confidence > (0)::numeric) AND (auto_pause_confidence < (1)::numeric))),
     CONSTRAINT channels_auto_pause_cooldown_minutes_check CHECK (((auto_pause_cooldown_minutes >= 0) AND (auto_pause_cooldown_minutes <= 10080))),
@@ -455,6 +466,17 @@ ALTER TABLE ONLY public.orgs REPLICA IDENTITY FULL;
 
 
 --
+-- Name: read_replica_commit_marker; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.read_replica_commit_marker (
+    id smallint NOT NULL,
+    committed_at timestamp with time zone NOT NULL,
+    CONSTRAINT read_replica_commit_marker_singleton CHECK ((id = 1))
+);
+
+
+--
 -- Name: stripe_info; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -487,7 +509,10 @@ CREATE TABLE public.stripe_info (
     is_above_plan boolean,
     extra_mau bigint DEFAULT 0 NOT NULL,
     billing_account text DEFAULT 'ee'::text NOT NULL,
-    CONSTRAINT stripe_info_billing_account_check CHECK ((billing_account = ANY (ARRAY['ee'::text, 'us'::text])))
+    billing_address jsonb,
+    billing_currency text,
+    CONSTRAINT stripe_info_billing_account_check CHECK ((billing_account = ANY (ARRAY['ee'::text, 'us'::text]))),
+    CONSTRAINT stripe_info_billing_currency_check CHECK ((billing_currency ~ '^[a-z]{3}$'::text))
 );
 
 ALTER TABLE ONLY public.stripe_info REPLICA IDENTITY FULL;
@@ -665,6 +690,14 @@ ALTER TABLE ONLY public.orgs
 
 
 --
+-- Name: read_replica_commit_marker read_replica_commit_marker_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.read_replica_commit_marker
+    ADD CONSTRAINT read_replica_commit_marker_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: stripe_info stripe_info_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -702,6 +735,13 @@ ALTER TABLE ONLY public.orgs
 
 ALTER TABLE ONLY public.version_files
     ADD CONSTRAINT version_files_pkey PRIMARY KEY (app_version_id);
+
+
+--
+-- Name: app_versions_app_id_id_desc_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX app_versions_app_id_id_desc_idx ON public.app_versions USING btree (app_id, id DESC);
 
 
 --

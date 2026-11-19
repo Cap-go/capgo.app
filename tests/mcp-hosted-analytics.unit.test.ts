@@ -54,3 +54,63 @@ describe('hosted MCP tool tracking route', () => {
     expect(mocks.track).not.toHaveBeenCalled()
   })
 })
+
+describe('hosted MCP CI evidence forwarding', () => {
+  it.each([
+    ['GitHub Actions', 'GitHub Actions'],
+    ['  GitLab CI  ', 'GitLab CI'],
+    ['x'.repeat(80), 'x'.repeat(64)],
+    ['Invalid\u00FC CI', null],
+    ['', null],
+    [undefined, null],
+  ])('preserves valid evidence from an authenticated upload completion (%s)', async (provider, expected) => {
+    const dispatch = vi.fn((_request: Request) => Response.json({ status: 'ok' }))
+    const app = createMcpApp(dispatch)
+    const response = await app.request('/mcp', {
+      method: 'POST',
+      headers: {
+        'authorization': 'Bearer key',
+        'content-type': 'application/json',
+        ...(provider === undefined ? {} : { 'x-cli-ci': provider }),
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'capgo_complete_bundle_upload', arguments: { upload_token: 'test-upload-token' } },
+      }),
+    })
+    expect(response.status).toBe(200)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    const request = dispatch.mock.calls[0]?.[0]
+    expect(request?.url).toBe('http://localhost/bundle/upload/complete')
+    expect(request?.method).toBe('POST')
+    expect(request?.headers.get('capgkey')).toBe('key')
+    expect(request?.headers.get('x-cli-ci')).toBe(expected)
+    await expect(request?.json()).resolves.toEqual({ upload_token: 'test-upload-token' })
+  })
+
+  it('does not dispatch unauthenticated CI requests', async () => {
+    const dispatch = vi.fn(() => Response.json({ status: 'ok' }))
+    const app = createMcpApp(dispatch)
+    const response = await app.request('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-cli-ci': 'GitHub Actions' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capgo_complete_bundle_upload', arguments: { upload_token: 'test-upload-token' } } }),
+    })
+    expect(response.status).toBe(401)
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('keeps the CI header out of the browser CORS allowlist', async () => {
+    const response = await app.request('/mcp', {
+      method: 'OPTIONS',
+      headers: {
+        'origin': 'https://example.com',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'authorization,content-type,x-cli-ci',
+      },
+    })
+    expect(response.headers.get('access-control-allow-headers')?.toLowerCase().split(',')).not.toContain('x-cli-ci')
+  })
+})

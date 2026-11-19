@@ -1,9 +1,15 @@
+import { SERVING_REGIONS } from '../supabase/functions/_backend/plugin_runtime/utils/servingRegions.ts'
 import { Hono } from 'hono/tiny'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getAppOwnerPostgresMock = vi.fn()
 const requestInfosPostgresMock = vi.fn()
 const getBundleUrlMock = vi.fn()
+const servingPolicyMock = vi.fn()
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/servingPolicy.ts', async (original) => ({
+  ...await original<typeof import('../supabase/functions/_backend/plugin_runtime/utils/servingPolicy.ts')>(),
+  requestServingPolicy: servingPolicyMock,
+}))
 const sendStatsAndDeviceMock = vi.fn(() => Promise.resolve())
 
 ;(globalThis as any).EdgeRuntime = undefined
@@ -97,6 +103,7 @@ function baseChannel(versionOverrides: Record<string, unknown> = {}, channelOver
 
 function resetUpdateMocks() {
   vi.clearAllMocks()
+  servingPolicyMock.mockReturnValue(undefined)
   getBundleUrlMock.mockResolvedValue('https://signed.example/bundle.zip')
   getAppOwnerPostgresMock.mockResolvedValue({
     allow_device_custom_id: true,
@@ -214,5 +221,31 @@ describe('/updates paused channel', () => {
     expect(json.error).toBeUndefined()
     expect(json.version).toBe('3.0.0')
     expect(json.url).toBe('https://signed.example/bundle.zip')
+  })
+})
+
+
+describe('/updates external delivery boundaries', () => {
+  beforeEach(resetUpdateMocks)
+  it.each([
+    { regions: [...SERVING_REGIONS], mode: 'route', excluded: false },
+    { regions: [...SERVING_REGIONS], mode: 'block', excluded: false },
+    { regions: ['EU'], mode: 'route', excluded: true },
+    { regions: ['EU'], mode: 'block', excluded: true },
+  ])('uses actual deselections for external offers with legacy $mode and $regions', async ({ regions, mode, excluded }) => {
+    servingPolicyMock.mockReturnValue({ regions, mode })
+    const url = 'https://external.example.com/bundle.zip'
+    requestInfosPostgresMock.mockResolvedValue({ channelData: baseChannel({ external_url: url }) })
+    const json = await (await runUpdate()).json()
+    if (excluded) {
+      // An expected policy refusal, not a failed update check.
+      expect(json).toMatchObject({ error: 'external_delivery_unavailable', kind: 'blocked' })
+      expect(json).not.toHaveProperty('url')
+    }
+    else {
+      expect(json).toMatchObject({ url })
+      expect(json).not.toHaveProperty('error')
+    }
+    expect(getBundleUrlMock).not.toHaveBeenCalled()
   })
 })

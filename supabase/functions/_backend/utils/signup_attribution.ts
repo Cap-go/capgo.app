@@ -7,7 +7,7 @@ import {
   type SignupAttributionEventTags,
 } from '../../shared/signup-attribution.ts'
 import { cloudlog } from './logging.ts'
-import { supabaseAdmin } from './supabase.ts'
+import { gotrueAdmin } from './gotrue_admin.ts'
 
 export function signupPluginTagsFromAttribution(attribution: ResolvedSignupAttribution): SignupAttributionEventTags {
   return signupAttributionEventTags(attribution)
@@ -18,7 +18,7 @@ export async function resolveSignupAttributionForUser(
   userId: string,
 ): Promise<ResolvedSignupAttribution> {
   try {
-    const { data, error } = await supabaseAdmin(c).auth.admin.getUserById(userId)
+    const { data, error } = await gotrueAdmin(c).getUserById(userId)
     if (error || !data.user)
       return {}
     return parseSignupAttributionRecord(data.user.user_metadata as Record<string, unknown>)

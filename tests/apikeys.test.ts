@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './sql-data-client'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   APIKEY_MANAGEMENT_APIKEY_MANAGER,
@@ -952,6 +952,14 @@ describe('[POST] /apikey operations', () => {
     expect(data).toHaveProperty('error', 'name_is_required')
   })
 
+  it.concurrent('rejects more than 100 bindings with a 400 too_many_bindings error', async () => {
+    const bindings = Array.from({ length: 101 }, () => ({ role_name: 'org_admin', scope_type: 'org', org_id: randomUUID() }))
+    const response = await postApiKey({ name: `too-many-bindings-${randomUUID()}`, bindings }, authHeaders)
+    expect(response.status).toBe(400)
+    const data = await response.json() as { error: string }
+    expect(data).toHaveProperty('error', 'too_many_bindings')
+  })
+
   it('create api key with invalid binding scope', async () => {
     const response = await postApiKey({
       name: 'test-key',
@@ -996,6 +1004,19 @@ describe('[POST] /apikey operations', () => {
 })
 
 describe('[PUT] /apikey/:id operations', () => {
+  it.concurrent('rejects updating bindings with more than 100 entries', async () => {
+    const bindings = Array.from({ length: 101 }, () => ({ role_name: 'org_admin', scope_type: 'org', org_id: randomUUID() }))
+    // Seeded key 13 is owned by the test user; the cap is enforced before any binding is touched.
+    const response = await fetch(`${BASE_URL}/apikey/13`, {
+      method: 'PUT',
+      headers: authHeaders,
+      body: JSON.stringify({ bindings }),
+    })
+    expect(response.status).toBe(400)
+    const data = await response.json() as { error: string }
+    expect(data).toHaveProperty('error', 'too_many_bindings')
+  })
+
   it('update api key name', async () => {
     // Using seeded API key ID 11 (dedicated test key for update name)
     const newName = 'updated-test-key-name'

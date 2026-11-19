@@ -75,7 +75,7 @@ The initial catch-up is complete on production. The old
 `delta_files_compact_all` procedure is removed because PostgreSQL procedures
 that commit cannot also pin `search_path`. New installations catch up through
 the scheduled task, or repeatedly call `SELECT public.delta_files_compact(20000)`
-from separate transactions. Compaction requires the Vault setting
+from separate transactions. Compaction requires the `private.settings` switch
 `CAPGO_DELTA_FILES_COMPACT_ENABLED`; enable it after all readers support
 compacted rows. Progress is in `backfill_progress`.
 
@@ -100,9 +100,8 @@ Deployment order:
    session index. The migration publishes `delta_sessions`.
 2. CI refreshes the subscription and waits for the table copies before
    deploying API, files and plugin workers. All readers understand both forms.
-3. Once those workers are deployed everywhere, enable the Vault setting:
-   `SELECT vault.create_secret('true', 'CAPGO_DELTA_SESSIONS_ENABLED');`
-   If it exists, use `vault.update_secret` instead.
+3. Once those workers are deployed everywhere, enable the switch:
+   `INSERT INTO private.settings (name, value) VALUES ('CAPGO_DELTA_SESSIONS_ENABLED', 'true') ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = now();`
 4. The existing cron dispatcher calls `delta_sessions_move(5000)` every
    10 seconds. It scans by `delta_files_pkey`, records its cursor in
    `backfill_progress`, and moves only each batch. The compactor attaches
@@ -314,8 +313,8 @@ After the deploy:
 2. Check the R2 lifecycle rules: `deleted-after-7-days/` expires after 7 days
    (already used by bundle zips), and incomplete multipart uploads under
    `orgs/` are aborted after 1 day.
-3. Enable GC: `SELECT vault.create_secret('true', 'CAPGO_DELTA_STORAGE_GC_ENABLED');`
-   (if the secret exists: `SELECT vault.update_secret(id, 'true') FROM vault.secrets WHERE name = 'CAPGO_DELTA_STORAGE_GC_ENABLED';`).
+3. Enable GC:
+   `INSERT INTO private.settings (name, value) VALUES ('CAPGO_DELTA_STORAGE_GC_ENABLED', 'true') ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = now();`
 4. Decommission the inventory: delete the `capgo-r2-inventory-prod` worker, its
    queues (`capgo-r2-inventory-prod`, `-repair`, `-cleanup` and their DLQs), the
    `capgo` bucket notification rule, Hyperdrive `af73fa6a112b495f80e81718b153db76`

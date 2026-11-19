@@ -13,6 +13,7 @@ import type {
 } from './compatibility_events.ts'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
+import { purgeUpdatesCache } from '../utils/purgeUpdatesCache.ts'
 import { backgroundTask } from '../utils/utils.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
@@ -489,6 +490,7 @@ app.post('/', middlewareAPISecret, triggerValidator('channels', 'UPDATE'), async
   // Compatibility work can scan hundreds of rows; run after the demotion updates
   // so queue HTTP posts return before the 15s consumer abort.
   await backgroundTask(c, persistCompatibilityEvents(c, record, oldRecord, previousDefaultChannelByPlatform))
+  await backgroundTask(c, purgeUpdatesCache(c, record.app_id))
 
   return c.json(BRES)
 })

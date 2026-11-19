@@ -6,6 +6,7 @@ import AddAppSetupChoice from '~/components/dashboard/AddAppSetupChoice.vue'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import { canPrepareAgentKey } from '~/services/aiAgentKey'
 import { useConsole } from '~/services/console'
+import { organizationAccessKey } from '~/services/organizationWatchKeys'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -73,7 +74,9 @@ async function init() {
   }
 }
 
-watch(currentOrganization, () => init())
+// Only rerun when the organization or its access gates change, not when the
+// store swaps in a refreshed copy of the same organization (logo, settings).
+watch(() => organizationAccessKey(currentOrganization.value), () => init())
 
 onMounted(() => {
   displayStore.NavTitle = ''

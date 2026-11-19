@@ -71,6 +71,31 @@ function shouldSuppressQueueRetryAlert(c: Context): boolean {
   return Boolean(queueName) && readCount !== null && maxReads !== null && readCount < maxReads
 }
 
+function redactUrlForLog(url: string): string {
+  try {
+    const parsed = URL.parse(url)
+    if (!parsed)
+      return url.split('?')[0] ?? url
+    return `${parsed.origin}${parsed.pathname}`
+  }
+  catch {
+    return url.split('?')[0] ?? url
+  }
+}
+
+function isPluginRequestCancellation(c: Context, e: unknown): boolean {
+  if (!e || typeof e !== 'object')
+    return false
+  const err = e as Error
+  const signal = c.req.raw.signal
+  if (!signal?.aborted)
+    return false
+  if (err.name === 'AbortError')
+    return true
+  const cause = (e as { cause?: unknown }).cause
+  return cause instanceof Error && cause.name === 'AbortError'
+}
+
 const upstreamUnavailableResponse: SimpleErrorResponse = {
   error: 'upstream_unavailable',
   message: 'Database temporarily unavailable',
@@ -110,6 +135,20 @@ function logTransientPgError(c: Context, functionName: string, e: unknown, kind:
 
 export function onError(functionName: string) {
   return async (e: any, c: Context) => {
+    if (isPluginRequestCancellation(c, e)) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        functionName,
+        kind: 'request_cancelled',
+        method: c.req.method,
+        url: redactUrlForLog(c.req.url),
+      })
+      return c.json({
+        error: 'request_cancelled',
+        message: 'Request cancelled',
+        moreInfo: {},
+      }, 499 as Parameters<Context['json']>[1])
+    }
     let body = 'N/A'
     const rawReq = c.req.raw
     const method = c.req.method.toUpperCase()

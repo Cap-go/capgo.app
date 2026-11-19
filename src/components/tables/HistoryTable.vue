@@ -5,11 +5,11 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { z } from 'zod'
-import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { confirmAndRollbackChannel, readChannelRollbackContext } from '~/services/channelRollback'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
+import { createHistoryContextLoader } from '~/services/historyContext'
 import { checkPermissions } from '~/services/permissions'
-import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 import { escapeIlike } from '~/utils/ilike'
 
@@ -67,7 +67,6 @@ const { t } = useI18n()
 const router = useRouter()
 const capgo = useConsole()
 const organizationStore = useOrganizationStore()
-const dialogStore = useDialogV2Store()
 
 const deployHistory = ref<DeployHistory[]>([])
 const loading = ref(true)
@@ -81,31 +80,20 @@ const total = ref(0)
 const currentVersionId = ref<number | null>(null)
 
 // Fetch current channel's version_id (only relevant for channel mode)
-async function fetchCurrentVersion() {
+async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promise<boolean> {
   // Skip if in bundle mode
   if (props.bundleId)
-    return
+    return true
 
   if (!props.channelId)
-    return
+    return true
 
-  try {
-    const { data, error } = await capgo
-      .from('channels')
-      .select('version')
-      .eq('id', props.channelId)
-      .single()
-
-    if (error) {
-      console.error('Error fetching current version:', error)
-      return
-    }
-
-    currentVersionId.value = data.version
-  }
-  catch (error) {
-    console.error('Error fetching current version:', error)
-  }
+  const context = await readChannelRollbackContext(props.channelId)
+  if (!context)
+    return false
+  if (isCurrent())
+    currentVersionId.value = context.versionId
+  return true
 }
 
 // Check if an item is the current version
@@ -213,12 +201,21 @@ async function openOneVersion(item: DeployHistory) {
   router.push(`/app/${props.appId}/bundle/${item.version_id}`)
 }
 
-async function fetchDeployHistory() {
+// Members and the current bundle load once per scope (see historyContext.ts).
+const historyContext = createHistoryContextLoader({
+  scopeKey: () => JSON.stringify([organizationStore.currentOrganization?.gid ?? null, props.appId, props.channelId ?? null, props.bundleId ?? null]),
+  loadCurrentVersion: fetchCurrentVersion,
+  loadMembers: () => organizationStore.getMembers(),
+  applyMembers: (loaded) => {
+    members.value = loaded
+  },
+})
+
+async function fetchDeployHistory(options: { refreshCurrentVersion?: boolean } = {}) {
   loading.value = true
   try {
     deployHistory.value.length = 0
-    await fetchCurrentVersion()
-    members.value = await organizationStore.getMembers()
+    await historyContext.load(options)
 
     if (isBundleMode.value) {
       // Bundle mode: fetch both assignments and removals
@@ -459,7 +456,11 @@ async function handleRollback(item: DeployHistory) {
   if (!props.channelId)
     return
 
+  // The table can switch channel while a dialog is open: everything below
+  // stays bound to the channel the user confirmed.
+  const appId = props.appId
   const channelId = props.channelId
+  const stillSameChannel = () => props.channelId === channelId && props.appId === appId
 
   if (!canRollbackBundle.value) {
     toast.error(t('no-permission'))
@@ -471,43 +472,18 @@ async function handleRollback(item: DeployHistory) {
     return
   }
 
-  dialogStore.openDialog({
-    title: t('rollback-to-version'),
-    description: t('confirm-rollback-desc'),
-    buttons: [
-      {
-        text: t('confirm'),
-        role: 'primary',
-        handler: async () => {
-          try {
-            const { error } = await capgo
-              .from('channels')
-              .update({ version: item.version_id })
-              .eq('id', channelId)
-
-            if (error) {
-              console.error('Error rolling back version:', error)
-              toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
-              return
-            }
-
-            toast.success(t('rollback-success'))
-            currentVersionId.value = item.version_id
-            fetchDeployHistory()
-          }
-          catch (error) {
-            console.error('Error rolling back version:', error)
-            toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
-          }
-        },
-      },
-      {
-        text: t('cancel'),
-        role: 'cancel',
-      },
-    ],
+  // Same impact confirm as setting a bundle: who gets it and why the others won't.
+  const rolledBack = await confirmAndRollbackChannel({
+    appId,
+    channelId,
+    bundle: { id: item.version_id, name: item.version.name },
+    stillSameChannel,
+    viewDependencies: path => router.push(path),
   })
-  await dialogStore.onDialogDismiss()
+  if (!rolledBack)
+    return
+  currentVersionId.value = item.version_id
+  fetchDeployHistory()
 }
 
 watch([() => props.channelId, () => props.bundleId, () => props.appId], () => {
@@ -528,6 +504,6 @@ watch([() => props.channelId, () => props.bundleId, () => props.appId], () => {
     @update:search="search = $event"
     @update:current-page="page = $event"
     @update:columns="columns = $event"
-    @reload="fetchDeployHistory"
+    @reload="fetchDeployHistory({ refreshCurrentVersion: true })"
   />
 </template>

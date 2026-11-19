@@ -67,6 +67,105 @@ describe('analytics engine write volume', () => {
     expect(writeDataPoint).toHaveBeenCalledTimes(1)
   })
 
+  it('drops heartbeat logs and keeps one device cohort for sampled actions', async () => {
+    const { APP_LOG_VOLUME_SAMPLE_RATE, appLogDeviceKept, trackLogsCF } = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
+    const writeDataPoint = vi.fn()
+    const c = createContext({ APP_LOG: { writeDataPoint } })
+    let kept = ''
+    let skipped = ''
+    for (let i = 0; i < 200 && (!kept || !skipped); i++) {
+      const id = `device-${i}`
+      if (appLogDeviceKept(id))
+        kept = kept || id
+      else
+        skipped = skipped || id
+    }
+    expect(kept).not.toBe('')
+    expect(skipped).not.toBe('')
+
+    for (const action of ['noNew', 'app_moved_to_foreground', 'getChannel'] as const)
+      await trackLogsCF(c, 'com.example.app', kept, action, '1.0.0')
+    expect(writeDataPoint).not.toHaveBeenCalled()
+
+    await trackLogsCF(c, 'com.example.app', skipped, 'webview_page_loaded', '1.0.0', { duration_ms: '15' })
+    await trackLogsCF(c, 'com.example.app', skipped, 'webview_page_loaded', '1.0.0', { duration_ms: '15' })
+    expect(writeDataPoint).not.toHaveBeenCalled()
+
+    await trackLogsCF(c, 'com.example.app', kept, 'webview_page_loaded', '1.0.0', { duration_ms: '15' })
+    await trackLogsCF(c, 'com.example.app', kept, 'webview_page_loaded', '1.0.0', { duration_ms: '15' })
+    expect(writeDataPoint).toHaveBeenCalledTimes(2)
+    expect(writeDataPoint).toHaveBeenCalledWith(expect.objectContaining({
+      doubles: [15, APP_LOG_VOLUME_SAMPLE_RATE],
+    }))
+  })
+
+  it('keeps launch, install and failure logs out of the volume sample', async () => {
+    const { appLogDeviceKept, trackLogsCF } = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
+    const writeDataPoint = vi.fn()
+    const c = createContext({ APP_LOG: { writeDataPoint } })
+    let skipped = 'device-0'
+    for (let i = 0; i < 200; i++) {
+      if (!appLogDeviceKept(`device-${i}`)) {
+        skipped = `device-${i}`
+        break
+      }
+    }
+    for (const action of ['app_launch_ready', 'set', 'get', 'download_fail', 'app_crash'] as const)
+      await trackLogsCF(c, 'com.example.app', skipped, action, '1.0.0')
+    expect(writeDataPoint).toHaveBeenCalledTimes(5)
+    for (const [point] of writeDataPoint.mock.calls)
+      expect(point.doubles).toBeUndefined()
+  })
+
+  it('uses the same app_log volume sample on the plugin and API paths', async () => {
+    const plugin = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
+    const api = await import('../supabase/functions/_backend/utils/cloudflare.ts')
+    expect(plugin.APP_LOG_VOLUME_SAMPLE_RATE).toBe(api.APP_LOG_VOLUME_SAMPLE_RATE)
+    expect([...plugin.APP_LOG_DROPPED_ACTIONS]).toEqual([...api.APP_LOG_DROPPED_ACTIONS])
+    expect([...plugin.APP_LOG_VOLUME_SAMPLED_ACTIONS]).toEqual([...api.APP_LOG_VOLUME_SAMPLED_ACTIONS])
+
+    let kept = ''
+    let skipped = ''
+    for (let i = 0; i < 200 && (!kept || !skipped); i++) {
+      const id = `parity-device-${i}`
+      if (plugin.appLogDeviceKept(id) !== api.appLogDeviceKept(id))
+        throw new Error(`sample decision diverged for ${id}`)
+      if (plugin.appLogDeviceKept(id))
+        kept = kept || id
+      else
+        skipped = skipped || id
+    }
+
+    async function written(track: typeof plugin.trackLogsCF) {
+      const writeDataPoint = vi.fn()
+      const c = createContext({ APP_LOG: { writeDataPoint } })
+      await track(c, 'com.example.app', kept, 'webview_page_loaded', '1.0.0', { duration_ms: '15' })
+      await track(c, 'com.example.app', kept, 'webview_page_loaded', '1.0.0', { duration_ms: '15' })
+      await track(c, 'com.example.app', skipped, 'webview_page_loaded', '1.0.0', { duration_ms: '15' })
+      await track(c, 'com.example.app', kept, 'noNew', '1.0.0')
+      await track(c, 'com.example.app', skipped, 'app_launch_ready', '1.0.0')
+      return writeDataPoint.mock.calls.map(([point]) => point)
+    }
+
+    expect(await written(plugin.trackLogsCF)).toEqual(await written(api.trackLogsCF))
+  })
+
+  it('scales population totals and leaves one device\'s own count unscaled', async () => {
+    const { readStatsInsightsCF } = await import('../supabase/functions/_backend/utils/cloudflare.ts')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ meta: [], data: [] })))
+    const c = createContext({ CF_ACCOUNT_ANALYTICS_ID: 'account', CF_ANALYTICS_TOKEN: 'token', APP_LOG: {} })
+    await readStatsInsightsCF(c, { app_id: 'com.example.app', start_date: '2026-11-01', end_date: '2026-11-02' })
+    const bodies = fetchMock.mock.calls.map(([, init]) => String(init?.body))
+    const deviceQuery = bodies.find(body => body.includes('GROUP BY action, device_id'))
+    const actionQuery = bodies.find(body => body.includes('GROUP BY action'))
+    expect(deviceQuery).toContain('sum(_sample_interval) AS total')
+    expect(deviceQuery).not.toContain('double2')
+    expect(actionQuery).toContain('sum(_sample_interval * if(double2 > 0, double2, 1.0))')
+    expect(actionQuery).toContain('sample_rate_min')
+    const summaryQuery = bodies.find(body => !body.includes('GROUP BY'))
+    expect(summaryQuery).toContain('sample_rate_min')
+  })
+
   it('samples APP_LOG_EXTERNAL and stores the sample rate in double2', async () => {
     const { APP_LOG_EXTERNAL_SAMPLE_RATE, trackLogsCFExternal } = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
     const writeDataPoint = vi.fn()

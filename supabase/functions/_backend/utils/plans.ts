@@ -23,7 +23,7 @@ import {
   isTrialOrg,
 } from './supabase.ts'
 import { sendEventToTracking } from './tracking.ts'
-import { isStripeConfigured } from './utils.ts'
+import { getEnv, isStripeConfigured } from './utils.ts'
 
 type CreditMetric = Database['public']['Enums']['credit_metric_type']
 type PlanUsageMetric = Exclude<keyof PlanUsage, 'total_percent'>
@@ -47,6 +47,8 @@ interface StripeInfoForPlanCheck {
   subscription_anchor_end?: string | null
   status?: Database['public']['Enums']['stripe_status'] | null
   trial_at?: string | null
+  product_id?: string | null
+  price_id?: string | null
 }
 
 interface OrgWithCustomerInfo {
@@ -446,11 +448,17 @@ async function userAbovePlan(c: Context, org: {
     c,
     eventName,
     'usage_limit',
-    { best_plan: bestPlanKey, plan_name: currentPlanName },
+    {
+      best_plan: bestPlanKey,
+      best_name: bestPlan,
+      plan_name: currentPlanName,
+      plans_url: getConsolePlansUrl(c, orgId),
+    },
     orgId,
     orgId,
     '0 0 * * 1',
     drizzleClient,
+    'admins_and_billing',
   )
   if (sent) {
     cloudlog({ requestId: c.get('requestId'), message: eventName, orgId })
@@ -465,6 +473,11 @@ async function userAbovePlan(c: Context, org: {
   return { exceededFlags, needsUpgrade: true }
 }
 
+function getConsolePlansUrl(c: Context, orgId: string) {
+  const base = (getEnv(c, 'WEBAPP_URL') || '').replace(/\/+$/, '')
+  return base ? `${base}/settings/organization/plans?oid=${encodeURIComponent(orgId)}` : null
+}
+
 async function userIsAtPlanUsage(c: Context, orgId: string, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>) {
   const alert = getPlanUsageAlert(percentUsage)
   if (!alert)
@@ -473,9 +486,11 @@ async function userIsAtPlanUsage(c: Context, orgId: string, percentUsage: PlanUs
   const sent = await sendNotifToOrgMembers(c, alert.eventName, 'usage_limit', {
     metric: alert.metric,
     metric_percent: alert.metricPercent,
-    percent: alert.percentUsage,
+    percent: String(alert.threshold),
+    usage: alert.percentUsage,
     threshold: alert.threshold,
-  }, orgId, orgId, '0 0 1 * *', drizzleClient)
+    plans_url: getConsolePlansUrl(c, orgId),
+  }, orgId, orgId, '0 0 1 * *', drizzleClient, 'admins_and_billing')
   if (sent) {
     await sendEventToTracking(c, {
       channel: 'usage',
@@ -503,7 +518,9 @@ export async function getOrgWithCustomerInfo(c: Context, orgId: string) {
             'subscription_id', si.subscription_id,
             'subscription_anchor_start', si.subscription_anchor_start,
             'subscription_anchor_end', si.subscription_anchor_end,
-            'trial_at', si.trial_at
+            'trial_at', si.trial_at,
+            'product_id', si.product_id,
+            'price_id', si.price_id
           )
           FROM public.stripe_info AS si
           WHERE si.customer_id = o.customer_id
@@ -606,8 +623,13 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
   }
   else if (is_good_plan && is_onboarded) {
     await userIsAtPlanUsage(c, orgId, percentUsage, drizzleClient)
-    finalIsGoodPlan = true
-    exceededFlags = createEmptyExceededFlags()
+  }
+
+  if (is_good_plan) {
+    if (!(is_onboarded && isCreditOnlyBillingOrg(org)))
+      finalIsGoodPlan = true
+    if (!exceededFlags)
+      exceededFlags = createEmptyExceededFlags()
   }
 
   return { exceededFlags, finalIsGoodPlan }
@@ -629,8 +651,20 @@ async function updateExceededFlags(customerId: string | null, flags: PlanExceede
   `)
 }
 
+export type PlanBillingGuard = {
+  productId: string | null | undefined
+  priceId: string | null | undefined
+}
+
 // Update stripe_info once, and only when the calculated plan state changed.
-export async function updatePlanStatus(org: any, result: PlanNotificationResult, isAbovePlan: boolean, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<void> {
+export async function updatePlanStatus(
+  org: any,
+  result: PlanNotificationResult,
+  isAbovePlan: boolean,
+  percentUsage: PlanUsage,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  billingGuard?: PlanBillingGuard,
+): Promise<void> {
   if (!org.customer_id)
     return
 
@@ -643,6 +677,10 @@ export async function updatePlanStatus(org: any, result: PlanNotificationResult,
           is_good_plan = ${result.finalIsGoodPlan},
           plan_usage = ${planUsage}
       WHERE customer_id = ${org.customer_id}
+        ${billingGuard
+        ? sql`AND product_id IS NOT DISTINCT FROM ${billingGuard.productId ?? null}
+             AND price_id IS NOT DISTINCT FROM ${billingGuard.priceId ?? null}`
+        : sql``}
         AND ROW(is_above_plan, is_good_plan, plan_usage)
           IS DISTINCT FROM ROW(${isAbovePlan}, ${result.finalIsGoodPlan}, ${planUsage})
     `)
@@ -660,6 +698,10 @@ export async function updatePlanStatus(org: any, result: PlanNotificationResult,
         bandwidth_exceeded = ${flags.bandwidth_exceeded},
         build_time_exceeded = ${flags.build_time_exceeded}
     WHERE customer_id = ${org.customer_id}
+      ${billingGuard
+      ? sql`AND product_id IS NOT DISTINCT FROM ${billingGuard.productId ?? null}
+           AND price_id IS NOT DISTINCT FROM ${billingGuard.priceId ?? null}`
+      : sql``}
       AND ROW(is_above_plan, is_good_plan, plan_usage, mau_exceeded, storage_exceeded, bandwidth_exceeded, build_time_exceeded)
         IS DISTINCT FROM ROW(${isAbovePlan}, ${result.finalIsGoodPlan}, ${planUsage}, ${flags.mau_exceeded}, ${flags.storage_exceeded}, ${flags.bandwidth_exceeded}, ${flags.build_time_exceeded})
   `)
@@ -671,6 +713,10 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
   // It must run even when Stripe is not configured (e.g. local tests / on-prem),
   // as it does not require Stripe API calls.
   const org = await getOrgWithCustomerInfo(c, orgId)
+  const billingGuard: PlanBillingGuard = {
+    productId: org.stripe_info?.product_id,
+    priceId: org.stripe_info?.price_id,
+  }
 
   // Handle trial organizations
   const trialHandled = await handleTrialOrg(c, orgId, org, drizzleClient)
@@ -691,7 +737,7 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
       const isAbovePlan = percentUsage.total_percent > 100
       try {
         const result = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
-        await updatePlanStatus(org, result, isAbovePlan, percentUsage, drizzleClient)
+        await updatePlanStatus(org, result, isAbovePlan, percentUsage, drizzleClient, billingGuard)
       }
       catch (error) {
         planStatusWriteError = error

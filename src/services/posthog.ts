@@ -86,6 +86,12 @@ export function createPosthogClientOptions() {
     defaults: '2026-05-30',
     autocapture: false,
     capture_performance: { web_vitals: false },
+    session_recording: {
+      // Assistant requests contain chat content and provider tokens. Do not let
+      // remote replay settings enable capture of network payloads or headers.
+      recordBody: false,
+      recordHeaders: false,
+    },
     before_send: (event) => {
       const sanitizedEvent = sanitizePostHogInvitationEvent(event)
       if (shouldSuppressPostHogExceptionEvent(sanitizedEvent))

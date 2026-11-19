@@ -6,6 +6,8 @@ export const disableUpdatePgEnum = pgEnum('disable_update', ['major', 'minor', '
 export const channelUpdatePackagePgEnum = pgEnum('channel_update_package', ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'])
 
 export const apps = pgTable('apps', {
+  serving_regions: text('serving_regions').array().notNull(),
+  serving_region_mode: text('serving_region_mode').notNull(),
   created_at: timestamp('created_at').notNull().defaultNow(),
   app_id: varchar('app_id').notNull(),
   icon_url: varchar('icon_url').notNull(),
@@ -24,6 +26,9 @@ export const apps = pgTable('apps', {
   expose_metadata: boolean('expose_metadata').notNull().default(false),
   block_provider_infra_requests: boolean('block_provider_infra_requests').notNull().default(true),
   allow_device_custom_id: boolean('allow_device_custom_id').notNull().default(true),
+  allow_preview: boolean('allow_preview').notNull().default(false),
+  default_upload_channel: varchar('default_upload_channel').notNull().default('production'),
+  bundle_incompatible_alert: text('bundle_incompatible_alert').notNull().default('default'),
   device_data_collection: jsonb('device_data_collection').notNull().default({
     country: true,
     platform: true,
@@ -83,6 +88,7 @@ export const channels = pgTable('channels', {
   android: boolean('android').notNull().default(true),
   electron: boolean('electron').notNull().default(true),
   allow_device_self_set: boolean('allow_device_self_set').default(false).notNull(),
+  bundle_alert_enabled: boolean('bundle_alert_enabled'),
   allow_emulator: boolean('allow_emulator').notNull().default(true),
   allow_device: boolean('allow_device').notNull().default(true),
   allow_dev: boolean('allow_dev').notNull().default(true),
@@ -172,6 +178,7 @@ export const users = pgTable('users', {
     device_error: true,
     channel_self_rejected: true,
     cli_realtime_feed: true,
+    security_updates: false,
   }),
   onboarding: jsonb('onboarding').notNull().default({}),
 })

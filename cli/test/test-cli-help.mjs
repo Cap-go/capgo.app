@@ -16,6 +16,9 @@ function getHelp(...command) {
 
 const buildHelp = getHelp('build')
 assert.match(buildHelp, /Build native iOS and Android apps with Capgo Cloud\./)
+assert.match(buildHelp, /generally available for production iOS and Android releases/)
+assert.doesNotMatch(buildHelp, /limited beta/i)
+assert.match(buildHelp, /https:\/\/capgo.app\/builder-data\//)
 assert.match(buildHelp, /Quick start:/)
 assert.match(buildHelp, /needed \[options\] \[appId\]\s+Check whether a native build is required/)
 assert.match(buildHelp, /request \[options\] \[appId\]\s+Request a native build from Capgo Cloud/)

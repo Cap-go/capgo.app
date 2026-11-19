@@ -13,12 +13,14 @@ import { buildChannelInsertOrExistingSql, resolveChannelInsert } from './channel
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
 import { CREATE_DEFAULT_API_KEYS_SQL } from './default_apikeys.ts'
 import { getDirectOfferStatus } from './direct_offer.ts'
+import { gotrueAdmin } from './gotrue_admin.ts'
 import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
 import { isTransientPgError } from './pg_errors.ts'
 import { authPrincipal, queryJson, withRlsContext } from './pg_rls.ts'
 import { getPlanPriceInterval } from './plan_price_interval.ts'
+import { devicesOffsetClause } from './devicesPageOffset.ts'
 import { getClientIP } from './rate_limit.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { Constants } from './supabase.types.ts'
@@ -214,7 +216,7 @@ async function readDevicesSBSql(c: Context, params: ReadDevicesParams, customIdM
   try {
     return await queryJson<Database['public']['Tables']['devices']['Row']>(
       pgClient,
-      `SELECT * FROM public.devices WHERE ${where} ORDER BY ${orderBy} LIMIT $${values.length}`,
+      `SELECT * FROM public.devices WHERE ${where} ORDER BY ${orderBy} LIMIT $${values.length} ${devicesOffsetClause(params.offset)}`,
       values,
     )
   }
@@ -292,6 +294,8 @@ export interface DeletePayload<T extends keyof Database['public']['Tables']> {
   schema: string
   record: null
   old_record: Database['public']['Tables'][T]['Row']
+  /** When the row was deleted, set by trigger_http_queue_post_to_function. */
+  occurred_at?: string
 }
 
 export function supabaseClient(c: Context, jwt: string) {
@@ -1117,7 +1121,7 @@ export async function customerToSegmentOrg(
   // Direct-offer (paid ads) orgs never had a trial: tag offer=direct and strip trial tags.
   // Callers already loaded the org, so reuse its created_by instead of re-reading it.
   // An unknown offer (lookup failed) only withholds trial tags until a later sync.
-  const directOffer = await getDirectOfferStatus(c, supabaseAdmin(c), org.created_by)
+  const directOffer = await getDirectOfferStatus(c, gotrueAdmin(c), org.created_by)
   return applyDirectOfferBentoTags(await customerToSegmentOrgBase(c, org.id, price_id, plan, trialPlanNamesToRemove), directOffer, trialPlanNamesToRemove)
 }
 
@@ -1291,13 +1295,14 @@ export async function trackMetaSB(
   app_id: string,
   version_id: number,
   size: number,
+  at?: string | null,
 ): Promise<{ data: boolean | null, error: unknown | null }> {
-  cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size })
+  cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size, at })
   try {
     const data = await scalarRpc<boolean>(
       c,
-      'SELECT public.upsert_version_meta(p_app_id => $1::varchar, p_version_id => $2::bigint, p_size => $3::bigint) AS result',
-      [app_id, version_id, size],
+      'SELECT public.upsert_version_meta(p_app_id => $1::varchar, p_version_id => $2::bigint, p_size => $3::bigint, p_timestamp => $4::timestamptz) AS result',
+      [app_id, version_id, size, at ?? null],
     )
     return { data, error: null }
   }
@@ -1399,14 +1404,14 @@ export function trackLogsSB(c: Context, app_id: string, device_id: string, actio
   }, 'trackLogsSB error')
 }
 
-type UsageRpc = 'read_device_usage' | 'read_bandwidth_usage' | 'read_storage_usage' | 'read_version_usage'
+type UsageRpc = 'read_device_usage' | 'read_bandwidth_usage' | 'read_version_usage'
 type UsageRpcRows<F extends UsageRpc> = Database['public']['Functions'][F]['Returns']
 
 /**
  * Service-role read of a usage RPC's rows as PostgREST JSON. Errors were ignored by these callers
- * (supabase-js `data ?? []`), so they still resolve to no rows; they are logged now.
+ * (supabase-js `data ?? []`). Preserve that fallback unless a caller requires a strict read.
  */
-async function readUsageRpc<F extends UsageRpc>(c: Context, fn: F, args: Record<string, unknown>): Promise<UsageRpcRows<F>> {
+async function readUsageRpc<F extends UsageRpc>(c: Context, fn: F, args: Record<string, unknown>, options: { throwOnError?: boolean } = {}): Promise<UsageRpcRows<F>> {
   const entries = Object.entries(args)
   const namedArgs = entries.map(([name], index) => `${quoteIdent(name)} => $${index + 1}`)
   try {
@@ -1414,6 +1419,8 @@ async function readUsageRpc<F extends UsageRpc>(c: Context, fn: F, args: Record<
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: `Error reading ${fn}`, app_id: args.p_app_id, error })
+    if (options.throwOnError)
+      throw error
     return [] as unknown as UsageRpcRows<F>
   }
 }
@@ -1426,11 +1433,7 @@ export function readBandwidthUsageSB(c: Context, app_id: string, period_start: s
   return readUsageRpc(c, 'read_bandwidth_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 }
 
-export function readStatsStorageSB(c: Context, app_id: string, period_start: string, period_end: string) {
-  return readUsageRpc(c, 'read_storage_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
-}
-
-export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string): Promise<VersionUsage[]> {
+export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string, options: { throwOnError?: boolean } = {}): Promise<VersionUsage[]> {
   const channelId = typeof channel === 'object' && channel ? channel.id : null
   const channelName = typeof channel === 'string' ? channel : channelId ? null : channel?.name
   const args = {
@@ -1440,7 +1443,7 @@ export async function readStatsVersionSB(c: Context, app_id: string, period_star
     ...(channelName ? { p_channel_name: channelName } : {}),
     ...(channelId ? { p_channel_id: channelId } : {}),
   }
-  const data = await readUsageRpc(c, 'read_version_usage', args)
+  const data = await readUsageRpc(c, 'read_version_usage', args, options)
   // Cast to VersionUsage[] - the SQL function returns version_name but auto-generated types are stale
   return data as unknown as VersionUsage[]
 }
@@ -1591,7 +1594,11 @@ export async function readChannelDeviceOverrideIdsSB(c: Context, app_id: string,
       limit: MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS,
     })
   }
-  return { into: partitioned.into, elsewhere: partitioned.elsewhere }
+  return {
+    into: partitioned.into,
+    elsewhere: partitioned.elsewhere,
+    truncated: partitioned.truncated || rows.length > CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT,
+  }
 }
 
 const CHANNEL_DEVICE_PLATFORMS: ChannelDevicePlatform[] = ['ios', 'android', 'electron']
@@ -1622,9 +1629,16 @@ export function pickChannelDefaultPlatforms(rows: PublicChannelRow[], channel: V
 
 /**
  * Platforms where `channel` is the public default, read from the app's public
- * channels. Returns none on error so counts fall back to reported channels.
+ * channels. Returns none on error so counts fall back to reported channels,
+ * unless `throwOnError` is set: callers that cache the result (channel impact)
+ * must not read a failed lookup as "default for no platform".
  */
-export async function readChannelDefaultPlatformsSB(c: Context, app_id: string, channel: VersionUsageChannel | string): Promise<ChannelDevicePlatform[]> {
+export async function readChannelDefaultPlatformsSB(
+  c: Context,
+  app_id: string,
+  channel: VersionUsageChannel | string,
+  options: { throwOnError?: boolean } = {},
+): Promise<ChannelDevicePlatform[]> {
   try {
     const rows = await withAdminPg(c, pg => queryJson<PublicChannelRow>(
       pg,
@@ -1638,6 +1652,8 @@ export async function readChannelDefaultPlatformsSB(c: Context, app_id: string, 
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading public channels for device counts', app_id, error })
+    if (options.throwOnError)
+      throw error
     return []
   }
 }

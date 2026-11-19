@@ -4,7 +4,7 @@ import type { Database } from '../src/types/database.types'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import process, { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './sql-data-client'
 import { Hono } from 'hono/tiny'
 import { Pool } from 'pg'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
@@ -172,9 +172,9 @@ export const SUPABASE_ANON_KEY = env.SUPABASE_ANON_KEY ?? ''
  * All other endpoints go to the API worker
  */
 export function getEndpointUrl(path: string): string {
-  // PostgREST is always served from the Supabase API host (also under Cloudflare CI).
+  // Tests never call PostgREST: use createClient from ./sql-data-client or sqlRestRequest.
   if (path.startsWith('/rest/'))
-    return `${SUPABASE_BASE_URL}${path}`
+    throw new Error(`Tests must not call PostgREST (${path}); use ./sql-data-client or ./sql-rest-request`)
 
   if (!USE_CLOUDFLARE) {
     // In CI, Node/Undici prefers IPv6 for localhost (::1). Supabase Edge runtime
@@ -879,6 +879,8 @@ export function getSupabaseClient(): SupabaseClient<Database> {
     // Support both env names. Supabase CLI exposes SERVICE_ROLE_KEY, and our wrapper exports
     // SUPABASE_SERVICE_ROLE_KEY + SUPABASE_SERVICE_KEY for convenience.
     const supabaseServiceKey = env.SUPABASE_SERVICE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY ?? env.SERVICE_ROLE_KEY ?? ''
+    // createClient from sql-data-client: data calls run as SQL with the service
+    // role, never through PostgREST. auth/storage stay on supabase-js.
     supabaseClient = createClient<Database>(supabaseUrl, supabaseServiceKey, {
       db: {
         schema: 'public',

@@ -1,0 +1,19 @@
+<p>Hi {{ visitor.first_name | default: "there" | escape }},</p>
+<p>Here is the weekly update activity for <strong>{{ event.details.app_id | escape }}</strong>.</p>
+{% if event.details.report_schema_version == "2" %}
+<p><strong>Reporting window (UTC):</strong> {{ event.details.window_start | escape }} 00:00 to {{ event.details.window_end | escape }} 00:00 (end excluded). This covers seven completed days.</p>
+{% else %}
+<p>This report uses the previous reporting format. Its exact date range is unavailable.</p>
+{% endif %}
+<ul>
+<li><strong>Install events:</strong> {{ event.details.weekly_install_formatted | default: event.details.weekly_install | default: "Unavailable" | escape }}</li>
+<li><strong>Failure events:</strong> {{ event.details.weekly_fail_formatted | default: event.details.weekly_fail | default: "Unavailable" | escape }}</li>
+{% if event.details.report_schema_version == "2" %}
+<li><strong>Update-check requests:</strong> {{ event.details.weekly_update_checks_formatted | default: event.details.weekly_update_checks | default: "Unavailable" | escape }}</li>
+{% endif %}
+</ul>
+<p>These are app-wide event counts across bundles and channels. They may be estimated from sampled analytics, and late events may not yet be included.</p>
+<p>Update checks are not app opens or unique people. One device can check repeatedly. Repeat installs and failures can also count more than once; these counters do not measure unique-device adoption or establish release health.</p>
+<p><a href="https://console.capgo.app/app/{{ event.details.app_id | url_encode }}">View app activity</a></p>
+<p>Questions about the report? Reply to this email.</p>
+<p><a href="https://console.capgo.app/settings/account/notifications">Notification settings</a> · <a href="{{ visitor.unsubscribe_url }}">Unsubscribe</a></p>

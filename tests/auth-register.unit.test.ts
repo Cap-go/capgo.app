@@ -51,13 +51,12 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
       signUp: signUpMock,
     },
   }),
-  supabaseAdmin: () => ({
-    auth: {
-      admin: {
-        deleteUser: deleteUserMock,
-        updateUserById: updateUserByIdMock,
-      },
-    },
+}))
+
+vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
+  gotrueAdmin: () => ({
+    deleteUser: deleteUserMock,
+    updateUserById: updateUserByIdMock,
   }),
 }))
 
@@ -78,8 +77,9 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
       }
       if (text.includes('INSERT INTO public.users')) {
         expect(text).toContain('ON CONFLICT (id) DO UPDATE')
-        const [id, email, first_name, last_name, opt_for_newsletters] = values
-        await unwrap(usersUpsertMock({ id, email, first_name, last_name, enable_notifications: true, opt_for_newsletters }))
+        expect(text.split('ON CONFLICT')[1]).not.toContain('country')
+        const [id, email, first_name, last_name, opt_for_newsletters, country] = values
+        await unwrap(usersUpsertMock({ id, email, first_name, last_name, enable_notifications: true, opt_for_newsletters, country }))
         return { rows: [] }
       }
       if (text.includes('DELETE FROM public.users')) {
@@ -94,10 +94,10 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
 
 const { app } = await import('../supabase/functions/_backend/auth/register.ts')
 
-function postRegister(body: Record<string, unknown>) {
+function postRegister(body: Record<string, unknown>, country?: string) {
   return app.request('/', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(country ? { 'cf-ipcountry': country } : {}) },
     body: JSON.stringify(body),
   })
 }
@@ -113,6 +113,18 @@ const validBody = {
 describe('pOST /auth/register unit', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it.each([
+    ['in', 'IN'],
+    ['BR', 'BR'],
+    ['XX', null],
+    ['T1', null],
+    [undefined, null],
+  ])('stores request country %s on the new profile as %s', async (country, expected) => {
+    const response = await postRegister({ ...validBody, country: 'US' }, country ?? undefined)
+    expect(response.status).toBe(200)
+    expect(usersUpsertMock).toHaveBeenCalledWith(expect.objectContaining({ country: expected }))
   })
 
   it.each([
@@ -203,6 +215,7 @@ describe('pOST /auth/register unit', () => {
       last_name: lastName ?? '',
       enable_notifications: true,
       opt_for_newsletters: false,
+      country: null,
     })
   })
 
@@ -247,6 +260,9 @@ describe('pOST /auth/register unit', () => {
       utm_source: 'example-source',
       utm_medium: 'readme',
       utm_campaign: 'example-campaign',
+      utm_content: 'creative-a',
+      utm_term: 'capacitor-security',
+      oppref: 'opaque-Example_click+/==',
     }
     const response = await postRegister({
       ...validBody,
@@ -268,7 +284,16 @@ describe('pOST /auth/register unit', () => {
       last_name: '',
       enable_notifications: true,
       opt_for_newsletters: newsletter,
+      country: null,
     })
+  })
+
+
+  it.each([42, {}, '', 'x'.repeat(1025), 'bad\nreference'])('ignores malformed optional click references without blocking signup: %s', async (oppref) => {
+    const response = await postRegister({ ...validBody, oppref })
+    expect(response.status).toBe(200)
+    const request = signUpMock.mock.calls[0] as unknown as [{ options: { data: Record<string, unknown> } }]
+    expect(request[0].options.data).not.toHaveProperty('oppref')
   })
 
   it('rejects non-boolean newsletter preferences before signup', async () => {

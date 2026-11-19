@@ -1,4 +1,4 @@
-import type { AuthChangeEvent, Factor, Session, User } from '../../supabase/functions/_backend/utils/console_contract'
+import type { AuthChangeEvent, Session, User } from '../../supabase/functions/_backend/utils/console_contract'
 
 /**
  * Console auth client. Speaks the GoTrue protocol to `/private/console/auth/*`
@@ -197,7 +197,7 @@ export function createConsoleAuthClient(options: ConsoleAuthOptions) {
       refresh_token: response.refresh_token,
       user: response.user,
       ...(response.weak_password ? { weak_password: response.weak_password } : {}),
-    } as Session
+    }
   }
 
   async function request<T = any>(method: string, path: string, init: { body?: unknown, token?: string | null } = {}): Promise<Result<T | null>> {
@@ -394,7 +394,7 @@ export function createConsoleAuthClient(options: ConsoleAuthOptions) {
       const { data, error } = await getUser()
       if (error || !data.user)
         return { data: null, error: error ?? sessionMissing() }
-      const all = (data.user.factors ?? []) as Factor[]
+      const all = data.user.factors ?? []
       return {
         data: {
           all,

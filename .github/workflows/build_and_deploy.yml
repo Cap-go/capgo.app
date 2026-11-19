@@ -22,10 +22,14 @@ jobs:
     timeout-minutes: 10
     name: Resolve deploy scope
     permissions:
-      contents: read
+      contents: write
+      actions: read
     outputs:
+      state_oid: ${{ steps.scope.outputs.state_oid }}
+      plugin_matrix: ${{ steps.scope.outputs.plugin_matrix }}
       api: ${{ steps.scope.outputs.api }}
       files: ${{ steps.scope.outputs.files }}
+      gotrue: ${{ steps.scope.outputs.gotrue }}
       plugins: ${{ steps.scope.outputs.plugins }}
       supabase: ${{ steps.scope.outputs.supabase }}
       translation: ${{ steps.scope.outputs.translation }}
@@ -43,25 +47,68 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Resolve triggering deployment target
+      - name: Resolve immutable deployment attempt target
         id: target
-        run: bun scripts/resolve-deploy-tag.ts --resolve "${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+        run: bun scripts/resolve-deploy-tag.ts --attempt "${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
       - name: Reject stale queued deployment
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ github.ref_name }}"
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ steps.target.outputs.deploy_tag }}"
       - name: Checkout deployment target
         uses: actions/checkout@v6
         with:
           ref: ${{ steps.target.outputs.deploy_sha }}
           fetch-depth: 0
           filter: blob:none
+      - name: Install deployment helper dependencies
+        run: bun install --frozen-lockfile
       - name: Resolve deploy scope
         id: scope
-        run: bun scripts/deploy-scope.ts "${{ steps.target.outputs.deploy_tag }}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_TAG: ${{ steps.target.outputs.deploy_tag }}
+          DEPLOY_SHA: ${{ steps.target.outputs.deploy_sha }}
+        run: bun scripts/deploy-state.ts begin >> "$GITHUB_OUTPUT"
 
   # Tests already passed before tag was created, so just build and deploy
+  read_replica_schema:
+    needs: changes
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    name: Reconcile production read-replica schema
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+      - name: Setup Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Install dependencies
+        run: bun install
+      - name: Reconcile the Google subscriber through server-side Cloud SQL import
+        env:
+          GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+        run: |
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
+          gcloud auth activate-service-account --key-file="$credentials_file"
+          gcloud config set project capgo-394818
+          bun scripts/sync-read-replica-schema.ts --apply --allow-drop
+
   supabase_deploy:
-    needs: [changes]
-    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' }}
+    needs: [changes, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     name: Build code and deploy to Supabase
@@ -113,7 +160,21 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
       - name: Apply Supabase Migrations
-        run: supabase db push
+        run: bash scripts/push-release-migrations.sh
+      - name: Setup Google Cloud CLI
+        if: env.SUPA_ENV == 'PROD'
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Guard read-replica schema against primary migrations
+        if: env.SUPA_ENV == 'PROD'
+        env:
+          GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+        run: |
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
+          gcloud auth activate-service-account --key-file="$credentials_file"
+          gcloud config set project capgo-394818
+          bun scripts/sync-read-replica-schema.ts --guard
       - name: Update functions
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
@@ -138,6 +199,43 @@ jobs:
               exit 1
             fi
           done
+
+  read_replica_subscription:
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' && needs.supabase_deploy.result == 'success' && needs.read_replica_schema.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    name: Refresh read-replica subscription
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+      - name: Setup Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Install dependencies
+        run: bun install
+      - name: Refresh subscription for newly published tables
+        env:
+          GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+        run: |
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
+          gcloud auth activate-service-account --key-file="$credentials_file"
+          gcloud config set project capgo-394818
+          bun scripts/sync-read-replica-schema.ts --refresh-subscription
 
   # Build the web app while the backend deploys; only publishing waits for it.
   build_webapp:
@@ -219,8 +317,8 @@ jobs:
           include-hidden-files: true
 
   deploy_webapp:
-    needs: [changes, build_webapp, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && needs.build_webapp.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') }}
+    needs: [changes, build_webapp, supabase_deploy, read_replica_schema, read_replica_subscription]
+    if: ${{ always() && needs.changes.result == 'success' && needs.build_webapp.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -291,8 +389,8 @@ jobs:
           prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}
 
   deploy_api:
-    needs: [changes, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -322,10 +420,18 @@ jobs:
             echo "ENV=prod" >> $GITHUB_ENV
           fi
       - name: Deploy CF Worker API
-        run: bun run deploy:cloudflare:api:${{ env.ENV }}
+        run: |
+          set -euo pipefail
+          : "${CHANGELOG_GITHUB_TOKEN:?Missing GitHub credential for release notes}"
+          secrets_file=$(mktemp)
+          trap 'rm -f "$secrets_file"' EXIT
+          # The Actions GITHUB_TOKEN expires after this job; use the existing long-lived credential.
+          bun -e 'await Bun.write(process.argv[1], JSON.stringify({ GITHUB_TOKEN: process.env.CHANGELOG_GITHUB_TOKEN }))' "$secrets_file"
+          bun run deploy:cloudflare:api:${{ env.ENV }} --secrets-file "$secrets_file"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CHANGELOG_GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - name: Retire removed CF Workers
         if: ${{ env.ENV == 'prod' }}
         run: bun scripts/retire-cloudflare-workers.ts
@@ -333,9 +439,38 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+  # Self-hosted GoTrue (auth migration). Production only, and no route yet: nothing reaches it
+  # until the API binds it. Secrets are pushed by hand (deploy:cloudflare_env:gotrue:prod).
+  deploy_gotrue_worker:
+    needs: [changes]
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.gotrue == 'true' && needs.changes.outputs.is_alpha != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+      - name: Install dependencies
+        run: bun install
+      - name: Deploy CF Worker GoTrue
+        run: bun run deploy:cloudflare:gotrue:prod
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
   deploy_translation_worker:
-    needs: [changes, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.translation == 'true' && (needs.supabase_deploy.result == 'success' || (needs.supabase_deploy.result == 'skipped' && needs.changes.outputs.supabase != 'true')) }}
+    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.translation == 'true' && (needs.supabase_deploy.result == 'success' || (needs.supabase_deploy.result == 'skipped' && needs.changes.outputs.supabase != 'true')) && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -371,8 +506,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_files:
-    needs: [changes, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -408,42 +543,13 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_plugin_regions:
-    needs: [changes, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        region: [eu, as, us, sa, oc, af, me, hk, jp]
-        include:
-          - region: eu
-            region_label: Europe (EU)
-            cf_target: plugin_eu
-          - region: as
-            region_label: Asia (AS)
-            cf_target: plugin_as
-          - region: us
-            region_label: United States (US)
-            cf_target: plugin_na
-          - region: sa
-            region_label: South America (SA)
-            cf_target: plugin_sa
-          - region: oc
-            region_label: Oceania (OC)
-            cf_target: plugin_oc
-          - region: af
-            region_label: Africa (AF)
-            cf_target: plugin_af
-          - region: me
-            region_label: Middle East (ME)
-            cf_target: plugin_me
-          - region: hk
-            region_label: Hong Kong (HK)
-            cf_target: plugin_hk
-          - region: jp
-            region_label: Japan (JP)
-            cf_target: plugin_jp
+      matrix: ${{ fromJSON(needs.changes.outputs.plugin_matrix) }}
     name: Deploy CF Worker Plugin (${{ matrix.region_label }})
     steps:
       - name: Checkout
@@ -476,6 +582,35 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  # Reconcile every stable release so a missed/failed snippet rollout is retried
+  # even when the next release only changes another component.
+  deploy_snippets:
+    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription, deploy_api, deploy_files, deploy_plugin_regions, deploy_gotrue_worker]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.is_alpha != 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: Deploy Cloudflare snippets
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+      - name: Deploy and verify all production snippets
+        run: bun run deploy:snippets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
   deploy_native_ios:
     needs: [changes, supabase_deploy, deploy_webapp]
@@ -595,8 +730,8 @@ jobs:
         run: bunx @capgo/cli@latest build request --platform android --path . --sync-android-version --ai-analytics
 
   sync_schema_types:
-    needs: [changes, supabase_deploy]
-    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.is_alpha != 'true' && needs.changes.outputs.requires_schema_types_sync == 'true' && needs.supabase_deploy.result == 'success' }}
+    needs: [changes, read_replica_schema, supabase_deploy]
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.is_alpha != 'true' && needs.changes.outputs.requires_schema_types_sync == 'true' && needs.read_replica_schema.result == 'success' && needs.supabase_deploy.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Sync production schema and generated types
@@ -699,3 +834,33 @@ jobs:
 
           echo "Schema/types publication could not obtain a stable main snapshot after 3 attempts." >&2
           exit 1
+
+  record_deployments:
+    needs: [changes, read_replica_schema, supabase_deploy, read_replica_subscription, deploy_api, deploy_translation_worker, deploy_files, deploy_gotrue_worker, deploy_plugin_regions]
+    if: ${{ always() && needs.changes.result == 'success' }}
+    name: Record completed deployment operations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout immutable deployment target
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install deployment helper dependencies
+        run: bun install --frozen-lockfile
+      - name: Record actual attempt operations with CAS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_TAG: ${{ needs.changes.outputs.deploy_tag }}
+          DEPLOY_SHA: ${{ needs.changes.outputs.deploy_sha }}
+          DEPLOY_STATE_OID: ${{ needs.changes.outputs.state_oid }}
+        run: bun scripts/deploy-state.ts complete

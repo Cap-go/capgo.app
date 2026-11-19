@@ -214,7 +214,7 @@ SET
 DELETE FROM pgmq.q_cron_email
 WHERE
     message -> 'payload' ->> 'appId' = (SELECT app_id FROM deploy_stats_context)
-    AND message -> 'payload' ->> 'type' = 'deploy_install_stats';
+    AND message -> 'payload' ->> 'type' = 'deploy_install_stats_v2';
 
 SELECT
     ok(
@@ -234,7 +234,7 @@ SELECT
             WHERE
                 message -> 'payload' ->> 'appId'
                 = (SELECT app_id FROM deploy_stats_context)
-                AND message -> 'payload' ->> 'type' = 'deploy_install_stats'
+                AND message -> 'payload' ->> 'type' = 'deploy_install_stats_v2'
         ),
         2::bigint,
         'queues one message per platform default channel'
@@ -247,7 +247,7 @@ SELECT
             FROM public.deploy_history
             WHERE id = (SELECT ios_deploy_id FROM deploy_stats_context)
         ),
-        'marks ios deploy as emailed'
+        'claims ios deploy for reporting'
     );
 
 SELECT
@@ -257,7 +257,7 @@ SELECT
             FROM public.deploy_history
             WHERE id = (SELECT android_deploy_id FROM deploy_stats_context)
         ),
-        'marks android deploy as emailed'
+        'claims android deploy for reporting'
     );
 
 SELECT
@@ -280,7 +280,7 @@ SELECT
             WHERE
                 message -> 'payload' ->> 'appId'
                 = (SELECT app_id FROM deploy_stats_context)
-                AND message -> 'payload' ->> 'type' = 'deploy_install_stats'
+                AND message -> 'payload' ->> 'type' = 'deploy_install_stats_v2'
         ),
         2::bigint,
         'does not queue duplicates after resend'

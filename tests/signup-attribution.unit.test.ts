@@ -259,6 +259,9 @@ describe('signup attribution parsing', () => {
     const attribution = parseSignupAttributionRecord({
       ref: 'plugin_updater',
       utm_source: 'docs',
+      utm_content: 'security-a',
+      utm_campaign: 'direct-sales',
+      oppref: 'opaque-click-reference',
       signup_source: 'docs:intro',
       first_touch_type: 'docs',
       first_touch_path: '/docs/intro/',
@@ -272,11 +275,16 @@ describe('signup attribution parsing', () => {
       first_touch_type: 'docs',
       first_touch_path: '/docs/intro/',
       first_utm_source: 'docs',
+      first_utm_content: 'security-a',
+      first_utm_campaign: 'direct-sales',
     })
     expect(signupAttributionEventTags(attribution)).toEqual({
       signup_plugin: 'updater',
       signup_source: 'docs:intro',
       first_touch_type: 'docs',
+      first_utm_source: 'docs',
+      first_utm_content: 'security-a',
+      first_utm_campaign: 'direct-sales',
     })
   })
 })

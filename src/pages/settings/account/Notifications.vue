@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
+import { resolveAccountEmailPref } from '~/utils/accountEmailPreferenceDefaults'
 // tabs handled by settings layout
 
 const { t } = useI18n()
@@ -15,25 +16,8 @@ const optForNewsletters = ref(main.user?.opt_for_newsletters ?? true)
 const displayStore = useDisplayStore()
 displayStore.NavTitle = t('notifications')
 
-// Email preferences with defaults
-interface EmailPreferences {
-  usage_limit?: boolean
-  credit_usage?: boolean
-  onboarding?: boolean
-  builder_onboarding?: boolean
-  weekly_stats?: boolean
-  monthly_stats?: boolean
-  billing_period_stats?: boolean
-  deploy_stats_24h?: boolean
-  bundle_created?: boolean
-  bundle_deployed?: boolean
-  device_error?: boolean
-  channel_self_rejected?: boolean
-  bundle_incompatible?: boolean
-  cli_realtime_feed?: boolean
-}
-
-type EmailPreferenceKey = keyof EmailPreferences
+type EmailPreferenceKey = Parameters<typeof resolveAccountEmailPref>[1]
+type EmailPreferences = Partial<Record<EmailPreferenceKey, boolean>>
 
 const emailPrefs = computed<EmailPreferences>(() => {
   // email_preferences is a JSONB column added in migration 20251228064121
@@ -42,7 +26,7 @@ const emailPrefs = computed<EmailPreferences>(() => {
 })
 
 function getEmailPref(key: EmailPreferenceKey): boolean {
-  return emailPrefs.value[key] ?? true
+  return resolveAccountEmailPref(emailPrefs.value, key)
 }
 
 async function submitNotif() {
@@ -90,7 +74,7 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
 
   isLoading.value = true
   const currentPrefs = emailPrefs.value
-  const newValue = !(currentPrefs[key] ?? true)
+  const newValue = !resolveAccountEmailPref(currentPrefs, key)
   const updatedPrefs = { ...currentPrefs, [key]: newValue }
 
   // email_preferences is a JSONB column added in migration 20251228064121
@@ -240,6 +224,19 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
               <Toggle
                 :value="getEmailPref('cli_realtime_feed')"
                 @change="toggleEmailPref('cli_realtime_feed')"
+              />
+            </InfoRow>
+          </dl>
+
+          <!-- Security advisories -->
+          <h3 class="text-lg font-semibold mb-4 dark:text-white text-slate-700">
+            {{ t('notifications-security-advisories') }}
+          </h3>
+          <dl id="security-updates-email" class="divide-y divide-slate-200 dark:divide-slate-500 mb-8">
+            <InfoRow :label="t('notifications-security-updates')" :editable="false" :value="t('notifications-security-updates-desc')" data-testid="security-updates-email-toggle">
+              <Toggle
+                :value="getEmailPref('security_updates')"
+                @change="toggleEmailPref('security_updates')"
               />
             </InfoRow>
           </dl>

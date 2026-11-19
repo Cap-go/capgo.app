@@ -31,7 +31,7 @@ test('organization admins can add, verify, copy and remove a custom domain', asy
   await expect(section.getByText('Pending verification', { exact: true })).toBeVisible()
   await expect(section.getByText('customers.capgo.app', { exact: true })).toBeVisible()
   await expect(section.getByRole('button', { name: 'Copy updater configuration' })).toHaveCount(0)
-  await section.getByRole('button', { name: 'Refresh status' }).click()
+  await expect(section.getByRole('button', { name: 'Refresh status' })).toHaveCount(0)
   await expect(section.getByText('Active', { exact: true })).toBeVisible()
   await expect(section.locator('pre')).toContainText('https://updates.example.com/channel_self')
   await expect(section.getByRole('button', { name: 'Copy updater configuration' })).toBeVisible()

@@ -2,13 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getUserByIdMock = vi.fn()
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({
-    auth: {
-      admin: {
-        getUserById: getUserByIdMock,
-      },
-    },
+vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
+  gotrueAdmin: () => ({
+    getUserById: getUserByIdMock,
   }),
 }))
 

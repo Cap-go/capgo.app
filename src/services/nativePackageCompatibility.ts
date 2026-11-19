@@ -114,3 +114,59 @@ export async function checkCompatibilityNativePackages(appId: string, channel: s
     localDependencies: nativePackages,
   }
 }
+
+/**
+ * Names of the bundle's native packages that the channel's current bundle does
+ * not satisfy; empty when everything matches or there is nothing to compare.
+ * Throws when the channel cannot be read: callers must stop the change rather
+ * than skip the compatibility warning.
+ */
+export async function findIncompatibleNativePackages(appId: string, channel: string, nativePackages: { name: string, version: string }[]): Promise<string[]> {
+  const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(appId, channel, nativePackages)
+  if (!localDependencies.length)
+    return []
+  return finalCompatibility.filter(pkg => !isCompatible(pkg)).map(pkg => pkg.name)
+}
+
+/** Native-package warning shown before a bundle lands on a channel. */
+export interface BundleChannelCompatibility {
+  /** Native packages of the bundle that the channel's current bundle does not ship (or ships in another version). */
+  packages: string[]
+  /** Dependencies page of the bundle, diffed against the channel's current bundle. */
+  dependenciesPath: string
+}
+
+/**
+ * The warning for putting a bundle (with these native packages) on a channel:
+ * null when every package matches. Throws when the channel cannot be read.
+ */
+export async function bundleChannelCompatibility(
+  appId: string,
+  channel: string,
+  bundleId: number,
+  nativePackages: { name: string, version: string }[],
+  compareVersionId?: number | null,
+): Promise<BundleChannelCompatibility | null> {
+  const packages = await findIncompatibleNativePackages(appId, channel, nativePackages)
+  if (!packages.length)
+    return null
+  // Pre-select the channel's current bundle so the Dependencies page opens already diffed.
+  const compareQuery = compareVersionId ? `?compare=${compareVersionId}` : ''
+  return { packages, dependenciesPath: `/app/${appId}/bundle/${bundleId}/dependencies${compareQuery}` }
+}
+
+/**
+ * bundleChannelCompatibility for a bundle known only by id (history rollback,
+ * revert to the previous bundle). Throws when the bundle or channel cannot be read.
+ */
+export async function readBundleChannelCompatibility(appId: string, channel: string, bundleId: number, compareVersionId?: number | null) {
+  const { data, error } = await useConsole()
+    .from('app_versions')
+    .select('native_packages')
+    .eq('app_id', appId)
+    .eq('id', bundleId)
+    .single()
+  if (error)
+    throw error
+  return bundleChannelCompatibility(appId, channel, bundleId, (data?.native_packages as { name: string, version: string }[] | null) ?? [], compareVersionId)
+}

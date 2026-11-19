@@ -35,8 +35,8 @@ describe('replication lag header cache', () => {
 
     const pool = {
       query: vi.fn()
-        .mockResolvedValueOnce({ rows: [{ lag_seconds: '12.4' }] })
-        .mockResolvedValueOnce({ rows: [{ lag_seconds: '25.1' }] }),
+        .mockResolvedValueOnce({ rows: [{ upstream_lag_seconds: '12.4', primary_commit_lag_seconds: null }] })
+        .mockResolvedValueOnce({ rows: [{ upstream_lag_seconds: '25.1', primary_commit_lag_seconds: null }] }),
     }
     const source = `replica-cache-${crypto.randomUUID()}`
 
@@ -64,7 +64,7 @@ describe('replication lag header cache', () => {
     vi.setSystemTime(new Date('2026-05-01T12:00:00Z'))
 
     const pool = {
-      query: vi.fn().mockResolvedValue({ rows: [{ lag_seconds: '0' }] }),
+      query: vi.fn().mockResolvedValue({ rows: [{ upstream_lag_seconds: '0', primary_commit_lag_seconds: null }] }),
     }
     const source = `replica-zero-${crypto.randomUUID()}`
 

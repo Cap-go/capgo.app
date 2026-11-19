@@ -333,6 +333,8 @@ export async function runConsoleQuery(c: Context, request: ConsoleQueryRequest, 
   // user-facing checks must read. Fail closed if the role cannot be assumed.
   const setupSql = consoleRoleSetupSql(session)
   try {
+    // Cold catalog reads need the transaction's database-side 10s timeout.
+    // Do not replace this with a client-side timeout, which can leave SQL running.
     // The catalog read must run as the login role, before SET LOCAL ROLE.
     // A warm isolate already has it, so the role switch shares the BEGIN round trip.
     if (catalogTask) {

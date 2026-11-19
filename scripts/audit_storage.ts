@@ -7,8 +7,8 @@
  * Usage: bun scripts/audit_storage.ts
  */
 import { HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
-import { createClient } from '@supabase/supabase-js'
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import type pg from 'pg'
+import { connectScriptDb, getDatabaseUrl } from './script_db.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const OUTPUT_DIR = './tmp/r2_audit'
@@ -103,11 +103,7 @@ async function main() {
   })
   const bucket = env.S3_BUCKET || 'capgo'
 
-  const supabase = createClient<Database>(
-    env.SUPABASE_URL,
-    env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-  )
+  const db = await connectScriptDb(getDatabaseUrl(env))
 
   await Bun.write(`${OUTPUT_DIR}/.gitkeep`, '')
 
@@ -122,7 +118,7 @@ async function main() {
 
   console.log('=== Storage Audit ===')
   console.log(`Bucket: ${bucket}`)
-  console.log(`Supabase: ${env.SUPABASE_URL}`)
+  console.log(`Database: ${new URL(getDatabaseUrl(env)).host}`)
   console.log(`Page size: ${PAGE_SIZE}, Concurrency: ${CONCURRENCY}`)
   console.log(`Use listing: ${USE_LISTING ? 'yes' : 'no'}`)
   console.log(`Filter paid/trial orgs: ${FILTER_PAID_TRIAL ? 'yes' : 'no'}`)
@@ -131,7 +127,7 @@ async function main() {
   let r2KeySet: Set<string> | null = null
   if (USE_LISTING) {
     console.log('\nListing R2 keys (this can take a while on very large buckets)...')
-    r2KeySet = await listAllKeysParallel(s3, bucket, R2_PREFIX)
+    r2KeySet = await listAllKeysParallel(db, s3, bucket, R2_PREFIX)
     console.log(`  Loaded ${r2KeySet.size} keys into memory`)
   }
 
@@ -145,7 +141,7 @@ async function main() {
 
   let allowedOrgIds: string[] | null = null
   if (FILTER_PAID_TRIAL) {
-    allowedOrgIds = await getPaidOrTrialOrgIds(supabase)
+    allowedOrgIds = await getPaidOrTrialOrgIds(db)
     console.log(`\nPaid/trial orgs found: ${allowedOrgIds.length}`)
     if (allowedOrgIds.length === 0) {
       console.log('No paid/trial orgs found. Exiting.')
@@ -159,19 +155,14 @@ async function main() {
   for (const orgChunk of orgChunks) {
     let from = 0
     while (true) {
-      const to = from + PAGE_SIZE - 1
-      let query = supabase
-        .from('app_versions')
-        .select('id, app_id, owner_org, deleted, r2_path, manifest_count')
-        .range(from, to)
-
-      if (orgChunk) query = query.in('owner_org', orgChunk)
-
-      const { data, error } = await query
-      if (error) {
+      const { rows: data } = await db.query(
+        `SELECT id, app_id, owner_org, deleted, r2_path, manifest_count FROM public.app_versions
+         WHERE ($1::uuid[] IS NULL OR owner_org = ANY($1)) ORDER BY id LIMIT $2 OFFSET $3`,
+        [orgChunk, PAGE_SIZE, from],
+      ).catch((error) => {
         console.error('Error fetching app_versions:', error)
         process.exit(1)
-      }
+      })
       if (!data || data.length === 0) break
 
       for (const row of data) {
@@ -214,18 +205,15 @@ async function main() {
 
   console.log('\nCounting total versions/manifests to check...')
   for (const orgChunk of orgChunks) {
-    let query = supabase
-      .from('app_versions')
-      .select('id', { count: 'exact', head: true })
-      .eq('deleted', false)
-      .not('r2_path', 'is', null)
-    if (orgChunk) query = query.in('owner_org', orgChunk)
-    const { count, error } = await query
-    if (error) {
+    const { rows } = await db.query(
+      `SELECT count(*) AS count FROM public.app_versions
+       WHERE deleted = false AND r2_path IS NOT NULL AND ($1::uuid[] IS NULL OR owner_org = ANY($1))`,
+      [orgChunk],
+    ).catch((error) => {
       console.error('Error counting app_versions:', error)
       process.exit(1)
-    }
-    totalVersionsToCheck += count ?? 0
+    })
+    totalVersionsToCheck += rows[0]?.count ?? 0
   }
 
   const versionIds = Array.from(versionMap.keys())
@@ -234,16 +222,14 @@ async function main() {
   totalManifestsToCheck = 0
   for (let i = 0; i < manifestCountChunks.length; i++) {
     const idChunk = manifestCountChunks[i]
-    const { count, error } = await supabase
-      .from('manifest')
-      .select('id', { count: 'exact', head: true })
-      .in('app_version_id', idChunk)
-      .not('s3_path', 'is', null)
-    if (error) {
+    const { rows } = await db.query(
+      'SELECT count(*) AS count FROM public.manifest WHERE app_version_id = ANY($1::bigint[]) AND s3_path IS NOT NULL',
+      [idChunk],
+    ).catch((error) => {
       console.error(`Error counting manifest (chunk ${i + 1}/${manifestCountChunks.length}, size=${idChunk.length}):`, error)
       process.exit(1)
-    }
-    totalManifestsToCheck += count ?? 0
+    })
+    totalManifestsToCheck += rows[0]?.count ?? 0
   }
   console.log(`Total versions to check: ${totalVersionsToCheck}`)
   console.log(`Total manifests to check: ${totalManifestsToCheck}`)
@@ -256,21 +242,15 @@ async function main() {
     console.log(`\n[versions] Org chunk ${orgLabel} starting at offset ${orgIndex === (state?.versions?.orgIndex ?? 0) ? (state?.versions?.offset ?? 0) : 0}`)
     let from = orgIndex === (state?.versions?.orgIndex ?? 0) ? (state?.versions?.offset ?? 0) : 0
     while (true) {
-      const to = from + PAGE_SIZE - 1
-      let query = supabase
-        .from('app_versions')
-        .select('id, app_id, owner_org, name, r2_path, deleted')
-        .eq('deleted', false)
-        .not('r2_path', 'is', null)
-        .range(from, to)
-
-      if (orgChunk) query = query.in('owner_org', orgChunk)
-
-      const { data, error } = await query
-      if (error) {
+      const { rows: data } = await db.query(
+        `SELECT id, app_id, owner_org, name, r2_path, deleted FROM public.app_versions
+         WHERE deleted = false AND r2_path IS NOT NULL AND ($1::uuid[] IS NULL OR owner_org = ANY($1))
+         ORDER BY id LIMIT $2 OFFSET $3`,
+        [orgChunk, PAGE_SIZE, from],
+      ).catch((error) => {
         console.error('Error fetching app_versions for audit:', error)
         process.exit(1)
-      }
+      })
       if (!data || data.length === 0) break
 
       await asyncPool(CONCURRENCY, data, async (row) => {
@@ -324,18 +304,14 @@ async function main() {
     console.log(`\n[manifests] Chunk ${chunkIndex + 1}/${versionIdChunks.length} starting at offset ${chunkIndex === (state?.manifests?.chunkIndex ?? 0) ? (state?.manifests?.offset ?? 0) : 0}`)
     let from = chunkIndex === (state?.manifests?.chunkIndex ?? 0) ? (state?.manifests?.offset ?? 0) : 0
     while (true) {
-      const to = from + PAGE_SIZE - 1
-      const { data, error } = await supabase
-        .from('manifest')
-        .select('id, app_version_id, s3_path')
-        .in('app_version_id', idChunk)
-        .not('s3_path', 'is', null)
-        .range(from, to)
-
-      if (error) {
+      const { rows: data } = await db.query(
+        `SELECT id, app_version_id, s3_path FROM public.manifest
+         WHERE app_version_id = ANY($1::bigint[]) AND s3_path IS NOT NULL ORDER BY id LIMIT $2 OFFSET $3`,
+        [idChunk, PAGE_SIZE, from],
+      ).catch((error) => {
         console.error('Error fetching manifest for audit:', error)
         process.exit(1)
-      }
+      })
       if (!data || data.length === 0) break
 
       await asyncPool(CONCURRENCY, data, async (row) => {
@@ -504,28 +480,13 @@ async function listAllKeys(s3: S3Client, bucket: string, prefix: string) {
   return keys
 }
 
-async function listAllKeysParallel(s3: S3Client, bucket: string, prefix: string) {
+async function listAllKeysParallel(db: pg.Client, s3: S3Client, bucket: string, prefix: string) {
   // If we can filter to paid/trial orgs, parallelize listing per org prefix.
-  const envFile = await Bun.file(ENV_FILE).text()
-  const env: Record<string, string> = {}
-  for (const line of envFile.split('\n')) {
-    const trimmed = line.trim()
-    if (trimmed && !trimmed.startsWith('#')) {
-      const eqIndex = trimmed.indexOf('=')
-      if (eqIndex > 0) env[trimmed.substring(0, eqIndex)] = trimmed.substring(eqIndex + 1)
-    }
-  }
-  const supabase = createClient<Database>(
-    env.SUPABASE_URL,
-    env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-  )
-
   if (!FILTER_PAID_TRIAL || prefix) {
     return listAllKeys(s3, bucket, prefix)
   }
 
-  const orgIds = await getPaidOrTrialOrgIds(supabase)
+  const orgIds = await getPaidOrTrialOrgIds(db)
   const prefixes = orgIds.map(id => `orgs/${id}/`)
   const allKeys = new Set<string>()
 
@@ -553,30 +514,27 @@ async function assertExists(s3: S3Client, bucket: string, key: string, keySet: S
   await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
 }
 
-async function getPaidOrTrialOrgIds(supabase: ReturnType<typeof createClient<Database>>) {
+async function getPaidOrTrialOrgIds(db: pg.Client) {
   const paidOrTrial: string[] = []
   let from = 0
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
   while (true) {
-    const to = from + PAGE_SIZE - 1
-    const { data, error } = await supabase
-      .from('orgs')
-      .select('id, customer_id, stripe_info(status, trial_at)')
-      .not('customer_id', 'is', null)
-      .range(from, to)
-
-    if (error) {
+    const { rows: data } = await db.query(
+      `SELECT o.id, si.status, si.trial_at FROM public.orgs o
+       LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
+       WHERE o.customer_id IS NOT NULL ORDER BY o.id LIMIT $1 OFFSET $2`,
+      [PAGE_SIZE, from],
+    ).catch((error) => {
       console.error('Error fetching orgs for paid/trial filter:', error)
       process.exit(1)
-    }
+    })
     if (!data || data.length === 0) break
 
     for (const row of data) {
-      const stripeInfo = Array.isArray(row.stripe_info) ? row.stripe_info[0] : row.stripe_info
-      const status = stripeInfo?.status
-      const trialAt = stripeInfo?.trial_at ? new Date(stripeInfo.trial_at) : null
+      const status = row.status
+      const trialAt = row.trial_at ? new Date(row.trial_at) : null
       const isPaid = status === 'succeeded'
       const isTrial = status !== 'succeeded' && trialAt !== null && trialAt >= today
       if (isPaid || isTrial) paidOrTrial.push(row.id)
@@ -659,3 +617,4 @@ async function saveState(state: AuditState) {
 }
 
 await main()
+process.exit(0)

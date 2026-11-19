@@ -1,3 +1,8 @@
+import { trustedIngressRegion } from '../../supabase/functions/_backend/plugin_runtime/utils/servingRegionIngress.ts'
+import { parseServingPolicy, isRestrictedServingPolicy } from '../../supabase/functions/_backend/plugin_runtime/utils/servingRegions.ts'
+
+import { servingRegionReaderEpoch } from '../../supabase/functions/_backend/plugin_runtime/utils/servingRegionRollout.js'
+
 // Rules to match requests this Snippet will handle
 // Expression
 // (http.host eq "plugin.usecapgo.com")
@@ -17,6 +22,8 @@ const CIRCUIT_RESET_MS = 5 * 60 * 1000 // 5 minutes before retrying unhealthy wo
 // Every fetch and cache call goes through the budget below; optional cache
 // writes are skipped instead of failing the request.
 const MAX_SUBREQUESTS = 5
+// Also the receipt lifetime in servingPolicy.ts. Cache work shares this budget.
+const SERVING_ROUTE_MS = MAX_SUBREQUESTS * TIMEOUT_MS
 
 // On-prem and plan-upgrade caching use worker Cache-Control, with Retry-After as TTL fallback.
 // Cached responses keep Retry-After / X-RateLimit-Reset so clients and edge skip the worker.
@@ -79,12 +86,39 @@ const MAX_SEMVER_LENGTH = 256
 const DEVICE_PLATFORMS = new Set(['ios', 'android', 'electron'])
 
 function createBudget() {
-  return { used: 0 }
+  return { used: 0, deadline: null }
 }
 
 /** True when `count` more subrequests fit and still leave `reserve` for later ones. */
 function canSpend(budget, count = 1, reserve = 0) {
-  return budget.used + count + reserve <= MAX_SUBREQUESTS
+  return (budget.deadline === null || Date.now() < budget.deadline)
+    && budget.used + count + reserve <= MAX_SUBREQUESTS
+}
+
+// Active-policy routing has one absolute deadline, including complete cache
+// reads and breaker writes. Timed-out operations may finish, so only use this
+// for fetches, read-only cache work, and diagnostic circuit mutations.
+async function withinServingDeadline(budget, operation) {
+  if (budget.deadline === null)
+    return operation()
+  const remaining = Math.min(TIMEOUT_MS, budget.deadline - Date.now())
+  if (remaining <= 0)
+    throw new Error('Serving route deadline exceeded')
+  let timer
+  try {
+    const result = await Promise.race([
+      operation(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Serving route operation timed out')), remaining)
+      }),
+    ])
+    if (Date.now() >= budget.deadline)
+      throw new Error('Serving route deadline exceeded')
+    return result
+  }
+  finally {
+    clearTimeout(timer)
+  }
 }
 
 /**
@@ -160,23 +194,25 @@ async function markUnhealthy(budget, hostname, colo, workerUrl) {
       'Cache-Control': `max-age=${Math.floor(CIRCUIT_RESET_MS / 1000)}`,
     },
   })
-  if (await cachePut(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl), response))
+  if (await withinServingDeadline(budget, () => cachePut(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl), response)).catch(() => false))
     console.log(`Circuit OPEN for ${colo} → ${workerUrl}`)
 }
 
 /** Reads the breaker once; `hasEntry` lets a success clear it without another lookup. */
 async function readCircuit(budget, hostname, colo, workerUrl) {
-  const cached = await cacheMatch(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))
-  if (!cached)
-    return { healthy: true, hasEntry: false } // No cache entry = healthy
-  try {
-    const data = await cached.json()
-    // Circuit resets after CIRCUIT_RESET_MS (handled by Cache-Control, but double-check)
-    return { healthy: Date.now() - data.unhealthyAt >= CIRCUIT_RESET_MS, hasEntry: true }
-  }
-  catch {
-    return { healthy: true, hasEntry: true } // On error, assume healthy
-  }
+  return withinServingDeadline(budget, async () => {
+    const cached = await cacheMatch(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))
+    if (!cached)
+      return { healthy: true, hasEntry: false } // No cache entry = healthy
+    try {
+      const data = await cached.json()
+      // Circuit resets after CIRCUIT_RESET_MS (handled by Cache-Control, but double-check)
+      return { healthy: Date.now() - data.unhealthyAt >= CIRCUIT_RESET_MS, hasEntry: true }
+    }
+    catch {
+      return { healthy: true, hasEntry: true } // On error, assume healthy
+    }
+  }).catch(() => ({ healthy: true, hasEntry: false }))
 }
 
 // On-prem caching helper functions
@@ -186,7 +222,13 @@ function matchesEndpoint(pathname, endpoint) {
   return pathname === endpoint || pathname.startsWith(`${endpoint}/`)
 }
 
+function policyEndpointPath(pathname) {
+  // Activated releases gate deprecated aliases before any learned answer or retry.
+  return servingRegionReaderEpoch ? pathname.replace(/^\/plugin(?=\/)/, '') : pathname
+}
+
 function getEndpointName(pathname) {
+  pathname = policyEndpointPath(pathname)
   if (matchesEndpoint(pathname, '/updates'))
     return 'updates'
   if (matchesEndpoint(pathname, '/stats'))
@@ -197,7 +239,7 @@ function getEndpointName(pathname) {
 }
 
 function isCacheableEndpoint(pathname) {
-  return ONPREM_CACHEABLE_ENDPOINTS.some(ep => matchesEndpoint(pathname, ep))
+  return ONPREM_CACHEABLE_ENDPOINTS.some(ep => matchesEndpoint(policyEndpointPath(pathname), ep))
 }
 
 function getRetryAfterSeconds(headers, responseBody) {
@@ -305,6 +347,24 @@ async function withFreshRateLimitHeaders(cachedResponse) {
     statusText: cachedResponse.statusText,
     headers,
   })
+}
+
+// Nothing in this operation publishes an answer or starts another subrequest
+// after the match. A late read/body completion cannot spend the retry budget.
+async function readEdgeCache(budget, edgeKey) {
+  return withinServingDeadline(budget, async () => {
+    const cached = await cacheMatch(budget, edgeKey, null)
+    if (!cached)
+      return { miss: cached === undefined }
+    if (cached.headers.get(EDGE_KIND_HEADER) !== 'answers')
+      return { response: await withFreshRateLimitHeaders(cached), kind: cached.headers.get(EDGE_KIND_HEADER) }
+    try {
+      return { document: await cached.json() }
+    }
+    catch {
+      return {}
+    }
+  }).catch(() => ({}))
 }
 
 /** Persist absolute reset + Cache-Control so Cache API TTL and client countdown stay correct. */
@@ -643,7 +703,7 @@ async function tryEdgeAnswer(budget, request, url, endpoint, appId, body, rawBod
     const statHeader = edgeStatHeader({ e: 'updates', b: rawBody, n: fill.n })
     if (!ip || !statHeader || !canSpend(budget, 1, 2))
       return null
-    if (await cacheMatch(budget, getIpLimitCacheKey(url.hostname, ip), true))
+    if (await withinServingDeadline(budget, () => cacheMatch(budget, getIpLimitCacheKey(url.hostname, ip), true)).catch(() => true))
       return null
     return edgeAnswerResponse(fill.r, statHeader)
   }
@@ -763,39 +823,65 @@ export default {
     let appId = null
     let endpoint = null
     let body
+    let servingPolicy = null
+    const forwardedHeaders = new Headers(request.headers)
+    forwardedHeaders.delete('x-capgo-serving-ingress')
     let edgeKey = null
-    if (isCacheableEndpoint(url.pathname)) {
+    if (isCacheableEndpoint(url.pathname) || /\/(?:plugin\/)?updates\/manifest_size$/.test(url.pathname)) {
       endpoint = getEndpointName(url.pathname)
       body = parseJsonBody(requestBody)
       appId = extractAppIdFromRequest(request, url, body)
-      const variant = appId ? getEdgeVariant(endpoint, method, body) : null
+      if (appId && servingRegionReaderEpoch) {
+        budget.deadline = Date.now() + SERVING_ROUTE_MS
+        try {
+          // One subrequest, before ANY app cache, including synthetic stats.
+          budget.used++
+          const doc = await withinServingDeadline(budget, async () => {
+            const policyResponse = await fetch(new Request(`https://plugin.eu.capgo.app/serving_policy/${encodeURIComponent(appId)}`, {
+              headers: forwardedHeaders,
+              redirect: 'manual',
+              signal: AbortSignal.timeout(TIMEOUT_MS),
+            }))
+            if (!policyResponse.ok)
+              throw new Error('Policy unavailable')
+            return policyResponse.json()
+          })
+          if (doc.active !== true || doc.epoch !== servingRegionReaderEpoch || doc.f !== 1 || doc.app_id !== appId || !doc.policy || typeof doc.receipt !== 'string')
+            throw new Error('Invalid policy')
+          servingPolicy = parseServingPolicy(doc.policy.regions, doc.policy.mode)
+          forwardedHeaders.set('x-capgo-serving-ingress', doc.receipt)
+          if (isRestrictedServingPolicy(servingPolicy)) {
+            const ingress = trustedIngressRegion(request.cf?.colo)
+            if (!ingress)
+              throw new Error('Unknown ingress')
+            if (!servingPolicy.regions.includes(ingress))
+              return Response.json({ error: 'serving_region_blocked' }, { status: 403 })
+          }
+        }
+        catch {
+          return Response.json({ error: 'serving_policy_unavailable' }, { status: 503 })
+        }
+      }
+      const restrictedServing = servingPolicy && isRestrictedServingPolicy(servingPolicy)
+      const variant = appId && !restrictedServing ? getEdgeVariant(endpoint, method, body) : null
       edgeKey = variant === null ? null : getEdgeCacheKey(hostname, appId, endpoint, method, variant)
 
       if (edgeKey) {
         // null: the lookup failed, which must not read as nothing learned.
-        const cached = await cacheMatch(budget, edgeKey, null)
-        if (cached) {
-          if (cached.headers.get(EDGE_KIND_HEADER) !== 'answers') {
-            console.log(`Edge cache HIT (${cached.headers.get(EDGE_KIND_HEADER)}) for ${appId}/${endpoint}/${method}`)
-            return await withFreshRateLimitHeaders(cached)
-          }
-          let edgeDoc = null
-          try {
-            edgeDoc = await cached.json()
-          }
-          catch {
-            edgeDoc = null
-          }
-          if (isPlainObject(edgeDoc) && method === 'POST') {
-            const rawBody = new TextDecoder().decode(requestBody)
-            const answer = await tryEdgeAnswer(budget, request, url, endpoint, appId, body, rawBody, edgeDoc)
-            if (answer)
-              return answer
-          }
+        const entry = await readEdgeCache(budget, edgeKey)
+        if (entry.response) {
+          console.log(`Edge cache HIT (${entry.kind}) for ${appId}/${endpoint}/${method}`)
+          return entry.response
+        }
+        if (isPlainObject(entry.document) && method === 'POST') {
+          const rawBody = new TextDecoder().decode(requestBody)
+          const answer = await tryEdgeAnswer(budget, request, url, endpoint, appId, body, rawBody, entry.document)
+          if (answer)
+            return answer
         }
         // Nothing learned for this app here yet: answer /stats anyway, except
         // the share left to the worker to learn from.
-        else if (cached === undefined && STATS_ANSWER_ALL && endpoint === 'stats' && method === 'POST' && !isStatsLearnSample(appId, body)) {
+        else if (entry.miss && STATS_ANSWER_ALL && endpoint === 'stats' && method === 'POST' && !isStatsLearnSample(appId, body)) {
           const answer = await tryEdgeAnswer(budget, request, url, endpoint, appId, body, new TextDecoder().decode(requestBody), {})
           if (answer)
             return answer
@@ -829,364 +915,6 @@ export default {
       JAPAN: 'JP',
     }
 
-    // Maps Cloudflare colo (data center) codes to zones
-    // Full list: https://github.com/Netrvin/cloudflare-colo-list/blob/main/DC-Colos.json
-    const coloToZone = {
-      AAE: ZONE.AFRICA, // Annaba, Algeria
-      ABJ: ZONE.AFRICA, // Abidjan, Ivory Coast
-      ABQ: ZONE.NORTH_AMERICA, // Albuquerque, USA
-      ACC: ZONE.AFRICA, // Accra, Ghana
-      ACX: ZONE.HONG_KONG, // Xingyi, China
-      ADB: ZONE.EUROPE, // Izmir, Turkey
-      ADD: ZONE.AFRICA, // Addis Ababa, Ethiopia
-      ADL: ZONE.OCEANIA, // Adelaide, Australia
-      AGR: ZONE.ASIA, // Agra, India
-      AIP: ZONE.ASIA, // Jalandhar, India
-      AKL: ZONE.OCEANIA, // Auckland, New Zealand
-      AKX: ZONE.ASIA, // Aktobe, Kazakhstan
-      ALA: ZONE.ASIA, // Almaty, Kazakhstan
-      ALG: ZONE.AFRICA, // Algiers, Algeria
-      AMD: ZONE.ASIA, // Ahmedabad, India
-      AMM: ZONE.MIDDLE_EAST, // Amman, Jordan
-      AMS: ZONE.EUROPE, // Amsterdam, Netherlands
-      ANC: ZONE.NORTH_AMERICA, // Anchorage, USA
-      ARI: ZONE.SOUTH_AMERICA, // Arica, Chile
-      ARN: ZONE.EUROPE, // Stockholm, Sweden
-      ARU: ZONE.SOUTH_AMERICA, // Aracatuba, Brazil
-      ASK: ZONE.AFRICA, // Yamoussoukro, Ivory Coast
-      ASU: ZONE.SOUTH_AMERICA, // Asunción, Paraguay
-      ATH: ZONE.EUROPE, // Athens, Greece
-      ATL: ZONE.NORTH_AMERICA, // Atlanta, USA
-      AUS: ZONE.NORTH_AMERICA, // Austin, USA
-      AVA: ZONE.HONG_KONG, // Anshun, China
-      BAH: ZONE.MIDDLE_EAST, // Manama, Bahrain
-      BAQ: ZONE.SOUTH_AMERICA, // Barranquilla, Colombia
-      BBI: ZONE.ASIA, // Bhubaneswar, India
-      BCN: ZONE.EUROPE, // Barcelona, Spain
-      BDQ: ZONE.ASIA, // Jamnagar (Vadodara airport code), India
-      BEG: ZONE.EUROPE, // Belgrade, Serbia
-      BEL: ZONE.SOUTH_AMERICA, // Belém, Brazil
-      BEY: ZONE.MIDDLE_EAST, // Beirut, Lebanon
-      BGI: ZONE.NORTH_AMERICA, // Bridgetown, Barbados
-      BGR: ZONE.NORTH_AMERICA, // Bangor, USA
-      BGW: ZONE.MIDDLE_EAST, // Baghdad, Iraq
-      BHY: ZONE.HONG_KONG, // Beihai, China
-      BKK: ZONE.HONG_KONG, // Bangkok, Thailand
-      BLR: ZONE.ASIA, // Bangalore, India
-      BNA: ZONE.NORTH_AMERICA, // Nashville, USA
-      BNE: ZONE.OCEANIA, // Brisbane, Australia
-      BNU: ZONE.SOUTH_AMERICA, // Blumenau, Brazil
-      BOD: ZONE.EUROPE, // Bordeaux, France
-      BOG: ZONE.SOUTH_AMERICA, // Bogota, Colombia
-      BOM: ZONE.ASIA, // Mumbai, India
-      BOS: ZONE.NORTH_AMERICA, // Boston, USA
-      BRU: ZONE.EUROPE, // Brussels, Belgium
-      BSB: ZONE.SOUTH_AMERICA, // Brasilia, Brazil
-      BSR: ZONE.MIDDLE_EAST, // Basra, Iraq
-      BTS: ZONE.EUROPE, // Bratislava, Slovakia
-      BUD: ZONE.EUROPE, // Budapest, Hungary
-      BUF: ZONE.NORTH_AMERICA, // Buffalo, USA
-      BWN: ZONE.HONG_KONG, // Bandar Seri Begawan, Brunei
-      CAI: ZONE.AFRICA, // Cairo, Egypt
-      CAN: ZONE.HONG_KONG, // Guangzhou, China
-      CAW: ZONE.SOUTH_AMERICA, // Campos dos Goytacazes, Brazil
-      CBR: ZONE.OCEANIA, // Canberra, Australia
-      CCP: ZONE.SOUTH_AMERICA, // Concepción, Chile
-      CCU: ZONE.ASIA, // Kolkata, India
-      CDG: ZONE.EUROPE, // Paris, France
-      CEB: ZONE.HONG_KONG, // Cebu, Philippines
-      CFC: ZONE.SOUTH_AMERICA, // Cacador, Brazil
-      CGB: ZONE.SOUTH_AMERICA, // Cuiaba, Brazil
-      CGD: ZONE.HONG_KONG, // Changde, China
-      CGK: ZONE.HONG_KONG, // Jakarta, Indonesia
-      CGO: ZONE.HONG_KONG, // Zhengzhou, China
-      CGP: ZONE.ASIA, // Chittagong, Bangladesh
-      CGY: ZONE.HONG_KONG, // Cagayan de Oro, Philippines
-      CHC: ZONE.OCEANIA, // Christchurch, New Zealand
-      CJB: ZONE.ASIA, // Coimbatore, India
-      CKG: ZONE.HONG_KONG, // Chongqing, China
-      CLE: ZONE.NORTH_AMERICA, // Cleveland, USA
-      CLO: ZONE.SOUTH_AMERICA, // Cali, Colombia
-      CLT: ZONE.NORTH_AMERICA, // Charlotte, USA
-      CMB: ZONE.ASIA, // Colombo, Sri Lanka
-      CMH: ZONE.NORTH_AMERICA, // Columbus, USA
-      CNF: ZONE.SOUTH_AMERICA, // Belo Horizonte, Brazil
-      CNN: ZONE.ASIA, // Kannur, India
-      CNX: ZONE.HONG_KONG, // Chiang Mai, Thailand
-      COK: ZONE.ASIA, // Kochi, India
-      COR: ZONE.SOUTH_AMERICA, // Córdoba, Argentina
-      CPH: ZONE.EUROPE, // Copenhagen, Denmark
-      CPT: ZONE.AFRICA, // Cape Town, South Africa
-      CRK: ZONE.HONG_KONG, // Tarlac City (Clark), Philippines
-      CSX: ZONE.HONG_KONG, // Changsha, China
-      CTS: ZONE.JAPAN, // Sapporo, Japan
-      CTU: ZONE.HONG_KONG, // Chengdu, China
-      CVG: ZONE.NORTH_AMERICA, // Cincinnati, USA
-      CWB: ZONE.SOUTH_AMERICA, // Curitiba, Brazil
-      CZL: ZONE.AFRICA, // Constantine, Algeria
-      CZX: ZONE.HONG_KONG, // Changzhou, China
-      DAC: ZONE.ASIA, // Dhaka, Bangladesh
-      DAD: ZONE.HONG_KONG, // Da Nang, Vietnam
-      DAR: ZONE.AFRICA, // Dar es Salaam, Tanzania
-      DEL: ZONE.ASIA, // New Delhi, India
-      DEN: ZONE.NORTH_AMERICA, // Denver, USA
-      DFW: ZONE.NORTH_AMERICA, // Dallas, USA
-      DKR: ZONE.AFRICA, // Dakar, Senegal
-      DLA: ZONE.AFRICA, // Douala, Cameroon
-      DLC: ZONE.HONG_KONG, // Dalian, China
-      DME: ZONE.EUROPE, // Moscow, Russia
-      DMM: ZONE.MIDDLE_EAST, // Dammam, Saudi Arabia
-      DOH: ZONE.MIDDLE_EAST, // Doha, Qatar
-      DPS: ZONE.HONG_KONG, // Denpasar (Bali), Indonesia
-      DTW: ZONE.NORTH_AMERICA, // Detroit, USA
-      DUB: ZONE.EUROPE, // Dublin, Ireland
-      DUR: ZONE.AFRICA, // Durban, South Africa
-      DUS: ZONE.EUROPE, // Düsseldorf, Germany
-      DXB: ZONE.MIDDLE_EAST, // Dubai, UAE
-      DYU: ZONE.ASIA, // Dushanbe, Tajikistan
-      EBB: ZONE.AFRICA, // Kampala, Uganda
-      EBL: ZONE.MIDDLE_EAST, // Erbil, Iraq
-      EVN: ZONE.ASIA, // Yerevan, Armenia
-      EWR: ZONE.NORTH_AMERICA, // Newark, USA
-      EZE: ZONE.SOUTH_AMERICA, // Buenos Aires, Argentina
-      FCO: ZONE.EUROPE, // Rome, Italy
-      FIH: ZONE.AFRICA, // Kinshasa, DR Congo
-      FLN: ZONE.SOUTH_AMERICA, // Florianopolis, Brazil
-      FOC: ZONE.HONG_KONG, // Fuzhou, China
-      FOR: ZONE.SOUTH_AMERICA, // Fortaleza, Brazil
-      FRA: ZONE.EUROPE, // Frankfurt, Germany
-      FRU: ZONE.ASIA, // Bishkek, Kyrgyzstan
-      FSD: ZONE.NORTH_AMERICA, // Sioux Falls, USA
-      FUK: ZONE.JAPAN, // Fukuoka, Japan
-      FUO: ZONE.HONG_KONG, // Foshan, China
-      GBE: ZONE.AFRICA, // Gaborone, Botswana
-      GDL: ZONE.NORTH_AMERICA, // Guadalajara, Mexico
-      GEO: ZONE.SOUTH_AMERICA, // Georgetown, Guyana
-      GIG: ZONE.SOUTH_AMERICA, // Rio de Janeiro, Brazil
-      GND: ZONE.SOUTH_AMERICA, // St. George's, Grenada
-      GOT: ZONE.EUROPE, // Gothenburg, Sweden
-      GRU: ZONE.SOUTH_AMERICA, // São Paulo, Brazil
-      GUA: ZONE.NORTH_AMERICA, // Guatemala City, Guatemala
-      GUM: ZONE.ASIA, // Hagatna, Guam
-      GVA: ZONE.EUROPE, // Geneva, Switzerland
-      GYD: ZONE.ASIA, // Baku, Azerbaijan
-      GYE: ZONE.SOUTH_AMERICA, // Guayaquil, Ecuador
-      GYN: ZONE.SOUTH_AMERICA, // Goiania, Brazil
-      HAK: ZONE.HONG_KONG, // Chengmai (Haikou), China
-      HAM: ZONE.EUROPE, // Hamburg, Germany
-      HAN: ZONE.HONG_KONG, // Hanoi, Vietnam
-      HBA: ZONE.OCEANIA, // Hobart, Australia
-      HEL: ZONE.EUROPE, // Helsinki, Finland
-      HFA: ZONE.MIDDLE_EAST, // Haifa, Israel
-      HGH: ZONE.HONG_KONG, // Shaoxing (Hangzhou), China
-      HKG: ZONE.HONG_KONG, // Hong Kong
-      HNL: ZONE.NORTH_AMERICA, // Honolulu, USA
-      HRE: ZONE.AFRICA, // Harare, Zimbabwe
-      HYD: ZONE.ASIA, // Hyderabad, India
-      HYN: ZONE.HONG_KONG, // Taizhou, China
-      IAD: ZONE.NORTH_AMERICA, // Ashburn (Washington DC), USA
-      IAH: ZONE.NORTH_AMERICA, // Houston, USA
-      ICN: ZONE.JAPAN, // Seoul, South Korea (North Asia -> Japan)
-      IND: ZONE.NORTH_AMERICA, // Indianapolis, USA
-      ISB: ZONE.ASIA, // Islamabad, Pakistan
-      IST: ZONE.EUROPE, // Istanbul, Turkey
-      ISU: ZONE.MIDDLE_EAST, // Sulaymaniyah, Iraq
-      ITJ: ZONE.SOUTH_AMERICA, // Itajai, Brazil
-      IXC: ZONE.ASIA, // Chandigarh, India
-      JAX: ZONE.NORTH_AMERICA, // Jacksonville, USA
-      JDO: ZONE.SOUTH_AMERICA, // Juazeiro do Norte, Brazil
-      JED: ZONE.MIDDLE_EAST, // Jeddah, Saudi Arabia
-      JHB: ZONE.HONG_KONG, // Johor Bahru, Malaysia
-      JIB: ZONE.AFRICA, // Djibouti
-      JNB: ZONE.AFRICA, // Johannesburg, South Africa
-      JOG: ZONE.HONG_KONG, // Yogyakarta, Indonesia
-      JOI: ZONE.SOUTH_AMERICA, // Joinville, Brazil
-      JRG: ZONE.ASIA, // Sambalpur, India
-      JXG: ZONE.HONG_KONG, // Jiaxing, China
-      KBP: ZONE.EUROPE, // Kyiv, Ukraine
-      KCH: ZONE.HONG_KONG, // Kuching, Malaysia
-      KEF: ZONE.EUROPE, // Reykjavík, Iceland
-      KGL: ZONE.AFRICA, // Kigali, Rwanda
-      KHH: ZONE.JAPAN, // Kaohsiung City, Taiwan (North Asia -> Japan)
-      KHI: ZONE.ASIA, // Karachi, Pakistan
-      KHN: ZONE.HONG_KONG, // Nanchang, China
-      KIN: ZONE.NORTH_AMERICA, // Kingston, Jamaica
-      KIV: ZONE.EUROPE, // Chișinău, Moldova
-      KIX: ZONE.JAPAN, // Osaka, Japan
-      KJA: ZONE.ASIA, // Krasnoyarsk, Russia
-      KMG: ZONE.HONG_KONG, // Kunming, China
-      KNU: ZONE.ASIA, // Kanpur, India
-      KOJ: ZONE.JAPAN, // Kagoshima, Japan
-      KTM: ZONE.ASIA, // Kathmandu, Nepal
-      KUL: ZONE.HONG_KONG, // Kuala Lumpur, Malaysia
-      KWE: ZONE.HONG_KONG, // Guiyang, China
-      KWI: ZONE.MIDDLE_EAST, // Kuwait City, Kuwait
-      LAD: ZONE.AFRICA, // Luanda, Angola
-      LAS: ZONE.NORTH_AMERICA, // Las Vegas, USA
-      LAX: ZONE.NORTH_AMERICA, // Los Angeles, USA
-      LCA: ZONE.EUROPE, // Nicosia, Cyprus
-      LED: ZONE.EUROPE, // Saint Petersburg, Russia
-      LHE: ZONE.ASIA, // Lahore, Pakistan
-      LHR: ZONE.EUROPE, // London, UK
-      LHW: ZONE.HONG_KONG, // Lanzhou, China
-      LIM: ZONE.SOUTH_AMERICA, // Lima, Peru
-      LIS: ZONE.EUROPE, // Lisbon, Portugal
-      LJU: ZONE.EUROPE, // Ljubljana, Slovenia
-      LLK: ZONE.ASIA, // Astara, Azerbaijan
-      LLW: ZONE.AFRICA, // Lilongwe, Malawi
-      LOS: ZONE.AFRICA, // Lagos, Nigeria
-      LPB: ZONE.SOUTH_AMERICA, // La Paz, Bolivia
-      LUH: ZONE.ASIA, // Ludhiana, India
-      LUN: ZONE.AFRICA, // Lusaka, Zambia
-      LUX: ZONE.EUROPE, // Luxembourg City, Luxembourg
-      LYA: ZONE.HONG_KONG, // Luoyang, China
-      LYS: ZONE.EUROPE, // Lyon, France
-      MAA: ZONE.ASIA, // Chennai, India
-      MAD: ZONE.EUROPE, // Madrid, Spain
-      MAN: ZONE.EUROPE, // Manchester, UK
-      MAO: ZONE.SOUTH_AMERICA, // Manaus, Brazil
-      MBA: ZONE.AFRICA, // Mombasa, Kenya
-      MCI: ZONE.NORTH_AMERICA, // Kansas City, USA
-      MCT: ZONE.MIDDLE_EAST, // Muscat, Oman
-      MDE: ZONE.SOUTH_AMERICA, // Medellín, Colombia
-      MEL: ZONE.OCEANIA, // Melbourne, Australia
-      MEM: ZONE.NORTH_AMERICA, // Memphis, USA
-      MEX: ZONE.NORTH_AMERICA, // Mexico City, Mexico
-      MFM: ZONE.HONG_KONG, // Macau
-      MIA: ZONE.NORTH_AMERICA, // Miami, USA
-      MLA: ZONE.EUROPE, // Santa Venera, Malta
-      MLE: ZONE.ASIA, // Male, Maldives
-      MLG: ZONE.HONG_KONG, // Malang, Indonesia
-      MNL: ZONE.HONG_KONG, // Manila, Philippines
-      MPM: ZONE.AFRICA, // Maputo, Mozambique
-      MRS: ZONE.EUROPE, // Marseille, France
-      MRU: ZONE.AFRICA, // Port Louis, Mauritius
-      MSP: ZONE.NORTH_AMERICA, // Minneapolis, USA
-      MSQ: ZONE.EUROPE, // Minsk, Belarus
-      MUC: ZONE.EUROPE, // Munich, Germany
-      MXP: ZONE.EUROPE, // Milan, Italy
-      NAG: ZONE.ASIA, // Nagpur, India
-      NBO: ZONE.AFRICA, // Nairobi, Kenya
-      NGO: ZONE.JAPAN, // Nagoya, Japan
-      NJF: ZONE.MIDDLE_EAST, // Najaf, Iraq
-      NNG: ZONE.HONG_KONG, // Nanning, China
-      NOU: ZONE.OCEANIA, // Noumea, New Caledonia
-      NQN: ZONE.SOUTH_AMERICA, // Neuquen, Argentina
-      NQZ: ZONE.ASIA, // Astana, Kazakhstan
-      NRT: ZONE.JAPAN, // Tokyo Narita, Japan
-      NVT: ZONE.SOUTH_AMERICA, // Timbo (Navegantes), Brazil
-      OKA: ZONE.JAPAN, // Naha (Okinawa), Japan
-      OKC: ZONE.NORTH_AMERICA, // Oklahoma City, USA
-      OMA: ZONE.NORTH_AMERICA, // Omaha, USA
-      ORD: ZONE.NORTH_AMERICA, // Chicago, USA
-      ORF: ZONE.NORTH_AMERICA, // Norfolk, USA
-      ORN: ZONE.AFRICA, // Oran, Algeria
-      OSL: ZONE.EUROPE, // Oslo, Norway
-      OTP: ZONE.EUROPE, // Bucharest, Romania
-      OUA: ZONE.AFRICA, // Ouagadougou, Burkina Faso
-      PAT: ZONE.ASIA, // Patna, India
-      PBH: ZONE.ASIA, // Thimphu, Bhutan
-      PBM: ZONE.SOUTH_AMERICA, // Paramaribo, Suriname
-      PDX: ZONE.NORTH_AMERICA, // Portland, USA
-      PER: ZONE.OCEANIA, // Perth, Australia
-      PHL: ZONE.NORTH_AMERICA, // Philadelphia, USA
-      PHX: ZONE.NORTH_AMERICA, // Phoenix, USA
-      PIT: ZONE.NORTH_AMERICA, // Pittsburgh, USA
-      PKX: ZONE.HONG_KONG, // Langfang (Beijing), China
-      PMO: ZONE.EUROPE, // Palermo, Italy
-      PMW: ZONE.SOUTH_AMERICA, // Palmas, Brazil
-      PNH: ZONE.HONG_KONG, // Phnom Penh, Cambodia
-      PNQ: ZONE.ASIA, // Pune, India
-      POA: ZONE.SOUTH_AMERICA, // Porto Alegre, Brazil
-      POS: ZONE.SOUTH_AMERICA, // Port of Spain, Trinidad
-      PPT: ZONE.OCEANIA, // Tahiti, French Polynesia
-      PRG: ZONE.EUROPE, // Prague, Czech Republic
-      PTY: ZONE.SOUTH_AMERICA, // Panama City, Panama
-      QRO: ZONE.NORTH_AMERICA, // Queretaro, Mexico
-      QWJ: ZONE.SOUTH_AMERICA, // Americana, Brazil
-      RAO: ZONE.SOUTH_AMERICA, // Ribeirao Preto, Brazil
-      RDU: ZONE.NORTH_AMERICA, // Durham (Raleigh), USA
-      REC: ZONE.SOUTH_AMERICA, // Recife, Brazil
-      RIC: ZONE.NORTH_AMERICA, // Richmond, USA
-      RIX: ZONE.EUROPE, // Riga, Latvia
-      RUH: ZONE.MIDDLE_EAST, // Riyadh, Saudi Arabia
-      RUN: ZONE.AFRICA, // Saint-Denis, Réunion
-      SAN: ZONE.NORTH_AMERICA, // San Diego, USA
-      SAP: ZONE.SOUTH_AMERICA, // San Pedro Sula, Honduras
-      SAT: ZONE.NORTH_AMERICA, // San Antonio, USA
-      SCL: ZONE.SOUTH_AMERICA, // Santiago, Chile
-      SDJ: ZONE.JAPAN, // Sendai, Japan
-      SDQ: ZONE.NORTH_AMERICA, // Santo Domingo, Dominican Republic
-      SEA: ZONE.NORTH_AMERICA, // Seattle, USA
-      SFO: ZONE.NORTH_AMERICA, // San Francisco, USA
-      SGN: ZONE.HONG_KONG, // Ho Chi Minh City, Vietnam
-      SHA: ZONE.HONG_KONG, // Shanghai, China
-      SIN: ZONE.HONG_KONG, // Singapore
-      SJC: ZONE.NORTH_AMERICA, // San Jose, USA
-      SJK: ZONE.SOUTH_AMERICA, // São José dos Campos, Brazil
-      SJO: ZONE.SOUTH_AMERICA, // San José, Costa Rica
-      SJP: ZONE.SOUTH_AMERICA, // São José do Rio Preto, Brazil
-      SJU: ZONE.NORTH_AMERICA, // San Juan, Puerto Rico
-      SJW: ZONE.HONG_KONG, // Shijiazhuang, China
-      SKG: ZONE.EUROPE, // Thessaloniki, Greece
-      SKP: ZONE.EUROPE, // Skopje, North Macedonia
-      SLC: ZONE.NORTH_AMERICA, // Salt Lake City, USA
-      SMF: ZONE.NORTH_AMERICA, // Sacramento, USA
-      SOD: ZONE.SOUTH_AMERICA, // Sorocaba, Brazil
-      SOF: ZONE.EUROPE, // Sofia, Bulgaria
-      SSA: ZONE.SOUTH_AMERICA, // Salvador, Brazil
-      STI: ZONE.NORTH_AMERICA, // Santiago de los Caballeros, Dominican Republic
-      STL: ZONE.NORTH_AMERICA, // St. Louis, USA
-      STR: ZONE.EUROPE, // Stuttgart, Germany
-      SUV: ZONE.OCEANIA, // Suva, Fiji
-      SYD: ZONE.OCEANIA, // Sydney, Australia
-      SZX: ZONE.HONG_KONG, // Shenzhen, China
-      TAO: ZONE.HONG_KONG, // Qingdao, China
-      TBS: ZONE.EUROPE, // Tbilisi, Georgia
-      TEN: ZONE.HONG_KONG, // Tongren, China
-      TGU: ZONE.SOUTH_AMERICA, // Tegucigalpa, Honduras
-      TIA: ZONE.EUROPE, // Tirana, Albania
-      TLH: ZONE.NORTH_AMERICA, // Tallahassee, USA
-      TLL: ZONE.EUROPE, // Tallinn, Estonia
-      TLV: ZONE.MIDDLE_EAST, // Tel Aviv, Israel
-      TNA: ZONE.HONG_KONG, // Zibo (Jinan), China
-      TNR: ZONE.AFRICA, // Antananarivo, Madagascar
-      TPA: ZONE.NORTH_AMERICA, // Tampa, USA
-      TPE: ZONE.JAPAN, // Taipei, Taiwan (North Asia -> Japan)
-      TUN: ZONE.AFRICA, // Tunis, Tunisia
-      TXL: ZONE.EUROPE, // Berlin, Germany
-      TYN: ZONE.HONG_KONG, // Yangquan (Taiyuan), China
-      UDI: ZONE.SOUTH_AMERICA, // Uberlandia, Brazil
-      UDR: ZONE.ASIA, // Udaipur, India
-      UIO: ZONE.SOUTH_AMERICA, // Quito, Ecuador
-      ULN: ZONE.JAPAN, // Ulaanbaatar, Mongolia (North Asia -> Japan)
-      URT: ZONE.HONG_KONG, // Surat Thani, Thailand
-      VCP: ZONE.SOUTH_AMERICA, // Campinas, Brazil
-      VIE: ZONE.EUROPE, // Vienna, Austria
-      VIX: ZONE.SOUTH_AMERICA, // Vitoria, Brazil
-      VNO: ZONE.EUROPE, // Vilnius, Lithuania
-      VTE: ZONE.HONG_KONG, // Vientiane, Laos
-      WAW: ZONE.EUROPE, // Warsaw, Poland
-      WDH: ZONE.AFRICA, // Windhoek, Namibia
-      WLG: ZONE.OCEANIA, // Wellington, New Zealand
-      WRO: ZONE.EUROPE, // Wroclaw, Poland
-      XAP: ZONE.SOUTH_AMERICA, // Chapeco, Brazil
-      XFN: ZONE.HONG_KONG, // Xiangyang, China
-      XIY: ZONE.HONG_KONG, // Baoji (Xi'an), China
-      XNH: ZONE.MIDDLE_EAST, // Nasiriyah, Iraq
-      XNN: ZONE.HONG_KONG, // Xining, China
-      YHZ: ZONE.NORTH_AMERICA, // Halifax, Canada
-      YOW: ZONE.NORTH_AMERICA, // Ottawa, Canada
-      YUL: ZONE.NORTH_AMERICA, // Montréal, Canada
-      YVR: ZONE.NORTH_AMERICA, // Vancouver, Canada
-      YWG: ZONE.NORTH_AMERICA, // Winnipeg, Canada
-      YXE: ZONE.NORTH_AMERICA, // Saskatoon, Canada
-      YYC: ZONE.NORTH_AMERICA, // Calgary, Canada
-      YYZ: ZONE.NORTH_AMERICA, // Toronto, Canada
-      ZAG: ZONE.EUROPE, // Zagreb, Croatia
-      ZDM: ZONE.MIDDLE_EAST, // Ramallah, Palestine
-      ZRH: ZONE.EUROPE, // Zurich, Switzerland
-    }
 
     // Fallback order for each zone
     const zoneFallbackUrls = {
@@ -1205,16 +933,28 @@ export default {
     // colo: The three-letter IATA airport code of the data center that the request hit, for example, "DFW".
     // more on the cf object: https://developers.cloudflare.com/workers/runtime-apis/request#incomingrequestcfproperties
     const colo = request.cf.colo
-    const zone = coloToZone[colo] ?? ZONE.EUROPE
+    const regionToZone = {
+      EU: ZONE.EUROPE, NA: ZONE.NORTH_AMERICA, SA: ZONE.SOUTH_AMERICA, OC: ZONE.OCEANIA,
+      AS_INDIA: ZONE.ASIA, AS_JAPAN: ZONE.JAPAN, HK: ZONE.HONG_KONG, AF: ZONE.AFRICA, ME: ZONE.MIDDLE_EAST,
+    }
+    const zone = regionToZone[trustedIngressRegion(colo)] ?? ZONE.EUROPE
     const pathWithQuery = url.pathname + url.search
 
-    const fallbackUrls = zoneFallbackUrls[zone] || [WORKER_URL.EUROPE]
+    const regionByUrl = {
+      [WORKER_URL.EUROPE]: 'EU', [WORKER_URL.NORTH_AMERICA]: 'NA', [WORKER_URL.SOUTH_AMERICA]: 'SA',
+      [WORKER_URL.OCEANIA]: 'OC', [WORKER_URL.ASIA]: 'AS_INDIA', [WORKER_URL.JAPAN]: 'AS_JAPAN',
+      [WORKER_URL.HONG_KONG]: 'HK', [WORKER_URL.AFRICA]: 'AF', [WORKER_URL.MIDDLE_EAST]: 'ME',
+    }
+    const preferred = zoneFallbackUrls[zone] || [WORKER_URL.EUROPE]
+    const fallbackUrls = servingPolicy
+      ? [...new Set([...preferred, ...Object.values(WORKER_URL)])].filter(target => servingPolicy.regions.includes(regionByUrl[target])).slice(0, 3)
+      : preferred
     // Set once a worker is skipped or fails; an on-prem answer seen after that is served but not cached.
     let fallbackFailure = false
     // Budget order: a fetch for every worker left, then the /updates IP limit
     // write (it keeps edge answers away from a limited IP), then the breaker.
     const hintReserve = endpoint === 'updates' ? 1 : 0
-    const fallbackReserve = 1
+    const fallbackReserve = servingPolicy ? 0 : 1
 
     for (let index = 0; index < fallbackUrls.length; index++) {
       const workerUrl = fallbackUrls[index]
@@ -1231,17 +971,20 @@ export default {
       if (!canSpend(budget, 1, fallbackReserve))
         break
 
+      let timeoutId
+      const abortController = new AbortController()
       try {
-        const abortController = new AbortController()
-        const timeoutId = setTimeout(() => abortController.abort(), TIMEOUT_MS)
+        const timeoutMs = budget.deadline === null ? TIMEOUT_MS : Math.min(TIMEOUT_MS, budget.deadline - Date.now())
+        timeoutId = setTimeout(() => abortController.abort(), timeoutMs)
 
         budget.used++
-        const response = await fetch(`${workerUrl}${pathWithQuery}`, {
+        const response = await withinServingDeadline(budget, () => fetch(`${workerUrl}${pathWithQuery}`, {
           method: request.method,
-          headers: request.headers,
+          headers: forwardedHeaders,
+          redirect: 'manual',
           body: requestBody ? requestBody.slice(0) : undefined,
           signal: abortController.signal,
-        })
+        }))
 
         clearTimeout(timeoutId)
 
@@ -1256,8 +999,11 @@ export default {
 
         // Success (2xx, 3xx, 4xx) - worker is healthy
         if (circuit.hasEntry && canSpend(budget, 1, hintReserve + fallbackReserve))
-          await cacheDelete(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))
+          await withinServingDeadline(budget, () => cacheDelete(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))).catch(() => {})
         console.log(`Request served by ${workerUrl}`)
+        // A KV canary response must not seed any cache shared with DB/control
+        // devices. Keep rate-limit hints, but never learn its app-wide answers.
+        const canCacheWorkerAnswer = !response.headers.has('X-Serving-Regions') && !response.headers.get('X-Plugin-State')?.startsWith('kv')
 
         // Check if this is an on-prem response that should be cached
         if (appId && endpoint) {
@@ -1271,14 +1017,14 @@ export default {
             // served but not cached.
             if (isOnPremResponse(response.status, responseBody) && !response.headers.has(EDGE_IP_LIMIT_HEADER)) {
               console.log(`On-prem detected by ${workerUrl} for ${appId}${fallbackFailure ? ' (after fallback failure, not caching)' : ''}`)
-              if (!fallbackFailure && edgeKey)
+              if (!fallbackFailure && edgeKey && canCacheWorkerAnswer)
                 await setOnPremCache(budget, edgeKey, appId, endpoint, method, responseBody, response.status, response.headers)
               return buildOnPremResponse(appId, responseBody, response.status, response.headers)
             }
 
             if (isPlanUpgradeResponse(response.status, responseBody)) {
               // Cache plan-upgrade responses for a short TTL to reduce burst traffic
-              if (edgeKey)
+              if (edgeKey && canCacheWorkerAnswer)
                 await setPlanUpgradeCache(budget, edgeKey, appId, endpoint, method, responseBody, response.status, response.headers)
 
               const newHeaders = new Headers(response.headers)
@@ -1295,12 +1041,14 @@ export default {
           catch {
             // Response is not JSON or parsing failed - skip on-prem cache check and return original response
           }
-          return await handleEdgeHints(budget, response, request, hostname, edgeKey, appId, endpoint, !fallbackFailure)
+          return await handleEdgeHints(budget, response, request, hostname, edgeKey, appId, endpoint, !fallbackFailure && canCacheWorkerAnswer)
         }
 
         return response
       }
       catch (error) {
+        abortController.abort()
+        clearTimeout(timeoutId)
         // Network failure or timeout - mark unhealthy
         fallbackFailure = true
         console.log(`${workerUrl} failed: ${error.message}, marking unhealthy`)
@@ -1308,9 +1056,12 @@ export default {
           await markUnhealthy(budget, hostname, colo, workerUrl)
         // continue to next fallback
       }
+      finally {
+        clearTimeout(timeoutId)
+      }
     }
 
-    if (!canSpend(budget, 1, 0)) {
+    if (servingPolicy || !canSpend(budget, 1, 0)) {
       console.log('Subrequest budget exhausted, no worker answered')
       return new Response(JSON.stringify({ error: 'service_unavailable', message: 'Service temporarily unavailable' }), {
         status: 503,
