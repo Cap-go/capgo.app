@@ -153,12 +153,12 @@ async function provisionBeforeStorageMigration(adminUrl: string, targetUrl: stri
   await client.connect()
   try {
     await client.query('SET statement_timeout = 0')
+    cloneProvisionedSchema(adminUrl, targetUrl)
     await runSqlFile(
       client,
       readFileSync(resolve(repoRoot, 'tests/fixtures/local-db-disposable-extensions-stub.sql'), 'utf8'),
       'local-db-disposable-extensions-stub.sql',
     )
-    cloneProvisionedSchema(adminUrl, targetUrl)
     await runSqlFile(
       client,
       readFileSync(resolve(repoRoot, 'tests/fixtures/storage-gb-hours-revert-migration.sql'), 'utf8'),
