@@ -39,12 +39,25 @@ CREATE TABLE IF NOT EXISTS public.daily_storage (
   storage bigint
 );
 
+INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password, created_at, updated_at)
+VALUES (
+  '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
+  '00000000-0000-0000-0000-000000000000'::uuid,
+  'authenticated',
+  'authenticated',
+  'lock-test-user@example.com',
+  crypt('lock-test-password', gen_salt('bf')),
+  now(),
+  now()
+)
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO public.orgs (id, created_by, name, management_email)
 VALUES (
   '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid,
   '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
   'Storage lock test org',
-  'lock-test@example.com'
+  'lock-test-org@example.com'
 )
 ON CONFLICT (id) DO NOTHING;
 
