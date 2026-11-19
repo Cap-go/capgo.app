@@ -11,6 +11,7 @@ import { closeClient, getPgClient } from '../utils/pg.ts'
 // --- Worker logic imports ---
 import { integerLikeSchema, safeParseSchema } from '../utils/schema_validation.ts'
 import { backgroundTask, getEnv, WAIT_FOR_COMPLETION_HEADER } from '../utils/utils.ts'
+import { perMessageManifestSizeLookupBudget } from '../utils/manifest_size_lookup_budget.ts'
 import { skipLegacyManifestSize, updateDeltaFileSize } from './on_manifest_create.ts'
 
 // Define constants
@@ -601,8 +602,20 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
-function isSuccessfulQueueResult(result: ProcessedQueueMessage): boolean {
+function isSuccessfulQueueResult(result: { httpResponse: Response }): boolean {
   return result.httpResponse.status >= 200 && result.httpResponse.status < 300
+}
+
+function partitionQueueResultsForAck<T extends { httpResponse: Response }>(results: T[]): { failed: T[], successful: T[] } {
+  const successful: T[] = []
+  const failed: T[] = []
+  for (const result of results) {
+    if (isSuccessfulQueueResult(result))
+      successful.push(result)
+    else
+      failed.push(result)
+  }
+  return { successful, failed }
 }
 
 async function deleteSuccessfulChunkMessages(
@@ -850,13 +863,16 @@ async function processQueue(c: Context, db: Awaited<ReturnType<typeof getPgClien
     await archive_queue_messages(c, db, queueName, messagesToSkip.map(msg => msg.msg_id))
   }
 
+  if (queueName === 'on_manifest_create' && messagesToProcess.length > 0) {
+    c.set(
+      'manifestSizeLookupSubrequestBudgetPerMessage',
+      perMessageManifestSizeLookupBudget(messagesToProcess.length),
+    )
+  }
+
   const results = await processQueueMessageChunks(c, db, queueName, messagesToProcess, processConcurrency, waitForCompletion)
 
-  // Batch remove all messages that have succeeded.
-  const [successMessages, messagesFailed] = results.reduce((acc, result) => {
-    acc[isSuccessfulQueueResult(result) ? 0 : 1].push(result)
-    return acc
-  }, [[], []] as [typeof results, typeof results])
+  const { failed: messagesFailed, successful: successMessages } = partitionQueueResultsForAck(results)
 
   // Successful messages are deleted below, so only failed ones keep a CF ID trail.
   await persistQueueCfIds(c, db, queueName, messagesFailed)
@@ -1203,19 +1219,23 @@ app.post('/sync', async (c) => {
 })
 
 export const __queueConsumerTestUtils__ = {
+  defaultBatchSize: DEFAULT_BATCH_SIZE,
   extractErrorDetails,
   extractMessageBody,
   getQueueMessageTrace,
   getActionableQueueFailures,
   getManifestRecordFromQueueBody,
   getQueueBatchSize,
+  manifestQueueHttpConcurrency: MANIFEST_QUEUE_HTTP_CONCURRENCY,
   getQueueAckChunkSize,
   getQueueHttpConcurrency,
   getQueueHttpTimeoutMs,
   getQueueMaxReads,
   httpExceptionToQueueResponse,
   getQueueVisibilityTimeout,
+  isSuccessfulQueueResult,
   normalizeQueueFunctionType,
+  partitionQueueResultsForAck,
   prepareQueueHttpBody,
   shouldRunQueueSyncInBackground,
   queueFailureResponse,

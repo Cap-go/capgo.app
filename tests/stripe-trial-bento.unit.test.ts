@@ -22,6 +22,7 @@ vi.mock('hono/adapter', async importOriginal => ({
   ...await importOriginal<typeof import('hono/adapter')>(),
   env: (c: { env: Record<string, string> }) => c.env,
 }))
+vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile_sync.ts', () => ({ syncBillingProfile: (c: unknown, ctx: { customerId: string }) => mocks.syncCountry(c, ctx.customerId) }))
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../supabase/functions/_backend/utils/stripe.ts')>(),
   getStripe: mocks.getStripe,

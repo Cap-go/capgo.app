@@ -567,12 +567,24 @@ export const deviceStatsSchema = z.object({
 
 export type DeviceStats = z.infer<typeof deviceStatsSchema>
 
-export const observeViewSchema = z.enum(['summary', 'metrics', 'events', 'device', 'versions', 'routes'])
+export const buildMonitorOptionsSchema = z.object({
+  appId: z.string().min(1).describe('App ID owning the cloud build'),
+  jobId: z.string().min(1).max(256).describe('Cloud job ID from the build request, not a local onboarding job ID'),
+  cursor: z.number().int().nonnegative().optional().describe('For build logs: previous snapshot cursor; omit for the current live-stream backlog'),
+  apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
+})
+export type BuildMonitorOptions = z.infer<typeof buildMonitorOptionsSchema>
+
+export const observeViewSchema = z.enum(['summary', 'metrics', 'events', 'device', 'versions', 'routes', 'logs', 'errors', 'release'])
 export const observeSortSchema = z.enum(['slowest', 'fastest', 'newest', 'oldest'])
 export const observeDaysSchema = z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(30)])
 
 export const observeOptionsObjectSchema = z.object({
   appId: z.string().describe('App ID'),
+  source: z.enum(['native', 'updater', 'all']).optional().describe('For logs, errors, and device: filter native health or updater events (default all)'),
+  channelId: z.number().int().positive().optional().describe('For release: channel ID, default the app default channel'),
   view: observeViewSchema.optional().describe('Start with summary, then follow findings.next. device is the session timeline.'),
   days: observeDaysSchema.optional().describe('Lookback window: 1, 3, 7, or 30 (default 7)'),
   action: z.string().optional().describe('Filter by stats action, e.g. app_launch_ready or app_nav'),

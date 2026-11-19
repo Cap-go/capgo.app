@@ -12,7 +12,7 @@ skills/              workflow skills bundled with the plugin
 assets/plugin/       logo and composer icon
 ```
 
-The ZIP must not contain this README or `REVIEW.md`; the build script only packages the files above.
+The ZIP contains the manifest's review cases and release notes. It must not contain this README, `REVIEW.md`, passwords, or reviewer account details; the build script only packages the files above.
 
 ## Build the ZIP
 
@@ -39,5 +39,6 @@ The route returns 404 while the secret is unset.
 1. Organization owner (or member with Apps Management Write) completes business verification.
 2. Upload the ZIP, select the Capgo developer identity.
 3. Connect the MCP server: complete domain verification, then the OAuth login with the reviewer account.
-4. Fill review information from `REVIEW.md` (test cases, reviewer access, release notes, demo recording URL).
-5. Attest policies and submit.
+4. Check the five positive and three negative cases imported from `plugin.json`. Run them with the dedicated demo account. ZIP-managed cases are read-only in the dashboard; update the manifest and upload a new package version to change them.
+5. Enter reviewer access only in the private reviewer form, verify a fresh sign-in, and provide an accessible recording of the actual workflows. Use `REVIEW.md` for the account-readiness checklist.
+6. Attest policies and submit.

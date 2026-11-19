@@ -1,6 +1,6 @@
 # Organization custom domains
 
-Paying Enterprise organizations can manage one Live Updates API hostname in Organization settings. The private API provisions a Cloudflare for SaaS hostname and returns DNS ownership and certificate validation records. Refresh fetches live provider status; updater URLs are offered only when both the hostname and TLS certificate are active. Bundle download URLs are unchanged.
+Paying Enterprise organizations can manage one Live Updates API hostname in Organization settings. The private API provisions a Cloudflare for SaaS hostname and returns DNS ownership and certificate validation records. The console checks pending verification automatically with bounded retries and checks again when the page becomes visible. Updater URLs are offered only when both the hostname and TLS certificate are active. Bundle download URLs are unchanged.
 
 ## Existing Cloudflare setup
 
@@ -11,6 +11,19 @@ Add Zone Read, SSL and Certificates Write, and Workers Routes Write permissions 
 Verify provisioning and the `/updates`, `/stats`, and `/channel_self` endpoints with a test hostname before rollout; hostname and TLS activation alone do not verify Worker availability. DNS-only CNAME records are recommended for customers using Cloudflare unless their SaaS zone has an explicit orange-to-orange configuration.
 
 Reference: [Workers Routes API](https://developers.cloudflare.com/api/resources/workers/subresources/routes/methods/create/), [Cloudflare Worker as fallback origin](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/start/advanced-settings/worker-as-origin/) and [custom hostname API](https://developers.cloudflare.com/api/resources/custom_hostnames/methods/create/).
+
+## Automatic snippet selection
+
+All custom hostnames in the `capgo.app` SaaS zone, including manually configured
+ones, serve the Live Updates API. The normal snippet release installs a stable
+foreign-host predicate for exact plugin endpoint paths. Once installed, newly
+provisioned hostnames automatically select the current `plugin_load_balancer`
+snippet without a database inventory refresh or per-domain snippet-rule writes.
+Existing manual and native routing branches remain in place. See
+[snippet deployment](snippets-deployment.md#custom-domain-routing) for paths,
+release constraints and O2O validation limits. Provisioning still creates the
+hostname and Worker route synchronously; DNS and certificate activation remain
+required.
 
 ## Data and permissions
 

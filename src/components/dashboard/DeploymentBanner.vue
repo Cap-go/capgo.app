@@ -31,7 +31,7 @@ import { toast } from 'vue-sonner'
 import IconInfo from '~icons/lucide/info'
 import { BUNDLE_PICKER_COLUMNS } from '~/services/bundleColumns'
 import { useConsole } from '~/services/console'
-import { checkPermissions } from '~/services/permissions'
+import { checkPermissionsBatch } from '~/services/permissions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 
 /**
@@ -157,10 +157,11 @@ async function loadData() {
       .eq('public', true)
 
     const platformChannels = publicChannels?.filter(channel => channel.ios || channel.android || channel.electron) ?? []
-    const allowedChannels = await Promise.all(platformChannels.map(async (channel) => {
-      const allowed = await checkPermissions('channel.promote_bundle', { appId: props.appId, channelId: channel.id })
-      return allowed ? channel : null
-    }))
+    const promotable = await checkPermissionsBatch(platformChannels.map(channel => ({
+      permissions: 'channel.promote_bundle' as const,
+      scope: { appId: props.appId, channelId: channel.id },
+    })))
+    const allowedChannels = platformChannels.map((channel, idx) => (promotable[idx] ? channel : null))
 
     defaultChannels.value = allowedChannels.filter((channel): channel is DefaultChannel => channel !== null)
 
@@ -482,7 +483,7 @@ defineExpose({
     <button
       type="button"
       :disabled="deploying"
-      class="flex-shrink-0 inline-flex items-center justify-center rounded-md bg-blue-500 px-3 py-1 text-sm font-semibold text-white transition-colors hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-blue-100/40 dark:focus:ring-offset-[#121b3a] disabled:opacity-50 disabled:cursor-not-allowed"
+      class="d-btn d-btn-sm d-btn-primary shrink-0"
       @click="handleDeploy"
     >
       <!-- Button text changes during deployment -->

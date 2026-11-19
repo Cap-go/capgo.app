@@ -556,7 +556,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
     <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-3 overflow-visible md:flex-nowrap">
       <div class="flex h-10 shrink-0 items-center gap-2">
         <button
-          class="inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="d-btn d-btn-outline h-9 min-h-9 gap-2 px-3 text-sm font-medium rounded-lg"
           type="button"
           :aria-label="t('reload')"
           :title="t('reload')"
@@ -575,7 +575,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <button
             ref="exportTriggerRef"
             type="button"
-            class="inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="d-btn d-btn-outline h-9 min-h-9 gap-2 px-3 text-sm font-medium rounded-lg"
             :disabled="isLoading || exportLoading"
             data-test="data-table-export"
             :aria-label="t('export')"
@@ -623,7 +623,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
             :aria-describedby="addDisabled && addTooltip ? addTooltipId : undefined"
             :aria-disabled="addDisabled"
             :title="addDisabled ? addTooltip : t('add-one')"
-            class="inline-flex items-center gap-2 h-9 px-3 text-sm font-semibold text-white rounded-lg bg-blue-600 shadow-xs cursor-pointer transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 aria-disabled:cursor-not-allowed aria-disabled:bg-slate-200 aria-disabled:text-slate-400 aria-disabled:hover:bg-slate-200 dark:aria-disabled:bg-white/10 dark:aria-disabled:text-slate-500"
+            class="d-btn d-btn-primary h-9 min-h-9 gap-2 px-3 text-sm font-semibold rounded-lg aria-disabled:cursor-not-allowed aria-disabled:border-slate-200 aria-disabled:bg-slate-200 aria-disabled:text-slate-400 dark:aria-disabled:border-transparent dark:aria-disabled:bg-white/10 dark:aria-disabled:text-slate-500"
             type="button" @click="handleAddClick"
           >
             <plusOutline v-if="!isAdding" class="w-4 h-4" />
@@ -637,7 +637,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <button
             ref="filterOpenButtonRef"
             type="button"
-            class="relative inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="relative d-btn d-btn-outline h-9 min-h-9 gap-2 px-3 text-sm font-medium rounded-lg"
             data-test="data-table-filters-open"
             :aria-expanded="isFilterModalOpen"
             aria-haspopup="dialog"
@@ -704,7 +704,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
       </div>
       <button
         v-if="isSelectAllEnabled"
-        class="ml-auto inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
+        class="ml-auto d-btn d-btn-outline h-9 min-h-9 gap-2 px-3 text-sm font-medium rounded-lg"
         type="button" @click="
           selectedRows = selectedRows.map(() => true);
           emit('selectRow', selectedRows);
@@ -714,8 +714,11 @@ const paginationClass = computed(() => props.mobileFixedPagination
       </button>
       <button
         v-if="isSelectAllEnabled"
-        class="inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed hover:border-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
-        type="button" @click="emit('massDelete')"
+        class="d-btn d-btn-outline d-btn-error h-9 min-h-9 px-3 rounded-lg"
+        type="button"
+        :aria-label="t('delete')"
+        :title="t('delete')"
+        @click="emit('massDelete')"
       >
         <IconTrash class="w-4 h-4 text-red-500" />
       </button>
@@ -824,6 +827,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                       <button
                         type="button"
                         class="inline-flex items-center justify-center size-8 text-slate-400 rounded-md cursor-pointer transition-colors hover:text-slate-900 hover:bg-slate-100 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
+                        :aria-label="col.label"
                         @click.stop="col.onClick ? col.onClick(elem) : () => { }"
                       >
                         <component :is="col.icon" />

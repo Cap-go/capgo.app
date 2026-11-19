@@ -7,6 +7,7 @@ import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { apikeyPrincipal, queryJson, withRlsTransaction } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
+import { MAX_QUERY_LIMIT } from '../../utils/privateAnalyticsValidation.ts'
 import { readDevices } from '../../utils/stats.ts'
 import { fetchLimit, isValidAppId } from '../../utils/utils.ts'
 
@@ -132,6 +133,43 @@ async function withCallerReads<T>(c: Context, principal: RlsPrincipal, run: (rea
   }
 }
 
+/**
+ * Page size of the device list. Analytics reads already stop at MAX_QUERY_LIMIT (the
+ * console device list cap), so larger values are clamped rather than rejected: the
+ * Postgres path and the follow-up `channel_devices ... device_id = ANY($1)` read stay
+ * bounded too.
+ */
+export function parseDeviceListLimit(rawLimit: unknown): number {
+  const limit = rawLimit == null ? fetchLimit : Number(rawLimit)
+  if (!Number.isFinite(limit) || !Number.isInteger(limit) || limit < 1) {
+    throw simpleError('invalid_limit', 'limit must be a positive integer', { limit: rawLimit })
+  }
+  return Math.min(limit, MAX_QUERY_LIMIT)
+}
+
+/** Version ids not already resolved by name, with one Set lookup per id. */
+export function findMissingVersionIds(versionIds: number[], versionMap: Record<string, { id: number }>): number[] {
+  const knownVersionIds = new Set(Object.values(versionMap).map(version => version.id))
+  return versionIds.filter(id => !knownVersionIds.has(id))
+}
+
+/** Sets each device's channel from its override; the first row per device wins, as Array.find did. */
+export function applyChannelOverrides(
+  devices: { device_id: string }[],
+  overrides: { device_id: string, channels: { name: string } | null }[],
+): void {
+  const overrideByDevice = new Map<string, { name: string } | null>()
+  for (const override of overrides) {
+    if (!overrideByDevice.has(override.device_id))
+      overrideByDevice.set(override.device_id, override.channels)
+  }
+  for (const device of devices) {
+    const channel = overrideByDevice.get(device.device_id.toLowerCase())
+    if (channel)
+      (device as { channel?: string }).channel = channel.name
+  }
+}
+
 export function filterDeviceKeys(devices: DeviceRes[]) {
   return devices.map((device) => {
     const { updated_at, device_id, custom_id, is_prod, is_emulator, install_source, version_name, version, app_id, platform, plugin_version, os_version, version_build, key_id, country_code } = device
@@ -212,10 +250,7 @@ export async function get(c: Context, body: GetDevice, apikey: Database['public'
     const customIdFilter = parseCustomIdFilter(body.custom_id)
     const updatedAtGt = parseUpdatedAtFilter(body.updated_at)
     const order = parseDevicesOrder(body.order)
-    const limit = body.limit == null ? fetchLimit : Number(body.limit)
-    if (!Number.isFinite(limit) || !Number.isInteger(limit) || limit < 1) {
-      throw simpleError('invalid_limit', 'limit must be a positive integer', { limit: body.limit })
-    }
+    const limit = parseDeviceListLimit(body.limit)
 
     const res = await readDevices(c, {
       app_id: body.app_id,
@@ -247,7 +282,7 @@ export async function get(c: Context, body: GetDevice, apikey: Database['public'
           }, {} as Record<string, { id: number, name: string }>)
         }
       }
-      const missingVersionIds = versionIds.filter(id => !Object.values(versionMap).some(v => v.id === id))
+      const missingVersionIds = findMissingVersionIds(versionIds, versionMap)
       if (missingVersionIds.length) {
         const dataVersions = await read<{ id: number, name: string }>(
           'SELECT id, name FROM public.app_versions WHERE app_id = $1 AND id = ANY($2::bigint[])',
@@ -277,14 +312,8 @@ export async function get(c: Context, body: GetDevice, apikey: Database['public'
       )
 
       // Add channel override to each device that has one
-      if (channelOverrides?.length) {
-        dataDevices.forEach((device) => {
-          const override = channelOverrides.find(o => o.device_id === device.device_id.toLowerCase())
-          if (override?.channels) {
-            (device as any).channel = override.channels.name
-          }
-        })
-      }
+      if (channelOverrides?.length)
+        applyChannelOverrides(dataDevices, channelOverrides)
     })
 
     return c.json({

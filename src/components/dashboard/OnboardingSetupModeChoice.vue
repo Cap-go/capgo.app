@@ -32,7 +32,7 @@ import { useOrganizationStore } from '~/stores/organization'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { onboardingPlanStops } from '~/utils/onboardingPlanStops'
 import { readOnboardingCompanyName } from '~/utils/onboardingProfile'
-import { aiGoalToIntent, aiOnboardingPathFor, defaultAiOrganizationName, readAiOnboardingGoal, withAiSetupOrganization, withOnboardingFields, withOnboardingSetupMode, withoutAiAgentProgress } from '~/utils/onboardingSetupMode'
+import { aiGoalToIntent, aiIntentEventProperties, aiOnboardingPathFor, defaultAiOrganizationName, readAiOnboardingGoal, withAiSetupOrganization, withOnboardingFields, withOnboardingSetupMode, withoutAiAgentProgress } from '~/utils/onboardingSetupMode'
 
 type SetupScreen = 'choice' | 'ai' | 'invite'
 
@@ -169,7 +169,7 @@ async function chooseMode(mode: OnboardingSetupMode) {
     return
   isSaving.value = true
   try {
-    sendOnboardingEvent('onboarding_setup_mode_selected', { setup_mode: mode })
+    sendOnboardingEvent('onboarding_setup_mode_selected', { setup_mode: mode, ...aiIntentEventProperties(goal.value) })
     if (mode !== 'invite')
       void rememberSetupMethod(mode)
     // The mode drives redirects and the Getting started checklist, so it must be saved first.
@@ -239,6 +239,7 @@ async function createOrganization() {
       starting_out: plan.startingOut === true,
       org_name_edited: hasEditedOrgName.value,
       goal: chosenGoal,
+      intent,
     })
 
     try {

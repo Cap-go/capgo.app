@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MAX_DEVICES_PAGE_OFFSET } from './devicesPageOffset.ts'
 import { Constants } from './supabase.types.ts'
 import { deviceIdRegex, INVALID_STRING_APP_ID, INVALID_STRING_DEVICE_ID, reverseDomainRegex } from './utils.ts'
 
@@ -15,9 +16,17 @@ export const deviceIdSchema = z.string().max(36).refine(
   { message: INVALID_STRING_DEVICE_ID },
 )
 
+// Device id filters go into the analytics query itself (an Analytics Engine
+// IN list or a Postgres = ANY array) and are logged, so their length is capped
+// rather than bounded only by the request body size.
+export const MAX_DEVICE_ID_FILTER = 1000
+export const deviceIdListSchema = z.array(deviceIdSchema).max(MAX_DEVICE_ID_FILTER)
+
 export const safeQueryTextSchema = z.string().max(MAX_QUERY_TEXT_LENGTH)
 export const safeQueryDateSchema = z.string().max(128)
 export const cursorSchema = z.string().max(128)
+
+export const devicesPageOffsetSchema = z.number().int().min(0).max(MAX_DEVICES_PAGE_OFFSET)
 
 const queryLimitNumberSchema = z.number().int().min(1).refine(
   value => value <= MAX_QUERY_LIMIT,

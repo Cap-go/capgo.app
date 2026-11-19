@@ -40,7 +40,7 @@ function selectLanguage(locale: string) {
       type="button"
       :aria-expanded="isOpen"
       :aria-controls="menuId"
-      class="inline-flex items-center gap-2 h-9 px-3 m-1 text-sm font-medium rounded-lg border border-slate-300 bg-white text-slate-700 cursor-pointer transition-colors duration-150 hover:border-slate-400 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:bg-slate-700"
+      class="d-btn d-btn-outline h-9 min-h-9 m-1 gap-2 px-3 font-medium"
       @click="isOpen = !isOpen"
     >
       <span aria-hidden="true">{{ getEmoji(i18n.global.locale.value) }}</span>

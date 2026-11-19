@@ -306,7 +306,7 @@ const { continueOnboarding, goBack, replay } = useOnboardingChannelAnimation({
                 <span class="active">{{ t('daily') }}</span><span>{{ t('cumulative') }}</span>
                 <i />
                 <span class="active">{{ t('billing-period') }}</span><span>{{ t('last-30-days') }}</span>
-                <button type="button">
+                <button type="button" :aria-label="t('reload')">
                   <IconRefresh />
                 </button>
               </div>

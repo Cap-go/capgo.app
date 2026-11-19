@@ -227,7 +227,7 @@ export async function resolveDeltaEncryptionSettings(options: OptionsUpload, enc
     }
 
     if (updaterVersion && coerced && greaterOrEqual(coerced, parse('6.14.4'))) {
-      log.info(`Auto-enabling delta update encryption for updater version ${coerced} (>= 6.14.4)`)
+      log.info(`Auto-enabling delta update encryption for updater version ${updaterVersion} (>= 6.14.4)`)
       if (options.verbose)
         log.info(`[Verbose] Delta encryption auto-enabled for updater >= 6.14.4`)
       options.encryptDelta = true
@@ -251,7 +251,7 @@ export async function resolveDeltaEncryptionSettings(options: OptionsUpload, enc
       supportsHexChecksum = !isDeprecatedPluginVersion(coerced, HEX_CHECKSUM_MIN_VERSION_V5, HEX_CHECKSUM_MIN_VERSION_V6, HEX_CHECKSUM_MIN_VERSION_V7)
 
       if (options.verbose && supportsHexChecksum)
-        log.info(`[Verbose] Using hex checksum format for updater version ${coerced}`)
+        log.info(`[Verbose] Using hex checksum format for updater version ${updaterVersion}`)
     }
   }
 

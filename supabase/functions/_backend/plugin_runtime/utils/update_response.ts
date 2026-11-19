@@ -27,6 +27,8 @@ const UPDATE_BLOCKED_CODES = new Set([
   'disable_emulator',
   'key_id_mismatch',
   'provider_infrastructure_request_blocked',
+  // The app's region policy excludes regions an external provider cannot fence.
+  'external_delivery_unavailable',
 ])
 
 export function getUpdateResponseKind(errorCode: string): UpdateResponseKind {

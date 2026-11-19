@@ -148,7 +148,12 @@ describe('files R2 error handling', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('public, max-age=31536000, immutable, no-transform')
-    expect(matchMock).toHaveBeenCalledTimes(2)
+    // One file cache read serves the bytes. Deleted-marker reads come from the
+    // serve path and from the R2 restore, which runs in the background (its
+    // count depends on how far it got), so only their presence is asserted.
+    const matchedPaths = matchMock.mock.calls.map(([cacheRequest]) => new URL(cacheRequest.url).pathname)
+    expect(matchedPaths.filter(path => !path.startsWith('/deleted/'))).toHaveLength(1)
+    expect(matchedPaths.some(path => path.startsWith('/deleted/'))).toBe(true)
   })
 
   it('should persist no-transform in file metadata written to R2', async () => {

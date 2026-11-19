@@ -96,6 +96,8 @@ export const useDisplayStore = defineStore('display', () => {
         return 'account'
       case 'notifications':
         return 'notifications'
+      case 'ci-cd':
+        return 'cicd-guide-nav-title'
       default:
         return segment.charAt(0).toUpperCase() + segment.slice(1)
     }

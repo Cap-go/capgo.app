@@ -1,5 +1,5 @@
-import type { Permission } from '~/services/permissions'
-import { checkPermissions } from '~/services/permissions'
+import type { PermissionCheckRequest } from '~/services/permissions'
+import { checkPermissionsBatch } from '~/services/permissions'
 
 export interface ChannelPromotionTarget {
   id: number
@@ -7,28 +7,31 @@ export interface ChannelPromotionTarget {
 }
 
 export type ChannelPromotionPermissionChecker = (
-  permission: Permission,
-  scope: { appId: string, channelId: number },
-) => Promise<boolean>
+  requests: PermissionCheckRequest[],
+) => Promise<boolean[]>
 
 export async function findChannelsWithoutPromotionPermission(
   appId: string,
   channels: ChannelPromotionTarget[],
-  permissionChecker: ChannelPromotionPermissionChecker = checkPermissions,
+  permissionChecker: ChannelPromotionPermissionChecker = checkPermissionsBatch,
 ) {
-  const channelPermissions = await Promise.all(channels.map(async (channel) => {
-    try {
-      const allowed = await permissionChecker('channel.promote_bundle', { appId, channelId: channel.id })
-      return { channel, allowed }
-    }
-    catch {
-      return { channel, allowed: false }
-    }
-  }))
+  if (channels.length === 0)
+    return []
 
-  return channelPermissions
-    .filter(({ allowed }) => !allowed)
-    .map(({ channel }) => channel)
+  let allowed: boolean[]
+  try {
+    // One batched permission RPC for every linked channel.
+    allowed = await permissionChecker(channels.map(channel => ({
+      permissions: 'channel.promote_bundle',
+      scope: { appId, channelId: channel.id },
+    })))
+  }
+  catch {
+    // Fail closed: treat every channel as not promotable.
+    return [...channels]
+  }
+
+  return channels.filter((_channel, idx) => allowed[idx] !== true)
 }
 
 export function formatChannelPromotionTargets(channels: ChannelPromotionTarget[]) {

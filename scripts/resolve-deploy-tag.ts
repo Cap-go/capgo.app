@@ -91,19 +91,28 @@ export function assertCurrentDeployTag(
   return target
 }
 
+export function resolveAttemptDeployTag(tag: string, attempt: number, run: GitRunner = runGit): DeployTag {
+  if (!Number.isSafeInteger(attempt) || attempt < 1)
+    throw new Error('Invalid deployment attempt')
+  const environment = isAlphaTag(tag)
+  return attempt > 1 ? resolveLatestDeployTag(environment, run) : assertCurrentDeployTag(tag, run)
+}
+
 if (import.meta.main) {
   const mode = process.argv[2]
   const tag = process.argv[3]
-  if ((mode !== '--resolve' && mode !== '--assert-current') || !tag) {
-    console.error('Usage: bun scripts/resolve-deploy-tag.ts [--resolve|--assert-current] <capgo-tag>')
+  if ((mode !== '--resolve' && mode !== '--assert-current' && mode !== '--attempt') || !tag) {
+    console.error('Usage: bun scripts/resolve-deploy-tag.ts [--resolve|--assert-current|--attempt] <capgo-tag>')
     process.exit(1)
   }
 
-  const target = mode === '--resolve'
-    ? resolveDeployTag(tag)
-    : assertCurrentDeployTag(tag)
+  const target = mode === '--attempt'
+    ? resolveAttemptDeployTag(tag, Number(process.env.GITHUB_RUN_ATTEMPT))
+    : mode === '--resolve'
+      ? resolveDeployTag(tag)
+      : assertCurrentDeployTag(tag)
   console.error(`${mode === '--resolve' ? 'Resolved' : 'Validated'} deployment target: ${target.tag} (${target.sha})`)
-  if (mode === '--resolve') {
+  if (mode === '--resolve' || mode === '--attempt') {
     console.log(`deploy_tag=${target.tag}`)
     console.log(`deploy_sha=${target.sha}`)
     console.log(`is_alpha=${target.isAlpha}`)

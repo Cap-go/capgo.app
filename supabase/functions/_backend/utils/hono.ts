@@ -56,6 +56,8 @@ export interface MiddlewareKeyVariables {
     subkey?: Database['public']['Tables']['apikeys']['Row']
     webhookBody?: unknown
     oldRecord?: unknown
+    /** When the database change happened (trigger payload `occurred_at`), if the message has it. */
+    webhookOccurredAt?: string
     // RBAC context variables
     rbacEnabled?: boolean
     resolvedOrgId?: string
@@ -66,6 +68,7 @@ export interface MiddlewareKeyVariables {
     skipChannelSelfPostgresFallback?: boolean
     requireReadReplica?: boolean
     deviceDataCollection?: import('./deviceDataCollection.ts').DeviceDataCollection
+    manifestSizeLookupSubrequestBudgetPerMessage?: number
   }
 }
 
@@ -189,6 +192,7 @@ export const useCors = cors({
     'x-cli-command',
     'x-cli-node',
     'x-cli-os',
+    'x-cli-ci',
     'x-image-path',
     'x-image-upsert',
   ],
@@ -226,6 +230,11 @@ export function triggerValidator(
       cloudlog({ requestId: c.get('requestId'), message: `Not ${allowedTypes.join(' or ')}` })
       throw simpleError('type_not_match', 'Not type', { body })
     }
+
+    // Messages queued before occurred_at was added to the trigger payload have none.
+    const occurredAt = (body as { occurred_at?: unknown }).occurred_at
+    if (typeof occurredAt === 'string' && Number.isFinite(Date.parse(occurredAt)))
+      c.set('webhookOccurredAt', occurredAt)
 
     // Store the validated body in context for next middleware
     if (body.type === 'DELETE' && body.old_record) {

@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import type { ChannelLookupResult, CompatibleChannelRow, getDrizzleClient, PlanAction } from './pg.ts'
+import type { AppVersionLookup, ChannelLookupResult, CompatibleChannelRow, getDrizzleClient, PlanAction } from './pg.ts'
 import { isLazyPgConnectError, logPgError, queryAppOwnerPostgres, queryAppVersionPostgres, queryChannelByNamePg, queryCompatibleChannelsPg } from './pg.ts'
 import { isDatabaseOriginError, isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
 
@@ -55,6 +55,24 @@ export async function getAppOwnerWithEdgeCache(
   }
 }
 
+/** getAppVersionWithEdgeCache that tells a failed read from a missing bundle. */
+export async function lookupAppVersionWithEdgeCache(
+  c: Context,
+  appId: string,
+  versionName: string,
+  drizzleClient: DrizzleClient,
+): Promise<AppVersionLookup> {
+  try {
+    const result = await getCachedAppVersion(c, appId, versionName, () => queryAppVersionPostgres(appId, versionName, undefined, drizzleClient))
+    return { value: result.value, failed: false }
+  }
+  catch (error: unknown) {
+    rethrowConnectError(error)
+    logPgError(c, 'getAppVersionPostgres', error)
+    return { value: null, failed: true }
+  }
+}
+
 /** Bundle by name, deleted bundles included (getAppVersionPostgres with allowedDeleted undefined). */
 export async function getAppVersionWithEdgeCache(
   c: Context,
@@ -62,15 +80,7 @@ export async function getAppVersionWithEdgeCache(
   versionName: string,
   drizzleClient: DrizzleClient,
 ) {
-  try {
-    const result = await getCachedAppVersion(c, appId, versionName, () => queryAppVersionPostgres(appId, versionName, undefined, drizzleClient))
-    return result.value
-  }
-  catch (error: unknown) {
-    rethrowConnectError(error)
-    logPgError(c, 'getAppVersionPostgres', error)
-    return null
-  }
+  return (await lookupAppVersionWithEdgeCache(c, appId, versionName, drizzleClient)).value
 }
 
 /** getChannelByNamePg through the edge cache. */

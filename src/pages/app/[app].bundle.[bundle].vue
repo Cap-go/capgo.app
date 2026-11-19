@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ChannelChangeCompatibility } from '~/composables/useChannelChangeConfirm'
 import type { BundleSummaryWithNativePackages } from '~/services/bundleColumns'
 import type { LinkedChannel } from '~/services/bundleLinkedChannels'
 import type { ChannelPromotionTarget } from '~/services/channelPromotion'
@@ -17,16 +18,21 @@ import IconTrash from '~icons/heroicons/trash'
 import IconSearch from '~icons/ic/round-search'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconPencil from '~icons/lucide/pencil'
+import ChangelogUpdateBadge from '~/components/changelog/ChangelogUpdateBadge.vue'
+import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
+import { confirmChannelChange } from '~/composables/useChannelChangeConfirm'
 import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
+import { invalidateChannelImpact } from '~/services/channelImpact'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
+import { readChannelRollbackContext } from '~/services/channelRollback'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { useConsole } from '~/services/console'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
-import { checkCompatibilityNativePackages, isCompatible } from '~/services/nativePackageCompatibility'
-import { checkPermissions } from '~/services/permissions'
+import { bundleChannelCompatibility } from '~/services/nativePackageCompatibility'
+import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { openVersion } from '~/services/versions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -165,9 +171,11 @@ async function copyToast(text: string) {
   }
 }
 
+let channelsLoadId = 0
 async function getChannels() {
   if (!version.value)
     return
+  const loadId = ++channelsLoadId
   channel.value = undefined
   const appId = version.value.app_id
   const { data: dataChannel, error: channelsError } = await capgo
@@ -185,17 +193,16 @@ async function getChannels() {
     return
   }
 
-  channels.value = dataChannel ?? []
-  const channelPermissions = await Promise.all(channels.value.map(async (channel) => {
-    try {
-      const allowed = await checkPermissions('channel.promote_bundle', { appId, channelId: channel.id })
-      return { channelId: channel.id, allowed }
-    }
-    catch (error) {
-      console.error('Cannot check channel promotion permission:', error)
-      return { channelId: channel.id, allowed: false }
-    }
-  }))
+  const loadedChannels = dataChannel ?? []
+  channels.value = loadedChannels
+  const promotable = await checkPermissionsBatch(loadedChannels.map(channel => ({
+    permissions: 'channel.promote_bundle' as const,
+    scope: { appId, channelId: channel.id },
+  })))
+  // A newer load replaced the channel list while this batch was in flight.
+  if (loadId !== channelsLoadId)
+    return
+  const channelPermissions = loadedChannels.map((channel, idx) => ({ channelId: channel.id, allowed: promotable[idx] }))
   promotableChannelIds.value = new Set(channelPermissions.filter(result => result.allowed).map(result => result.channelId))
   showBundleMetadataInput.value = channels.value.some(c => c.disable_auto_update === 'version_number')
 }
@@ -262,6 +269,7 @@ async function ASChannelChooser() {
   channelSearchVal.value = ''
   filteredChannels.value = getPromotableChannels()
 
+  let picked: Database['public']['Tables']['channels']['Row'] | null = null
   dialogStore.openDialog({
     title: t('channel-linking'),
     size: 'lg',
@@ -273,18 +281,22 @@ async function ASChannelChooser() {
       {
         text: t('set-bundle'),
         role: 'primary',
-        handler: async () => {
+        handler: () => {
           if (!selectedChannelForLink.value) {
             toast.error(t('please-select-channel'))
             return false
           }
-          await handleChannelLink(selectedChannelForLink.value)
+          picked = selectedChannelForLink.value
           return true
         },
       },
     ],
   })
-  return dialogStore.onDialogDismiss()
+  const canceled = await dialogStore.onDialogDismiss()
+  // The chooser is closed first; the impact confirm opens as its own dialog.
+  if (picked)
+    await handleChannelLink(picked)
+  return canceled
 }
 
 async function handleChannelLink(chan: Database['public']['Tables']['channels']['Row']) {
@@ -296,51 +308,95 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
   }
 
   try {
-    const {
-      finalCompatibility,
-      localDependencies,
-    } = await checkCompatibilityNativePackages(version.value.app_id, chan.name, (version.value.native_packages as any) ?? [])
-
-    // Check if any package is incompatible
-    if (localDependencies.length > 0 && finalCompatibility.some(x => !isCompatible(x))) {
-      toast.error(t('bundle-not-compatible-with-channel', { channel: chan.name }))
-
-      dialogStore.openDialog({
-        title: t('compatibility-accept-title'),
-        description: t('set-even-not-compatible'),
-        buttons: [
-          {
-            text: t('button-cancel'),
-            role: 'cancel',
-          },
-          {
-            text: t('view-dependencies'),
-            role: 'cancel',
-            handler: () => {
-              // Pre-select the channel's current bundle as the comparison baseline so the
-              // Dependencies page opens already diffed against what is live on the channel.
-              const compareQuery = chan.version ? `?compare=${chan.version}` : ''
-              router.push(`/app/${packageId.value}/bundle/${version.value!.id}/dependencies${compareQuery}`)
-            },
-          },
-          {
-            text: t('compatibility-accept'),
-            role: 'primary',
-          },
-        ],
-      })
-      if (await dialogStore.onDialogDismiss())
-        return
+    const bundle = version.value
+    // Read the channel fresh: another session may have changed its bundle or
+    // started a rollout since the channel list loaded.
+    const names = await readChannelBundleNames(chan, bundle.id)
+    if (!names)
+      return
+    let compatibility: ChannelChangeCompatibility | null
+    try {
+      compatibility = await bundleChannelCompatibility(bundle.app_id, chan.name, bundle.id, (bundle.native_packages as any) ?? [], names.versionId)
     }
-    else if (localDependencies.length === 0 || finalCompatibility.length === 0) {
-      toast.info(t('ignore-compatibility'))
+    catch (error) {
+      // Never skip the native package warning because the check itself failed.
+      console.error('Cannot check native package compatibility', error)
+      toast.error(t('channel-impact-compat-check-failed'))
+      return
     }
-    else {
-      toast.info(t('bundle-compatible-with-channel', { channel: chan.name }))
+    const result = await confirmChannelChange({
+      appId: bundle.app_id,
+      channelId: chan.id,
+      channelName: chan.name,
+      action: 'set',
+      bundle: { id: bundle.id, name: bundle.name },
+      currentBundleName: names.currentBundleName,
+      stopsRolloutTarget: names.rolloutTargetName,
+      compatibility,
+    })
+    if (!result.confirmed) {
+      if (result.next === 'view-dependencies' && compatibility)
+        await router.push(compatibility.dependenciesPath)
+      return
     }
-    await setChannel(chan, version.value.id)
+    await setChannel(chan, bundle.id)
+    invalidateChannelImpact(chan.id)
     await getChannels()
     toast.success(t('linked-bundle'))
+    toast.info(t('cloud-replication-delay'))
+  }
+  catch (error) {
+    console.error(error)
+    toast.error(t(channelUpdatePackageErrorKey(error) ?? 'cannot-test-app-some'))
+  }
+}
+
+/**
+ * What the impact confirm says the channel serves now, and which rollout the
+ * change stops, read fresh from the channel. Null (after an error toast) when it
+ * cannot be read: the confirm must never describe a channel it could not read.
+ */
+async function readChannelBundleNames(chan: Database['public']['Tables']['channels']['Row'], nextVersionId: number | null) {
+  const context = await readChannelRollbackContext(chan.id)
+  if (!context) {
+    toast.error(t('channel-impact-bundle-read-failed'))
+    return null
+  }
+  return {
+    versionId: context.versionId,
+    currentBundleName: context.versionName,
+    // A new stable bundle resets any configured rollout (channel trigger); the
+    // same bundle again does not change the version, so the rollout stays.
+    rolloutTargetName: context.versionId === nextVersionId ? null : context.rolloutTargetName,
+  }
+}
+
+/** Unlink: the channel serves the store version again, so show who goes back to it first. */
+async function unlinkChannelBundle(chan: Database['public']['Tables']['channels']['Row']) {
+  if (!canPromoteChannel(chan.id)) {
+    toast.error(t('no-permission'))
+    return
+  }
+  const names = await readChannelBundleNames(chan, null)
+  if (!names)
+    return
+  const result = await confirmChannelChange({
+    appId: chan.app_id,
+    channelId: chan.id,
+    channelName: chan.name,
+    action: 'set',
+    currentBundleName: names.currentBundleName,
+    stopsRolloutTarget: names.rolloutTargetName,
+    title: t('unlink-channel'),
+    confirmText: t('continue'),
+  })
+  if (!result.confirmed)
+    return
+  try {
+    await setChannel(chan, null)
+    invalidateChannelImpact(chan.id)
+    await getChannels()
+    toast.success(t('channels-unlinked-successfully'))
     toast.info(t('cloud-replication-delay'))
   }
   catch (error) {
@@ -410,16 +466,7 @@ async function handleChannelAction(action: 'set' | 'open' | 'unlink') {
     await openChannelLink()
   }
   else if (action === 'unlink') {
-    try {
-      await setChannel(channel.value, null)
-      await getChannels()
-      toast.success(t('channels-unlinked-successfully'))
-      toast.info(t('cloud-replication-delay'))
-    }
-    catch (error) {
-      console.error(error)
-      toast.error(t('cannot-test-app-some'))
-    }
+    await unlinkChannelBundle(channel.value)
   }
 }
 
@@ -902,6 +949,7 @@ async function deleteBundle() {
                     <button
                       type="button"
                       class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                      :aria-label="t('copy')"
                       @click="copyToast(version?.checksum ?? '')"
                     >
                       <IconDocumentDuplicate class="w-4 h-4 text-gray-500 cursor-pointer dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
@@ -930,6 +978,7 @@ async function deleteBundle() {
                       <button
                         type="button"
                         class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                        :aria-label="t('settings')"
                         @click="openChannelSettings(chn)"
                       >
                         <Settings class="w-4 h-4 text-gray-500 cursor-pointer dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
@@ -970,7 +1019,15 @@ async function deleteBundle() {
                 <InfoRow
                   v-if="version.cli_version" :label="t('cli-version')"
                 >
-                  {{ version.cli_version }}
+                  <span class="inline-flex flex-wrap items-center justify-end gap-2">
+                    {{ version.cli_version }}
+                    <ChangelogUpdateBadge
+                      product="cli"
+                      show-notes
+                      :current="version.cli_version"
+                      :features="[version.session_key ? 'encryption' : '', hasManifest ? 'delta' : ''].filter(Boolean)"
+                    />
+                  </span>
                 </InfoRow>
                 <!-- version.external_url -->
                 <InfoRow
@@ -1036,6 +1093,7 @@ async function deleteBundle() {
                       <button
                         type="button"
                         class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                        :aria-label="t('download')"
                         @click="openDownload()"
                       >
                         <IconArchiveBoxArrowDown class="w-4 h-4 text-gray-500 cursor-pointer dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
@@ -1070,6 +1128,7 @@ async function deleteBundle() {
                     <button
                       type="button"
                       class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                      :aria-label="t('delete')"
                       @click="deleteBundle"
                     >
                       <IconTrash class="w-4 h-4 text-red-500 transition-colors cursor-pointer dark:text-red-400 hover:text-red-600" />
@@ -1087,18 +1146,19 @@ async function deleteBundle() {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('bundle-not-found') }}
-      </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-400">
-        {{ t('bundle-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles/`)">
-        {{ t('back-to-bundles') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('bundle-not-found')"
+      :description="t('bundle-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles/`)">
+          {{ t('back-to-bundles') }}
+        </button>
+      </template>
+    </EmptyState>
 
     <!-- Teleport Content for Deletion Style Modal -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('select-style-of-deletion')" defer to="#dialog-v2-content">

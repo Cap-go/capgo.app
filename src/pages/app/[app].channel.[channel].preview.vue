@@ -5,6 +5,8 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconSettings from '~icons/lucide/settings'
+import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
+import EmptyState from '~/components/EmptyState.vue'
 import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
@@ -160,44 +162,34 @@ watchEffect(async () => {
   <div>
     <PageLoader v-if="loading" />
 
-    <div v-else-if="!channel" class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('channel-not-found') }}
-      </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-400">
-        {{ t('channel-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
-        {{ t('back-to-channels') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else-if="!channel"
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('channel-not-found')"
+      :description="t('channel-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
+          {{ t('back-to-channels') }}
+        </button>
+      </template>
+    </EmptyState>
 
-    <div v-else-if="previewState === 'no-app'" class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('app-not-found') }}
-      </h2>
-      <p class="mt-2 text-center text-slate-600 dark:text-slate-400 max-w-md">
-        {{ t('app-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push('/apps')">
-        {{ t('back-to-apps') }}
-      </button>
-    </div>
+    <AppPageNotFound v-else-if="previewState === 'no-app'" />
 
-    <div v-else-if="previewState === 'preview-disabled'" class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconSettings class="w-16 h-16 mb-4 text-slate-500 dark:text-slate-400" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('preview-disabled') }}
-      </h2>
-      <p class="mt-2 text-center text-slate-600 dark:text-slate-400 max-w-md">
-        {{ t('preview-disabled-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="goToAppSettings">
-        {{ t('preview-enable-settings') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else-if="previewState === 'preview-disabled'"
+      :icon="IconSettings"
+      :title="t('preview-disabled')"
+      :description="t('preview-disabled-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="goToAppSettings">
+          {{ t('preview-enable-settings') }}
+        </button>
+      </template>
+    </EmptyState>
 
     <div v-else-if="previewState === 'ready'" class="h-full min-h-0 w-full overflow-y-auto">
       <BundlePreviewFrame

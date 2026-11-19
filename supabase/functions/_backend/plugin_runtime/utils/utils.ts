@@ -8,7 +8,10 @@ import {
 } from '@std/semver'
 import { env, getRuntimeKey } from 'hono/adapter'
 
-declare const EdgeRuntime: { waitUntil?: (promise: Promise<any>) => void } | undefined
+function edgeRuntimeWaitUntil(): ((promise: Promise<unknown>) => void) | undefined {
+  const edgeRuntime = (globalThis as { EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void } }).EdgeRuntime
+  return edgeRuntime?.waitUntil
+}
 
 export const fetchLimit = 50
 export const WAIT_FOR_COMPLETION_HEADER = 'x-capgo-wait-for-completion'
@@ -230,8 +233,9 @@ export function backgroundTask(c: Context, p: any) {
     c.executionCtx.waitUntil(p)
     return Promise.resolve(null)
   }
-  if (EdgeRuntime?.waitUntil) {
-    EdgeRuntime.waitUntil(p)
+  const waitUntil = edgeRuntimeWaitUntil()
+  if (waitUntil) {
+    waitUntil(p)
     return Promise.resolve(null)
   }
   return p

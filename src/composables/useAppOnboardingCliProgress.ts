@@ -6,6 +6,20 @@ import { FunctionsHttpError } from '~/services/consoleClient'
 import { withUsageProvenSteps } from '~/utils/appOnboardingProgress'
 import { hasDualOnboardingChecklists } from '~/utils/dualOnboardingChecklists'
 
+/** First poll delay, and the delay again after any progress. */
+export const CLI_PROGRESS_POLL_BASE_MS = 2_000
+/** Poll every CLI_PROGRESS_POLL_BASE_MS for this long after the last progress, then back off. */
+export const CLI_PROGRESS_POLL_FAST_PHASE_MS = 2 * 60_000
+/** Longest delay between polls once nothing changes. */
+export const CLI_PROGRESS_POLL_MAX_MS = 30_000
+const CLI_PROGRESS_POLL_BACKOFF = 1.5
+/** Stop polling after this long without progress; a manual refresh or the tab becoming visible again restarts it. */
+export const CLI_PROGRESS_POLL_MAX_IDLE_MS = 30 * 60_000
+
+function isDocumentHidden() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+}
+
 interface ProgressResponse {
   onboarding: unknown
   hasChannel?: boolean
@@ -35,21 +49,85 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
       return stepsDone
     return stepsDone || onboarding.value.outcome === 'completed' || onboarding.value.outcome === 'skipped'
   })
-  let pollTimer: ReturnType<typeof setInterval> | undefined
+  let pollTimer: ReturnType<typeof setTimeout> | undefined
   let generation = 0
   let refreshing = false
   let mounted = false
   let accessRevoked = false
   let N = 0
+  // Polling backs off while nothing changes, pauses while the tab is hidden and
+  // ends after CLI_PROGRESS_POLL_MAX_IDLE_MS without progress.
+  let pollingWanted = false
+  let pollDelay = CLI_PROGRESS_POLL_BASE_MS
+  let lastProgressAt = 0
+  let lastSnapshot: string | undefined
 
-  function stopPolling() {
-    clearInterval(pollTimer)
+  function resetBackoff() {
+    pollDelay = CLI_PROGRESS_POLL_BASE_MS
+    lastProgressAt = Date.now()
+  }
+
+  function canPoll() {
+    return mounted && !accessRevoked && toValue(active) && !isTerminal.value
+  }
+
+  function clearPollTimer() {
+    clearTimeout(pollTimer)
     pollTimer = undefined
   }
 
+  function stopPolling() {
+    pollingWanted = false
+    clearPollTimer()
+  }
+
+  function scheduleNextPoll() {
+    if (pollTimer !== undefined || !pollingWanted || !canPoll() || isDocumentHidden())
+      return
+    if (Date.now() - lastProgressAt >= CLI_PROGRESS_POLL_MAX_IDLE_MS) {
+      stopPolling()
+      return
+    }
+    pollTimer = setTimeout(async () => {
+      pollTimer = undefined
+      // Back off once the fast phase is over; a poll that sees progress resets the delay.
+      if (Date.now() - lastProgressAt >= CLI_PROGRESS_POLL_FAST_PHASE_MS)
+        pollDelay = Math.min(Math.round(pollDelay * CLI_PROGRESS_POLL_BACKOFF), CLI_PROGRESS_POLL_MAX_MS)
+      await refreshProgress(false)
+      scheduleNextPoll()
+    }, pollDelay)
+  }
+
+  // Progress seen: poll at the base delay again, replacing a backed-off timer.
+  function pollSoon() {
+    resetBackoff()
+    if (pollTimer !== undefined) {
+      clearPollTimer()
+      scheduleNextPoll()
+    }
+  }
+
   function startPolling() {
-    if (pollTimer === undefined && mounted && !accessRevoked && toValue(active))
-      pollTimer = setInterval(() => void refreshProgress(false), 2000)
+    if (!canPoll())
+      return
+    if (!pollingWanted) {
+      pollingWanted = true
+      resetBackoff()
+    }
+    scheduleNextPoll()
+  }
+
+  function onVisibilityChange() {
+    if (isDocumentHidden()) {
+      // Paused, not stopped: the next visible tab polls right away.
+      clearPollTimer()
+      return
+    }
+    if (!canPoll())
+      return
+    void refreshProgress(false)
+    pollingWanted = false
+    startPolling()
   }
 
   async function refreshProgress(initial: boolean) {
@@ -79,6 +157,15 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
           startPolling()
       }
       if (data) {
+        // The endpoint only reports hasChannel on some polls: an omitted value
+        // means unchanged, not progress.
+        const reportedHasChannel = typeof data.hasChannel === 'boolean' ? data.hasChannel : hasChannel.value
+        const snapshot = JSON.stringify([data.onboarding, reportedHasChannel])
+        if (snapshot !== lastSnapshot) {
+          if (lastSnapshot !== undefined)
+            pollSoon()
+          lastSnapshot = snapshot
+        }
         rawOnboarding.value = data.onboarding
         reportedOnboarding.value = parseAppOnboarding(data.onboarding)
         if (typeof data.hasChannel === 'boolean')
@@ -97,13 +184,22 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
     }
   }
 
-  const refreshOnboarding = () => refreshProgress(true)
+  const refreshOnboarding = () => {
+    // A manual refresh also restarts polling that ended after the idle limit.
+    if (mounted && !pollingWanted && canPoll())
+      startPolling()
+    return refreshProgress(true)
+  }
   // Apply a snapshot returned by a write and drop any older in-flight poll.
   function applyOnboarding(value: unknown) {
     generation += 1
     refreshing = false
+    pollSoon()
     rawOnboarding.value = value
     reportedOnboarding.value = parseAppOnboarding(value)
+    // A write is progress: restart polling if the idle limit had stopped it.
+    if (!isTerminal.value)
+      startPolling()
   }
   watch(() => toValue(initialOnboarding), (value) => {
     rawOnboarding.value = value
@@ -113,6 +209,7 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
     generation += 1
     refreshing = false
     accessRevoked = false
+    lastSnapshot = undefined
     N = 0
     refreshError.value = false
     hasChannel.value = null
@@ -138,12 +235,16 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
   })
   onMounted(() => {
     mounted = true
+    if (typeof document !== 'undefined')
+      document.addEventListener('visibilitychange', onVisibilityChange)
     void refreshOnboarding()
     if (!isTerminal.value)
       startPolling()
   })
   onBeforeUnmount(() => {
     mounted = false
+    if (typeof document !== 'undefined')
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     generation += 1
     stopPolling()
   })

@@ -9,9 +9,8 @@
  * Usage: bun scripts/r2_cleanup/1_list_r2_files.ts
  */
 
-import type { Database } from '../../supabase/functions/_backend/utils/supabase.types.ts'
 import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
-import { createClient } from '@supabase/supabase-js'
+import { connectScriptDb, getDatabaseUrl } from '../script_db.ts'
 
 // Load environment from prod file
 const envFile = await Bun.file('./internal/cloudflare/.env.prod').text()
@@ -41,36 +40,14 @@ const s3 = new S3Client({
   forcePathStyle: true,
 })
 
-const supabase = createClient<Database>(
-  env.SUPABASE_URL,
-  env.SUPABASE_SERVICE_ROLE_KEY,
-  { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-)
+const db = await connectScriptDb(getDatabaseUrl(env))
 
-const PAGE_SIZE = 1000
-
-async function fetchAll<T>(
-  buildQuery: () => ReturnType<typeof supabase.from>,
-  context: string,
-): Promise<T[]> {
-  const all: T[] = []
-  let from = 0
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { data, error } = await buildQuery().range(from, from + PAGE_SIZE - 1)
-    if (error) {
-      console.error(`Error fetching ${context}:`, error)
-      process.exit(1)
-    }
-    if (data && data.length > 0)
-      all.push(...data as T[])
-    if (!data || data.length < PAGE_SIZE)
-      break
-    from += PAGE_SIZE
-  }
-
-  return all
+async function fetchAll<T>(sql: string, params: unknown[], context: string): Promise<T[]> {
+  const { rows } = await db.query(sql, params).catch((error) => {
+    console.error(`Error fetching ${context}:`, error)
+    process.exit(1)
+  })
+  return rows as T[]
 }
 
 // List only folder names at a prefix level (not files inside)
@@ -142,7 +119,7 @@ async function listVersions(prefix: string): Promise<{ files: string[], folders:
 async function main() {
   console.log('=== Hierarchical R2 Orphan Detection ===\n')
   console.log(`Bucket: ${S3_BUCKET}`)
-  console.log(`Supabase: ${env.SUPABASE_URL}\n`)
+  console.log(`Database: ${new URL(getDatabaseUrl(env)).host}\n`)
 
   // Ensure output directory exists
   await Bun.write('./tmp/r2_cleanup/.gitkeep', '')
@@ -157,11 +134,12 @@ async function main() {
 
   // ===== STEP 2: Get all active orgs from database =====
   console.log('\nStep 2: Querying active orgs from database...')
-  const dbOrgs = await fetchAll<{ owner_org: string }>(() => supabase
-    .from('app_versions')
-    .select('owner_org')
-    .eq('deleted', false)
-    .or('r2_path.not.is.null,manifest_count.gt.0'), 'orgs')
+  const dbOrgs = await fetchAll<{ owner_org: string }>(
+    `SELECT DISTINCT owner_org FROM public.app_versions
+     WHERE deleted = false AND (r2_path IS NOT NULL OR manifest_count > 0)`,
+    [],
+    'orgs',
+  )
 
   const activeOrgIds = new Set(dbOrgs?.map(r => r.owner_org) ?? [])
   console.log(`  Found ${activeOrgIds.size} orgs with active versions in DB`)
@@ -202,12 +180,12 @@ async function main() {
     }
 
     // Query DB for active apps in this org
-    const dbApps = await fetchAll<{ app_id: string }>(() => supabase
-      .from('app_versions')
-      .select('app_id')
-      .eq('owner_org', orgId)
-      .eq('deleted', false)
-      .or('r2_path.not.is.null,manifest_count.gt.0'), `apps for org ${orgId}`)
+    const dbApps = await fetchAll<{ app_id: string }>(
+      `SELECT DISTINCT app_id FROM public.app_versions
+       WHERE owner_org = $1 AND deleted = false AND (r2_path IS NOT NULL OR manifest_count > 0)`,
+      [orgId],
+      `apps for org ${orgId}`,
+    )
 
     const activeAppIds = new Set(dbApps?.map(r => r.app_id) ?? [])
     const results: typeof orphanedPaths = []
@@ -231,12 +209,11 @@ async function main() {
       if (files.length === 0 && folders.length === 0)
         continue
 
-      const dbVersions = await fetchAll<{ id: number, r2_path: string | null, manifest_count: number }>(() => supabase
-        .from('app_versions')
-        .select('id, r2_path, manifest_count')
-        .eq('app_id', appId)
-        .eq('owner_org', orgId)
-        .eq('deleted', false), `versions for app ${appId} (${orgId})`)
+      const dbVersions = await fetchAll<{ id: number, r2_path: string | null, manifest_count: number }>(
+        'SELECT id, r2_path, manifest_count FROM public.app_versions WHERE app_id = $1 AND owner_org = $2 AND deleted = false',
+        [appId, orgId],
+        `versions for app ${appId} (${orgId})`,
+      )
 
       const activeR2Paths = new Set(dbVersions?.map(r => r.r2_path).filter(Boolean) ?? [])
       const manifestVersionIds = dbVersions
@@ -248,10 +225,11 @@ async function main() {
         const CHUNK_SIZE = 500
         for (let i = 0; i < manifestVersionIds.length; i += CHUNK_SIZE) {
           const chunk = manifestVersionIds.slice(i, i + CHUNK_SIZE)
-          const manifestEntries = await fetchAll<{ s3_path: string }>(() => supabase
-            .from('manifest')
-            .select('s3_path')
-            .in('app_version_id', chunk), `manifest entries for app ${appId} (${orgId})`)
+          const manifestEntries = await fetchAll<{ s3_path: string }>(
+            'SELECT s3_path FROM public.manifest WHERE app_version_id = ANY($1::bigint[])',
+            [chunk],
+            `manifest entries for app ${appId} (${orgId})`,
+          )
 
           for (const entry of manifestEntries ?? []) {
             if (entry.s3_path)
@@ -367,3 +345,4 @@ async function main() {
 }
 
 await main()
+process.exit(0)

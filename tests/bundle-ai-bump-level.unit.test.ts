@@ -92,7 +92,9 @@ describe('bundle ai_bump_level', () => {
       reason: 'Added feature files',
     })
     expect(run).toHaveBeenCalledTimes(1)
-    expect(run.mock.calls[0]![0]).toBe('@cf/moonshotai/kimi-k2.6')
+    expect(run.mock.calls[0]![0]).toBe('@cf/qwen/qwen3.8-27b')
+    // Qwen 3.8 is a hybrid reasoning model: thinking must be off for this short JSON answer.
+    expect(run.mock.calls[0]![1]).toMatchObject({ chat_template_kwargs: { enable_thinking: false }, temperature: 0 })
   })
 
   it('returns 502 when AI returns an invalid level', async () => {

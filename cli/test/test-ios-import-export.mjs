@@ -234,6 +234,35 @@ await test('export-warning resolver persists NOTHING', async () => {
 
 console.log('\n🧪 import-exporting (effect, EPHEMERAL-dep, NO secrets on disk)\n')
 
+await test('import-exporting (profile with carried profileBase64) does not re-read disk if the file is swapped', async () => {
+  const atValidation = Buffer.from('BYTES-AT-VALIDATION-TIME')
+  const depsPick = makeDeps({
+    carried: { chosenIdentity: IDENTITY_A, importMatches: [{ identity: IDENTITY_A, profiles: [] }], noMatchReason: 'no-profile-on-disk' },
+    readMcpMobileprovision: async () => atValidation,
+    openProfilePicker: async () => './project/creds/profile.mobileprovision',
+    parseMobileprovisionDetailed: () => ({
+      uuid: 'IMPORTED-UUID',
+      name: 'P',
+      applicationIdentifier: 'TEAMAAA.com.example.app',
+      bundleId: APP_ID,
+      expirationDate: '2027-01-01T00:00:00.000Z',
+      profileType: 'app_store',
+      certificateSha1s: [IDENTITY_A.sha1],
+      profileEntitlements: {},
+    }),
+  })
+  const picked = await runIosEffect('import-provide-profile-path', iosProgress(), depsPick)
+  const chosenProfile = picked.transient.chosenProfile
+  const depsExport = makeDeps({
+    carried: { chosenIdentity: IDENTITY_A, chosenProfile },
+    readFile: async () => {
+      throw new Error('import-exporting must not re-read a profile path when profileBase64 is carried')
+    },
+  })
+  const res = await runIosEffect('import-exporting', iosProgress(), depsExport)
+  assertEquals(res.transient.profileData.profileBase64, atValidation.toString('base64'), 'export uses bytes captured at validation, not a later disk read')
+})
+
 await test('import-exporting (on-disk profile) -> saving-credentials; transient certData/profileData/teamId/importedP12Password; reads bytes off disk', async () => {
   const deps = makeDeps({ carried: { chosenIdentity: IDENTITY_A, chosenProfile: PROFILE_ON_DISK } })
   const res = await runIosEffect('import-exporting', iosProgress(), deps)

@@ -5,6 +5,7 @@ import IconDevice from '~icons/heroicons/device-phone-mobile'
 import IconError from '~icons/heroicons/exclamation-triangle'
 import IconPuzzle from '~icons/heroicons/puzzle-piece'
 import IconRocket from '~icons/heroicons/rocket-launch'
+import IconShield from '~icons/heroicons/shield-check'
 import IconTable from '~icons/heroicons/table-cells'
 
 // Keys are relative to the app root: Live release is the Observe landing page.
@@ -16,6 +17,7 @@ export const observeTabs: Tab[] = [
   { label: 'native', icon: IconDevice, key: '/observe/native', badge: 'beta' },
   { label: 'compatibility', icon: IconCompatibility, key: '/observe/compatibility' },
   { label: 'logs', icon: IconHistory, key: '/observe/logs' },
+  { label: 'security-updates-tab', icon: IconShield, key: '/observe/security' },
 ]
 
 // Third-level tabs inside an Observe page, selected with ?view=<key>. The

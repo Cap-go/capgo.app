@@ -10,9 +10,31 @@ import { checkPermission } from '../../../utils/rbac.ts'
 import { createSignedImageUrl } from '../../../utils/storage.ts'
 import { apikeyHasOrgRightWithPolicy } from '../../../utils/supabase.ts'
 
+export const MAX_MEMBERS_PAGE_SIZE = 1000
+
 const bodySchema = z.object({
   orgId: z.string(),
+  // Optional paging; omit both to get every member as before. GET passes them as query strings.
+  limit: z.coerce.number().int().min(1).max(MAX_MEMBERS_PAGE_SIZE).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
 })
+
+type Member = z.infer<typeof memberSchema>[number]
+
+function compareMembers(a: Member, b: Member) {
+  if (a.email !== b.email)
+    return a.email < b.email ? -1 : 1
+  return a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0
+}
+
+/** Pages by email then user id so consecutive pages neither repeat nor skip members. */
+function pageMembers(members: Member[], limit: number | undefined, offset: number | undefined): Member[] {
+  if (limit === undefined && offset === undefined)
+    return members
+  const start = offset ?? 0
+  const sorted = [...members].sort(compareMembers)
+  return limit === undefined ? sorted.slice(start) : sorted.slice(start, start + limit)
+}
 
 const memberSchema = z.array(z.object({
   uid: z.uuid(),
@@ -68,7 +90,9 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
   if (!parsed.success) {
     throw simpleError('cannot_parse_members', 'Cannot parse members', { error: parsed.error })
   }
-  const signedMembers = await Promise.all(parsed.data.map(async (member) => {
+  // Page before signing image URLs, so a page only signs the images it returns.
+  const members = pageMembers(parsed.data, body.limit, body.offset)
+  const signedMembers = await Promise.all(members.map(async (member) => {
     if (!member.image_url) {
       return {
         ...member,

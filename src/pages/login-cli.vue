@@ -122,7 +122,7 @@ function subscribe(orgIds: string[], session: string): Promise<boolean[]> {
           realtimeUnavailable.value = false
           finish(true)
         }
-        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        else {
           finish(false)
         }
       })

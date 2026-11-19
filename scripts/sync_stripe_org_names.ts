@@ -13,9 +13,10 @@
  *   bun run stripe:sync-org-names --apply --concurrency=10
  *   bun run stripe:sync-org-names --apply --env-file=./internal/cloudflare/.env.preprod
  */
+import type pg from 'pg'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
-import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { connectScriptDb, getDatabaseUrl } from './script_db.ts'
 
 const DEFAULT_ENV_FILE = './internal/cloudflare/.env.prod'
 const DEFAULT_PAGE_SIZE = 1000
@@ -107,40 +108,23 @@ async function asyncPool<T>(limit: number, items: T[], iterator: (item: T) => Pr
   await Promise.all(executing)
 }
 
-async function fetchTargetOrgs(supabase: ReturnType<typeof createClient<Database>>, orgId?: string | null) {
+async function fetchTargetOrgs(db: pg.Client, orgId?: string | null): Promise<OrgRow[]> {
   if (orgId) {
-    const { data, error } = await supabase
-      .from('orgs')
-      .select('id, name, customer_id')
-      .eq('id', orgId)
-      .maybeSingle()
-
-    if (error)
-      throw error
-
-    return data ? [data] : []
+    const { rows } = await db.query<OrgRow>('SELECT id, name, customer_id FROM public.orgs WHERE id = $1', [orgId])
+    return rows
   }
 
   const rows: OrgRow[] = []
   let lastSeenOrgId: string | null = null
 
   while (true) {
-    let query = supabase
-      .from('orgs')
-      .select('id, name, customer_id')
-      .not('customer_id', 'is', null)
-      .order('id', { ascending: true })
-      .limit(DEFAULT_PAGE_SIZE)
+    const { rows: data } = await db.query<OrgRow>(
+      `SELECT id, name, customer_id FROM public.orgs
+       WHERE customer_id IS NOT NULL AND ($1::uuid IS NULL OR id > $1) ORDER BY id LIMIT $2`,
+      [lastSeenOrgId, DEFAULT_PAGE_SIZE],
+    )
 
-    if (lastSeenOrgId)
-      query = query.gt('id', lastSeenOrgId)
-
-    const { data, error } = await query
-
-    if (error)
-      throw error
-
-    if (!data?.length)
+    if (!data.length)
       break
 
     rows.push(...data)
@@ -170,21 +154,14 @@ async function main() {
     ...Bun.env,
   }
 
-  const supabaseUrl = getRequiredEnv(env, 'SUPABASE_URL')
-  const supabaseServiceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY?.trim() || env.SUPABASE_SERVICE_KEY?.trim()
-  if (!supabaseServiceRoleKey)
-    throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY')
+  const databaseUrl = getDatabaseUrl(env)
   const stripeSecretKey = getRequiredEnv(env, 'STRIPE_SECRET_KEY')
   const stripeApiBaseUrl = env.STRIPE_API_BASE_URL?.trim()
 
-  const supabase = createClient<Database>(
-    supabaseUrl,
-    supabaseServiceRoleKey,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-  )
   const stripe = createStripeClient(stripeSecretKey, stripeApiBaseUrl)
 
-  const orgs = await fetchTargetOrgs(supabase, orgId)
+  const db = await connectScriptDb(databaseUrl)
+  const orgs = await fetchTargetOrgs(db, orgId).finally(() => db.end())
   const actionableOrgs = orgs
     .filter(org => !!org.customer_id && !org.customer_id.startsWith('pending_'))
     .filter(org => !!org.name?.trim())

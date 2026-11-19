@@ -1,8 +1,8 @@
 import type { Context } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildReadDevicesCFQuery as buildPluginReadDevicesCFQuery } from '../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts'
-import { buildDeviceIdsByInstallSourcesQuery, buildReadDevicesCFQuery, countDevicesCF, countInstallSourcesCF, formatDateCF, readBandwidthUsageCF, readDeviceUsageCF, readDevicesCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
-import { readDevicesSB } from '../supabase/functions/_backend/utils/supabase.ts'
+import { buildDeviceIdsByInstallSourcesQuery, buildReadDevicesCFQuery, countDevicesCF, countInstallSourcesCF, formatDateCF, readBandwidthUsageCF, readDeviceUsageCF, readDevicesCF, readStatsVersionCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { readDevicesSB, readStatsVersionSB } from '../supabase/functions/_backend/utils/supabase.ts'
 
 const pgMocks = vi.hoisted(() => ({
   getPgClient: vi.fn(),
@@ -583,5 +583,72 @@ describe('readDeviceUsageCF', () => {
       { date: '2026-09-01', app_id: 'com.example.app', org_id: 'org-new', mau: 600005 },
       { date: '2026-09-02', app_id: 'com.example.app', org_id: 'org-new', mau: 328104 },
     ])
+  })
+})
+
+
+describe('strict version usage for report emails', () => {
+  it('propagates Cloudflare failures while retaining the dashboard fallback', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('unavailable', { status: 503 })))
+    const c = { ...createContextMock(), env: { ...createContextMock().env, VERSION_USAGE: {}, APP_LOG: {} } } as unknown as Context
+    await expect(readStatsVersionCF(c, 'com.example.app', '2026-11-01', '2026-11-02', undefined, { throwOnError: true })).rejects.toThrow('HTTP 503')
+    await expect(readStatsVersionCF(c, 'com.example.app', '2026-11-01', '2026-11-02')).resolves.toEqual([])
+  })
+
+  it('propagates Postgres failures for strict reads', async () => {
+    pgMocks.getPgClient.mockResolvedValue({ query: vi.fn().mockRejectedValue(new Error('database unavailable')) })
+    const c = createContextMock() as unknown as Context
+    await expect(readStatsVersionSB(c, 'com.example.app', '2026-11-01', '2026-11-02', undefined, { throwOnError: true })).rejects.toThrow('database unavailable')
+    await expect(readStatsVersionSB(c, 'com.example.app', '2026-11-01', '2026-11-02')).resolves.toEqual([])
+  })
+})
+
+
+describe('complete failure analytics for report emails', () => {
+  function reportContext() {
+    return { ...createContextMock(), env: { ...createContextMock().env, VERSION_USAGE: {}, APP_LOG: {} } } as unknown as Context
+  }
+
+  function response(data: Record<string, string>[], numeric: string[]) {
+    return new Response(JSON.stringify({
+      data,
+      meta: Object.keys(data[0] ?? {}).map(name => ({ name, type: numeric.includes(name) ? 'Float64' : 'String' })),
+    }), { status: 200 })
+  }
+
+  it('defers strict reads if the correction provider fails, but preserves dashboard fallback', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => String(init.body).includes('FROM app_log')
+      ? new Response('unavailable', { status: 503 })
+      : response([{ app_id: 'com.example.app', version_name: '1.0.0', date: '2026-11-01', install: '10', fail: '3' }], ['install', 'fail'])))
+    await expect(readStatsVersionCF(reportContext(), 'com.example.app', '2026-11-01', '2026-11-02', undefined, { throwOnError: true })).rejects.toThrow('HTTP 503')
+    await expect(readStatsVersionCF(reportContext(), 'com.example.app', '2026-11-01', '2026-11-02')).resolves.toMatchObject([{ fail: 3 }])
+  })
+
+  it('subtracts legacy check failures before reporting the failure count', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => String(init.body).includes('FROM app_log')
+      ? response([{ bucket: '2026-11-01', version_name: '1.0.0', plugin_version: '8.41.1', count: '2' }], ['count'])
+      : response([{ app_id: 'com.example.app', version_name: '1.0.0', date: '2026-11-01', install: '10', fail: '3' }], ['install', 'fail'])))
+    await expect(readStatsVersionCF(reportContext(), 'com.example.app', '2026-11-01', '2026-11-02', undefined, { throwOnError: true })).resolves.toMatchObject([{ install: 10, fail: 1 }])
+  })
+
+  it('rejects malformed correction counts', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => String(init.body).includes('FROM app_log')
+      ? response([{ bucket: '2026-11-01', version_name: '1.0.0', plugin_version: '8.41.1', count: 'NaN' }], ['count'])
+      : response([{ app_id: 'com.example.app', version_name: '1.0.0', date: '2026-11-01', install: '10', fail: '3' }], ['install', 'fail'])))
+    await expect(readStatsVersionCF(reportContext(), 'com.example.app', '2026-11-01', '2026-11-02', undefined, { throwOnError: true })).rejects.toThrow('Invalid legacy failure count')
+  })
+
+  it.each(['NaN', '-1', '1.5'])('rejects bad raw failure counts before correction can mask them: %s', async (fail) => {
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => String(init.body).includes('FROM app_log')
+      ? response([{ bucket: '2026-11-01', version_name: '1.0.0', plugin_version: '8.41.1', count: '2' }], ['count'])
+      : response([{ app_id: 'com.example.app', version_name: '1.0.0', date: '2026-11-01', install: '10', fail }], ['install', 'fail'])))
+    await expect(readStatsVersionCF(reportContext(), 'com.example.app', '2026-11-01', '2026-11-02', undefined, { throwOnError: true })).rejects.toThrow('Invalid version failure count')
+  })
+
+  it('rejects missing correction configuration for strict reads', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response([], [])))
+    const c = reportContext()
+    delete c.env.APP_LOG
+    await expect(readStatsVersionCF(c, 'com.example.app', '2026-11-01', '2026-11-02', undefined, { throwOnError: true })).rejects.toThrow('requires APP_LOG')
   })
 })

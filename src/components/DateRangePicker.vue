@@ -429,7 +429,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
           </div>
           <button
             type="button"
-            class="inline-flex h-9 min-h-9 cursor-pointer items-center justify-center rounded-lg bg-azure-500 px-4 text-sm font-semibold text-white transition-colors duration-150 hover:bg-azure-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/50 disabled:cursor-not-allowed disabled:opacity-40"
+            class="d-btn d-btn-primary h-9 min-h-9 rounded-lg px-4 text-sm font-semibold"
             :disabled="!canApply"
             @click="apply"
           >

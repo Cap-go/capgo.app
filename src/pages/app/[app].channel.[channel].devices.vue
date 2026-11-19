@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import type { OrganizationRole } from '~/stores/organization'
 import type { Database } from '~/types/database.types'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import plusOutline from '~icons/ion/add-outline'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
+import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
+import { useChannelRecord } from '~/composables/useChannelRecord'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { withBuiltinChannelVersion } from '~/services/versions'
-import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
@@ -28,7 +29,6 @@ const router = useRouter()
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
-const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
 const capgo = useConsole()
 const packageId = ref<string>('')
@@ -36,7 +36,10 @@ const id = ref<number>(0)
 const loading = ref(true)
 // Whether any device is forced to this channel; the table pages them through the API.
 const hasDevices = ref(false)
-const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
+// Cached row first, then a background refresh; stale reads never apply (see useChannelRecord).
+const { channel, load: loadChannel, beginNavigation, isMounted } = useChannelRecord<Database['public']['Tables']['channels']['Row'] & Channel>({
+  normalize: row => withBuiltinChannelVersion(row) as any,
+})
 const deviceIdInput = ref('')
 const deviceIdErrors = computed(() => validateField(deviceIdInput.value, [
   rules.required(t('device-id')),
@@ -186,8 +189,9 @@ async function customDeviceOverwritePart5(
   reload()
 }
 
-async function getDeviceIds() {
-  if (!channel.value)
+/** Counts forced devices; applies the result only while `isCurrent()` (same channel, page still open). */
+async function getDeviceIds(isCurrent: () => boolean = () => true) {
+  if (!channel.value || !isCurrent())
     return
   try {
     const { count, error } = await capgo
@@ -198,93 +202,45 @@ async function getDeviceIds() {
     // A failed check must not pretend the channel has no forced devices.
     if (error) {
       console.error('Cannot check forced devices', error)
-      toast.error(t('something-went-wrong-try-again-later'))
+      if (isCurrent())
+        toast.error(t('something-went-wrong-try-again-later'))
       return
     }
-    hasDevices.value = (count ?? 0) > 0
+    if (isCurrent())
+      hasDevices.value = (count ?? 0) > 0
   }
   catch (error) {
     console.error(error)
   }
 }
 
-async function getChannel() {
-  if (!id.value)
-    return
-
-  // Check if we already have this channel in the store
-  if (appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
-    channel.value = withBuiltinChannelVersion(appDetailStore.currentChannel as any) as any
-    if (channel.value?.name)
-      displayStore.setChannelName(String(channel.value.id), channel.value.name)
-    displayStore.NavTitle = channel.value?.name ?? t('channel')
-    return
-  }
-
-  try {
-    const { data, error } = await capgo
-      .from('channels')
-      .select(`
-          id,
-          name,
-          public,
-          owner_org,
-          version:app_versions!channels_version_fkey(
-            id,
-            name,
-            app_id,
-            created_at,
-            min_update_version,
-            storage_provider,
-            link,
-            comment
-          ),
-          created_at,
-          app_id,
-          allow_emulator,
-          allow_device,
-          allow_dev,
-          allow_prod,
-          allow_device_self_set,
-          disable_auto_update_under_native,
-          disable_auto_update,
-          ios,
-          android,
-          updated_at
-        `)
-      .eq('id', id.value)
-      .single()
-    if (error) {
-      console.error('no channel', error)
-      return
-    }
-
-    channel.value = withBuiltinChannelVersion(data as any) as unknown as Database['public']['Tables']['channels']['Row'] & Channel
-
-    // Store in appDetailStore
-    appDetailStore.setChannel(id.value, channel.value)
-
-    if (channel.value?.name)
-      displayStore.setChannelName(String(channel.value.id), channel.value.name)
-    displayStore.NavTitle = channel.value?.name ?? t('channel')
-  }
-  catch (error) {
-    console.error(error)
-  }
+async function getChannel(force = false) {
+  await loadChannel(id.value, force)
 }
 
 async function reload() {
+  // A refresh after an edit: keep it on this channel without cancelling the
+  // page load, and drop it (count and error toast included) once the page is gone.
+  const channelId = id.value
+  const isCurrent = () => isMounted() && id.value === channelId
+  if (!isCurrent())
+    return
   await getChannel()
-  await getDeviceIds()
+  await getDeviceIds(isCurrent)
 }
 
-watchEffect(async () => {
+// Load on navigation only: a watchEffect would also track the cached store
+// channel read inside getChannel and refetch every time the refresh stores it.
+watch(() => route.path, async () => {
   if (route.path.includes('/channel/') && route.path.includes('/devices')) {
+    const isCurrent = beginNavigation()
     loading.value = true
     packageId.value = route.params.app as string
     id.value = Number(route.params.channel as string)
     await getChannel()
-    await getDeviceIds()
+    await getDeviceIds(isCurrent)
+    if (!isCurrent())
+      return
     loading.value = false
     if (!channel.value?.name)
       displayStore.NavTitle = t('channel')
@@ -292,9 +248,11 @@ watchEffect(async () => {
 
     // Load role
     await organizationStore.awaitInitialLoad()
-    role.value = await organizationStore.getCurrentRoleForApp(packageId.value)
+    const appRole = await organizationStore.getCurrentRoleForApp(packageId.value)
+    if (isCurrent())
+      role.value = appRole
   }
-})
+}, { immediate: true })
 </script>
 
 <template>
@@ -328,18 +286,19 @@ watchEffect(async () => {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('channel-not-found') }}
-      </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-400">
-        {{ t('channel-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
-        {{ t('back-to-channels') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('channel-not-found')"
+      :description="t('channel-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
+          {{ t('back-to-channels') }}
+        </button>
+      </template>
+    </EmptyState>
 
     <!-- Teleport Content for Add Device Modal -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('type-device-id')" defer to="#dialog-v2-content">

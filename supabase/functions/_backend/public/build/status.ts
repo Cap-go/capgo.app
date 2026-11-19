@@ -14,6 +14,7 @@ import { emitBuildTransitionEvent } from '../../utils/build_tracking.ts'
 import { isoFromBuilderTimestamp } from '../../utils/builder_capacity.ts'
 import { getBuilderXcodeVersion } from '../../utils/builder_machine.ts'
 import { persistBuilderBuildOutcome } from '../../utils/builder_onboarding_checklist.ts'
+import { explainBuildStatus } from '../../utils/buildDiagnostics.ts'
 import { simpleError } from '../../utils/hono.ts'
 import type { PgClient } from '../../utils/pg.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
@@ -22,11 +23,25 @@ import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.t
 import { checkPermission } from '../../utils/rbac.ts'
 import { recordBuildTime } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
+import {
+  computeNativeBuildEffectiveQueuePriority,
+  nativeBuildQueueTierFromPriority,
+} from '../../utils/native_build_queue_priority.ts'
 
 export interface BuildStatusParams {
   job_id: string
   app_id: string
-  platform: 'ios' | 'android'
+  platform?: 'ios' | 'android'
+  /**
+   * Ignored on HTTP: external callers always persist. Hosted MCP uses in-process
+   * `hostedMcpReadOnly` (see getBuildStatus options), not this query field.
+   */
+  persist?: boolean | string
+}
+
+export interface GetBuildStatusOptions {
+  /** Hosted MCP tool only: skip DB sync, billing, webhooks and builder timeout cancel. */
+  hostedMcpReadOnly?: boolean
 }
 
 interface BuilderStatusResponse {
@@ -41,6 +56,7 @@ interface BuilderStatusResponse {
   uploadUrl?: string
 }
 
+/** Ask the builder to cancel a job that exceeded the build timeout window. */
 async function cancelTimedOutBuilderJob(c: Context, jobId: string, appId: string): Promise<boolean> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 5000)
@@ -92,24 +108,39 @@ async function cancelTimedOutBuilderJob(c: Context, jobId: string, appId: string
   }
 }
 
+/**
+ * Poll builder job status for a native build request, optionally syncing DB state, billing, and webhooks.
+ * HTTP always persists. Hosted MCP passes `hostedMcpReadOnly: true` in options (in-process).
+ */
 export async function getBuildStatus(
   c: Context,
   params: BuildStatusParams,
   apikey: Database['public']['Tables']['apikeys']['Row'],
+  options?: GetBuildStatusOptions,
 ): Promise<Response> {
   const { job_id, app_id, platform } = params
+  const shouldPersist = !options?.hostedMcpReadOnly
 
   // Use authenticated client for data queries - RLS will enforce access
   const principal = apikeyPrincipal(c, apikey.key)
 
   // Bind job_id to app_id under RLS before calling the builder.
   // This prevents cross-app access by mixing an allowed app_id with another app's job_id.
-  type StatusBuildRow = Pick<Database['public']['Tables']['build_requests']['Row'], 'app_id' | 'owner_org' | 'requested_by' | 'platform' | 'status' | 'build_mode'>
+  type StatusBuildRow = Pick<Database['public']['Tables']['build_requests']['Row'],
+    'app_id'
+    | 'owner_org'
+    | 'requested_by'
+    | 'platform'
+    | 'status'
+    | 'build_mode'
+    | 'queue_priority'
+    | 'created_at'
+  >
   let buildRequest: StatusBuildRow | null
   try {
     const rows = await withRlsContext(c, principal, client => queryJson<StatusBuildRow>(
       client,
-      `SELECT app_id, owner_org, requested_by, platform, status, build_mode
+      `SELECT app_id, owner_org, requested_by, platform, status, build_mode, queue_priority, created_at
       FROM public.build_requests
       WHERE builder_job_id = $1
       LIMIT 2`,
@@ -173,7 +204,7 @@ export async function getBuildStatus(
   const timeoutSeconds = normalizeBuildTimeoutSeconds(appSettings.build_timeout_seconds)
   const resolvedPlatform = (buildRequest.platform === 'ios' || buildRequest.platform === 'android')
     ? buildRequest.platform
-    : platform
+    : (platform === 'ios' || platform === 'android' ? platform : 'android')
 
   // Fetch status from builder
   const builderResponse = await fetch(`${getEnv(c, 'BUILDER_URL')}/jobs/${job_id}`, {
@@ -211,8 +242,8 @@ export async function getBuildStatus(
   let timeoutApplied = false
 
   if (timedOut && builderJob.job.completed_at)
-    timeoutApplied = true
-  else if (timedOut)
+    timeoutApplied = shouldPersist
+  else if (timedOut && shouldPersist)
     timeoutApplied = await cancelTimedOutBuilderJob(c, job_id, buildRequest.app_id)
 
   const effectiveStatus = timeoutApplied ? BUILD_TIMEOUT_STATUS : builderJob.job.status
@@ -248,10 +279,50 @@ export async function getBuildStatus(
   // if `updatedRows` is empty, another writer already moved the status and has
   // (or will) emit the lifecycle event — skip emission here to avoid double-firing.
   const previousStatus = buildRequest.status
+  const baseQueuePriority = typeof buildRequest.queue_priority === 'number'
+    ? buildRequest.queue_priority
+    : null
+  const enqueuedAtMs = buildRequest.created_at
+    ? Date.parse(buildRequest.created_at)
+    : Date.now()
+  const effectiveQueuePriority = baseQueuePriority !== null
+    ? computeNativeBuildEffectiveQueuePriority(baseQueuePriority, enqueuedAtMs)
+    : null
+
+  const statusPayload: Record<string, unknown> = {
+    job_id,
+    status: effectiveStatus,
+    diagnostic: explainBuildStatus(effectiveStatus),
+    poll_after_seconds: 15,
+    machine: builderJob.machine || null,
+    started_at: builderJob.job.started_at,
+    completed_at: effectiveCompletedAt,
+    runner_wait_seconds: runnerWaitSeconds,
+    build_time_seconds: timeoutApplied
+      ? effectiveBuildTimeSeconds
+      : builderJob.job.started_at && builderJob.job.completed_at
+        ? runtimeSeconds
+        : null,
+    error: effectiveError,
+    upload_url: builderJob.uploadUrl || null,
+    queue_priority: baseQueuePriority,
+    effective_queue_priority: effectiveQueuePriority,
+    queue_priority_tier: baseQueuePriority !== null
+      ? nativeBuildQueueTierFromPriority(baseQueuePriority)
+      : null,
+  }
+
+  if (!shouldPersist && timedOut && !timeoutApplied) {
+    statusPayload.timeout_exceeded = true
+    statusPayload.timeout_warning = `${formatBuildTimeoutError(timeoutSeconds)}. This hosted MCP poll is read-only: it does not cancel the builder job or update billing. Cancel with capgo_cancel_build if you need to stop the job, or wait for Capgo reconciliation to finish the job and record build time.`
+  }
 
   let updatedCount = 0
   let updateFailed = false
   let pg: PgClient | null = null
+  if (!shouldPersist)
+    return c.json({ ...statusPayload, persisted: false }, 200)
+
   try {
     pg = await getPgClient(c)
     // Null builder timestamps/xcode leave the stored value untouched, as the omitted
@@ -346,19 +417,5 @@ export async function getBuildStatus(
     )
   }
 
-  return c.json({
-    job_id,
-    status: effectiveStatus,
-    machine: builderJob.machine || null,
-    started_at: builderJob.job.started_at,
-    completed_at: effectiveCompletedAt,
-    runner_wait_seconds: runnerWaitSeconds,
-    build_time_seconds: timeoutApplied
-      ? effectiveBuildTimeSeconds
-      : builderJob.job.started_at && builderJob.job.completed_at
-        ? runtimeSeconds
-        : null,
-    error: effectiveError,
-    upload_url: builderJob.uploadUrl || null,
-  }, 200)
+  return c.json({ ...statusPayload, persisted: !updateFailed && updatedCount > 0 }, 200)
 }

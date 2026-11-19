@@ -64,11 +64,12 @@ async function signHs256Jwt(payload: Record<string, unknown>, secret: string): P
  * Generate a JWT token for direct log stream access
  * Uses HMAC-SHA256 for signing
  */
-async function generateLogStreamToken(
+export async function generateLogStreamToken(
   jobId: string,
   userId: string,
   appId: string,
   jwtSecret: string,
+  options: { role?: 'read', ttlSeconds?: number } = {},
 ): Promise<string> {
   const nowInSeconds = Math.floor(Date.now() / 1000)
   return signHs256Jwt({
@@ -78,7 +79,9 @@ async function generateLogStreamToken(
     aud: 'build-logs',
     sub: userId,
     iat: nowInSeconds,
-    exp: nowInSeconds + (4 * 60 * 60),
+    exp: nowInSeconds + (options.ttlSeconds ?? 4 * 60 * 60),
+    // A read token only follows the stream: the builder refuses /start and acks with it.
+    ...(options.role ? { role: options.role } : {}),
   }, jwtSecret)
 }
 

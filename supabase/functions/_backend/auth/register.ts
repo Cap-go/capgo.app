@@ -1,14 +1,17 @@
-import type { User } from '@supabase/supabase-js'
+import type { Context } from 'hono'
+import type { GotrueUser } from '../utils/gotrue_admin.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
+import { normalizeOpenAIClickReference } from '../../shared/openai-click-reference.ts'
 import { checkRegistrationEmail, deleteUserProfile, getCaptchaSecret, isAuthRateLimitError, isCaptchaFailedError, isLeakedPasswordError, isWeakPasswordError, provisionUserProfile } from '../utils/accountProvisioning.ts'
 import { isDirectOfferMetadata, persistDirectOffer } from '../utils/direct_offer.ts'
+import { gotrueAdmin } from '../utils/gotrue_admin.ts'
 import { parseBody, simpleErrorWithStatus, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { emptySupabaseWithClientIP, supabaseAdmin } from '../utils/supabase.ts'
+import { emptySupabaseWithClientIP } from '../utils/supabase.ts'
 
 const DEFAULT_PASSWORD_POLICY = {
   min_length: 6,
@@ -30,6 +33,10 @@ const registerSchema = z.object({
   utm_source: z.string().trim().min(1).optional(),
   utm_medium: z.string().trim().min(1).optional(),
   utm_campaign: z.string().trim().min(1).optional(),
+  utm_content: z.string().trim().min(1).max(256).optional().catch(undefined),
+  utm_term: z.string().trim().min(1).max(256).optional().catch(undefined),
+  // Optional attribution must never block an otherwise valid registration.
+  oppref: z.unknown().transform(normalizeOpenAIClickReference).optional(),
   // Paid-ads signups send offer=direct (no free trial). Any other value is ignored.
   offer: z.string().max(64).optional(),
   opt_for_newsletters: z.boolean().default(false),
@@ -57,12 +64,12 @@ function isUserAlreadyRegisteredError(err: unknown): boolean {
   return message.includes('already registered') || message.includes('user already exists')
 }
 
-function isEmailConfirmationPending(user: Pick<User, 'email_confirmed_at'> | null | undefined): boolean {
+function isEmailConfirmationPending(user: Pick<GotrueUser, 'email_confirmed_at'> | null | undefined): boolean {
   return Boolean(user) && !user?.email_confirmed_at
 }
 
-async function rollbackCreatedUser(c: Parameters<typeof supabaseAdmin>[0], userId: string) {
-  const admin = supabaseAdmin(c)
+async function rollbackCreatedUser(c: Context<MiddlewareKeyVariables>, userId: string) {
+  const admin = gotrueAdmin(c)
   const requestId = c.get('requestId')
 
   const { error: profileDeleteError } = await deleteUserProfile(c, userId)
@@ -75,7 +82,7 @@ async function rollbackCreatedUser(c: Parameters<typeof supabaseAdmin>[0], userI
     })
   }
 
-  const { error: authDeleteError } = await admin.auth.admin.deleteUser(userId)
+  const { error: authDeleteError } = await admin.deleteUser(userId)
   if (authDeleteError) {
     cloudlogErr({
       requestId,
@@ -134,7 +141,7 @@ app.post('/', async (c) => {
     userMetadata.last_name = body.last_name
   if (body.ref)
     userMetadata.ref = body.ref
-  for (const key of ['signup_source', 'signup_plugin', 'first_touch_type', 'first_touch_path', 'utm_source', 'utm_medium', 'utm_campaign'] as const) {
+  for (const key of ['signup_source', 'signup_plugin', 'first_touch_type', 'first_touch_path', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'oppref'] as const) {
     if (body[key])
       userMetadata[key] = body[key]
   }
@@ -215,7 +222,7 @@ app.post('/', async (c) => {
   // their first org, so the org trigger reads it.
   if (isDirectOfferMetadata({ offer: body.offer })) {
     try {
-      await persistDirectOffer(supabaseAdmin(c), userId)
+      await persistDirectOffer(gotrueAdmin(c), userId)
     }
     catch (error) {
       cloudlogErr({

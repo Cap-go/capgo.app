@@ -25,14 +25,6 @@ import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 import { waitAuthPgRetryJitter } from './pg_auth_retry.ts'
 import { isTransientPgError } from './pg_errors.ts'
 
-/**
- * Hyperdrive caches read results for 60s and never invalidates them on writes, so a
- * permission checked before an app existed would keep being denied after creation and
- * a revoked permission would keep passing. Hyperdrive never caches a query that calls a
- * STABLE function; PostgreSQL does not evaluate this unused CTE.
- */
-const BYPASS_HYPERDRIVE_CACHE = sql.raw('WITH capgo_fresh_read AS (SELECT now())')
-
 // =============================================================================
 // Types
 // =============================================================================
@@ -106,12 +98,44 @@ export interface PermissionScope {
  * errors must surface as 503 so clients (especially TUS) can retry.
  * Non-transient query failures (invalid UUID, etc.) still deny.
  */
+/**
+ * Permission checks bind the caller's plaintext API key as a query parameter. Drizzle's
+ * "Failed query" error repeats those parameters in its message, and driver errors can echo
+ * them too, so only the error name, driver code and parameter-free message are logged.
+ */
+export function sanitizePermissionCheckError(error: unknown, secrets: Array<string | null | undefined> = []) {
+  const clean = (text: unknown) => {
+    if (typeof text !== 'string')
+      return undefined
+    let result = text.replace(/\n?\s*params:[\s\S]*$/i, '')
+    for (const secret of secrets) {
+      if (secret)
+        result = result.split(secret).join('[redacted]')
+    }
+    return result
+  }
+  const describe = (value: unknown) => {
+    if (!value || typeof value !== 'object')
+      return { message: clean(String(value)) }
+    const record = value as { name?: unknown, code?: unknown, message?: unknown }
+    return {
+      name: typeof record.name === 'string' ? record.name : undefined,
+      code: typeof record.code === 'string' ? record.code : undefined,
+      message: clean(record.message),
+    }
+  }
+  const cause = error && typeof error === 'object' ? (error as { cause?: unknown }).cause : undefined
+  return { ...describe(error), cause: cause === undefined ? undefined : describe(cause) }
+}
+
 function handlePermissionCheckError(
   c: Context<MiddlewareKeyVariables>,
   permission: Permission,
   scope: PermissionScope,
   error: unknown,
-  source: 'checkPermission' | 'checkPermissionPg' | 'checkPermissionInMemberOrgs',
+  source: 'checkPermission' | 'checkPermissionPg' | 'checkPermissionInMemberOrgs' | 'checkPermissionsBatch',
+  // The key actually bound into the failed query; it can differ from the request's capgkey.
+  boundApikey?: string | null,
 ): false {
   if (error instanceof HTTPException)
     throw error
@@ -121,7 +145,7 @@ function handlePermissionCheckError(
   cloudlogErr({
     requestId: c.get('requestId'),
     message: `${source} error`,
-    error,
+    error: sanitizePermissionCheckError(error, [boundApikey, c.get('capgkey') as string | undefined]),
     permission,
     scope,
     transient,
@@ -220,7 +244,7 @@ export async function checkPermission(
         return false
 
       const rbacOnlyResult = await drizzleClient.execute(
-        sql`${BYPASS_HYPERDRIVE_CACHE} SELECT public.rbac_check_permission_direct(
+        sql`SELECT public.rbac_check_permission_direct(
           ${permission},
           ${userId}::uuid,
           ${orgId}::uuid,
@@ -243,7 +267,7 @@ export async function checkPermission(
 
     // Use the unified SQL function for JWT checks and non-key fallbacks.
     const result = await drizzleClient.execute(
-      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT public.rbac_check_permission_direct(
+      sql`SELECT public.rbac_check_permission_direct(
         ${permission},
         ${userId}::uuid,
         ${orgId}::uuid,
@@ -266,12 +290,136 @@ export async function checkPermission(
     return allowed
   }
   catch (e) {
-    return handlePermissionCheckError(c, permission, scope, e, 'checkPermission')
+    return handlePermissionCheckError(c, permission, scope, e, 'checkPermission', apikeyString)
   }
   finally {
     if (pgClient) {
       closeClient(c, pgClient)
     }
+  }
+}
+
+/**
+ * One permission check inside a batch.
+ */
+export interface PermissionCheck {
+  permission: Permission
+  scope: PermissionScope
+}
+
+/**
+ * Upper bound of entries per public.rbac_check_permissions call (the SQL
+ * function rejects larger arrays). Larger batches are split into several
+ * statements on the same client.
+ */
+export const MAX_PERMISSION_CHECKS_PER_QUERY = 500
+
+/**
+ * Batch variant of checkPermissionPg on an existing Drizzle client: evaluates
+ * every check with public.rbac_check_permissions, which runs
+ * rbac_check_permission_direct per entry with the same principal arguments
+ * checkPermissionPg passes. Results are returned in input order.
+ *
+ * Errors follow checkPermissionPg: transient database errors become 503,
+ * other query failures deny every check of the batch.
+ */
+export async function checkPermissionsBatchPg(
+  c: Context<MiddlewareKeyVariables>,
+  checks: PermissionCheck[],
+  drizzleClient: Pick<ReturnType<typeof getDrizzleClient>, 'execute'>,
+  userId: string,
+  apikeyString?: string | null,
+): Promise<boolean[]> {
+  if (checks.length === 0)
+    return []
+  if (!userId) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'checkPermissionsBatchPg: no userId',
+      count: checks.length,
+    })
+    return checks.map(() => false)
+  }
+
+  const auth = c.get('auth')
+  // Same guard as checkPermission / checkPermissionPg: an RBAC API key without
+  // its plaintext value cannot be evaluated.
+  if (auth?.authType === 'apikey' && auth.apikey?.rbac_id && !apikeyString)
+    return checks.map(() => false)
+
+  const results: boolean[] = []
+  try {
+    for (let start = 0; start < checks.length; start += MAX_PERMISSION_CHECKS_PER_QUERY) {
+      const chunk = checks.slice(start, start + MAX_PERMISSION_CHECKS_PER_QUERY)
+      const payload = chunk.map(({ permission, scope }) => ({
+        permission_key: permission,
+        user_id: userId,
+        org_id: scope.orgId ?? null,
+        app_id: scope.appId ?? null,
+        channel_id: scope.channelId ?? null,
+        apikey: apikeyString ?? null,
+      }))
+      const result = await drizzleClient.execute(
+        sql`SELECT idx, allowed FROM public.rbac_check_permissions(${JSON.stringify(payload)}::jsonb)`,
+      )
+      const allowedByIdx = new Map<number, boolean>()
+      for (const row of result.rows as Array<{ idx: number | string, allowed: boolean | null }>)
+        allowedByIdx.set(Number(row.idx), row.allowed === true)
+      chunk.forEach((_check, idx) => results.push(allowedByIdx.get(idx) ?? false))
+    }
+  }
+  catch (e) {
+    const first = checks[0]
+    handlePermissionCheckError(c, first.permission, first.scope, e, 'checkPermissionsBatch', apikeyString)
+    return checks.map(() => false)
+  }
+
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'checkPermissionsBatchPg: result',
+    count: checks.length,
+    allowedCount: results.filter(Boolean).length,
+    hasApikey: !!apikeyString,
+  })
+  return results
+}
+
+/**
+ * Batch variant of checkPermission(): same principal resolution, one pooled
+ * client and one statement (per MAX_PERMISSION_CHECKS_PER_QUERY entries)
+ * instead of one client per check. Results are returned in input order.
+ */
+export async function checkPermissionsBatch(
+  c: Context<MiddlewareKeyVariables>,
+  checks: PermissionCheck[],
+): Promise<boolean[]> {
+  if (checks.length === 0)
+    return []
+  const auth = c.get('auth')
+  if (!auth?.userId) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'checkPermissionsBatch: no auth',
+      count: checks.length,
+    })
+    return checks.map(() => false)
+  }
+
+  // For hashed keys, apikey.key is null, so we use capgkey from the request header
+  const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
+  let pgClient
+  try {
+    pgClient = await getPgClient(c)
+    return await checkPermissionsBatchPg(c, checks, getDrizzleClient(pgClient), auth.userId, apikeyString)
+  }
+  catch (e) {
+    const first = checks[0]
+    handlePermissionCheckError(c, first.permission, first.scope, e, 'checkPermissionsBatch', apikeyString)
+    return checks.map(() => false)
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
   }
 }
 
@@ -295,7 +443,7 @@ export async function checkPermissionInMemberOrgs(
   try {
     pgClient = await getPgClient(c)
     const result = await getDrizzleClient(pgClient).execute(
-      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT EXISTS (
+      sql`SELECT EXISTS (
         SELECT 1
         FROM public.org_users ou
         WHERE ou.user_id = ${memberUserId}::uuid
@@ -312,7 +460,7 @@ export async function checkPermissionInMemberOrgs(
     return (result.rows[0] as any)?.allowed === true
   }
   catch (e) {
-    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionInMemberOrgs')
+    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionInMemberOrgs', apikeyString)
   }
   finally {
     if (pgClient)
@@ -354,7 +502,7 @@ export async function getDeniedChannelIdsForPermission(
     pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(
-      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT ch.id
+      sql`SELECT ch.id
         FROM (
           SELECT
             a.app_id,
@@ -396,7 +544,7 @@ export async function getDeniedChannelIdsForPermission(
     return new Set((result.rows as Array<{ id: number | string }>).map(row => Number(row.id)))
   }
   catch (e) {
-    handlePermissionCheckError(c, permission, { appId }, e, 'checkPermission')
+    handlePermissionCheckError(c, permission, { appId }, e, 'checkPermission', apikeyString)
     return quickError(403, 'permission_denied', `Permission denied: ${permission}`, { permission, appId })
   }
   finally {
@@ -435,12 +583,10 @@ export async function checkPermissions(
   permissions: Permission[],
   scope: PermissionScope,
 ): Promise<boolean> {
-  for (const permission of permissions) {
-    if (!(await checkPermission(c, permission, scope))) {
-      return false
-    }
-  }
-  return true
+  if (permissions.length === 0)
+    return true
+  const results = await checkPermissionsBatch(c, permissions.map(permission => ({ permission, scope })))
+  return results.every(Boolean)
 }
 
 /**
@@ -451,12 +597,10 @@ export async function checkAnyPermission(
   permissions: Permission[],
   scope: PermissionScope,
 ): Promise<boolean> {
-  for (const permission of permissions) {
-    if (await checkPermission(c, permission, scope)) {
-      return true
-    }
-  }
-  return false
+  if (permissions.length === 0)
+    return false
+  const results = await checkPermissionsBatch(c, permissions.map(permission => ({ permission, scope })))
+  return results.some(Boolean)
 }
 
 /**
@@ -505,7 +649,7 @@ export async function checkPermissionPg(
         return false
 
       const rbacOnlyResult = await drizzleClient.execute(
-        sql`${BYPASS_HYPERDRIVE_CACHE} SELECT public.rbac_check_permission_direct(
+        sql`SELECT public.rbac_check_permission_direct(
           ${permission},
           ${userId}::uuid,
           ${orgId}::uuid,
@@ -528,7 +672,7 @@ export async function checkPermissionPg(
 
     // Use the unified SQL function for JWT checks and non-key fallbacks.
     const result = await drizzleClient.execute(
-      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT public.rbac_check_permission_direct(
+      sql`SELECT public.rbac_check_permission_direct(
         ${permission},
         ${userId}::uuid,
         ${orgId}::uuid,
@@ -551,7 +695,7 @@ export async function checkPermissionPg(
     return allowed
   }
   catch (e) {
-    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionPg')
+    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionPg', apikeyString)
   }
 }
 
@@ -584,7 +728,7 @@ export async function checkPermissionPgFreshRetry(
       // Pool acquisition failures that are not transient are infra/config faults, not ACL denials.
       if (!pgClient && !isTransientPgError(error))
         throw error
-      return handlePermissionCheckError(c, permission, scope, error, 'checkPermissionPg')
+      return handlePermissionCheckError(c, permission, scope, error, 'checkPermissionPg', apikeyString)
     }
     finally {
       if (pgClient)
@@ -720,7 +864,6 @@ export async function callerHoldsAllRolePermissions(
 
   const result = await drizzleClient.execute(
     sql`
-      ${BYPASS_HYPERDRIVE_CACHE}
       SELECT EXISTS (
         SELECT 1
         FROM public.role_permissions AS role_permission

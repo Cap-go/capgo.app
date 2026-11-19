@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -74,7 +74,7 @@ await t('collectCordovaAppIdCandidates reads plugin.xml id', async () => {
 })
 
 await t('buildCordovaUploadConfig defaults webDir to www', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'capgo-cordova-default-www-'))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'capgo-cordova-default-www-')))
   try {
     writeCordovaProject(dir)
     await withCwd(dir, async () => {
@@ -90,7 +90,7 @@ await t('buildCordovaUploadConfig defaults webDir to www', async () => {
 })
 
 await t('buildCordovaUploadConfig resolves webDir from nested working directory', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'capgo-cordova-nested-cwd-'))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'capgo-cordova-nested-cwd-')))
   const nestedDir = join(dir, 'scripts')
   try {
     writeCordovaProject(dir)

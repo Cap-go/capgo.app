@@ -20,6 +20,7 @@ import {
   shouldRecountOnTableReload,
 } from '~/services/dateRange'
 import { DEFAULT_DEVICE_DATA_COLLECTION } from '~/services/deviceDataCollection'
+import { DeviceCountCache, planDevicePageFetch, plannedDevicePage } from '~/services/devicePagination'
 import BundleMultiFilter from './BundleMultiFilter.vue'
 import VersionCompareField from './VersionCompareField.vue'
 
@@ -86,6 +87,8 @@ const bundleNames = ref<string[]>([])
 const dateRangePickerRef = ref<DateRangePickerHandle>()
 const skipFilterReload = ref(false)
 const offset = 10
+// Count without the date range, keyed by the other filters (see recountDevices).
+const unfilteredCountCache = new DeviceCountCache()
 function hasVersionDigits(value: string | undefined) {
   return Boolean(value && /\d/.test(value.trim()))
 }
@@ -141,7 +144,7 @@ function onDateRangeApply(payload: { start: Date, end: Date, mode: DateRangePres
   // Apply payload first so refresh does not race v-model flush and keep the old window.
   dateRangeMode.value = payload.mode
   dateRange.value = [payload.start, payload.end]
-  void refreshData()
+  void refreshData({ keepCountCache: true })
 }
 
 function clearDeviceViewFilters(clearFilters: () => void) {
@@ -374,13 +377,25 @@ function getDeviceIdsFilterBody() {
   }
 }
 
-async function countDevices(options?: { includeDateRange?: boolean }) {
+/** Device count for the current filters, or null when the request failed. */
+async function countDevices(options?: { includeDateRange?: boolean }): Promise<number | null> {
+  // Snapshot the filters before awaiting, so the body matches the filters the
+  // caller saw (and the count cache key it computed).
+  const body = JSON.stringify({
+    count: true,
+    appId: props.appId,
+    ...getDevicesFilterBody(),
+    ...getDeviceIdsFilterBody(),
+    search: getSearchTerm(),
+    order: getActiveOrder(columns.value),
+    customIdMode: filters.value.CustomId,
+    ...(options?.includeDateRange === false ? {} : getDateRangePayload()),
+  })
   const { data: currentSession } = await capgo.auth.getSession()!
   if (!currentSession.session)
-    return 0
+    return null
 
   const currentJwt = currentSession.session.access_token
-  const searchTerm = getSearchTerm()
 
   try {
     const response = await fetch(`${defaultApiHost}/private/devices`, {
@@ -389,21 +404,12 @@ async function countDevices(options?: { includeDateRange?: boolean }) {
         'Content-Type': 'application/json',
         'authorization': `Bearer ${currentJwt ?? ''}`,
       },
-      body: JSON.stringify({
-        count: true,
-        appId: props.appId,
-        ...getDevicesFilterBody(),
-        ...getDeviceIdsFilterBody(),
-        search: searchTerm,
-        order: getActiveOrder(columns.value),
-        customIdMode: filters.value.CustomId,
-        ...(options?.includeDateRange === false ? {} : getDateRangePayload()),
-      }),
+      body,
     })
 
     if (!response.ok) {
       console.log('Cannot get devices', response.status)
-      return 0
+      return null
     }
 
     const dataD = await response.json() as { count: number }
@@ -411,19 +417,34 @@ async function countDevices(options?: { includeDateRange?: boolean }) {
   }
   catch (err) {
     console.log('Cannot get devices', err)
-    return 0
+    return null
   }
 }
 
+function getUnfilteredCountKey() {
+  const signature = JSON.parse(getQuerySignature()) as Record<string, unknown>
+  // The order never changes a count, and this count ignores the date range.
+  delete signature.dateRange
+  delete signature.order
+  return JSON.stringify(signature)
+}
+
 async function recountDevices(loadId: number) {
+  // The count without the date range only depends on the other filters, so a
+  // date range change (or a filter set seen before) reuses it.
+  const unfilteredKey = getUnfilteredCountKey()
+  const cachedAllCount = unfilteredCountCache.get(unfilteredKey)
   const [filteredCount, allCount] = await Promise.all([
     countDevices(),
-    countDevices({ includeDateRange: false }),
+    cachedAllCount ?? countDevices({ includeDateRange: false }),
   ])
   if (loadId !== activeLoadId.value)
     return false
-  total.value = filteredCount
-  unfilteredTotal.value = allCount
+  // Cache successful counts only (a zero included), so a failure is retried.
+  if (cachedAllCount === undefined && allCount !== null)
+    unfilteredCountCache.set(unfilteredKey, allCount)
+  total.value = filteredCount ?? 0
+  unfilteredTotal.value = allCount ?? 0
   return true
 }
 
@@ -469,8 +490,11 @@ async function reload() {
     if (shouldRecount) {
       // Toolbar reload (not a page change): snap rolling bounds and drop
       // cursors so the new window cannot reuse stale page offsets.
-      if (!filtersChanged)
+      if (!filtersChanged) {
         resetTablePagination({ snapRolling: true })
+        // Same filters reloaded on purpose: recount instead of reusing the cache.
+        unfilteredCountCache.clear()
+      }
       const counted = await recountDevices(loadId)
       if (!counted)
         return
@@ -489,8 +513,12 @@ async function reload() {
   }
 }
 
-async function refreshData() {
+async function refreshData(options: { keepCountCache?: boolean } = {}) {
   cancelScheduledReload()
+  // Explicit refresh (toolbar or app change): counts must be fresh. A date
+  // range change keeps the cache: that count ignores the date range.
+  if (!options.keepCountCache)
+    unfilteredCountCache.clear()
   const loadId = ++activeLoadId.value
   isLoading.value = true
   try {
@@ -532,7 +560,7 @@ onUnmounted(() => {
   cancelScheduledReload()
 })
 
-async function fetchDevicesPage(cursor: string | undefined | null) {
+async function fetchDevicesPage(cursor: string | undefined | null, pageOffset = 0) {
   const searchTerm = getSearchTerm()
 
   const { data: currentSession } = await capgo.auth.getSession()!
@@ -553,6 +581,7 @@ async function fetchDevicesPage(cursor: string | undefined | null) {
       search: searchTerm,
       order: getActiveOrder(columns.value),
       cursor: cursor ?? undefined,
+      ...(pageOffset > 0 ? { offset: pageOffset } : {}),
       limit: offset,
       customIdMode: filters.value.CustomId,
       ...getDateRangePayload(),
@@ -567,27 +596,29 @@ async function fetchDevicesPage(cursor: string | undefined | null) {
   return await response.json() as DevicesResponse
 }
 
-async function getCursorForPageWithLoadId(page: number, loadId: number) {
+/**
+ * Fetch one page. A page whose start cursor is unknown is reached in one
+ * request from the closest known page before it (cursor + offset) instead of
+ * walking every page in between. Returns null past the end of the list and
+ * undefined when a newer load superseded this one.
+ */
+async function fetchPageWithLoadId(page: number, loadId: number): Promise<DevicesResponse | null | undefined> {
   const target = Math.max(1, page)
-  if (pageStartCursor.value.has(target))
-    return pageStartCursor.value.get(target)
-
-  while (!pageStartCursor.value.has(target)) {
-    const knownPages = Array.from(pageStartCursor.value.keys())
-    const lastKnownPage = Math.max(...knownPages)
-    const cursor = pageStartCursor.value.get(lastKnownPage)
-    if (cursor === null)
+  while (true) {
+    const plan = planDevicePageFetch(pageStartCursor.value, target, offset)
+    if (!plan)
       return null
-    const data = await fetchDevicesPage(cursor)
+    const reachedPage = plannedDevicePage(plan, offset)
+    const data = await fetchDevicesPage(plan.cursor, plan.offset)
     if (loadId !== activeLoadId.value)
       return undefined
     if (!data)
-      throw new Error(`Failed to resolve cursor for page ${lastKnownPage + 1}`)
-    if (loadId === activeLoadId.value)
-      pageStartCursor.value.set(lastKnownPage + 1, data.nextCursor ?? null)
+      throw new Error(`Failed to fetch devices page ${reachedPage}`)
+    pageStartCursor.value.set(reachedPage + 1, data.nextCursor ?? null)
+    if (reachedPage >= target)
+      return data
+    // Jump longer than the offset bound: continue from the page just reached.
   }
-
-  return pageStartCursor.value.get(target)
 }
 
 async function getData(loadId: number) {
@@ -600,31 +631,22 @@ async function getData(loadId: number) {
       currentPage.value = targetPage
     }
 
-    const cursor = await getCursorForPageWithLoadId(targetPage, loadId)
-
-    if (loadId !== activeLoadId.value)
+    const dataD = await fetchPageWithLoadId(targetPage, loadId)
+    if (dataD === undefined || loadId !== activeLoadId.value)
       return
 
-    if (!cursor && targetPage > 1) {
+    if (dataD === null) {
       elements.value = []
       hasMore.value = false
       nextCursor.value = undefined
       return
     }
 
-    const dataD = await fetchDevicesPage(cursor)
-    if (!dataD) {
-      throw new Error('Failed to fetch devices page')
-    }
-    if (loadId !== activeLoadId.value)
-      return
-
     await ensureVersionNames(dataD.data)
     if (loadId !== activeLoadId.value)
       return
 
     elements.value = dataD.data
-    pageStartCursor.value.set(targetPage + 1, dataD.nextCursor ?? null)
     nextCursor.value = dataD.nextCursor
     hasMore.value = dataD.hasMore
   }
@@ -942,7 +964,7 @@ async function exportDevices(format: 'csv' | 'json') {
               <button
                 type="button"
                 class="d-btn d-btn-link ml-1 h-auto min-h-0 p-0 text-sm font-medium text-azure-600 underline decoration-azure-600/40 underline-offset-2 hover:text-azure-700 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:text-azure-400 dark:hover:text-azure-300"
-                @click="refreshData"
+                @click="refreshData()"
               >
                 {{ t('devices-empty-refresh') }}
               </button>

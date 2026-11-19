@@ -491,7 +491,8 @@ test.describe('Registration', () => {
     await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveCount(0)
     await page.locator('[data-test="onboarding-estimated-users-option"]').first().click()
     await page.click('[data-test="onboarding-create-org"]')
-    await expect(page.locator('[data-test="onboarding-logo-action"]')).toBeVisible({ timeout: 60000 })
+    await expect.poll(() => writes.includes('organization'), { timeout: 60_000 }).toBe(true)
+    await expect(page.locator('[data-test="onboarding-logo-action"]')).toBeVisible({ timeout: 60_000 })
     expect(writes).toEqual(['profile', 'organization'])
 
     const { error: signInError } = await capgo.auth.signInWithPassword({ email, password })
@@ -537,8 +538,14 @@ test.describe('Registration', () => {
     await page.locator('[data-test="onboarding-estimated-users-option"]').first().click()
     const createOrganization = page.locator('[data-test="onboarding-create-org"]')
     await expect(createOrganization).toBeEnabled()
+    const orgWrites: string[] = []
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && /\/organization(?:\?|$)/.test(request.url()))
+        orgWrites.push('organization')
+    })
     await createOrganization.click()
-    await expect(page.locator('[data-test="onboarding-logo-action"]')).toBeVisible({ timeout: 60000 })
+    await expect.poll(() => orgWrites.includes('organization'), { timeout: 60_000 }).toBe(true)
+    await expect(page.locator('[data-test="onboarding-logo-action"]')).toBeVisible({ timeout: 60_000 })
 
     const { error: signInError } = await capgo.auth.signInWithPassword({ email, password })
     expect(signInError).toBeNull()

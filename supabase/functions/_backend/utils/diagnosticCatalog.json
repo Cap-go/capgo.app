@@ -1,0 +1,694 @@
+{
+  "InvalidIp": {
+    "classification": "policy",
+    "meaning": "Capgo detected traffic that looks like it comes from Google or cloud infrastructure. Updates less than four hours old are ignored so bot traffic does not count as billable devices.",
+    "next_steps": [
+      "Ignore this on real users. Retry from normal networks and real devices, or wait and check again later."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#invalidip"
+  },
+  "provider_infrastructure_request_blocked": {
+    "classification": "policy",
+    "meaning": "Your app is configured to block requests from known Google and Apple datacenter IP ranges. The protection applies to update checks, stats, and channel-self requests, so cloud-hosted probes and provider runners can receive this response even when the app configuration is otherwise valid.",
+    "next_steps": [
+      "Retry from a physical device on a normal user network. If the provider-originated traffic is intentional, temporarily disable **Block provider infrastructure requests** in the app's **Information** tab, then enable it again after the test. New apps enable this setting by default; existing apps retain their previous disabled setting until changed."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#provider_infrastructure_request_blocked"
+  },
+  "needPlanUpgrade": {
+    "classification": "error",
+    "meaning": "Your organization reached its plan or device limit. The device will not receive updates until you upgrade or the next billing cycle resets usage.",
+    "next_steps": [
+      "Upgrade your plan in the dashboard or wait for the next billing cycle."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#needplanupgrade"
+  },
+  "noNew": {
+    "classification": "normal",
+    "meaning": "The device already has the latest bundle available for its channel. This is a normal state, not a failure.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#nonew"
+  },
+  "rateLimited": {
+    "classification": "error",
+    "meaning": "The device sent too many update or channel requests in a short window.",
+    "next_steps": [
+      "Stop calling update APIs inside render loops. Call setChannel / getChannel only from user actions, and set defaultChannel in capacitor.config."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#ratelimited"
+  },
+  "semver_error": {
+    "classification": "error",
+    "meaning": "The native app version in config is missing or not valid semver (x.y.z).",
+    "next_steps": [
+      "Set plugins.CapacitorUpdater.version to valid semver, verify it in the SemVer tester, then rebuild and reinstall the native app."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#semver_error"
+  },
+  "disablePlatformIos": {
+    "classification": "policy",
+    "meaning": "The device runs iOS, but iOS updates are disabled for this channel.",
+    "next_steps": [
+      "Enable iOS in the channel if this was accidental, or route iOS builds to a dedicated channel when blocking is intentional."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableplatformios"
+  },
+  "disablePlatformAndroid": {
+    "classification": "policy",
+    "meaning": "The device runs Android, but Android updates are disabled for this channel.",
+    "next_steps": [
+      "Enable Android in the channel if this was accidental, or route Android builds to a dedicated channel when blocking is intentional."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableplatformandroid"
+  },
+  "disablePlatformElectron": {
+    "classification": "policy",
+    "meaning": "The device runs Electron, but Electron updates are disabled for this channel.",
+    "next_steps": [
+      "Enable Electron in the channel if this was accidental, or route Electron builds to a dedicated channel when blocking is intentional."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableplatformelectron"
+  },
+  "disableDevBuild": {
+    "classification": "policy",
+    "meaning": "The device is a development build, but dev builds are blocked for this channel.",
+    "next_steps": [
+      "Allow dev builds in a test channel, or keep this channel release-only and move dev devices elsewhere."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disabledevbuild"
+  },
+  "disableProdBuild": {
+    "classification": "policy",
+    "meaning": "A production build called /updates, but production updates are blocked for this channel.",
+    "next_steps": [
+      "Allow production updates in the channel if this was accidental, or route production builds to the correct channel."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableprodbuild"
+  },
+  "disableDevice": {
+    "classification": "policy",
+    "meaning": "A real phone or tablet was blocked because this channel blocks real devices.",
+    "next_steps": [
+      "Enable real-device updates if this was accidental, or keep the restriction and route real devices to another channel."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disabledevice"
+  },
+  "disableEmulator": {
+    "classification": "policy",
+    "meaning": "The device is an emulator, but emulator updates are disabled for this channel.",
+    "next_steps": [
+      "Enable emulator updates in a test channel, or keep this channel emulator-blocked and use another channel for emulator validation."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableemulator"
+  },
+  "disableAutoUpdate": {
+    "classification": "policy",
+    "meaning": "Auto-update is disabled by channel compatibility policy. Metadata includes auto_update with a matching rule such as major, minor, patch, metadata, or none.",
+    "next_steps": [
+      "Change the channel auto-update policy to allow your intended rollout."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableautoupdate"
+  },
+  "disableAutoUpdateUnderNative": {
+    "classification": "policy",
+    "meaning": "The channel has a bundle older than the device baseline and blocks sending updates under the native version.",
+    "next_steps": [
+      "Publish a bundle at or above the native baseline, or disable under-native protection in the channel."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableautoupdateundernative"
+  },
+  "disableAutoUpdateMetadata": {
+    "classification": "policy",
+    "meaning": "The channel requires min_update_version, but the device native version is below that threshold.",
+    "next_steps": [
+      "Set min_update_version on the target bundle or release from a newer native version."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableautoupdatemetadata"
+  },
+  "disableAutoUpdateToMajor": {
+    "classification": "policy",
+    "meaning": "The channel blocks major version jumps, for example 1.x.x to 2.x.x.",
+    "next_steps": [
+      "Align channel strategy with your major rollout plan, or allow major jumps for this track. See Common Update Problems."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableautoupdatetomajor"
+  },
+  "disableAutoUpdateToMinor": {
+    "classification": "policy",
+    "meaning": "The channel blocks minor version jumps relative to the device native baseline (version_build), for example 1.2.3 to 1.3.0.",
+    "next_steps": [
+      "Align channel strategy with your minor rollout plan, or allow minor jumps for this track."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableautoupdatetominor"
+  },
+  "disableAutoUpdateToPatch": {
+    "classification": "policy",
+    "meaning": "The channel blocks patch-level changes while keeping the same MAJOR.MINOR.PATCH prefix; only suffix changes are allowed.",
+    "next_steps": [
+      "Align release cadence with channel policy, or allow patch jumps for this track."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#disableautoupdatetopatch"
+  },
+  "cannotUpdateViaPrivateChannel": {
+    "classification": "policy",
+    "meaning": "The device tried to self-associate with a private channel that does not allow device self-assignment (allow_device_self_set is false) and the channel is not public.",
+    "next_steps": [
+      "Enable allow_device_self_set on the channel or switch the device to a public or allowed channel."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#cannotupdateviaprivatechannel"
+  },
+  "channelMisconfigured": {
+    "classification": "error",
+    "meaning": "The channel uses disable_auto_update: \"version_number\" but the bundle min_update_version is null, so Capgo cannot decide which devices should update.",
+    "next_steps": [
+      "Fill the missing config for that rule or switch to a simpler auto-update mode."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#channelmisconfigured"
+  },
+  "NoChannelOrOverride": {
+    "classification": "error",
+    "meaning": "No default channel is configured and the device has no channel override.",
+    "next_steps": [
+      "Set a default channel in the dashboard or configure defaultChannel in the build."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#nochanneloroverride"
+  },
+  "cannotGetBundle": {
+    "classification": "error",
+    "meaning": "Capgo failed to generate a valid signed download URL and no manifest fallback was available.",
+    "next_steps": [
+      "Re-upload the bundle, regenerate manifests, and verify R2 or public bundle settings."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#cannotgetbundle"
+  },
+  "missingBundle": {
+    "classification": "error",
+    "meaning": "The bundle assigned to the channel has no downloadable content: no external_url, no r2_path, not a built-in version, and no manifest entries.",
+    "next_steps": [
+      "Rebuild and re-upload the version, then confirm the bundle has real file content."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#missingbundle"
+  },
+  "keyMismatch": {
+    "classification": "error",
+    "meaning": "The device encryption public key does not match the key used to encrypt the bundle. Metadata can include device_key_id, bundle_key_id, and version.",
+    "next_steps": [
+      "Compare device and bundle key IDs in the console. Publish with the same key and matching CLI/plugin versions."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#keymismatch"
+  },
+  "customIdBlocked": {
+    "classification": "policy",
+    "meaning": "The app sent a custom device ID, but this app does not accept custom IDs, so the ID is ignored.",
+    "next_steps": [
+      "Stop sending custom IDs, or enable custom IDs only when your workflow requires them."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#customidblocked"
+  },
+  "blocked_by_server_url": {
+    "classification": "error",
+    "meaning": "server.url is set in Capacitor config, so the WebView loads a remote URL instead of local bundle files. Capgo live updates require local files and server.url is discouraged in production.",
+    "next_steps": [
+      "Remove or clear server.url for production builds and keep update payloads local. This code can appear as a backend refusal or as a device-side stat."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#blocked_by_server_url"
+  },
+  "backend_refusal": {
+    "classification": "error",
+    "meaning": "The updater plugin is v4, which the backend no longer accepts.",
+    "next_steps": [
+      "Upgrade plugin and CLI to v5+ (prefer v8) with Capacitor v5+, rebuild, and republish bundle metadata."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#backend_refusal"
+  },
+  "ping": {
+    "classification": "normal",
+    "meaning": "Internal test action used to verify the stats pipeline.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#ping"
+  },
+  "get": {
+    "classification": "normal",
+    "meaning": "Capgo sent download information for a new version to the device.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#get"
+  },
+  "set": {
+    "classification": "normal",
+    "meaning": "A bundle was activated on the device.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#set"
+  },
+  "set_fail": {
+    "classification": "error",
+    "meaning": "A bundle failed to activate on the device.",
+    "next_steps": [
+      "Check native logs with npx @capgo/cli@latest app debug and verify bundle integrity, paths, and notifyAppReady flow."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#set_fail"
+  },
+  "reset": {
+    "classification": "normal",
+    "meaning": "The device reset to the built-in bundle.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#reset"
+  },
+  "delete": {
+    "classification": "normal",
+    "meaning": "One bundle was deleted on the device.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#delete"
+  },
+  "download_0": {
+    "classification": "normal",
+    "meaning": "The download sequence started at 0% progress.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_0"
+  },
+  "download_10": {
+    "classification": "normal",
+    "meaning": "A new bundle has been downloaded — progress indicated at 10%.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_10"
+  },
+  "download_20": {
+    "classification": "normal",
+    "meaning": "A new bundle has been downloaded — progress indicated at 20%.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_20"
+  },
+  "download_30": {
+    "classification": "normal",
+    "meaning": "A new bundle has been downloaded — progress indicated at 30%.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_30"
+  },
+  "download_40": {
+    "classification": "normal",
+    "meaning": "A new bundle has been downloaded — progress indicated at 40%.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_40"
+  },
+  "download_50": {
+    "classification": "normal",
+    "meaning": "A new bundle has been downloaded — progress indicated at 50%.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_50"
+  },
+  "download_60": {
+    "classification": "normal",
+    "meaning": "A new bundle has been downloaded — progress indicated at 60%.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_60"
+  },
+  "download_70": {
+    "classification": "normal",
+    "meaning": "A new bundle has been downloaded — progress indicated at 70%.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_70"
+  },
+  "download_80": {
+    "classification": "normal",
+    "meaning": "A new bundle has been downloaded — progress indicated at 80%.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_80"
+  },
+  "download_90": {
+    "classification": "normal",
+    "meaning": "A new bundle has been downloaded — progress indicated at 90%.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_90"
+  },
+  "download_complete": {
+    "classification": "normal",
+    "meaning": "The bundle download finished successfully.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_complete"
+  },
+  "download_manifest_start": {
+    "classification": "normal",
+    "meaning": "The device started downloading the update manifest.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_manifest_start"
+  },
+  "download_manifest_complete": {
+    "classification": "normal",
+    "meaning": "The device finished downloading the update manifest.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_manifest_complete"
+  },
+  "download_zip_start": {
+    "classification": "normal",
+    "meaning": "The device started downloading the bundle archive.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_zip_start"
+  },
+  "download_zip_complete": {
+    "classification": "normal",
+    "meaning": "The device finished downloading the bundle archive.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_zip_complete"
+  },
+  "download_manifest_file_fail": {
+    "classification": "error",
+    "meaning": "One manifest entry failed to download. version_name uses version:fileName to identify the asset.",
+    "next_steps": [
+      "Fix the missing or blocked asset, regenerate the manifest, and re-upload the bundle."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_manifest_file_fail"
+  },
+  "download_manifest_checksum_fail": {
+    "classification": "error",
+    "meaning": "A manifest file failed checksum validation.",
+    "next_steps": [
+      "Re-upload the bundle with a current CLI version and verify manifest checksums."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_manifest_checksum_fail"
+  },
+  "download_manifest_brotli_fail": {
+    "classification": "error",
+    "meaning": "A manifest file failed Brotli decompression.",
+    "next_steps": [
+      "Verify compression settings and re-upload affected assets."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_manifest_brotli_fail"
+  },
+  "download_fail": {
+    "classification": "error",
+    "meaning": "The bundle failed to download.",
+    "next_steps": [
+      "Check network connectivity, signed URL expiry, CDN reachability, and device storage."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#download_fail"
+  },
+  "update_fail": {
+    "classification": "error",
+    "meaning": "The bundle installed but the app never called notifyAppReady, so Capgo rolled back.",
+    "next_steps": [
+      "Call notifyAppReady() after your app finishes bootstrapping. Native log text notifyAppReady was not called, roll back current bundle maps to this code."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#update_fail"
+  },
+  "checksum_fail": {
+    "classification": "error",
+    "meaning": "The downloaded bundle failed checksum validation. Common causes: CRC32 vs SHA256 mismatch from an old CLI upload, or encryption key mismatch on older plugins that surface decryption failure as checksum failure.",
+    "next_steps": [
+      "Re-upload with a current CLI/plugin (SHA256). If using encryption, verify the app public key matches the upload key, or upgrade to plugin 8.3.0+ for explicit keyMismatch errors."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#checksum_fail"
+  },
+  "decrypt_fail": {
+    "classification": "error",
+    "meaning": "The downloaded bundle failed to decrypt.",
+    "next_steps": [
+      "Verify encryption keys and re-upload the bundle with the matching key pair."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#decrypt_fail"
+  },
+  "windows_path_fail": {
+    "classification": "error",
+    "meaning": "The zip contains illegal Windows-style paths.",
+    "next_steps": [
+      "Rebuild the bundle on Unix paths or sanitize archive paths before upload."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#windows_path_fail"
+  },
+  "canonical_path_fail": {
+    "classification": "error",
+    "meaning": "File paths inside the zip are not canonical.",
+    "next_steps": [
+      "Fix archive path generation before upload."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#canonical_path_fail"
+  },
+  "directory_path_fail": {
+    "classification": "error",
+    "meaning": "The zip contains invalid directory paths.",
+    "next_steps": [
+      "Fix archive structure before upload."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#directory_path_fail"
+  },
+  "unzip_fail": {
+    "classification": "error",
+    "meaning": "The device failed to unzip the downloaded bundle.",
+    "next_steps": [
+      "Verify archive integrity and supported compression."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#unzip_fail"
+  },
+  "low_mem_fail": {
+    "classification": "error",
+    "meaning": "Download failed because the device ran out of memory.",
+    "next_steps": [
+      "Reduce bundle size or retry on a device with more free memory."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#low_mem_fail"
+  },
+  "app_moved_to_background": {
+    "classification": "normal",
+    "meaning": "The app entered the background.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_moved_to_background"
+  },
+  "app_moved_to_foreground": {
+    "classification": "normal",
+    "meaning": "The app entered the foreground.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_moved_to_foreground"
+  },
+  "app_crash": {
+    "classification": "error",
+    "meaning": "JavaScript or Capacitor layer crash. Metadata can include message, stack, source, and active bundle context.",
+    "next_steps": [
+      "Inspect metadata and native logs. Pair JS and native error reporting (for example Sentry) to locate the failing code path."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_crash"
+  },
+  "app_crash_native": {
+    "classification": "error",
+    "meaning": "Native platform crash. Metadata can include platform, reason, stack, and process details.",
+    "next_steps": [
+      "Use Xcode or Logcat crash logs and correlate with the active bundle from metadata."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_crash_native"
+  },
+  "app_anr": {
+    "classification": "error",
+    "meaning": "Android Application Not Responding event.",
+    "next_steps": [
+      "Inspect ANR traces in Logcat and reduce main-thread blocking work after updates."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_anr"
+  },
+  "app_killed_low_memory": {
+    "classification": "error",
+    "meaning": "The OS killed the app after memory pressure.",
+    "next_steps": [
+      "Reduce memory use after update activation and inspect metadata for available memory signals."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_killed_low_memory"
+  },
+  "app_killed_excessive_resource_usage": {
+    "classification": "error",
+    "meaning": "The OS killed the app for excessive resource use.",
+    "next_steps": [
+      "Inspect metadata for the resource type or platform reason."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_killed_excessive_resource_usage"
+  },
+  "app_initialization_failure": {
+    "classification": "error",
+    "meaning": "Updater or startup failed before normal runtime was ready.",
+    "next_steps": [
+      "Inspect metadata for the failing step and error message."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_initialization_failure"
+  },
+  "app_memory_warning": {
+    "classification": "error",
+    "meaning": "iOS memory warning.",
+    "next_steps": [
+      "Inspect memory context in metadata and reduce peak usage after updates."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_memory_warning"
+  },
+  "webview_javascript_error": {
+    "classification": "error",
+    "meaning": "Uncaught JavaScript error in the WebView. Metadata can include message, source URL, line, column, and stack.",
+    "next_steps": [
+      "Install error reporting in JS and native layers to capture the exact failing line in production."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#webview_javascript_error"
+  },
+  "webview_unhandled_rejection": {
+    "classification": "error",
+    "meaning": "Unhandled promise rejection in the WebView.",
+    "next_steps": [
+      "Capture async failures with JS and native error reporting."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#webview_unhandled_rejection"
+  },
+  "webview_resource_error": {
+    "classification": "error",
+    "meaning": "A WebView resource failed to load.",
+    "next_steps": [
+      "Use metadata URL and status details to fix broken assets or network rules."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#webview_resource_error"
+  },
+  "webview_security_policy_violation": {
+    "classification": "error",
+    "meaning": "Content security policy blocked a resource.",
+    "next_steps": [
+      "Adjust CSP using metadata directive and blocked URI details."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#webview_security_policy_violation"
+  },
+  "webview_unclean_restart": {
+    "classification": "error",
+    "meaning": "Previous WebView session did not shut down cleanly, which can indicate crash loops after an update.",
+    "next_steps": [
+      "Correlate with crash and WebView error events before and after restart."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#webview_unclean_restart"
+  },
+  "webview_render_process_gone": {
+    "classification": "error",
+    "meaning": "Android WebView renderer process exited.",
+    "next_steps": [
+      "Inspect renderer crash signals in metadata and native logs."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#webview_render_process_gone"
+  },
+  "webview_content_process_terminated": {
+    "classification": "error",
+    "meaning": "iOS WebView content process terminated.",
+    "next_steps": [
+      "Inspect active bundle and page URL from metadata."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#webview_content_process_terminated"
+  },
+  "app_launch_start": {
+    "classification": "normal",
+    "meaning": "The app started a launch measurement. This is a normal lifecycle event.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_launch_start"
+  },
+  "app_launch_ready": {
+    "classification": "normal",
+    "meaning": "The app reported it was ready. Timing metadata can help compare startup across versions. This is a normal lifecycle event.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_launch_ready"
+  },
+  "app_launch_timeout": {
+    "classification": "error",
+    "meaning": "The app did not report ready within its launch measurement window.",
+    "next_steps": [
+      "Inspect startup errors and the device timeline. Check that startup reaches the readiness call, and call notifyAppReady() after bootstrapping succeeds. Compare timing and failures with the previous bundle before changing timeout settings."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_launch_timeout"
+  },
+  "webview_dom_content_loaded": {
+    "classification": "normal",
+    "meaning": "The WebView reported DOM content loaded. This is a normal timing event, not proof that all resources or application features are ready.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#webview_dom_content_loaded"
+  },
+  "webview_page_loaded": {
+    "classification": "normal",
+    "meaning": "The WebView reported a page load. This is a normal timing event. Compare duration metadata between versions when investigating slow loads.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#webview_page_loaded"
+  },
+  "app_nav": {
+    "classification": "normal",
+    "meaning": "The app reported a navigation event. This is normal telemetry. Route and duration metadata allow per-screen comparisons when the app supplies them.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_nav"
+  },
+  "set_next": {
+    "classification": "normal",
+    "meaning": "A bundle was scheduled for activation on a later app launch. Scheduling is normal and does not mean the bundle has already been activated.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#set_next"
+  },
+  "channelPaused": {
+    "classification": "policy",
+    "meaning": "The selected channel is paused. The server sends no update and the device keeps its current bundle. This can be an intentional release policy.",
+    "next_steps": [
+      "Check why the channel was paused and whether it is safe to resume. Do not resume a rollout automatically to silence this event."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#channelpaused"
+  },
+  "finish_download_fail": {
+    "classification": "error",
+    "meaning": "The device could not finalize a downloaded bundle.",
+    "next_steps": [
+      "Inspect metadata and native logs for the underlying filesystem or validation error. Verify available storage and the uploaded archive before retrying."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#finish_download_fail"
+  },
+  "manifest_path_fail": {
+    "classification": "error",
+    "meaning": "A manifest file path failed validation or could not be used during the update.",
+    "next_steps": [
+      "Inspect the failing path in native logs, correct the bundle's file layout and re-upload it. Do not bypass path validation."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#manifest_path_fail"
+  },
+  "checksum_required": {
+    "classification": "error",
+    "meaning": "The updater requires checksum metadata that is missing for this download.",
+    "next_steps": [
+      "Upload the bundle again with the current CLI and verify that checksum metadata is present. Do not disable integrity checks to work around the error."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#checksum_required"
+  },
+  "insufficient_disk_space": {
+    "classification": "error",
+    "meaning": "The device does not have enough storage for the update.",
+    "next_steps": [
+      "Free device storage, reduce the bundle size where practical, and retry on an affected test device. This is not resolved by changing a channel's version policy."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#insufficient_disk_space"
+  },
+  "update_check_error": {
+    "classification": "error",
+    "meaning": "An update check failed. This event alone does not identify whether the cause is connectivity, server availability, or a specific response refusal.",
+    "next_steps": [
+      "Inspect response metadata and surrounding native logs. Check connectivity and the configured update URL, then look up any specific backend error in Common Update Problems before changing settings."
+    ],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#update_check_error"
+  },
+  "os_version_changed": {
+    "classification": "normal",
+    "meaning": "Device OS version changed between checks.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#os_version_changed"
+  },
+  "native_app_version_changed": {
+    "classification": "normal",
+    "meaning": "Native app store version changed, helping separate native vs web bundle changes.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#native_app_version_changed"
+  },
+  "getChannel": {
+    "classification": "normal",
+    "meaning": "The device queried its current channel.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#getchannel"
+  },
+  "setChannel": {
+    "classification": "normal",
+    "meaning": "A channel was set successfully for the device.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#setchannel"
+  },
+  "uninstall": {
+    "classification": "normal",
+    "meaning": "The app was uninstalled or Capgo data was cleared.",
+    "next_steps": [],
+    "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#uninstall"
+  }
+}

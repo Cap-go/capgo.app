@@ -7,11 +7,11 @@ complete post-merge test suite remains mandatory. A newer real branch push
 cancels an older, unfinished version workflow so that the newer workflow tests
 and releases the cumulative state. Version-workflow re-runs are rejected.
 
-A failed production deployment is recoverable with GitHub's native **Re-run
-failed jobs** action. A deployment retry remains pinned to its original immutable
-tag and is allowed only while that tag is still the newest tag for its stable or
-alpha environment. An older deployment must never silently switch to or roll
-back from another release.
+A failed production deployment recovers with GitHub's **Re-run all jobs** action.
+Each full retry resolves the newest stable or alpha tag once, then pins every
+job and completion record to that immutable target. Freshness guards reject
+superseded retries before they mutate the environment. Durable per-destination
+baselines keep failed deployment work pending across later published tags.
 
 This change updates the existing `bump_version.yml` and
 `build_and_deploy.yml` workflows. It does not add another workflow.
@@ -118,49 +118,68 @@ The superseded path remains a final race guard in addition to concurrency. It
 does not conceal test failures: it is reachable only after the complete
 post-merge suite passed for that run.
 
-### 5. Pin deployment retries to their original tag
+### 5. Resolve full deployment retries once per attempt
 
-`build_and_deploy.yml` keeps its existing `capgo-*` tag trigger. Each run
-validates and resolves the exact tag from its original `github.ref_name`. GitHub
-preserves the original `GITHUB_REF` and `GITHUB_SHA` on a re-run, so every job in
-that run remains bound to the same immutable release.
+`build_and_deploy.yml` retains its `capgo-*` trigger. The first attempt resolves
+and freshness-checks the triggering tag. Recovery uses **Re-run all jobs**. On
+attempts greater than one, `scripts/resolve-deploy-tag.ts --attempt` selects the
+newest stable or alpha tag for the original environment. The scope job exports
+that resolved tag and SHA once. Every downstream checkout, release action, and
+completion record uses those outputs, never the original Actions `head_sha`.
 
-At the start of an initial workflow attempt, the scope job fetches the current
-tags and verifies that the run's original tag is still the newest tag for its
-stable or alpha environment. Once that attempt begins mutating production, it
-runs to completion even if a newer tag is published. This prevents a newer tag
-from interrupting the older deployment after only some targets were updated;
-the environment-wide deployment concurrency group keeps the newer deployment
-queued until the older one finishes.
+The resolved target stays immutable throughout the attempt. Each mutating job
+retains its current-tag freshness guard on retries, so a selective retry cannot
+deploy a superseded tag. **Re-run failed jobs** is unsupported: it retains old
+scope outputs and cannot create a new matching state intent for its attempt.
+There is no stale-deployment bypass.
 
-On a workflow re-run, every production-mutating job repeats the freshness check
-before that job touches production. Therefore:
+### 6. Serialize deployments and persist cumulative scope
 
-- If it is still newest, a failed job may be retried idempotently.
-- If a newer matching tag exists, the historical job fails fast before touching
-  production during that retry and directs the operator to retry the newer
-  tag's deployment run.
+Deployment concurrency groups stable and alpha separately and uses
+`cancel-in-progress: false`. Initial attempts already mutating an environment
+finish before the next deployment starts. A queued stale initial attempt fails
+its freshness guard before any mutation. Full retries resolve the newest tag.
 
-The supported recovery action is **Re-run failed jobs**. GitHub re-runs failed
-jobs and their dependent jobs while retaining the original event ref. The
-freshness guard lives inside each mutating job rather than only in a previously
-successful scope job, so a selective retry cannot bypass it.
+Published tags prove release publication, not deployment completion. Deployment
+scope uses `manifest.json` on separate orphan state branches
+`deployment-state-stable` and `deployment-state-alpha`. No source branch, release
+tag, release publication helper, or production schedule is changed by state
+writes. Each entry records its immutable target tag/SHA and Actions run/attempt.
+Targets have separate baselines; stable plugins have one per region. Alpha has
+one plugin destination. GoTrue remains stable-only and folder-only.
 
-Full workflow re-runs do not retarget to a newer tag. They remain pinned to the
-original tag and are subject to the same freshness guard.
+The scope job writes pending intent for all selected destinations with an exact
+Git ref compare-and-swap before any deployment can start. The completion job
+runs with `always()` after the relevant jobs and reads paginated, attempt-specific
+Actions job/step results. It records only completed operations, including successes
+inside a failed overall run. Skipped jobs and skip-only success advance nothing.
+Stable Supabase requires reconciliation, migrations/functions deployment and
+subscription refresh together. Alpha requires only its applicable Supabase
+operations. Each plugin region records its own deployment success.
 
-### 6. Serialize production deployment without cancellation
+Pending intent survives failed gates, partial matrices, cancellations and a failed
+completion writer. A later source revert still reconciles partially changed
+regions. Completion clears only matching attempt intent. Writes preserve untouched
+entries, reject regressing source/attempt evidence and reject stale ref leases.
+Conflicts fail explicitly and require a fresh full run; writers never merge stale
+scope snapshots. Separate environment refs avoid cross-environment CAS conflicts.
 
-Deployment concurrency is grouped by environment rather than by original tag.
-Production runs share one group and alpha runs share another. The workflow uses
-`cancel-in-progress: false`, so a new tag never cancels a deployment that may
-already be mutating production.
+On a missing state ref, bootstrap examines at most 20 historical runs in two pages
+and at most 300 jobs per validated initial attempt. Only explicitly pinned
+historical workflow targets whose tags resolve to their recorded commit qualify.
+Historical reruns without immutable resolved identity are excluded. Successful
+operation steps, rather than workflow conclusions, provide recovered evidence.
+Recovered entries remain pending: retention and old-created reruns prevent history
+from proving the latest deployed state. Missing history therefore forces a fresh
+reconciliation. Invalid manifests, unavailable APIs, incomplete job pages, missing
+Git objects and moved evidence tags fail explicitly. No path falls back to the
+previous published tag. The first rollout can conservatively deploy every
+applicable destination, including GoTrue when its baseline is unknown.
 
-Queued runs remain pinned to their own tags. If a queued older run is no longer
-current when one of its mutating jobs starts, it fails fast. Repeated deployment
-of the same current tag must remain idempotent, which matches the retry
-expectation for migrations, replica reconciliation, Cloudflare publication, and
-OTA upload.
+The state contains only deployment metadata. Contents-write permission is scoped
+to the scope and completion jobs. The generated commits touch only the state ref;
+they do not change the checkout or index. State-branch pushes do not match the
+deployment tag trigger or the branch-scoped release trigger.
 
 ### 7. Synchronize production schema and types after database deployment
 
@@ -210,7 +229,7 @@ malformed release tags fail before any production mutation.
 
 Version publication distinguishes a normal main-advanced race from all other Git
 push errors. Deployment retains failures from real migration, replica, build, or
-provider errors so operators can fix the cause and use **Re-run failed jobs**.
+provider errors so operators can fix the cause and use **Re-run all jobs**.
 
 ## Verification
 
@@ -229,9 +248,12 @@ Automated tests will cover:
 - auto-sync commits not creating releases by themselves while still handing off
   earlier pending source changes;
 - version workflow re-runs failing before publication;
-- deployment retries retaining the original tag and allowing the current tag;
+- full deployment retries resolving the latest tag once per attempt;
 - stale deployment retries failing inside every production-mutating job;
-- every deployment checkout and release action using the original validated tag;
+- every deployment checkout, release action and state record using the resolved target;
+- cumulative per-target/per-environment deployment baselines and partial-region reverts;
+- operation evidence excluding skips and incomplete Supabase subscription refresh;
+- bounded historical bootstrap, missing/damaged state and CAS conflicts;
 - production deployment concurrency not cancelling in-progress runs;
 - schema/type generation running after replica reconciliation and Supabase
   migration deployment;
@@ -240,8 +262,7 @@ Automated tests will cover:
   production schema an unsafe source for the newer code.
 
 Local completion gates are repository lint, typecheck, and the focused release
-workflow/unit tests. The PR then follows the repository's stable-green review
-process with two unchanged green observations at least five minutes apart.
+workflow/unit tests. PR checks and reviews are handled by the coordinating deployment owner.
 
 ## Explicit non-goals
 
@@ -251,5 +272,15 @@ process with two unchanged green observations at least five minutes apart.
 - Do not mutate or force-update an existing release tag.
 - Do not use force pushes for release publication.
 - Do not change database migration or read-replica reconciliation behavior.
-- Do not make a historical deployment run deploy a newer tag.
 - Do not permit version/tag creation from a manually re-run version workflow.
+
+## Implementation notes
+
+The focused deployment-state suite uses temporary local Git repositories and a
+bare remote to exercise real state ref creation, lease conflicts, cumulative
+source diffs and partial rollout reverts. Neutral Actions fixtures cover
+attempt-specific operation evidence and bootstrap pagination. Release publication
+and the complete post-merge test gate remain unchanged.
+
+State is updated only when this existing deployment workflow runs. This change
+does not deploy, rerun historical jobs or initialize production state by itself.

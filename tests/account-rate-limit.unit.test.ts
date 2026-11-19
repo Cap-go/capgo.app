@@ -65,6 +65,9 @@ describe('account failed-auth rate limiting', () => {
 
   it('normalizes account identifiers before hashing', () => {
     expect(normalizeRateLimitAccountIdentifier('  Victim@Example.COM  ')).toBe('victim@example.com')
+    expect(normalizeRateLimitAccountIdentifier('Local+tag@Example.com')).toBe('local@example.com')
+    expect(normalizeRateLimitAccountIdentifier('john.doe+promo@gmail.com')).toBe('johndoe@gmail.com')
+    expect(normalizeRateLimitAccountIdentifier('john.doe@googlemail.com')).toBe('johndoe@gmail.com')
   })
 
   it('limits by account across different client IPs', async () => {

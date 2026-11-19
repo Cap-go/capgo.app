@@ -3,7 +3,9 @@ import {
   assertNativeBuildConcurrencyAvailable,
   buildNativeBuildConcurrencyErrorMessage,
   getPlansUpgradeUrl,
+  occupiedBuilderSlotsSql,
   reserveNativeBuildSlot,
+  reserveSimulatorSlot,
 } from '../supabase/functions/_backend/public/build/concurrency.ts'
 
 const { mockCloseClient, mockGetPgClient, mockLogPgError, mockGetEnv, mockSendEventToTracking } = vi.hoisted(() => ({
@@ -88,7 +90,7 @@ describe('native build concurrency limits', () => {
     expect(client.query).toHaveBeenCalledWith('BEGIN')
     expect(client.query).toHaveBeenCalledWith('COMMIT')
     expect(client.query).not.toHaveBeenCalledWith('ROLLBACK')
-    expect(client.release).toHaveBeenCalledTimes(1)
+    expect(client.release).toHaveBeenCalledTimes(2)
     expect(mockCloseClient).toHaveBeenCalledWith(context, pool)
     expect(mockSendEventToTracking).not.toHaveBeenCalled()
   })
@@ -117,7 +119,7 @@ describe('native build concurrency limits', () => {
 
     expect(client.query).toHaveBeenCalledWith('ROLLBACK')
     expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE public.build_requests'), expect.anything())
-    expect(client.release).toHaveBeenCalledTimes(1)
+    expect(client.release).toHaveBeenCalledTimes(2)
     expect(mockSendEventToTracking).toHaveBeenCalledWith(context, expect.objectContaining({
       event: 'Native build concurrency limit reached',
       sentToBento: true,
@@ -177,6 +179,68 @@ describe('native build concurrency limits', () => {
       }),
     }))
   })
+
+  it('treats one running simulator plus one build as two builder slots', async () => {
+    const { client } = mockPgClient({
+      activeCount: 2,
+      planLimit: 2,
+      planName: 'Solo',
+      mode: 'assert',
+    })
+
+    await expect(reserveSimulatorSlot(context as any, {
+      orgId: input.orgId,
+      appId: input.appId,
+      userId: input.userId,
+      platform: 'ios',
+      name: 'Checkout',
+    })).rejects.toMatchObject({ status: 429 })
+
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('public.simulator_sessions'), expect.anything())
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO public.simulator_sessions'), expect.anything())
+    expect(occupiedBuilderSlotsSql()).toContain('public.simulator_sessions')
+  })
+
+  it('reserves a simulator slot when one slot is still free', async () => {
+    mockPgClient({
+      activeCount: 1,
+      planLimit: 2,
+      planName: 'Maker',
+      mode: 'assert',
+    })
+
+    const result = await reserveSimulatorSlot(context as any, {
+      orgId: input.orgId,
+      appId: input.appId,
+      userId: input.userId,
+      platform: 'android',
+    })
+
+    expect(result).toEqual({
+      id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4',
+      activeBuilds: 1,
+      limit: 2,
+      planName: 'Maker',
+      upgradeUrl: 'https://console.capgo.app/settings/organization/plans',
+    })
+  })
+
+  it('does not reserve a simulator after the app moved to another organization', async () => {
+    mockPgClient({
+      activeCount: 0,
+      planLimit: 2,
+      planName: 'Maker',
+      mode: 'assert',
+      appOwnerOrg: '11111111-1111-4111-8111-111111111111',
+    })
+
+    await expect(reserveSimulatorSlot(context as any, {
+      orgId: input.orgId,
+      appId: input.appId,
+      userId: input.userId,
+      platform: 'ios',
+    })).rejects.toMatchObject({ status: 409 })
+  })
 })
 
 function mockPgClient(options: {
@@ -185,12 +249,16 @@ function mockPgClient(options: {
   planName: string
   reservationStatus?: string
   mode?: 'reserve' | 'assert'
+  appOwnerOrg?: string
 }) {
   const mode = options.mode ?? 'reserve'
   const client = {
     query: vi.fn(async (query: string, params?: unknown[]) => {
       if (query === 'BEGIN' || query === 'COMMIT' || query === 'ROLLBACK')
         return { rowCount: null, rows: [] }
+
+      if (query.includes('expire_simulator_sessions'))
+        return { rowCount: 1, rows: [{ expire_simulator_sessions: 0 }] }
 
       if (query.includes('SELECT id FROM public.orgs')) {
         expect(params).toEqual(['91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57'])
@@ -208,7 +276,10 @@ function mockPgClient(options: {
         }
       }
 
-      if (query.includes('COUNT(*)::text AS active_count')) {
+      if (query.includes('AS active_count')) {
+        expect(query).toContain('public.simulator_sessions')
+        expect(query).toContain('max_duration_minutes')
+        expect(query).toContain('public.build_requests')
         if (mode === 'assert') {
           expect(params).toEqual([
             '91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57',
@@ -223,6 +294,15 @@ function mockPgClient(options: {
           ])
         }
         return { rowCount: 1, rows: [{ active_count: String(options.activeCount) }] }
+      }
+
+      if (query.includes('SELECT owner_org FROM public.apps')) {
+        expect(params).toEqual(['com.test.native.concurrency'])
+        return { rowCount: 1, rows: [{ owner_org: options.appOwnerOrg ?? '91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57' }] }
+      }
+
+      if (query.includes('INSERT INTO public.simulator_sessions')) {
+        return { rowCount: 1, rows: [{ id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4' }] }
       }
 
       if (query.includes('UPDATE public.build_requests')) {

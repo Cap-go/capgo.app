@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { APIKEY_TEST_ALL, executeSQL, fetchTestRequest, getAuthHeaders, SUPABASE_ANON_KEY, SUPABASE_BASE_URL } from './test-utils.ts'
+import { sqlRestRequest } from './sql-rest-request'
+import { APIKEY_TEST_ALL, executeSQL, getAuthHeaders, SUPABASE_ANON_KEY, SUPABASE_BASE_URL } from './test-utils.ts'
 
 interface RestProbeRow {
   table_name: string
@@ -168,7 +169,7 @@ type RestProbeMode = 'selected limit' | 'bare range'
 function buildRestProbeRequest(probe: RestProbeRow, headers: Record<string, string>, mode: RestProbeMode) {
   if (mode === 'bare range') {
     return {
-      url: `${SUPABASE_BASE_URL}/rest/v1/${encodeURIComponent(probe.table_name)}`,
+      url: encodeURIComponent(probe.table_name),
       headers: {
         ...headers,
         'Range': '0-0',
@@ -183,7 +184,7 @@ function buildRestProbeRequest(probe: RestProbeRow, headers: Record<string, stri
   })
 
   return {
-    url: `${SUPABASE_BASE_URL}/rest/v1/${encodeURIComponent(probe.table_name)}?${params.toString()}`,
+    url: `${encodeURIComponent(probe.table_name)}?${params.toString()}`,
     headers,
   }
 }
@@ -194,7 +195,7 @@ async function fetchRestProbe(probe: RestProbeRow, headers: Record<string, strin
   const timeout = setTimeout(() => controller.abort(), 5000)
 
   try {
-    const response = await fetchTestRequest(
+    const response = await sqlRestRequest(
       request.url,
       { headers: request.headers, signal: controller.signal },
     )

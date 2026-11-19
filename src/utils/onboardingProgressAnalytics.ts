@@ -144,8 +144,11 @@ export interface OnboardingCopyEventProperties {
   intent?: OnboardingIntent
   org_id?: string
   setup_command: 'builder' | 'ota'
-  /** Where the AI prompt was copied: the first-task buttons or the card shown on later tasks. */
-  placement?: 'start' | 'checklist'
+  /**
+   * Where the copy happened: the AI prompt's first-task buttons or the card shown on later tasks,
+   * or the CLI command shown first on the manual setup.
+   */
+  placement?: 'start' | 'checklist' | 'manual_start'
 }
 
 export type OnboardingDetailsField = 'first_name' | 'last_name' | 'company_name' | 'app_id' | 'app_name' | 'icon_store_url' | 'store_url'

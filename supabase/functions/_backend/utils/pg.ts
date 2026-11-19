@@ -7,6 +7,7 @@ import { alias } from 'drizzle-orm/pg-core'
 import { getRuntimeKey } from 'hono/adapter'
 // @ts-types="npm:@types/pg"
 import { Client, Pool } from 'pg'
+import { replicationLagSecondsFromQueryRow } from '../plugin_runtime/utils/replicaFreshness.ts'
 import { BEGIN_WRITE_TRANSACTION_SQL, configureTransactionAccessMode, getPgAccessMode, inheritPgAccessMode, readOnlyStartupOptions, setPgAccessMode, TRANSACTION_IDLE_TIMEOUT_MS } from '../plugin_runtime/utils/pg_transaction_mode.ts'
 export { BEGIN_WRITE_TRANSACTION_SQL, TRANSACTION_IDLE_TIMEOUT_MS } from '../plugin_runtime/utils/pg_transaction_mode.ts'
 import { serializePostgresError } from '../plugin_runtime/utils/postgres_error.ts'
@@ -361,13 +362,6 @@ function setReplicationLagMemoryEntry(cacheKey: string, status: ReplicationLagSt
   })
 }
 
-function toReplicationLagSeconds(value: unknown): number | null {
-  if (value === null || value === undefined)
-    return null
-  const lagSeconds = Number(value)
-  return Number.isFinite(lagSeconds) ? lagSeconds : null
-}
-
 /**
  * Replica lag SQL: logical subscriber (pg_stat_subscription) or physical
  * standby (replay position / timestamp). Same query as
@@ -375,21 +369,31 @@ function toReplicationLagSeconds(value: unknown): number | null {
  * isolation, see plugin_runtime/README.md): keep both in sync.
  */
 const REPLICA_LAG_QUERY = `
-  SELECT CASE
-    WHEN pg_is_in_recovery() THEN
-      CASE
-        WHEN pg_last_wal_receive_lsn() IS NOT NULL
-          AND pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()
-          AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver WHERE pid IS NOT NULL AND (status IS NULL OR status = 'streaming'))
-          THEN 0
-        ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
-      END
-    ELSE (
-      SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
-      FROM pg_stat_subscription
-      WHERE last_msg_receipt_time IS NOT NULL
-    )
-  END AS lag_seconds
+  WITH upstream_lag AS (
+    SELECT CASE
+      WHEN pg_is_in_recovery() THEN
+        CASE
+          WHEN pg_last_wal_receive_lsn() IS NOT NULL
+            AND pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()
+            AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver WHERE pid IS NOT NULL AND (status IS NULL OR status = 'streaming'))
+            THEN 0::double precision
+          ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
+        END
+      ELSE (
+        SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
+        FROM pg_stat_subscription
+        WHERE last_msg_receipt_time IS NOT NULL
+      )
+    END AS lag_seconds
+  ),
+  primary_commit_lag AS (
+    SELECT EXTRACT(EPOCH FROM (now() - committed_at)) AS lag_seconds
+    FROM public.read_replica_commit_marker
+    WHERE id = 1
+  )
+  SELECT
+    (SELECT lag_seconds FROM upstream_lag) AS upstream_lag_seconds,
+    (SELECT lag_seconds FROM primary_commit_lag) AS primary_commit_lag_seconds
 `
 
 /**
@@ -400,7 +404,7 @@ const REPLICA_LAG_QUERY = `
 async function queryReplicaLag(c: Context, pool: Pool): Promise<ReplicationLagStatus> {
   try {
     const result = await pool.query(REPLICA_LAG_QUERY)
-    const lagSeconds = toReplicationLagSeconds(result.rows[0]?.lag_seconds)
+    const lagSeconds = replicationLagSecondsFromQueryRow(result.rows[0])
 
     let status: ReplicationStatus = 'unknown'
     if (lagSeconds !== null) {
@@ -599,6 +603,20 @@ function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
   return false
 }
 
+/** Background snapshot builders must explicitly select EU, regardless of ingress.
+ * Only an explicit local test replica URL may replace the EU binding. */
+export function getEUReadReplicaDatabaseURL(c: Context): string {
+  const binding = c.env?.HYPERDRIVE_CAPGO_READ_PLUGIN_STATE_EU?.connectionString
+  if (binding) {
+    setDatabaseSource(c, 'HYPERDRIVE_CAPGO_READ_PLUGIN_STATE_EU')
+    return binding
+  }
+  const local = getLocalReadOnlyDatabaseURL(c)
+  if (local)
+    return local
+  throw new Error('EU read replica is required for plugin state source reads')
+}
+
 /**
  * Create a DB client for this request.
  *
@@ -611,8 +629,9 @@ function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
  *
  * Non-Hyperdrive (local/direct/pooler): `Pool` + explicit `closeClient`/`end()`.
  */
-export async function getPgClient(c: Context, readOnly = false): Promise<PgClient> {
-  const dbUrl = getDatabaseURL(c, readOnly)
+export async function getPgClient(c: Context, access: boolean | 'eu-replica' = false): Promise<PgClient> {
+  const readOnly = access !== false
+  const dbUrl = access === 'eu-replica' ? getEUReadReplicaDatabaseURL(c) : getDatabaseURL(c, readOnly)
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')

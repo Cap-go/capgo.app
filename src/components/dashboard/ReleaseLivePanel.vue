@@ -12,6 +12,7 @@ import IconRefresh from '~icons/lucide/refresh-cw'
 import { Bar } from '~/components/dashboard/lazyCharts'
 import Spinner from '~/components/Spinner.vue'
 import { buildDemoReleaseLive, formatLegacyPluginVersions, RELEASE_LIVE_POLL_INTERVAL_MS, useReleaseLive } from '~/composables/useReleaseLive'
+import { changelogLocation } from '~/services/changelog'
 import { useConsole } from '~/services/console'
 import { formatDistanceToNow, formatLocalDateShort, formatLocalDateTime, formatLocalTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
@@ -183,6 +184,10 @@ const failures = computed(() => live.value?.failures ?? [])
 const failedDevices = computed(() => live.value?.failed_devices ?? null)
 // Old updater plugins report failed update checks as download_fail; the
 // backend leaves those out, and the notice says why and how to get exact data.
+const legacyChangelog = computed(() => changelogLocation('updater', {
+  since: live.value?.legacy_check_failures?.plugin_versions[0],
+  to: live.value?.legacy_check_failures?.fixed_in,
+}))
 const legacyCheckFailures = computed(() => {
   const value = live.value?.legacy_check_failures
   if (!value || value.excluded <= 0)
@@ -633,6 +638,9 @@ watch(() => props.appId, () => {
           <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-300">
             {{ legacyCheckFailures }}
           </p>
+          <router-link :to="legacyChangelog" class="mt-1 inline-block text-xs text-azure-600 hover:underline dark:text-azure-300">
+            {{ t('changelog-whats-new') }}
+          </router-link>
         </div>
       </div>
 

@@ -57,7 +57,14 @@ test.describe('Desktop sidebar collapse', () => {
     await expect.poll(() => shellPadding(page)).toBe('12px 12px 12px 12px')
     await expect.poll(() => sidebarWidth(page)).toBeGreaterThan(200)
 
+    const organization = page.locator('#sidebar').getByRole('button', { name: 'Organization', exact: true })
+    await expect(organization).toBeVisible()
+    await organization.click()
+    await expect(page).toHaveURL(/\/settings\/organization\/?$/)
+    await expect(organization).toHaveAttribute('aria-current', 'page')
+
     await page.locator('[data-test="sidebar-collapse-toggle"]').click()
+    await expect(organization).toHaveAttribute('title', 'Organization')
 
     await expect(page.locator('#sidebar')).toBeVisible()
     await expect.poll(() => sidebarWidth(page)).toBeGreaterThan(40)
@@ -100,6 +107,9 @@ test.describe('Desktop sidebar collapse', () => {
     await expect(page.locator('#sidebar')).toBeInViewport()
     await expect(page.locator('#sidebar')).toContainText(/workspace/i)
     await expect(page.locator('#sidebar [data-test="org-switcher"]')).toBeVisible()
+    await page.locator('#sidebar').getByRole('button', { name: 'Organization', exact: true }).click()
+    await expect(page).toHaveURL(/\/settings\/organization\/?$/)
+    await expect(page.locator('#sidebar')).not.toBeInViewport()
   })
 
   test('keeps the collapsed org switcher above app dashboard tabs', async ({ page }) => {

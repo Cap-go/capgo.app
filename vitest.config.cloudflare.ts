@@ -16,6 +16,7 @@ export default defineConfig(({ mode }) => ({
     // These raw PostgreSQL DDL/RBAC and direct PostgREST tests belong to the backend suite, not concurrent Worker integration tests.
     exclude: [
       'tests/read-replica-schema-catalog.test.ts',
+      'tests/cicd-encryption-policy.test.ts',
       'tests/rbac-permissions.test.ts',
       'tests/private-role-bindings.test.ts',
       'tests/public-rest-unfiltered-rls.test.ts',
@@ -27,6 +28,7 @@ export default defineConfig(({ mode }) => ({
       'tests/hashed-apikey-rls.test.ts',
       'tests/mfa-email-otp-trigger.test.ts',
       'tests/org-invitation-email.test.ts',
+      'tests/plugin-kv-state-sync.test.ts',
       'tests/queue_big_job_archive.test.ts',
       'tests/queue_cron_stat_org_function.test.ts',
       // Hot plugin paths (/updates, /stats, /channel_self) overload workerd under shard

@@ -1,5 +1,5 @@
 import { FILE_READ_TRACKING_QUERY_PARAMS } from '../../supabase/functions/_backend/files/file_read_cache.ts'
-import { isPreviewSubdomain } from '../../supabase/functions/_backend/files/preview.ts'
+import { isPreviewRobotsTxtPath, isPreviewSubdomain } from '../../supabase/functions/_backend/files/preview.ts'
 
 function getRequestHostname(request: Request): string {
   return request.headers.get('host') || new URL(request.url).hostname
@@ -39,11 +39,12 @@ function isCacheablePreviewRead(request: Request): boolean {
   if (!isPreviewSubdomain(hostname))
     return false
 
+  const url = new URL(request.url)
   const firstLabel = hostname.split('.', 1)[0]
   if (/^c\d+-/.test(firstLabel))
     return false
 
-  return new URL(request.url).pathname !== '/.capgo/preview.json'
+  return !isPreviewRobotsTxtPath(url.pathname) && url.pathname !== '/.capgo/preview.json'
 }
 
 export function buildWorkersCacheKey(request: Request): string | null {

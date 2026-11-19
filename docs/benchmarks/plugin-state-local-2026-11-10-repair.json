@@ -1,0 +1,315 @@
+{
+  "generated_at": "2026-11-10T04:48:15.307Z",
+  "environment": "Local workerd; DB and KV on this machine; serial interleaved requests",
+  "publication": "Immutable Workers KV values selected by conditional R2 pointers; Cache API in front",
+  "limitations": [
+    "Local timings do not predict worldwide latency or KV replication lag.",
+    "Cache API evictions do not evict the KV service cache or database buffers.",
+    "The tag-purge samples evict only tagged app/version/plugin-state entries. Untagged DB caches, including v1 manifest-size maps, remain warm with their normal TTL.",
+    "Propagation is primary COMMIT to observed reply while an independently invoked writer drain and local tag purge run in flight; polling resolution is 25ms plus request time. No writer completion is awaited before polling.",
+    "Channel surfing rows are single operations, not latency distributions.",
+    "Channel surfing uses independent fresh devices per mode for the same SET/read/DELETE/read sequence; SET always performs its first assignment. Which mode runs first alternates by plugin generation.",
+    "Every measured DB/KV pair has identical HTTP status and parsed JSON except absolute rateLimitResetAt timestamps, which are checked against each request interval and retryAfterSeconds. KV replies must carry X-Plugin-State: kv, and DB replies must not carry a KV marker.",
+    "The fixture has fewer than 500 forced overrides and fitting manifests. Large override sets and manifests marked for replica fallback require separate regional cost and latency measurements."
+  ],
+  "measurements": [
+    {
+      "scenario": "Existing bundle, up to date",
+      "warm": {
+        "db": {
+          "samples": 100,
+          "p50_ms": 13.218,
+          "p95_ms": 16.709,
+          "min_ms": 10.215,
+          "max_ms": 22.151
+        },
+        "kv": {
+          "samples": 100,
+          "p50_ms": 3.534,
+          "p95_ms": 4.632,
+          "min_ms": 2.553,
+          "max_ms": 5.139
+        }
+      },
+      "cache_api_evicted": {
+        "db": {
+          "samples": 10,
+          "p50_ms": 12.747,
+          "p95_ms": 16.145,
+          "min_ms": 12.31,
+          "max_ms": 16.145
+        },
+        "kv": {
+          "samples": 10,
+          "p50_ms": 3.81,
+          "p95_ms": 5.175,
+          "min_ms": 3.522,
+          "max_ms": 5.175
+        }
+      }
+    },
+    {
+      "scenario": "New bundle available",
+      "warm": {
+        "db": {
+          "samples": 100,
+          "p50_ms": 13.257,
+          "p95_ms": 15.661,
+          "min_ms": 10.1,
+          "max_ms": 19.306
+        },
+        "kv": {
+          "samples": 100,
+          "p50_ms": 3.594,
+          "p95_ms": 5.184,
+          "min_ms": 2.654,
+          "max_ms": 7.761
+        }
+      },
+      "cache_api_evicted": {
+        "db": {
+          "samples": 10,
+          "p50_ms": 14.877,
+          "p95_ms": 55.206,
+          "min_ms": 13.538,
+          "max_ms": 55.206
+        },
+        "kv": {
+          "samples": 10,
+          "p50_ms": 3.872,
+          "p95_ms": 5.628,
+          "min_ms": 3.482,
+          "max_ms": 5.628
+        }
+      }
+    },
+    {
+      "scenario": "Channel list",
+      "warm": {
+        "db": {
+          "samples": 100,
+          "p50_ms": 16.244,
+          "p95_ms": 22.835,
+          "min_ms": 11.498,
+          "max_ms": 95.918
+        },
+        "kv": {
+          "samples": 100,
+          "p50_ms": 3.871,
+          "p95_ms": 5.243,
+          "min_ms": 3.387,
+          "max_ms": 6.224
+        }
+      },
+      "cache_api_evicted": {
+        "db": {
+          "samples": 10,
+          "p50_ms": 15.35,
+          "p95_ms": 18.566,
+          "min_ms": 12.234,
+          "max_ms": 18.566
+        },
+        "kv": {
+          "samples": 10,
+          "p50_ms": 4.66,
+          "p95_ms": 7.155,
+          "min_ms": 4.277,
+          "max_ms": 7.155
+        }
+      }
+    },
+    {
+      "scenario": "Current channel",
+      "warm": {
+        "db": {
+          "samples": 100,
+          "p50_ms": 15.461,
+          "p95_ms": 19.65,
+          "min_ms": 10.255,
+          "max_ms": 21.326
+        },
+        "kv": {
+          "samples": 100,
+          "p50_ms": 4.366,
+          "p95_ms": 5.794,
+          "min_ms": 3.833,
+          "max_ms": 8.067
+        }
+      },
+      "cache_api_evicted": {
+        "db": {
+          "samples": 10,
+          "p50_ms": 10.478,
+          "p95_ms": 12.372,
+          "min_ms": 9.8,
+          "max_ms": 12.372
+        },
+        "kv": {
+          "samples": 10,
+          "p50_ms": 4.956,
+          "p95_ms": 6.596,
+          "min_ms": 4.563,
+          "max_ms": 6.596
+        }
+      }
+    },
+    {
+      "scenario": "Stats",
+      "warm": {
+        "db": {
+          "samples": 100,
+          "p50_ms": 10.314,
+          "p95_ms": 14.785,
+          "min_ms": 8.771,
+          "max_ms": 17.366
+        },
+        "kv": {
+          "samples": 100,
+          "p50_ms": 2.648,
+          "p95_ms": 4.984,
+          "min_ms": 2.182,
+          "max_ms": 9.265
+        }
+      },
+      "cache_api_evicted": {
+        "db": {
+          "samples": 10,
+          "p50_ms": 14.97,
+          "p95_ms": 16.429,
+          "min_ms": 10.148,
+          "max_ms": 16.429
+        },
+        "kv": {
+          "samples": 10,
+          "p50_ms": 4.259,
+          "p95_ms": 5.73,
+          "min_ms": 4.087,
+          "max_ms": 5.73
+        }
+      }
+    },
+    {
+      "scenario": "Stats batch",
+      "warm": {
+        "db": {
+          "samples": 100,
+          "p50_ms": 16.063,
+          "p95_ms": 19.395,
+          "min_ms": 11.088,
+          "max_ms": 22.146
+        },
+        "kv": {
+          "samples": 100,
+          "p50_ms": 3.231,
+          "p95_ms": 4.556,
+          "min_ms": 2.758,
+          "max_ms": 8.721
+        }
+      },
+      "cache_api_evicted": {
+        "db": {
+          "samples": 10,
+          "p50_ms": 20.112,
+          "p95_ms": 45.225,
+          "min_ms": 17.815,
+          "max_ms": 45.225
+        },
+        "kv": {
+          "samples": 10,
+          "p50_ms": 5.011,
+          "p95_ms": 7.745,
+          "min_ms": 4.653,
+          "max_ms": 7.745
+        }
+      }
+    },
+    {
+      "scenario": "Manifest sizes",
+      "warm": {
+        "db": {
+          "samples": 100,
+          "p50_ms": 1.286,
+          "p95_ms": 2.974,
+          "min_ms": 1.172,
+          "max_ms": 4.115
+        },
+        "kv": {
+          "samples": 100,
+          "p50_ms": 1.303,
+          "p95_ms": 1.541,
+          "min_ms": 1.194,
+          "max_ms": 4.455
+        }
+      },
+      "cache_api_evicted": {
+        "db": {
+          "samples": 10,
+          "p50_ms": 1.285,
+          "p95_ms": 1.445,
+          "min_ms": 1.196,
+          "max_ms": 1.445
+        },
+        "kv": {
+          "samples": 10,
+          "p50_ms": 3.825,
+          "p95_ms": 5.6,
+          "min_ms": 3.568,
+          "max_ms": 5.6
+        }
+      }
+    }
+  ],
+  "channel_surfing": [
+    {
+      "scenario": "7.0.0 SET beta",
+      "db_ms": 22.829791000000114,
+      "kv_ms": 5.679500000000189
+    },
+    {
+      "scenario": "7.0.0 GET current after SET",
+      "db_ms": 16.244957999999315,
+      "kv_ms": 3.762749999999869
+    },
+    {
+      "scenario": "7.0.0 DELETE override",
+      "db_ms": 23.715124999998807,
+      "kv_ms": 4.992083000001003
+    },
+    {
+      "scenario": "7.0.0 GET current after DELETE",
+      "db_ms": 18.717375000000175,
+      "kv_ms": 8.347874999999476
+    },
+    {
+      "scenario": "7.34.0 SET beta",
+      "db_ms": 44.94275000000016,
+      "kv_ms": 4.5385000000005675
+    },
+    {
+      "scenario": "7.34.0 GET current after SET",
+      "db_ms": 19.68891700000131,
+      "kv_ms": 4.1496250000000146
+    },
+    {
+      "scenario": "7.34.0 DELETE override",
+      "db_ms": 15.950290999999197,
+      "kv_ms": 3.9029589999991003
+    },
+    {
+      "scenario": "7.34.0 GET current after DELETE",
+      "db_ms": 23.29333299999962,
+      "kv_ms": 4.329334000000017
+    }
+  ],
+  "bundle_propagation": {
+    "description": "New bundle metadata and manifest pending sync; timer starts at channel-promotion COMMIT, after upload preparation.",
+    "db": {
+      "milliseconds": 19.014624999999796,
+      "requests": 1
+    },
+    "kv": {
+      "milliseconds": 72.085833000001,
+      "requests": 3
+    }
+  }
+}
