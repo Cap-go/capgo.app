@@ -102,7 +102,7 @@ try {
     try {
       await withTimeout(client.connect(transport))
       for (const [directory, name] of [[first, 'first'], [second, 'second'], [first, 'first']]) {
-        const { result, record } = await callToolWithTelemetry(client, 'capgo_whoami', { cwd: directory }, 'capgo_whoami')
+        const { result, record } = await callToolWithTelemetry(client, 'capgo_whoami', { cwd: directory })
         assert.ok(!result.isError, JSON.stringify(result))
         assert.ok(result.content[0].text.includes('using the local key'), JSON.stringify(result))
         assert.equal(record.apikey, projectKey, 'telemetry must use the selected app key, not a launch-directory key')
@@ -112,7 +112,7 @@ try {
         assert.ok(requests.some(request => request.path === '/' + name + '/private/cli/identity' && request.apikey === projectKey))
       }
       for (const name of ['second', 'first']) {
-        const { result, record } = await callToolWithTelemetry(client, 'capgo_set_project_dir', { path: '../' + name }, 'capgo_set_project_dir')
+        const { result, record } = await callToolWithTelemetry(client, 'capgo_set_project_dir', { path: '../' + name })
         assert.ok(!result.isError, JSON.stringify(result))
         assert.equal(record.apikey, projectKey)
         assert.equal(record.path, '/' + name + '/private/events')
@@ -122,7 +122,6 @@ try {
         client,
         'capgo_generate_encryption_keys',
         {},
-        'capgo_generate_encryption_keys',
       )
       assert.equal(errorResult.isError, true)
       assert.equal(errorRecord.apikey, projectKey)
@@ -137,7 +136,6 @@ try {
           client,
           'capgo_whoami',
           {},
-          'capgo_whoami',
           operationTimeoutMs,
           blockedToolResultTimeoutMs,
         )
