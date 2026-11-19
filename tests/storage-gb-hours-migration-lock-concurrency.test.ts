@@ -98,7 +98,7 @@ describe('storage gb-hours migration lock order vs replace_app_storage_hourly', 
     await migrator.query(`SET LOCAL lock_timeout = '2s'`)
     await migrator.query('LOCK TABLE public.daily_storage_hourly IN ACCESS EXCLUSIVE MODE')
 
-    void writer.query('BEGIN').then(() =>
+    const writerWork = writer.query('BEGIN').then(() =>
       writer.query(
         `SELECT public.replace_app_storage_hourly(
           $1::varchar,
@@ -112,7 +112,7 @@ describe('storage gb-hours migration lock order vs replace_app_storage_hourly', 
           true)`,
         [DEMO_APP, ORG_ID],
       ),
-    )
+    ).catch(() => undefined)
 
     await new Promise(resolve => setTimeout(resolve, 500))
 
@@ -121,6 +121,7 @@ describe('storage gb-hours migration lock order vs replace_app_storage_hourly', 
       .rejects.toMatchObject({ code: '55P03' })
 
     await migrator.query('ROLLBACK')
+    await writerWork
     await writer.query('ROLLBACK').catch(() => undefined)
   })
 })
