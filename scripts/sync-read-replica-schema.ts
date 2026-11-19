@@ -77,7 +77,7 @@ const GOOGLE_READ_REPLICA: GoogleDataApiConfig = {
   instance: 'eu-2',
   database: 'postgres',
 }
-export const READ_REPLICA_PUBLICATION = 'capgo_google_eu_2_pub'
+export const READ_REPLICA_PUBLICATION = process.env.READ_REPLICA_PUBLICATION_NAME || 'capgo_google_eu_2_pub'
 const READ_REPLICA_SUBSCRIPTION = 'capgo_google_eu_2_sub'
 export const READ_REPLICA_PUBLICATION_TABLES_SQL = `SELECT tablename AS table_name FROM pg_catalog.pg_publication_tables WHERE pubname = '${READ_REPLICA_PUBLICATION}' AND schemaname = 'public' ORDER BY tablename`
 export const READ_REPLICA_SUBSCRIPTION_TABLES_SQL = `SELECT c.relname AS table_name FROM pg_catalog.pg_subscription_rel AS r JOIN pg_catalog.pg_subscription AS s ON s.oid = r.srsubid JOIN pg_catalog.pg_class AS c ON c.oid = r.srrelid JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE s.subname = '${READ_REPLICA_SUBSCRIPTION}' AND n.nspname = 'public' ORDER BY c.relname`
@@ -1285,7 +1285,7 @@ export function dataApiCommandError(value: string): Error {
     )
   ) {
     return new Error(
-      'Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded.',
+      `Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded. gcloud output: ${output}`,
     )
   }
   return new Error(`Cloud SQL Data API query failed: ${output}`)
