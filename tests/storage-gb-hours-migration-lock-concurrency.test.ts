@@ -5,14 +5,14 @@ import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { parseMigrationFiles } from '../scripts/local-db.ts'
+import {
+  invertStorageMigrationLockOrder,
+  readStorageGbHoursMigrationSql,
+} from './storage-gb-hours-migration-lock-helpers.ts'
 import { ORG_ID, POSTGRES_URL } from './test-utils.ts'
 
 const DEMO_APP = 'com.demo.app'
 const STORAGE_MIGRATION_VERSION = '20261118193000'
-const MIGRATION_PATH = new URL(
-  '../supabase/migrations/20261118193000_storage_gb_hours_billing.sql',
-  import.meta.url,
-)
 
 const REPLACE_HOURLY_SQL = `SELECT public.replace_app_storage_hourly(
   $1::varchar,
@@ -69,27 +69,10 @@ GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(
 ) TO service_role;
 `
 
-export function readStorageGbHoursMigrationSql() {
-  return readFileSync(MIGRATION_PATH, 'utf8')
-}
-
-/** Mutation guard: run DSH table lock before apps/FK (inverts production order). */
-export function invertStorageMigrationLockOrder(sql: string): string {
-  const appsMarker = '-- 0. Apps / app_versions before any daily_storage_hourly writer path'
-  const section1Marker = '-- 1. Byte-hours of deleted apps stay billable until delete_old_deleted_apps'
-  const appsStart = sql.indexOf(appsMarker)
-  const section1Start = sql.indexOf(section1Marker)
-  const dshLockEnd = sql.indexOf('$capgo_lock_daily_storage_hourly$;', section1Start)
-  if (appsStart < 0 || section1Start < 0 || dshLockEnd < 0)
-    throw new Error('storage migration lock markers missing')
-  const dshLockEndPos = dshLockEnd + '$capgo_lock_daily_storage_hourly$;'.length
-
-  const appsBlock = sql.slice(appsStart, section1Start)
-  const head = sql.slice(0, appsStart)
-  const section1AndDshLock = sql.slice(section1Start, dshLockEndPos)
-  const tail = sql.slice(dshLockEndPos)
-
-  return `${head}${section1AndDshLock}${appsBlock}${tail}`
+function supabaseAdminUrl(baseUrl: string) {
+  const url = new URL(baseUrl)
+  url.username = 'supabase_admin'
+  return url.toString()
 }
 
 function databaseUrl(baseUrl: string, database: string) {
@@ -125,11 +108,22 @@ async function runSqlFile(client: Client, sql: string, label: string) {
 async function provisionBeforeStorageMigration(targetUrl: string) {
   const repoRoot = resolve(fileURLToPath(new URL('../', import.meta.url)))
   const supabaseDir = resolve(repoRoot, 'supabase')
+  const bootstrapClient = new Client({ connectionString: supabaseAdminUrl(targetUrl) })
+  await bootstrapClient.connect()
+  try {
+    await runSqlFile(
+      bootstrapClient,
+      readFileSync(resolve(supabaseDir, 'bootstrap.sql'), 'utf8'),
+      'bootstrap.sql',
+    )
+  }
+  finally {
+    await bootstrapClient.end()
+  }
+
   const client = new Client({ connectionString: targetUrl })
   await client.connect()
   try {
-    await runSqlFile(client, readFileSync(resolve(supabaseDir, 'bootstrap.sql'), 'utf8'), 'bootstrap.sql')
-
     const migrations = parseMigrationFiles(readdirSync(resolve(supabaseDir, 'migrations')))
       .filter(migration => migration.version < STORAGE_MIGRATION_VERSION)
     for (const migration of migrations) {

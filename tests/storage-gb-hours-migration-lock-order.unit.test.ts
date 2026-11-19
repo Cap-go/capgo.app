@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { invertStorageMigrationLockOrder } from './storage-gb-hours-migration-lock-concurrency.test.ts'
+import { invertStorageMigrationLockOrder } from './storage-gb-hours-migration-lock-helpers.ts'
 
 const migrationPath = new URL(
   '../supabase/migrations/20261118193000_storage_gb_hours_billing.sql',
