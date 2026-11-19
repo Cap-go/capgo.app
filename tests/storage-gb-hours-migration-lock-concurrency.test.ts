@@ -14,6 +14,18 @@ import { ORG_ID, POSTGRES_URL } from './test-utils.ts'
 
 const DEMO_APP = 'com.demo.app'
 
+/** Pre-deploy cron path used only for the inverted-lock mutation case. */
+const LEGACY_REPLACE_HOURLY_SQL = `SELECT public.replace_app_storage_hourly(
+  $1::varchar,
+  $2::uuid,
+  CURRENT_DATE,
+  CURRENT_DATE + 1,
+  CURRENT_DATE + 2,
+  '-infinity'::timestamptz,
+  '[]'::jsonb,
+  pg_catalog.clock_timestamp(),
+  true)`
+
 const REPLACE_HOURLY_SQL = `SELECT public.replace_app_storage_hourly(
   $1::varchar,
   $2::uuid,
@@ -203,9 +215,13 @@ async function runMigrationWithConcurrentWriter(
   dbUrl: string,
   migrationSql: string,
   waitRelations: string[],
-  options: { requireWriterLockWait?: boolean } = {},
+  options: {
+    requireWriterLockWait?: boolean
+    writerMode?: 'post-migrate' | 'legacy-during-migration'
+  } = {},
 ): Promise<ConcurrentRunResult> {
   const requireWriterLockWait = options.requireWriterLockWait ?? true
+  const writerMode = options.writerMode ?? 'post-migrate'
   const migrator = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
   const writer = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
   const observer = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
@@ -229,15 +245,20 @@ async function runMigrationWithConcurrentWriter(
       await writer.query('BEGIN')
       // Wait out the migrator's ACCESS EXCLUSIVE window; prod cron uses 5s but this test must not give up first.
       await writer.query(`SET LOCAL lock_timeout = '0'`)
-      await writer.query(
-        `SELECT 1
-         FROM public.apps
-         WHERE app_id = $1
-           AND owner_org = $2
-         FOR SHARE`,
-        [DEMO_APP, ORG_ID],
-      )
-      await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID, cycleDay, hourlyRows])
+      if (writerMode === 'legacy-during-migration') {
+        await writer.query(LEGACY_REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
+      }
+      else {
+        await writer.query(
+          `SELECT 1
+           FROM public.apps
+           WHERE app_id = $1
+             AND owner_org = $2
+           FOR SHARE`,
+          [DEMO_APP, ORG_ID],
+        )
+        await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID, cycleDay, hourlyRows])
+      }
       await writer.query('COMMIT')
     })()
 
@@ -321,16 +342,18 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
         dbUrl,
         inverted,
         ['daily_storage_hourly'],
-        { requireWriterLockWait: false },
+        { requireWriterLockWait: true, writerMode: 'legacy-during-migration' },
       )
 
       const migrationFailed = result.migration.status === 'rejected'
       const writerFailed = result.writer.status === 'rejected'
       expect(migrationFailed || writerFailed).toBe(true)
-      if (migrationFailed && result.migration.status === 'rejected') {
-        const code = (result.migration.reason as { code?: string })?.code
-        expect(['40P01', '55P03', '57014']).toContain(code)
-      }
+      const reason = migrationFailed
+        ? (result.migration.reason as { code?: string })
+        : writerFailed
+          ? (result.writer.reason as { code?: string })
+          : undefined
+      expect(['40P01', '55P03', '57014']).toContain(reason?.code)
     })
   }, 300_000)
 })
