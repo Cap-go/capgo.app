@@ -50,7 +50,7 @@ export const initOnboardingSteps: InitOnboardingStepDefinition[] = [
   {
     id: 'add_encryption',
     title: 'Setup Encryption',
-    summary: 'Decide whether to enable end-to-end bundle encryption for sensitive apps.',
+    summary: 'Skip bundle encryption for most apps; enable it when encrypted delivery of code or assets is required.',
     phase: 'Integrate',
   },
   {

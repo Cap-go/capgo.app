@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 // import veauryVitePlugins from 'veaury/vite/index'
 import type { Plugin } from 'vite'
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import VueI18n from '@intlify/unplugin-vue-i18n/vite'
@@ -23,9 +23,11 @@ import VueRouter from 'vue-router/vite'
 import pack from './package.json'
 import { isGuestRoutePath } from './src/constants/guestRoutes'
 import { branch, getRightKey } from './scripts/utils.mjs'
+import { servingPolicyStatusBaseUrl } from './scripts/serving-policy-status-url'
+import { withConsoleContentSecurityPolicy } from './scripts/console-security-policy'
 import 'vitest/config'
 
-type FrontendConfigKey = 'api_domain' | 'base_domain' | 'captcha_key'
+type FrontendConfigKey = 'api_domain' | 'base_domain' | 'captcha_key' | 'plugin_region_targets'
 
 function getFrontendKey(key: FrontendConfigKey): string {
   return getRightKey(key)
@@ -280,19 +282,58 @@ readdirSync('./messages/')
       locales.push(file.split('.')[0])
   })
 
+// One build version for both import.meta.env.VITE_APP_VERSION and /version.json (an env override
+// applies to both), so the update prompt never compares two different numbers for the same build.
+const appVersion = process.env.VITE_APP_VERSION || pack.version
+
 const frontendEnvironmentVariables: Record<string, string> = {
   locales: locales.join(','),
-  VITE_APP_VERSION: pack.version,
+  VITE_APP_VERSION: appVersion,
   VITE_APP_URL: getUrl(),
   VITE_API_HOST: getUrl('api_domain'),
+  VITE_SERVING_POLICY_URL: servingPolicyStatusBaseUrl(getFrontendKey('plugin_region_targets')),
   VITE_CAPTCHA_KEY: getFrontendKey('captcha_key'),
   VITE_BRANCH: branch,
   package_dependencies: JSON.stringify(pack.dependencies),
   domain: getUrl(),
 }
 
+// The running console polls /version.json to offer "new version available" with its changelog.
+function consoleVersionFilePlugin(): Plugin {
+  return {
+    name: 'console-version-file',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: `${JSON.stringify({ version: appVersion })}\n` })
+    },
+  }
+}
+
 function frontendEnvironmentPlugin(): Plugin {
   return EnvironmentPlugin(frontendEnvironmentVariables, { defineOn: 'import.meta.env' })
+}
+
+function consoleResponseHeadersPlugin(): Plugin {
+  let outputDirectory: string
+  let servingPolicyUrl: string | undefined
+  return {
+    name: 'capgo-console-response-headers',
+    apply: 'build',
+    configResolved(config) {
+      outputDirectory = path.resolve(config.root, config.build.outDir)
+      const definition = config.define['import.meta.env.VITE_SERVING_POLICY_URL']
+      if (definition !== undefined) {
+        const value: unknown = typeof definition === 'string' ? JSON.parse(definition) : definition
+        if (typeof value !== 'string')
+          throw new Error('The compiled serving policy URL must be a string')
+        servingPolicyUrl = value
+      }
+    },
+    writeBundle() {
+      const headersPath = path.join(outputDirectory, '_headers')
+      writeFileSync(headersPath, withConsoleContentSecurityPolicy(readFileSync(headersPath, 'utf8'), { servingPolicyUrl }))
+    },
+  }
 }
 
 export default defineConfig({
@@ -356,6 +397,7 @@ export default defineConfig({
       },
     },
     wellKnownPasswordManagerPlugin(),
+    consoleVersionFilePlugin(),
     envFaviconPlugin(),
     routeChunkPreloadPlugin(),
     tailwindcss(),
@@ -378,6 +420,7 @@ export default defineConfig({
       ],
     }),
     frontendEnvironmentPlugin(),
+    consoleResponseHeadersPlugin(),
 
     // https://github.com/vuejs/router
     VueRouter({

@@ -7,7 +7,12 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 
-const DEFAULT_MODEL = '@cf/moonshotai/kimi-k2.7-code';
+// Workers AI catalog: created 2026-08-17, no planned deprecation.
+// Override with --model or CLOUDFLARE_AI_MODEL.
+const DEFAULT_MODEL = '@cf/qwen/qwen3.8-27b';
+// Hybrid reasoning models think by default; without this the reasoning eats the
+// token budget before the changelog is written.
+const THINKING_MODEL_PREFIXES = ['@cf/deepseek-ai/deepseek-v4', '@cf/google/gemma-4', '@cf/qwen/qwen3', '@cf/zai-org/glm-'];
 
 function parseArgs(argv) {
   const args = { fromTag: process.env.FROM_TAG, toTag: process.env.TO_TAG };
@@ -90,6 +95,10 @@ async function generateChangelog(prompt, model) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
+      ...(THINKING_MODEL_PREFIXES.some((prefix) => model.startsWith(prefix))
+        ? { chat_template_kwargs: { enable_thinking: false } }
+        : {}),
+      max_tokens: 4096,
       messages: [{ role: 'user', content: prompt }],
     }),
   });

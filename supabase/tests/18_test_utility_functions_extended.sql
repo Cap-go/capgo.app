@@ -276,11 +276,11 @@ SELECT
         'find_best_plan_v3 test - negative usage returns valid plan'
     );
 
--- Test get_apikey (returns secret from vault in test environment)
+-- Test get_apikey (returns the private.settings value in test environment)
 SELECT
     ok(
         get_apikey() IS NOT null,
-        'get_apikey test - returns value from vault'
+        'get_apikey test - returns value from private.settings'
     );
 
 -- Test get_db_url (should return a URL)

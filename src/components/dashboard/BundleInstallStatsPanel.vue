@@ -14,6 +14,7 @@ import Spinner from '~/components/Spinner.vue'
 import { buildDemoBundleInstallStats, useBundleInstallStats } from '~/composables/useBundleInstallStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLegacyPluginVersions } from '~/composables/useReleaseLive'
+import { changelogLocation } from '~/services/changelog'
 import { createChartScales, createLegendConfig } from '~/services/chartConfig'
 import { useConsole } from '~/services/console'
 import { formatLocalDateShort } from '~/services/date'
@@ -68,6 +69,10 @@ const bundles = computed(() => effectiveStats.value?.bundles ?? [])
 // Failed update checks from old updater plugins, already left out of the
 // failure counts: say so, and how to get exact data.
 const legacyNoticeId = `${useId()}-legacy-notice`
+const legacyChangelog = computed(() => changelogLocation('updater', {
+  since: effectiveStats.value?.legacy_check_failures?.plugin_versions[0],
+  to: effectiveStats.value?.legacy_check_failures?.fixed_in,
+}))
 const legacyCheckFailures = computed(() => {
   const value = effectiveStats.value?.legacy_check_failures
   if (!value || value.excluded <= 0)
@@ -343,7 +348,10 @@ watch(
       data-testid="bundle-install-legacy-plugin"
     >
       <IconInfo class="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
-      <span>{{ legacyCheckFailures }}</span>
+      <span>
+        {{ legacyCheckFailures }}
+        <router-link :to="legacyChangelog" class="ml-1 text-azure-600 hover:underline dark:text-azure-300">{{ t('changelog-whats-new') }}</router-link>
+      </span>
     </p>
 
     <div v-if="statsLoading && !forceDemo && !stats && !statsError" class="flex items-center justify-center bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="dense ? 'h-[256px]' : 'h-48'">
@@ -377,6 +385,9 @@ watch(
       <!-- The dense header icon is not shown without data: explain here instead. -->
       <p v-if="legacyCheckFailures && dense" class="max-w-lg px-4 text-xs text-center" data-testid="bundle-install-legacy-plugin">
         {{ legacyCheckFailures }}
+        <router-link :to="legacyChangelog" class="ml-1 text-azure-600 hover:underline dark:text-azure-300">
+          {{ t('changelog-whats-new') }}
+        </router-link>
       </p>
     </div>
 
@@ -408,6 +419,9 @@ watch(
               {{ legacyCheckFailures }}
             </span>
           </span>
+          <router-link v-if="legacyCheckFailures" :to="legacyChangelog" class="shrink-0 text-xs text-azure-600 hover:underline dark:text-azure-300">
+            {{ t('changelog-whats-new') }}
+          </router-link>
           <span
             v-if="forceDemo"
             class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"

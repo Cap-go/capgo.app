@@ -43,8 +43,8 @@ function getButtonClasses(button: DialogV2Button) {
   const roleClasses = {
     primary: 'd-btn-primary',
     secondary: neutralClasses,
-    danger: 'border-red-600 bg-red-600 text-white hover:border-red-700 hover:bg-red-700 dark:border-red-500 dark:bg-red-500 dark:hover:border-red-600 dark:hover:bg-red-600',
-    cancel: 'border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-600 dark:bg-transparent dark:text-slate-200 dark:hover:border-slate-500 dark:hover:bg-slate-700/60',
+    danger: 'd-btn-error',
+    cancel: 'd-btn-outline',
     default: neutralClasses,
   } as const
 

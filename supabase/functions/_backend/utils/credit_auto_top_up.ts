@@ -1,3 +1,4 @@
+import { getCreditQuote } from './credit_currency.ts'
 import type { Context } from 'hono'
 import type { PgQueryClient } from './pg.ts'
 import type { BillingAccount } from './stripe.ts'
@@ -274,7 +275,9 @@ export async function payAutoTopUpInvoice(c: Context, stripe: Stripe, input: Aut
   const idempotencyKey = `credit_auto_top_up:${input.orgId}:${input.quantity}:${Math.floor(Date.now() / (60 * 60 * 1000))}`
   let invoiceId: string | null = null
   try {
+    const quote = await getCreditQuote(stripe, input.customerId, input.priceId, c)
     const draft = await stripe.invoices.create({
+      currency: quote.currency,
       customer: input.customerId,
       collection_method: 'charge_automatically',
       auto_advance: false,
@@ -288,7 +291,8 @@ export async function payAutoTopUpInvoice(c: Context, stripe: Stripe, input: Aut
     await stripe.invoiceItems.create({
       customer: input.customerId,
       invoice: draft.id,
-      pricing: { price: input.priceId },
+      ...(quote.priceData ? { price_data: quote.priceData } : { pricing: { price: input.priceId } }),
+      currency: quote.currency,
       quantity: input.quantity,
       metadata,
     }, { idempotencyKey: `${idempotencyKey}:item` })

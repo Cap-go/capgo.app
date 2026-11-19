@@ -279,9 +279,9 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
     expect(trackingCalls(orgId)).toHaveLength(0)
   })
 
-  it.concurrent('sends plan usage alerts with the metric that crossed the threshold', async () => {
+  it.concurrent.each([50, 70, 90])('sends the %i percent alert expected by the email template', async (threshold) => {
     const { handleOrgNotificationsAndEvents } = await import('../supabase/functions/_backend/utils/plans.ts')
-    const orgId = 'org-usage-storage'
+    const orgId = `org-usage-storage-${threshold}`
 
     const result = await handleOrgNotificationsAndEvents(
       createContext(),
@@ -297,7 +297,7 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
         total_percent: 20,
         mau_percent: 20,
         bandwidth_percent: 0,
-        storage_percent: 51,
+        storage_percent: threshold + 1,
         build_time_percent: 0,
       },
       {} as any,
@@ -314,35 +314,38 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
     })
     expect(sendNotifToOrgMembersMock).toHaveBeenCalledWith(
       expect.anything(),
-      'user:usage_50_percent_of_plan',
+      `user:usage_${threshold}_percent_of_plan`,
       'usage_limit',
       {
         metric: 'storage',
-        metric_percent: 51,
-        percent: {
-          total_percent: 51,
+        metric_percent: threshold + 1,
+        percent: String(threshold),
+        usage: {
+          total_percent: threshold + 1,
           mau_percent: 20,
           bandwidth_percent: 0,
-          storage_percent: 51,
+          storage_percent: threshold + 1,
           build_time_percent: 0,
         },
-        threshold: 50,
+        threshold,
+        plans_url: `https://console.capgo.app/settings/organization/plans?oid=${orgId}`,
       },
       orgId,
       orgId,
       '0 0 1 * *',
       expect.anything(),
+      'admins_and_billing',
     )
     expect(sendEventToTrackingMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         channel: 'usage',
-        event: 'User is at 50% of plan usage',
+        event: `User is at ${threshold}% of plan usage`,
         user_id: orgId,
         tags: {
           metric: 'storage',
-          metric_percent: '51',
-          threshold: '50',
+          metric_percent: String(threshold + 1),
+          threshold: String(threshold),
         },
       }),
     )
@@ -498,5 +501,21 @@ describe('userAbovePlan overage billing cycle', () => {
       p_billing_cycle_end: cycle.subscription_anchor_end,
       p_included_amount: 1000,
     }))
+  })
+
+  it('includes the display name, org-specific destination, and billing audience', async () => {
+    const orgId = 'org-upgrade-notification'
+    rpcMock.mockImplementation((name: string) => ({
+      single: vi.fn(async () => ({ data: name === 'get_cycle_info_org'
+        ? { subscription_anchor_start: '2026-10-01T00:00:00Z', subscription_anchor_end: '2026-11-01T00:00:00Z' }
+        : name === 'find_best_plan_v3' ? 'Maker' : { overage_unpaid: 500 }, error: null })),
+    }))
+    const { handleOrgNotificationsAndEvents } = await import('../supabase/functions/_backend/utils/plans.ts')
+    await handleOrgNotificationsAndEvents(createContext(), payingOrg(), orgId, false, ZERO_USAGE, replayDrizzle as any)
+    expect(sendNotifToOrgMembersMock).toHaveBeenCalledWith(
+      expect.anything(), 'user:upgrade_to_maker', 'usage_limit',
+      { best_plan: 'maker', best_name: 'Maker', plan_name: 'Solo', plans_url: `https://console.capgo.app/settings/organization/plans?oid=${orgId}` },
+      orgId, orgId, '0 0 * * 1', expect.anything(), 'admins_and_billing',
+    )
   })
 })

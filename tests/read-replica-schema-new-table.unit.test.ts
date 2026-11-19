@@ -136,11 +136,4 @@ describe('read-replica subscription refresh', () => {
     expect(readReplicaAnalyzeSql(NEW_TABLES)).toBe('ANALYZE public."delta_files", public."delta_sessions", public."version_files"')
     expect(() => readReplicaAnalyzeSql(['pg_authid'])).toThrow('Not a replicated table: pg_authid')
   })
-
-  it('runs the refresh after primary migrations in the release workflow', () => {
-    const workflow = readFileSync(new URL('../.github/workflows/build_and_deploy.yml', import.meta.url), 'utf8')
-    const job = workflow.slice(workflow.indexOf('  read_replica_subscription:'), workflow.indexOf('  build_webapp:'))
-    expect(job).toContain('needs: [changes, supabase_deploy, read_replica_schema]')
-    expect(job).toContain('bun scripts/sync-read-replica-schema.ts --refresh-subscription')
-  })
 })

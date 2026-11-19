@@ -117,7 +117,8 @@ test.describe('Credit Top-Up', () => {
     await page.login('test@capgo.app', USER_PASSWORD)
 
     await page.goto('/settings/organization/credits')
-    await page.getByRole('button', { name: '$50', exact: true }).click()
+    await expect(page.getByText('Billed in USD', { exact: false })).toBeVisible()
+    await page.getByRole('spinbutton', { name: 'Credits to purchase' }).fill('50')
     await expect(page.getByRole('spinbutton', { name: 'Credits to purchase' })).toHaveValue('50')
 
     const escapedStripeOrigin = STRIPE_EMULATOR_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

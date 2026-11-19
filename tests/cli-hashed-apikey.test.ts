@@ -73,14 +73,14 @@ describe('cli operations with hashed API key', () => {
       ignoreCompatibilityCheck: true,
     })
 
-    expect(result.success).toBe(true)
+    expect(result.success, result.error).toBe(true)
   }, 30000)
 
   it('should list bundles with hashed API key', async () => {
     const sdk = createHashedKeySDK()
     const result = await sdk.listBundles(APPNAME)
 
-    expect(result.success).toBe(true)
+    expect(result.success, result.error).toBe(true)
     expect(Array.isArray(result.data)).toBe(true)
   }, 30000)
 

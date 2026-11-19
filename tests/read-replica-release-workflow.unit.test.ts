@@ -43,8 +43,15 @@ describe('production read-replica release gate', () => {
       expect(workflow).toContain('base64 --decode')
       expect(workflow).toContain('gcloud auth activate-service-account')
       expect(workflow).not.toContain('vars.GOOGLE_')
-      expect(workflow).not.toContain('READ_REPLICATE_GOOGLE_EU1')
+      expect(workflow).not.toContain('secrets.READ_REPLICATE_GOOGLE_EU1')
+      expect(workflow).not.toContain('Missing READ_REPLICATE_GOOGLE_EU1')
+      expect(workflow).toContain('gcloud config set project capgo-394818')
+      expect(workflow).not.toContain('preload_replica_env')
       expect(workflow).not.toContain('check-read-replica-hyperdrive-schema')
+      expect(workflow).toContain('sync-read-replica-schema.ts --apply --allow-drop')
+      expect(workflow).toContain('read_replica_subscription:')
+      expect(workflow).toContain('sync-read-replica-schema.ts --refresh-subscription')
+      expect(workflow).toContain('sync-read-replica-schema.ts --guard')
       expect(workflow).toContain(
         [
           'read_replica_schema:',
@@ -62,10 +69,14 @@ describe('production read-replica release gate', () => {
       expect(workflow).toContain('needs.supabase_deploy.result == \'success\'')
       // The sync script must preflight subscriber compatibility before applying anything.
       // Import-path internals are covered by read-replica-schema-import-sync.unit.test.ts.
+      expect(syncScript).toContain('preflightCompatibilityIssues')
+      expect(syncScript).toContain('await applyPlan(plan)')
       expect(syncScript.indexOf('preflightCompatibilityIssues')).toBeLessThan(
         syncScript.indexOf('await applyPlan(plan)'),
       )
       expect(syncScript).toContain('readReplicaSchemaCatalogFromMigrations')
+      expect(syncScript).toContain('gcloud sql execute-sql (GOOGLE_SERVICE_ACCOUNT)')
+      expect(syncScript).toContain('loadLocalReadReplicaEnvIfNeeded')
     },
   )
 
@@ -74,15 +85,17 @@ describe('production read-replica release gate', () => {
     async () => {
       const workflow = await readReleaseWorkflow()
 
+      expect(workflow).toMatch(
+        /\n  deploy_webapp:\n    needs: \[changes, build_webapp, supabase_deploy, read_replica_schema, read_replica_subscription\]/,
+      )
       for (const job of [
-        'deploy_webapp',
         'deploy_api',
         'deploy_translation_worker',
         'deploy_files',
         'deploy_plugin_regions',
       ]) {
         expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema\\]`),
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema\\]`),
         )
       }
       // Subscription refresh stays a visible release step but must not gate worker deploys.

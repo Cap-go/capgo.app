@@ -6,10 +6,11 @@ import { CacheHelper } from '../utils/cache.ts'
 import { honoFactory, parseBody, quickError, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
-import { extractAiText, recordOf } from '../utils/workers_ai.ts'
+import { disableThinkingOptions, extractAiText, recordOf } from '../utils/workers_ai.ts'
 
 const CACHE_TTL_SECONDS = 5 * 60
-const DEFAULT_TRANSLATION_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast'
+// Workers AI catalog: created 2026-08-17, no planned deprecation. Override with TRANSLATION_MODEL.
+const DEFAULT_TRANSLATION_MODEL = '@cf/qwen/qwen3.8-27b'
 const MAX_BATCH_CHARACTERS = 6_000
 const MAX_BATCH_ITEMS = 60
 const TRANSLATION_ATTEMPTS = 3
@@ -262,6 +263,7 @@ async function translateBatch(ai: AiBinding, model: string, targetLanguage: stri
   for (let attempt = 1; attempt <= TRANSLATION_ATTEMPTS; attempt += 1) {
     try {
       const result = await ai.run(model, {
+        ...disableThinkingOptions(model),
         temperature: 0,
         max_tokens: 8192,
         response_format: {

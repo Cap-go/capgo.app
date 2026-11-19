@@ -103,6 +103,11 @@ export function aiGoalToIntent(goal: AiOnboardingGoal): 'ota' | 'builder' | 'bot
   return goal === 'unsure' ? 'exploring' : goal
 }
 
+/** Analytics `intent` property, with the saved value; empty until a goal is chosen. */
+export function aiIntentEventProperties(goal: AiOnboardingGoal | null): { intent?: ReturnType<typeof aiGoalToIntent> } {
+  return goal ? { intent: aiGoalToIntent(goal) } : {}
+}
+
 export function readAiOnboardingGoal(onboarding: Json | unknown): AiOnboardingGoal | null {
   const intent = asObject(onboarding).intent
   if (intent === 'ota' || intent === 'builder' || intent === 'both')
@@ -182,4 +187,21 @@ export function readSetupMethod(onboarding: Json | unknown): SetupMethod {
 
 export function withSetupMethod(onboarding: Json, method: SetupMethod): Json {
   return { ...asObject(onboarding), setup_method: method } as Json
+}
+
+/** Builder intents get the Builder setup command; every other intent gets live update `init`. */
+export function manualSetupUsesBuilder(onboarding: Json | unknown) {
+  const intent = asObject(onboarding).intent
+  return intent === 'builder' || intent === 'publish'
+}
+
+/**
+ * The single CLI command shown first on the manual setup, so users leaving the AI path
+ * still run one command in their project. Same commands as the setup step of the wizard:
+ * Builder setup for native builds, live update `init` otherwise.
+ */
+export function manualSetupCliCommand(onboarding: Json | unknown, apiKey: string, apiHostArgs = '') {
+  return manualSetupUsesBuilder(onboarding)
+    ? `npx @capgo/cli@latest build init -a ${apiKey}${apiHostArgs}`
+    : `npx @capgo/cli@latest i ${apiKey}${apiHostArgs}`
 }

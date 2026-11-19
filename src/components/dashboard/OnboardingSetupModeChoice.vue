@@ -31,7 +31,8 @@ import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { onboardingPlanStops } from '~/utils/onboardingPlanStops'
-import { aiGoalToIntent, aiOnboardingPathFor, defaultAiOrganizationName, readAiOnboardingGoal, withAiSetupOrganization, withOnboardingFields, withOnboardingSetupMode, withoutAiAgentProgress } from '~/utils/onboardingSetupMode'
+import { readOnboardingCompanyName } from '~/utils/onboardingProfile'
+import { aiGoalToIntent, aiIntentEventProperties, aiOnboardingPathFor, defaultAiOrganizationName, readAiOnboardingGoal, withAiSetupOrganization, withOnboardingFields, withOnboardingSetupMode, withoutAiAgentProgress } from '~/utils/onboardingSetupMode'
 
 type SetupScreen = 'choice' | 'ai' | 'invite'
 
@@ -75,8 +76,11 @@ const billingAccount = ref<'ee' | 'us' | undefined>()
 const hasEditedOrgName = ref(false)
 const orgNameInput = ref('')
 const assistantIcons = developmentEnvironmentOptions.find(option => option.value === 'ai_assistant')?.icons ?? []
+const profileCompanyName = computed(() => props.newOrganization ? '' : readOnboardingCompanyName(main.user?.onboarding))
 
 const defaultOrgName = computed(() => {
+  if (profileCompanyName.value)
+    return profileCompanyName.value
   const name = defaultAiOrganizationName(
     main.user?.first_name,
     t('ai-onboarding-default-org-name-fallback'),
@@ -165,7 +169,7 @@ async function chooseMode(mode: OnboardingSetupMode) {
     return
   isSaving.value = true
   try {
-    sendOnboardingEvent('onboarding_setup_mode_selected', { setup_mode: mode })
+    sendOnboardingEvent('onboarding_setup_mode_selected', { setup_mode: mode, ...aiIntentEventProperties(goal.value) })
     if (mode !== 'invite')
       void rememberSetupMethod(mode)
     // The mode drives redirects and the Getting started checklist, so it must be saved first.
@@ -235,6 +239,7 @@ async function createOrganization() {
       starting_out: plan.startingOut === true,
       org_name_edited: hasEditedOrgName.value,
       goal: chosenGoal,
+      intent,
     })
 
     try {
@@ -471,9 +476,17 @@ function onInviteSuccess(invite: { email: string }) {
             </div>
           </div>
 
-          <div>
+          <div v-if="profileCompanyName">
+            <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
+              {{ t('company-name') }}
+            </p>
+            <p class="mt-2 break-words text-base text-slate-950 dark:text-white" data-test="onboarding-company-name-summary">
+              {{ orgName }}
+            </p>
+          </div>
+          <div v-else>
             <label for="ai-onboarding-org-name" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-              {{ t('ai-onboarding-org-name-label') }}
+              {{ t('company-name') }}
             </label>
             <input
               id="ai-onboarding-org-name"

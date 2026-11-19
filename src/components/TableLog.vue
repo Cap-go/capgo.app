@@ -315,15 +315,16 @@ onMounted(() => {
   <div class="pb-4 md:pb-0">
     <div class="flex flex-wrap items-start justify-between gap-2 p-3 pb-4 overflow-visible md:items-center md:flex-nowrap">
       <div class="flex h-10 shrink-0 md:mb-0">
-        <button class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden" type="button" @click="reloadData">
+        <button class="d-btn d-btn-outline mr-2 px-3 font-medium" type="button" :aria-label="t('reload')" @click="reloadData">
           <IconReload v-if="!isLoading" class="m-1 md:mr-2" />
           <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
           <span class="hidden text-sm md:block">{{ t('reload') }}</span>
         </button>
         <button
           v-if="exportable"
-          class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+          class="d-btn d-btn-outline mr-2 px-3 font-medium"
           type="button"
+          :aria-label="t('download-csv')"
           :disabled="isLoading || exportLoading"
           @click="exportData"
         >
@@ -507,7 +508,7 @@ onMounted(() => {
     <nav class="native-bottom-offset fixed bottom-0 left-0 z-40 flex items-center justify-between w-full p-4 bg-white md:relative md:pt-4 md:bg-transparent dark:bg-gray-900 dark:md:bg-transparent" aria-label="Table navigation">
       <button
         type="button"
-        class="flex items-center justify-center h-10 px-4 py-2 space-x-2 text-sm font-medium transition-colors border border-gray-300 rounded-md whitespace-nowrap dark:text-white dark:border-gray-700 focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none dark:hover:bg-primary/90 hover:bg-primary/10 focus-visible:outline-hidden focus-visible:ring-blue-500"
+        class="d-btn d-btn-outline whitespace-nowrap font-medium"
         @click="fastBackward"
       >
         <IconFastBackward />

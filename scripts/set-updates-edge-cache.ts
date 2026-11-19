@@ -27,24 +27,33 @@
  *
  *   bun run snippet-edge-answer:purge
  *
+ * Plugin-state reads and timing are regional controls and require explicit
+ * environments. Keep them out of shared bulk env files:
+ *
+ *   bun run plugin-state:set 0.1% prod_eu --dry-run
+ *   bun run plugin-state:timing 1% prod_eu --dry-run
+ *   bun scripts/set-updates-edge-cache.ts --check-bulk-env=path/to/shared.env
+ *
  * Purge env: CLOUDFLARE_API_TOKEN (Cache Purge) and CF_CACHE_PURGE_ZONE_IDS
  * (comma separated, every zone the snippet runs on).
  */
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
+import { parse as parseEnv } from 'dotenv'
 import { parseJsonc, WRANGLER_PATH as WRANGLER_CONFIG } from './generate-plugin-route-hosts.ts'
 
-const SECRET_NAMES = ['UPDATES_EDGE_CACHE', 'SNIPPET_EDGE_ANSWER'] as const
+const SECRET_NAMES = ['UPDATES_EDGE_CACHE', 'SNIPPET_EDGE_ANSWER', 'PLUGIN_STATE_KV', 'PLUGIN_STATE_TIMING'] as const
 /** SNIPPET_EDGE_ANSWERS_TAG in plugin_runtime/utils/snippetEdgeAnswer.ts. */
 export const SNIPPET_EDGE_ANSWERS_TAG = 'capgo-snippet-edge-answers'
 
 export function resolveSecretName(args: string[]) {
   const flag = args.find(arg => arg.startsWith('--secret='))
   const name = flag ? flag.slice('--secret='.length) : SECRET_NAMES[0]
-  if (!(SECRET_NAMES as readonly string[]).includes(name))
+  const matched = SECRET_NAMES.find(secret => secret === name)
+  if (!matched)
     throw new Error(`Unknown secret ${name}. Allowed: ${SECRET_NAMES.join(', ')}`)
-  return name
+  return matched
 }
 
 export function normalizeEdgeCacheValue(raw: string): string | null {
@@ -69,13 +78,22 @@ export function pluginEnvs(config: unknown) {
   return Object.keys((config as { env?: Record<string, unknown> }).env ?? {})
 }
 
-export function resolveTargetEnvs(requested: string[], available: string[]) {
+export function resolveTargetEnvs(requested: string[], available: string[], secret: typeof SECRET_NAMES[number] = 'UPDATES_EDGE_CACHE') {
+  if (requested.length === 0 && secret.startsWith('PLUGIN_STATE_'))
+    throw new Error(`${secret} requires explicit plugin environment(s); a canary must not default to every production region`)
   if (requested.length === 0)
     return available.filter(env => env.startsWith('prod_'))
   const unknown = requested.filter(env => !available.includes(env))
   if (unknown.length > 0)
     throw new Error(`Unknown plugin env(s): ${unknown.join(', ')}. Available: ${available.join(', ')}`)
   return requested
+}
+
+/** Shared bulk uploads must never overwrite independently selected regional rollout settings. */
+export function assertNoPluginStateBulkSettings(content: string) {
+  const settings = Object.keys(parseEnv(content)).filter(key => key === 'PLUGIN_STATE_KV' || key.startsWith('PLUGIN_STATE_KV_') || key === 'PLUGIN_STATE_TIMING')
+  if (settings.length > 0)
+    throw new Error(`Regional plugin-state settings must stay out of shared bulk env files: ${settings.join(', ')}. Use plugin-state:set with explicit environments.`)
 }
 
 /** Drops every stored snippet answer in the given zones. */
@@ -114,9 +132,16 @@ async function purgeFromEnv(dryRun: boolean) {
 
 async function main() {
   const args = process.argv.slice(2)
+  const bulkEnvFlag = args.find(arg => arg.startsWith('--check-bulk-env='))
+  if (bulkEnvFlag) {
+    assertNoPluginStateBulkSettings(readFileSync(bulkEnvFlag.slice('--check-bulk-env='.length), 'utf8'))
+    return
+  }
   const dryRun = args.includes('--dry-run')
   const SECRET_NAME = resolveSecretName(args)
   if (args.includes('--purge-only')) {
+    if (SECRET_NAME.startsWith('PLUGIN_STATE_'))
+      throw new Error('Snippet purge-only mode is not a plugin-state rollout operation')
     if (!await purgeFromEnv(dryRun))
       process.exit(1)
     return
@@ -124,11 +149,11 @@ async function main() {
   const [rawValue, ...requestedEnvs] = args.filter(arg => arg !== '--dry-run' && !arg.startsWith('--secret='))
   const value = rawValue ? normalizeEdgeCacheValue(rawValue) : null
   if (!value) {
-    console.error('Usage: bun run updates-edge-cache:set <off|on|N%> [env ...] [--dry-run] [--secret=SNIPPET_EDGE_ANSWER]')
+    console.error(`Usage: bun scripts/set-updates-edge-cache.ts <off|on|N%> [env ...] [--dry-run] [--secret=${SECRET_NAMES.join('|')}]`)
     process.exit(1)
   }
 
-  const envs = resolveTargetEnvs(requestedEnvs, pluginEnvs(parseJsonc(readFileSync(WRANGLER_CONFIG, 'utf8'))))
+  const envs = resolveTargetEnvs(requestedEnvs, pluginEnvs(parseJsonc(readFileSync(WRANGLER_CONFIG, 'utf8'))), SECRET_NAME)
   console.log(`${SECRET_NAME}=${value} -> ${envs.join(', ')}${dryRun ? ' (dry run)' : ''}`)
   if (dryRun) {
     if (SECRET_NAME === 'SNIPPET_EDGE_ANSWER')

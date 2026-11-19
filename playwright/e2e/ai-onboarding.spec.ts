@@ -51,6 +51,7 @@ async function registerAndName(page: Page, email: string) {
     await welcome.click()
   await page.fill('[data-test="onboarding-first-name"]', 'Example')
   await page.fill('[data-test="onboarding-last-name"]', 'User')
+  await page.getByRole('textbox', { name: 'Company name', exact: true }).fill('Example Company')
   await page.click('[data-test="onboarding-name-continue"]')
   await page.waitForURL(/\/onboarding\/app/)
   await expect(page.locator('[data-test="onboarding-setup-mode"]')).toBeVisible()
@@ -69,7 +70,8 @@ test.describe('AI onboarding', () => {
     await page.click('[data-test="onboarding-setup-mode-ai"]')
     const create = page.locator('[data-test="onboarding-ai-create-org"]')
     await expect(create).toBeDisabled()
-    await expect(page.locator('[data-test="onboarding-ai-org-name"]')).toHaveValue('Example\'s organization')
+    await expect(page.locator('[data-test="onboarding-ai-org-name"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="onboarding-company-name-summary"]')).toHaveText('Example Company')
 
     // A refresh keeps the user on the AI path.
     await page.reload()
@@ -83,7 +85,7 @@ test.describe('AI onboarding', () => {
     const orgRequest = page.waitForRequest(request => request.method() === 'POST' && /\/organization(?:\?|$)/.test(request.url()))
     await create.click()
     const body = (await orgRequest).postDataJSON()
-    expect(body).toMatchObject({ name: 'Example\'s organization', developmentEnvironment: 'ai_assistant', startingOut: false, intent: 'ota' })
+    expect(body).toMatchObject({ name: 'Example Company', developmentEnvironment: 'ai_assistant', startingOut: false, intent: 'ota' })
     expect(body.estimatedMau).toBeGreaterThan(0)
 
     await page.waitForURL(/\/onboarding\/ai\?org=/)
@@ -137,8 +139,8 @@ test.describe('AI onboarding', () => {
     // A new organization gets the same three options as a new account.
     await expect(page.locator('[data-test="onboarding-setup-mode-invite"]')).toBeVisible()
     await page.click('[data-test="onboarding-setup-mode-ai"]')
-    // The first organization already uses the default name.
-    await expect(page.locator('[data-test="onboarding-ai-org-name"]')).toHaveValue('')
+    // Another organization asks for its own name instead of reusing the saved company.
+    await expect(page.locator('[data-test="onboarding-ai-org-name"]')).toHaveValue('Example\'s organization')
     await page.fill('[data-test="onboarding-ai-org-name"]', 'Second organization')
     await page.locator('[data-test="onboarding-ai-plan-option"]').first().click()
     await page.locator('[data-test="onboarding-ai-goal-builder"]').click()
@@ -170,7 +172,7 @@ test.describe('AI onboarding', () => {
     const orgRequest = page.waitForRequest(request => request.method() === 'POST' && /\/organization(?:\?|$)/.test(request.url()))
     await create.click()
     const body = (await orgRequest).postDataJSON()
-    expect(body).toMatchObject({ name: 'Example\'s organization', intent: 'builder' })
+    expect(body).toMatchObject({ name: 'Example Company', intent: 'builder' })
     expect(body.developmentEnvironment).toBeUndefined()
 
     // The invite dialog opens on its own once the organization exists.

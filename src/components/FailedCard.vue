@@ -76,7 +76,7 @@ async function copyOrgId() {
         <div class="flex flex-wrap gap-3 mt-6">
           <button
             type="button"
-            class="py-3 px-8 text-base font-semibold text-white bg-orange-500 rounded-lg shadow-md transition-colors duration-200 hover:bg-orange-600 hover:shadow-lg focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
+            class="d-btn d-btn-warning"
             @click="goToChangePassword"
           >
             {{ t('update-password-now') }}
@@ -84,7 +84,7 @@ async function copyOrgId() {
           <button
             v-if="showCopyOrgId"
             type="button"
-            class="py-3 px-8 text-base font-semibold text-amber-800 bg-transparent border border-amber-800 rounded-lg transition-colors duration-200 hover:bg-orange-100 dark:text-amber-200 dark:border-amber-400 dark:hover:bg-amber-900/40 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
+            class="d-btn d-btn-outline d-btn-warning"
             @click="copyOrgId"
           >
             {{ t('copy-organization-id') }}
@@ -112,7 +112,7 @@ async function copyOrgId() {
         <div class="flex flex-wrap gap-3 mt-6">
           <button
             type="button"
-            class="py-3 px-8 text-base font-semibold text-white bg-orange-500 rounded-lg shadow-md transition-colors duration-200 hover:bg-orange-600 hover:shadow-lg focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
+            class="d-btn d-btn-warning"
             @click="goToAccountSettings"
           >
             {{ t('setup-2fa-now') }}
@@ -120,7 +120,7 @@ async function copyOrgId() {
           <button
             v-if="showCopyOrgId"
             type="button"
-            class="py-3 px-8 text-base font-semibold text-amber-800 bg-transparent border border-amber-800 rounded-lg transition-colors duration-200 hover:bg-orange-100 dark:text-amber-200 dark:border-amber-400 dark:hover:bg-amber-900/40 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
+            class="d-btn d-btn-outline d-btn-warning"
             @click="copyOrgId"
           >
             {{ t('copy-organization-id') }}
@@ -148,7 +148,7 @@ async function copyOrgId() {
         <div v-if="!hideExternalPurchaseFlows" class="mt-6">
           <button
             type="button"
-            class="py-3 px-8 text-base font-semibold text-white bg-red-600 rounded-lg shadow-md transition-colors duration-200 hover:bg-red-700 hover:shadow-lg focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:outline-none"
+            class="d-btn d-btn-error"
             @click="goToPlans"
           >
             {{ t('plan-upgrade-v2') }}

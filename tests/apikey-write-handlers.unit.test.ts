@@ -65,6 +65,10 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: checkPermissionMock,
   checkPermissionPg: checkPermissionPgMock,
+  checkPermissionsBatch: (c: unknown, checks: Array<{ permission: string, scope: unknown }>) =>
+    Promise.all(checks.map(check => checkPermissionMock(c, check.permission, check.scope))),
+  checkPermissionsBatchPg: (c: unknown, checks: Array<{ permission: string, scope: unknown }>, ...rest: unknown[]) =>
+    Promise.all(checks.map(check => checkPermissionPgMock(c, check.permission, check.scope, ...rest))),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -75,6 +79,8 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/private/role_bindings.ts', () => ({
   createRoleBindingForPrincipal: createRoleBindingForPrincipalMock,
+  createRoleBindingBatchCache: () => ({ roles: new Map(), callerMaxRank: new Map() }),
+  prefetchRolesForBindings: async () => {},
   lockRbacOrgs: lockRbacOrgsMock,
 }))
 

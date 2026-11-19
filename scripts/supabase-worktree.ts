@@ -137,10 +137,14 @@ function upsertEnvValue(content: string, key: string, value: string): string {
     : `${content}\n${line}\n`
 }
 
-export function buildFunctionsEnvFile(source: string, apiPort: number, cloudflareFunctionUrl?: string): string {
+export function buildFunctionsEnvFile(source: string, apiPort: number, projectId: string, cloudflareFunctionUrl?: string): string {
   const s3Endpoint = `127.0.0.1:${apiPort}/storage/v1/s3`
   let generated = upsertEnvValue(source, 'S3_ENDPOINT', s3Endpoint)
   generated = upsertEnvValue(generated, 'FILES_PUBLIC_URL', `http://127.0.0.1:${apiPort}/functions/v1`)
+  // Only local `functions serve` uses this file. The isolated database is the
+  // explicit replica fixture; plugin reads must not regain a primary fallback.
+  generated = upsertEnvValue(generated, 'ENV_NAME', 'capgo_api-local')
+  generated = upsertEnvValue(generated, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL', `postgresql://postgres:postgres@supabase_db_${projectId}:5432/postgres`)
 
   if (cloudflareFunctionUrl)
     generated = upsertEnvValue(generated, 'CLOUDFLARE_FUNCTION_URL', cloudflareFunctionUrl)
@@ -158,7 +162,7 @@ function ensureFunctionsEnvFile(repoRoot: string, workdir: string, cfg: ReturnTy
   const sourcePath = resolve(repoRoot, 'supabase', 'functions', '.env')
   const targetPath = resolve(workdir, 'functions.local.env')
   const source = existsSync(sourcePath) ? readFileSync(sourcePath, 'utf8') : ''
-  const generated = buildFunctionsEnvFile(source, cfg.ports.api, process.env.CLOUDFLARE_FUNCTION_URL)
+  const generated = buildFunctionsEnvFile(source, cfg.ports.api, cfg.projectId, process.env.CLOUDFLARE_FUNCTION_URL)
 
   writeFileSync(targetPath, generated)
   return targetPath
@@ -534,6 +538,26 @@ function removeLeftoverWorktreeContainers(projectId: string): void {
   spawnSync('docker', ['rm', '-f', ...ids], { stdio: 'inherit' })
 }
 
+function logSupabasePortDiagnostics(ports: number[]): void {
+  if (process.platform !== 'linux' || !process.env.CI)
+    return
+
+  const filter = ports.map(port => `sport = :${port}`).join(' or ')
+  const commands = [
+    { cmd: 'sysctl', args: ['net.ipv4.ip_local_port_range', 'net.ipv4.ip_local_reserved_ports'] },
+    { cmd: 'sudo', args: ['-n', 'ss', '-Htanpo', 'state', 'all', `( ${filter} )`] },
+    { cmd: 'docker', args: ['ps', '-a', '--format', '{{.ID}} {{.Names}} {{.Status}} {{.Ports}}'] },
+  ]
+
+  console.error(`[supabase-port-bind] Collecting socket owners and Docker mappings for ports: ${ports.join(',')}`)
+  for (const { cmd, args } of commands) {
+    console.error(`[supabase-port-bind] ${cmd} ${args.join(' ')}`)
+    const result = spawnSync(cmd, args, { stdio: 'inherit', timeout: 2000 })
+    if (result.status !== 0)
+      console.error(`[supabase-port-bind] Diagnostic failed: ${result.error?.message ?? `exit ${result.status}`}`)
+  }
+}
+
 /**
  * `supabase start` can fail on GitHub runners with transient Docker port binds
  * or image-pull failures before tests start. Retry only classified infrastructure
@@ -555,6 +579,8 @@ async function runSupabaseStartWithRetry(args: string[], repoRoot: string): Prom
     if (status === 0)
       return 0
     const transientFailure = getTransientSupabaseStartFailure(output)
+    if (transientFailure === 'docker_port_bind')
+      logSupabasePortDiagnostics(ports)
     if (attempt >= maxAttempts || transientFailure === null) {
       console.error(`SUPABASE_START_FINAL_FAILURE=${transientFailure ?? 'non_transient'}`)
       return status

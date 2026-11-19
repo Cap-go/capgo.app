@@ -1,3 +1,4 @@
+import { enforceServingPolicy } from '../utils/servingPolicy.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { AppInfos } from '../utils/types.ts'
 import { Hono } from 'hono/tiny'
@@ -65,7 +66,8 @@ app.post('/manifest_size', async (c) => {
     return simpleRateLimit({ app_id: body.app_id })
 
   const parsedBody = parsePluginBody<AppInfos>(c, body, updateRequestSchema)
-  const size = await getManifestDownloadSize(c, parsedBody.app_id, typeof body.version === 'string' ? body.version : undefined, parseManifestSizeVersionId(body.version_id), files)
+  await enforceServingPolicy(c, parsedBody.app_id)
+  const size = await getManifestDownloadSize(c, parsedBody.app_id, typeof body.version === 'string' ? body.version : undefined, parseManifestSizeVersionId(body.version_id), files, parsedBody.device_id)
   return c.json(size)
 })
 

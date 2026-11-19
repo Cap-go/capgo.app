@@ -1,11 +1,13 @@
+import type { ExecutionContext } from 'hono'
+import { enforceFileServingPolicy, enforcePreviewServingPolicy, withFileServingHeaders } from '../../supabase/functions/_backend/files/file_serving_policy.ts'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { getAttachmentFileIdFromReadPath, hasDeletedFileMarker } from '../../supabase/functions/_backend/files/file_read_cache.ts'
 import { app as files } from '../../supabase/functions/_backend/files/files.ts'
-import { handlePreviewRequest, isPreviewSubdomain } from '../../supabase/functions/_backend/files/preview.ts'
+import { handlePreviewSubdomain, isPreviewSubdomain, withPreviewHostHeaders } from '../../supabase/functions/_backend/files/preview.ts'
 import { app as download_link } from '../../supabase/functions/_backend/private/download_link.ts'
 import { app as upload_link } from '../../supabase/functions/_backend/private/upload_link.ts'
 import { app as ok } from '../../supabase/functions/_backend/public/ok.ts'
-import { createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
+import { createAllCatch, createHono, quickError } from '../../supabase/functions/_backend/utils/hono.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
 import { buildWorkersCacheKey } from './cache_key.ts'
 
@@ -30,7 +32,7 @@ app.use('/*', async (c, next) => {
   const hostname = c.req.header('host') || ''
   if (isPreviewSubdomain(hostname)) {
     // Handle preview requests directly within this context
-    return handlePreviewRequest(c)
+    return handlePreviewSubdomain(c)
   }
   return next()
 })
@@ -55,30 +57,44 @@ export const filesWorkerCacheTestUtils = {
   buildWorkersCacheKey,
 }
 
-export default {
-  async fetch(request: Request, env: Cloudflare.Env, ctx: FilesExecutionContext): Promise<Response> {
-    const rawFileId = getAttachmentFileIdFromReadPath(new URL(request.url).pathname)
-    let fileId: string | null = rawFileId
-    if (rawFileId) {
-      try {
-        fileId = decodeURIComponent(rawFileId)
-      }
-      catch {
-        // Let the files handler return its invalid-path response.
-      }
+// This outer entrypoint always runs before the managed CachedFiles entrypoint.
+const ingress = createHono(functionName, version)
+ingress.all('*', async (c) => {
+  const request = c.req.raw
+  const env = c.env
+  const ctx: FilesExecutionContext = c.executionCtx
+  const rawFileId = getAttachmentFileIdFromReadPath(new URL(request.url).pathname)
+  let fileId: string | null = rawFileId
+  if (rawFileId) {
+    try {
+      fileId = decodeURIComponent(rawFileId)
     }
-    if (fileId && await hasDeletedFileMarker(fileId)) {
-      return new Response(JSON.stringify({ error: 'not_found', message: 'Not found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' },
-      })
+    catch {
+      // Let the files handler return its invalid-path response.
     }
+  }
+  const previewHost = isPreviewSubdomain(c.req.header('host') || new URL(request.url).hostname)
+  // Preview routes and attachment routes cannot share admission or byte caches.
+  if (previewHost && rawFileId)
+    throw quickError(404, 'not_found', 'Not found')
+  if (previewHost)
+    await enforcePreviewServingPolicy(c)
+  if (fileId)
+    await enforceFileServingPolicy(c, fileId)
+  if (fileId && await hasDeletedFileMarker(fileId)) {
+    return withPreviewHostHeaders(request, new Response(JSON.stringify({ error: 'not_found', message: 'Not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+  }
 
-    const cacheKey = buildWorkersCacheKey(request)
-    const cachedFiles = ctx.exports?.CachedFiles
-    if (cacheKey && cachedFiles)
-      return cachedFiles.fetch(request, { cf: { cacheKey } })
+  const cacheKey = buildWorkersCacheKey(request)
+  const cachedFiles = ctx.exports?.CachedFiles
+  if (cacheKey && cachedFiles)
+    return withFileServingHeaders(withPreviewHostHeaders(request, await cachedFiles.fetch(request, { cf: { cacheKey } })))
 
-    return app.fetch(request, env, ctx)
-  },
-}
+  return withFileServingHeaders(withPreviewHostHeaders(request, await app.fetch(request, env, ctx)))
+})
+createAllCatch(ingress, functionName)
+
+export default { fetch: ingress.fetch }

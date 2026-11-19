@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { PreviousDeployRow } from '~/services/bundleComparePrevious'
 import type { Database } from '~/types/database.types'
 import { useDebounceFn } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
@@ -6,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 import IconDown from '~icons/ic/round-keyboard-arrow-down'
 import IconSearch from '~icons/ic/round-search'
 import FormField from '~/components/forms/FormField.vue'
+import { chunkChannelIds, groupPreviousDeploysByChannel } from '~/services/bundleComparePrevious'
 import { useConsole } from '~/services/console'
 import { readAllConsoleRows } from '~/services/consoleRows'
 import { formatLocalDate } from '~/services/date'
@@ -46,6 +48,10 @@ const preferredCompareVersions = ref<VersionRow[]>([])
 const compareSearchResults = ref<VersionRow[]>([])
 const compareSearch = ref('')
 const compareSearchLoading = ref(false)
+const compareSearchError = ref(false)
+const compareVersionsLoading = ref(false)
+const compareVersionsError = ref(false)
+let compareVersionsRequestId = 0
 const compareSearchRequestId = ref(0)
 const latestCompareRequestId = ref(0)
 let preferredCompareRequestId = 0
@@ -77,6 +83,7 @@ function resetSearchState() {
   compareSearchRequestId.value += 1
   compareSearchResults.value = []
   compareSearchLoading.value = false
+  compareSearchError.value = false
 }
 
 function selectCompareVersion(option: VersionRow | null) {
@@ -118,6 +125,7 @@ async function loadLatestCompareVersions() {
   if (requestId !== latestCompareRequestId.value)
     return
 
+  compareVersionsError.value = Boolean(error)
   if (error) {
     console.error('Failed to load latest compare versions', error)
     latestCompareVersions.value = []
@@ -190,47 +198,32 @@ async function loadPreferredCompareVersions() {
   // otherwise leave the channel with no baseline. Keeping a small lookback lets
   // us fall back to the next older non-deleted deployment instead.
   const PREFERRED_LOOKBACK = 20
-  const LOOKBACK_CONCURRENCY = 6
-  // One lookback query per channel, a few at a time so many channels don't burst
-  // the API, and stop early once a newer request has replaced this one.
-  const loadLookback = (channelId: number) => {
-    const cutoff = deployedAtByChannel.get(channelId)
-    let query = capgo
-      .from('deploy_history')
-      .select('version_id, created_at, deployed_at')
-      .eq('app_id', props.appId)
-      .eq('channel_id', channelId)
-      .neq('version_id', currentVersionId)
-
-    if (cutoff)
-      query = query.lt('created_at', cutoff)
-
-    return query
-      .order('created_at', { ascending: false })
-      .limit(PREFERRED_LOOKBACK)
-  }
-  const lookbacks: Awaited<ReturnType<typeof loadLookback>>[] = []
+  // One request for every channel's lookback (newest first per channel)
+  // instead of one deploy_history query per channel. The RPC takes at most
+  // 1000 channels per call, so larger sets are sent in chunks.
   const pendingChannelIds = [...channelIds]
-  for (let index = 0; index < pendingChannelIds.length; index += LOOKBACK_CONCURRENCY) {
-    lookbacks.push(...await Promise.all(pendingChannelIds.slice(index, index + LOOKBACK_CONCURRENCY).map(loadLookback)))
-    if (requestId !== preferredCompareRequestId)
-      return
-  }
+  const lookbacks = await Promise.all(chunkChannelIds(pendingChannelIds).map(chunk => readAllConsoleRows<PreviousDeployRow>(
+    (from, to) => capgo
+      .rpc('get_channels_previous_deploys', {
+        p_app_id: props.appId,
+        p_exclude_version_id: currentVersionId,
+        p_channel_ids: chunk,
+        p_cutoffs: chunk.map(channelId => deployedAtByChannel.get(channelId) || null),
+        p_per_channel: PREFERRED_LOOKBACK,
+      })
+      .range(from, to),
+  )))
+  if (requestId !== preferredCompareRequestId)
+    return
 
-  const candidatesByChannel: Array<Array<{ versionId: number, deployedAt: string | null }>> = []
-  for (const { data, error } of lookbacks) {
-    if (error) {
-      console.error('Failed to load previous deploy history', error)
-      continue
-    }
-
-    const candidates = ((data ?? []) as DeployHistoryRow[]).map(entry => ({
-      versionId: entry.version_id,
-      deployedAt: entry.created_at ?? entry.deployed_at ?? null,
-    }))
-    if (candidates.length)
-      candidatesByChannel.push(candidates)
+  const lookbackError = lookbacks.find(result => result.error)?.error
+  if (lookbackError) {
+    console.error('Failed to load previous deploy history', lookbackError)
+    return
   }
+  const lookbackRows = lookbacks.flatMap(result => result.data ?? [])
+
+  const candidatesByChannel = groupPreviousDeploysByChannel(pendingChannelIds, lookbackRows)
 
   if (!candidatesByChannel.length)
     return
@@ -343,6 +336,7 @@ async function searchCompareVersions(term: string) {
 
   const requestId = ++compareSearchRequestId.value
   compareSearchLoading.value = true
+  compareSearchError.value = false
 
   // Each chain must start from its own builder: the console query builder is
   // mutable and returns `this`, so reusing one instance across concurrent
@@ -396,6 +390,7 @@ async function searchCompareVersions(term: string) {
     }).slice(0, COMPARE_SEARCH_LIMIT)
   }
 
+  compareSearchError.value = Boolean(error)
   if (error) {
     console.error('Failed to search compare versions', error)
     compareSearchResults.value = []
@@ -421,16 +416,22 @@ watch(compareSearch, (term) => {
 })
 
 watch(
-  () => [props.appId, props.currentVersionId],
+  () => [props.appId, props.currentVersionId, props.compareMode],
   async () => {
+    const requestId = ++compareVersionsRequestId
     resetSearchState()
+    compareVersionsError.value = false
+    compareVersionsLoading.value = false
+    latestCompareVersions.value = []
     if (!props.appId || !props.currentVersionId) {
-      latestCompareVersions.value = []
       preferredCompareVersions.value = []
       liveChannelsByVersion.value = new Map()
       return
     }
+    compareVersionsLoading.value = true
     await Promise.all([loadLatestCompareVersions(), loadPreferredCompareVersions(), loadLiveChannels()])
+    if (requestId === compareVersionsRequestId)
+      compareVersionsLoading.value = false
   },
   { immediate: true },
 )
@@ -504,12 +505,15 @@ watch(
               </span>
               <span class="ml-2 shrink-0 text-xs text-slate-400">{{ option.created_at ? formatLocalDate(option.created_at) : t('unknown') }}</span>
             </button>
-            <div v-if="compareSearchLoading" class="px-3 py-2 text-xs text-slate-400">
+            <div v-if="compareSearch.trim() ? compareSearchLoading : compareVersionsLoading" class="px-3 py-2 text-xs text-slate-400">
               {{ t('loading') }}
             </div>
-            <div v-else-if="compareSearch && compareOptions.length === 0" class="px-3 py-2 text-xs text-slate-400">
-              {{ noResultsLabel }}
-            </div>
+            <output v-else-if="compareSearch.trim() ? compareSearchError : compareVersionsError" class="block px-3 py-2 text-xs text-slate-400">
+              {{ t('bundle-compare-load-error') }}
+            </output>
+            <output v-else-if="compareOptions.length === 0" class="block px-3 py-2 text-xs text-slate-400">
+              {{ compareSearch.trim() ? noResultsLabel : t(compareMode === 'dependencies' ? 'bundle-compare-empty-dependencies' : 'bundle-compare-empty-manifest') }}
+            </output>
           </div>
         </div>
       </div>

@@ -11,6 +11,7 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import IconChevronRight from '~icons/lucide/chevron-right'
 import IconExternalLink from '~icons/lucide/external-link'
+import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
 import PluginAdoptionPanel from '~/components/observe/PluginAdoptionPanel.vue'
 import { comparePackages, hasPlatformChecksumMetadataDrift } from '~/services/bundleCompatibility'
 import { dependencyDiffPath, groupCompatibilityEvents, platformLabel } from '~/services/compatibilityEvents'
@@ -502,14 +503,13 @@ function openDependencyDiff(event: CompatibilityEventRow) {
 
 async function acknowledgeEvents(eventIds: number[], note: string) {
   try {
-    // Independent acknowledgements, sent together instead of one round trip each.
-    const results = await Promise.all(eventIds.map(eventId => capgo.rpc('acknowledge_compatibility_event', {
-      event_id: eventId,
-      note,
-    })))
-    const failed = results.find(result => result.error)
+    // One request for the whole selection (the RPC accepts each id with the
+    // same permission check as the single-event RPC).
+    const failed = eventIds.length === 1
+      ? await capgo.rpc('acknowledge_compatibility_event', { event_id: eventIds[0]!, note })
+      : await capgo.rpc('acknowledge_compatibility_events', { event_ids: eventIds, note })
 
-    if (failed) {
+    if (failed.error) {
       // The reason was already validated in the dialog handler, so an error
       // here is an RPC/network/server failure — not a missing reason.
       console.error('[Compatibility] Error accepting event:', failed.error)
@@ -897,7 +897,7 @@ watchEffect(async () => {
                           v-if="!group.resolved"
                           type="button"
                           data-test="compatibility-accept"
-                          class="inline-flex items-center px-3 py-1 text-xs font-medium text-white rounded-md bg-amber-600 hover:bg-amber-700"
+                          class="d-btn d-btn-primary d-btn-xs"
                           @click="openAcceptDialog(group)"
                         >
                           {{ t('compatibility-accept') }}
@@ -915,18 +915,7 @@ watchEffect(async () => {
       </div>
     </div>
 
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('app-not-found') }}
-      </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-400">
-        {{ t('app-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="$router.push(`/apps`)">
-        {{ t('back-to-apps') }}
-      </button>
-    </div>
+    <AppPageNotFound v-else />
 
     <!-- Accept dialog content (reason input) -->
     <Teleport
@@ -998,7 +987,7 @@ watchEffect(async () => {
           <a
             v-if="resolutionDetailMember?.email"
             :href="`mailto:${resolutionDetailMember.email}`"
-            class="inline-flex items-center px-3 py-1.5 ml-auto text-xs font-medium text-white rounded-md shrink-0 bg-blue-600 hover:bg-blue-700"
+            class="ml-auto shrink-0 d-btn d-btn-sm d-btn-primary"
             data-test="compatibility-email-user"
           >
             {{ t('compatibility-email-user') }}

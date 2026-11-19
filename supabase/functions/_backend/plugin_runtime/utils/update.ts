@@ -1,3 +1,4 @@
+import { enforceServingPolicy, requestServingPolicy } from './servingPolicy.ts'
 import type { SemVer } from '@std/semver'
 import type { Context } from 'hono'
 import type { ManifestEntry } from './downloadUrl.ts'
@@ -25,8 +26,11 @@ import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
 import { getAppOwnerWithEdgeCache } from './pluginEdgeCacheReads.ts'
+import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss, markPluginStateResponse, shouldUsePluginState, startPluginStateRequest } from './pluginState.ts'
+import { pluginStateQueriesFor } from './pluginStateRegistry.ts'
 import { getClientIP } from './rate_limit.ts'
 import { onPremiseAppResponse } from './rateLimitInfo.ts'
+import { hasServingRegionExclusions } from './servingRegions.ts'
 import { s3 } from './s3.ts'
 import { getSnippetEdgeAnswerBps, getSnippetEdgeReplay, setSnippetUpdatesFill } from './snippetEdgeAnswer.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
@@ -371,9 +375,13 @@ export async function updateWithPG(
     ? getAppOwnerFromEdgeCache(c, app_id, drizzleClient, pathTiming)
     // Snippet fills must not outlive a trial: they need its end date.
     : getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT, { ...UPDATES_OWNER_PG_OPTIONS, includeTrialAt: getSnippetEdgeAnswerBps(c) > 0 })
+  // Answered by the KV plugin state: the same client, no second connection.
+  const servedFromState = pluginStateQueriesFor(drizzleClient, app_id) !== null
   const channelPrefetchPromise = cachedStatus === 'cloud' && coerce
     ? (async () => {
         try {
+          if (servedFromState)
+            return await requestInfosChannelPostgres(c, platform, app_id, defaultChannel, drizzleClient, false, false) ?? null
           if (edgeCache) {
             // Lazy client: an edge cache hit answers without any connection.
             const prefetchClient = createLazyPgClient(c, true)
@@ -894,6 +902,11 @@ export async function updateWithPG(
     return updateError200(c, 'revert_to_builtin_plugin_version_too_old', 'revert_to_builtin used, but plugin version is too old')
   }
   const startBundleUrl = performance.now()
+  // An external provider cannot enforce a later regional preference change.
+  const servingPolicy = requestServingPolicy(c)
+  if (version.external_url && servingPolicy && hasServingRegionExclusions(servingPolicy))
+    return updateError200(c, 'external_delivery_unavailable', 'This bundle cannot be delivered with these update regions')
+
   let signedURL = serveZip ? (version.external_url ?? '') : ''
   let manifest: ManifestEntry[] = []
   let manifestFetchMs = 0
@@ -1024,9 +1037,14 @@ async function upToDateFromReadCache(c: Context, body: AppInfos, appStatus: Awai
  * cache, not from the snippet header (the device can read that header).
  */
 export async function recordSnippetUpToDate(c: Context, body: AppInfos, answer: { versionName: string }) {
-  const lazyClient = createLazyPgClient(c, true)
+  await enforceServingPolicy(c, body.app_id)
+  const pluginState = await startPluginStateRequest(c, body.app_id, body.device_id ?? '')
+  const stateDatabase = pluginState ? createPluginStateDatabase(c, pluginState) : null
+  const lazyClient = stateDatabase ? stateDatabase.lazy : createLazyPgClient(c, true)
   try {
-    const owner = await getAppOwnerWithEdgeCache(c, body.app_id, getDrizzleClient(lazyClient.client, { logger: false }), PLAN_LIMIT, UPDATES_OWNER_PG_OPTIONS)
+    const owner = stateDatabase
+      ? { value: await getAppOwnerPostgres(c, body.app_id, stateDatabase.drizzle, PLAN_LIMIT, UPDATES_OWNER_PG_OPTIONS), hit: false, lookupFailed: false }
+      : await getAppOwnerWithEdgeCache(c, body.app_id, getDrizzleClient(lazyClient.client, { logger: false }), PLAN_LIMIT, UPDATES_OWNER_PG_OPTIONS)
     // Deleted or no longer a cloud app: nothing to attribute the answer to.
     if (!owner.value) {
       if (owner.lookupFailed)
@@ -1044,6 +1062,7 @@ export async function recordSnippetUpToDate(c: Context, body: AppInfos, answer: 
 }
 
 export async function update(c: Context, body: AppInfos) {
+  await enforceServingPolicy(c, body.app_id)
   const startUpdate = performance.now()
   const appStatus = await getAppStatus(c, body.app_id)
   const appStatusMs = Math.round(performance.now() - startUpdate)
@@ -1052,11 +1071,72 @@ export async function update(c: Context, body: AppInfos) {
     if (providerBlockedResponse)
       return providerBlockedResponse
   }
-  if (appStatus.cacheHit && appStatus.status === 'cloud') {
+  if (appStatus.cacheHit && appStatus.status === 'cloud' && !shouldUsePluginState(c, body.app_id, body.device_id ?? '')) {
     const upToDateResponse = await upToDateFromReadCache(c, body, appStatus)
     if (upToDateResponse)
       return upToDateResponse
   }
+  const pluginState = await startPluginStateRequest(c, body.app_id, body.device_id ?? '')
+  if (pluginState) {
+    const stateResponse = await updateWithPluginState(c, body, appStatus, pluginState, startUpdate)
+    if (stateResponse)
+      return stateResponse
+  }
+  return updateWithDatabase(c, body, appStatus, startUpdate, appStatusMs)
+}
+
+/**
+ * /updates answered from the KV plugin state (pluginState.ts): the same
+ * updateWithPG logic, with every query answered by the session. Returns null
+ * when a key it needs is not synced yet: the caller then uses the database.
+ */
+async function updateWithPluginState(
+  c: Context,
+  body: AppInfos,
+  appStatus: Awaited<ReturnType<typeof getAppStatus>>,
+  pluginState: NonNullable<Awaited<ReturnType<typeof startPluginStateRequest>>>,
+  startUpdate: number,
+) {
+  const pathTiming: UpdatePathTiming = {}
+  const { drizzle, lazy } = createPluginStateDatabase(c, pluginState)
+  try {
+    const response = await updateWithPG(c, body, drizzle, appStatus, pathTiming)
+    markPluginStateResponse(response, lazy.isConnected() ? 'kv-escaped' : 'kv')
+    const totalMs = Math.round(performance.now() - startUpdate)
+    if (totalMs >= 100) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'plugin_path_timing',
+        path: 'updates',
+        outcome: 'total',
+        source: 'plugin_state',
+        totalMs,
+        ownerMs: pathTiming.ownerMs ?? 0,
+        requestInfosMs: pathTiming.requestInfosMs ?? 0,
+        app_id: body.app_id,
+      })
+    }
+    return response
+  }
+  catch (error) {
+    if (!isPluginStateMiss(error))
+      throw error
+    cloudlog({ requestId: c.get('requestId'), message: 'plugin state incomplete, using the database', app_id: body.app_id, error: error.message })
+    abandonPluginStateRequest(c)
+    return null
+  }
+  finally {
+    await lazy.close()
+  }
+}
+
+async function updateWithDatabase(
+  c: Context,
+  body: AppInfos,
+  appStatus: Awaited<ReturnType<typeof getAppStatus>>,
+  startUpdate: number,
+  appStatusMs: number,
+) {
   if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
     return updateWithEdgeCache(c, body, appStatus, startUpdate, appStatusMs)
 

@@ -81,6 +81,7 @@ export type EmailPreferenceKey
     | 'bundle_incompatible'
     | 'bundle_incompatible_expected'
     | 'app_too_large'
+    | 'security_updates'
 
 export interface EmailPreferences {
   usage_limit?: boolean
@@ -100,19 +101,35 @@ export interface EmailPreferences {
   bundle_incompatible?: boolean
   bundle_incompatible_expected?: boolean
   app_too_large?: boolean
+  security_updates?: boolean
+}
+
+/** User preferences that default to disabled when absent (opt-in only). */
+export const OPT_IN_EMAIL_PREFERENCE_KEYS = new Set<EmailPreferenceKey>(['security_updates'])
+
+export function isUserEmailPreferenceEnabled(
+  prefs: EmailPreferences,
+  preferenceKey: EmailPreferenceKey,
+): boolean {
+  const prefValue = prefs[preferenceKey]
+  if (OPT_IN_EMAIL_PREFERENCE_KEYS.has(preferenceKey))
+    return prefValue === true
+  return prefValue === undefined ? true : prefValue
 }
 
 /**
  * Which org members receive a notification.
  * - 'admins': org_admin + org_super_admin (org management + usage-credit data; the default).
  * - 'billing': org_super_admin + org_billing_admin (billing/payment actions; the org.update_billing holders).
+ * - 'admins_and_billing': org administrators plus billing administrators (usage alerts).
  * - 'all': every active org-scoped user/group binding, any role.
  */
-export type NotificationAudience = 'admins' | 'billing' | 'all'
+export type NotificationAudience = 'admins' | 'billing' | 'admins_and_billing' | 'all'
 
 const AUDIENCE_ROLE_NAMES: Record<NotificationAudience, string[]> = {
   admins: ['org_admin', 'org_super_admin'],
   billing: ['org_super_admin', 'org_billing_admin'],
+  admins_and_billing: ['org_admin', 'org_super_admin', 'org_billing_admin'],
   // Empty means no role-name filter; collect every org-scoped binding.
   all: [],
 }
@@ -368,8 +385,7 @@ async function getEligibleOrgMemberEmails(
         continue
 
       const prefs = (user.email_preferences as EmailPreferences | null) ?? {}
-      const prefValue = prefs[preferenceKey]
-      const isEnabled = prefValue === undefined ? true : prefValue
+      const isEnabled = isUserEmailPreferenceEnabled(prefs, preferenceKey)
 
       if (isEnabled) {
         emailSet.add(email)
@@ -492,10 +508,24 @@ export async function sendEmailToOrgMembers(
   orgId: string,
   drizzleClient?: ReturnType<typeof getDrizzleClient>,
 ): Promise<number> {
+  const prepared = await prepareEmailToOrgMembers(c, eventName, preferenceKey, orgId, drizzleClient)
+  return prepared?.send(eventData) ?? 0
+}
+
+// Resolve recipients before callers consume an irreversible delivery claim.
+// Preparation performs no sends; the returned send function performs no lookups.
+export async function prepareEmailToOrgMembers(
+  c: Context,
+  eventName: string,
+  preferenceKey: EmailPreferenceKey,
+  orgId: string,
+  drizzleClient?: ReturnType<typeof getDrizzleClient>,
+  options: { requireCompleteRecipients?: boolean } = {},
+): Promise<{ send: (eventData: Record<string, unknown>) => number } | null> {
   // If Bento isn't configured, sending is impossible; skip DB work entirely.
   // This also keeps CI/test runs fast/stable.
   if (!isBentoConfigured(c))
-    return 0
+    return null
 
   const ownedPgClient = drizzleClient ? undefined : await getPgClient(c, true)
   let targets: Awaited<ReturnType<typeof getPreparedEligibleEmailTargets>>
@@ -507,10 +537,13 @@ export async function sendEmailToOrgMembers(
     if (ownedPgClient)
       await closeClient(c, ownedPgClient)
   }
+  if (options.requireCompleteRecipients && targets.resolutionFailed)
+    throw new Error('Email recipient resolution failed before delivery')
+
   const { recipients } = targets
   if (!recipients) {
     cloudlog({ requestId: c.get('requestId'), message: 'sendEmailToOrgMembers: org not found', orgId })
-    return 0
+    return null
   }
 
   const { adminEmails, managementEmail, allEmails } = recipients
@@ -523,26 +556,30 @@ export async function sendEmailToOrgMembers(
       preferenceKey,
       orgId,
     })
-    return 0
+    return null
   }
 
-  // Send emails in background - don't await
-  for (const email of allEmails) {
-    backgroundTask(c, trackBentoEvent(c, email, eventData, eventName))
+  return {
+    send(eventData) {
+      // Send emails in background - don't await
+      for (const email of allEmails) {
+        backgroundTask(c, trackBentoEvent(c, email, eventData, eventName))
+      }
+
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'sendEmailToOrgMembers: queued',
+        eventName,
+        preferenceKey,
+        orgId,
+        totalRecipients: allEmails.length,
+        adminRecipients: adminEmails.length,
+        managementEmailIncluded: !!managementEmail,
+      })
+
+      return allEmails.length
+    },
   }
-
-  cloudlog({
-    requestId: c.get('requestId'),
-    message: 'sendEmailToOrgMembers: queued',
-    eventName,
-    preferenceKey,
-    orgId,
-    totalRecipients: allEmails.length,
-    adminRecipients: adminEmails.length,
-    managementEmailIncluded: !!managementEmail,
-  })
-
-  return allEmails.length
 }
 
 /**
@@ -962,4 +999,5 @@ export async function getOrgAdminMemberEmailsForTags(
 export const orgEmailNotificationTestUtils = {
   AUDIENCE_ROLE_NAMES,
   getEligibleEmailTargets,
+  getEligibleOrgMemberEmails,
 }

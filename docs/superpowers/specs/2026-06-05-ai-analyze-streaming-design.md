@@ -201,7 +201,7 @@ constants, staggered so the inner layer always fires before the outer.
 - Wire the incoming request's abort signal / stream cancellation through to
   the AI stream so upstream cancellation stops generation (output-token waste
   reduction; best-effort, not a security control).
-- Contingency: if `@cf/moonshotai/kimi-k2.6` rejects `stream: true`, the
+- Contingency: if `@cf/deepseek-ai/deepseek-v4.1-flash-1017` rejects `stream: true`, the
   builder buffers internally and emits the full text as a single `chunk`
   followed by `done` — protocol and all downstream code unchanged.
 - `extractAnalysis()` and the buffered path are deleted at rollout step 4.

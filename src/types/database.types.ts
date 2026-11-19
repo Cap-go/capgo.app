@@ -432,6 +432,8 @@ export type Database = {
       }
       apps: {
         Row: {
+          serving_regions: string[]
+          serving_region_mode: string
           allow_device_custom_id: boolean
           allow_preview: boolean
           android_store_url: string | null
@@ -439,6 +441,7 @@ export type Database = {
           block_provider_infra_requests: boolean
           build_timeout_seconds: number
           build_timeout_updated_at: string
+          bundle_incompatible_alert: string
           channel_device_count: number
           created_at: string | null
           created_from_onboarding: boolean
@@ -464,6 +467,8 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          serving_regions?: string[]
+          serving_region_mode?: string
           allow_device_custom_id?: boolean
           allow_preview?: boolean
           android_store_url?: string | null
@@ -471,6 +476,7 @@ export type Database = {
           block_provider_infra_requests?: boolean
           build_timeout_seconds?: number
           build_timeout_updated_at?: string
+          bundle_incompatible_alert?: string
           channel_device_count?: number
           created_at?: string | null
           created_from_onboarding?: boolean
@@ -496,6 +502,8 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          serving_regions?: string[]
+          serving_region_mode?: string
           allow_device_custom_id?: boolean
           allow_preview?: boolean
           android_store_url?: string | null
@@ -503,6 +511,7 @@ export type Database = {
           block_provider_infra_requests?: boolean
           build_timeout_seconds?: number
           build_timeout_updated_at?: string
+          bundle_incompatible_alert?: string
           channel_device_count?: number
           created_at?: string | null
           created_from_onboarding?: boolean
@@ -738,6 +747,7 @@ export type Database = {
           last_error: string | null
           owner_org: string
           platform: string
+          queue_priority: number | null
           requested_by: string
           runner_wait_seconds: number
           started_at: string | null
@@ -763,6 +773,7 @@ export type Database = {
           last_error?: string | null
           owner_org: string
           platform: string
+          queue_priority?: number | null
           requested_by: string
           runner_wait_seconds?: number
           started_at?: string | null
@@ -788,6 +799,7 @@ export type Database = {
           last_error?: string | null
           owner_org?: string
           platform?: string
+          queue_priority?: number | null
           requested_by?: string
           runner_wait_seconds?: number
           started_at?: string | null
@@ -1032,6 +1044,7 @@ export type Database = {
           allow_device: boolean
           allow_device_self_set: boolean
           allow_emulator: boolean
+          bundle_alert_enabled: boolean | null
           allow_prod: boolean
           android: boolean
           app_id: string
@@ -1073,6 +1086,7 @@ export type Database = {
           allow_device?: boolean
           allow_device_self_set?: boolean
           allow_emulator?: boolean
+          bundle_alert_enabled?: boolean | null
           allow_prod?: boolean
           android?: boolean
           app_id: string
@@ -1114,6 +1128,7 @@ export type Database = {
           allow_device?: boolean
           allow_device_self_set?: boolean
           allow_emulator?: boolean
+          bundle_alert_enabled?: boolean | null
           allow_prod?: boolean
           android?: boolean
           app_id?: string
@@ -1448,60 +1463,38 @@ export type Database = {
         }
         Relationships: []
       }
-      daily_storage: {
-        Row: {
-          app_id: string
-          date: string
-          id: number
-          storage: number
-        }
-        Insert: {
-          app_id: string
-          date: string
-          id?: number
-          storage: number
-        }
-        Update: {
-          app_id?: string
-          date?: string
-          id?: number
-          storage?: number
-        }
-        Relationships: []
-      }
       daily_storage_hourly: {
         Row: {
           app_id: string
           created_at: string
+          cycle_start: string
           date: string
           owner_org: string
+          segment_start: string
           storage_byte_hours: number
           updated_at: string
         }
         Insert: {
           app_id: string
           created_at?: string
+          cycle_start: string
           date: string
           owner_org: string
+          segment_start?: string
           storage_byte_hours?: number
           updated_at?: string
         }
         Update: {
           app_id?: string
           created_at?: string
+          cycle_start?: string
           date?: string
           owner_org?: string
+          segment_start?: string
           storage_byte_hours?: number
           updated_at?: string
         }
         Relationships: [
-          {
-            foreignKeyName: "daily_storage_hourly_app_id_fkey"
-            columns: ["app_id"]
-            isOneToOne: false
-            referencedRelation: "apps"
-            referencedColumns: ["app_id"]
-          },
           {
             foreignKeyName: "daily_storage_hourly_owner_org_fkey"
             columns: ["owner_org"]
@@ -1510,6 +1503,33 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      daily_storage_hourly_refreshes: {
+        Row: {
+          app_id: string
+          calculated_until: string
+          cycle_start: string
+          owner_org: string
+          segment_start: string
+          written_at: string
+        }
+        Insert: {
+          app_id: string
+          calculated_until: string
+          cycle_start: string
+          owner_org: string
+          segment_start: string
+          written_at: string
+        }
+        Update: {
+          app_id?: string
+          calculated_until?: string
+          cycle_start?: string
+          owner_org?: string
+          segment_start?: string
+          written_at?: string
+        }
+        Relationships: []
       }
       daily_version: {
         Row: {
@@ -2888,6 +2908,8 @@ export type Database = {
           mau: number
           name: string
           native_build_concurrency: number
+          native_build_queue_priority: number
+          observe_events: number
           price_m: number
           price_m_id: string
           price_y: number
@@ -2914,6 +2936,8 @@ export type Database = {
           mau?: number
           name?: string
           native_build_concurrency?: number
+          native_build_queue_priority?: number
+          observe_events?: number
           price_m?: number
           price_m_id: string
           price_y?: number
@@ -2940,6 +2964,8 @@ export type Database = {
           mau?: number
           name?: string
           native_build_concurrency?: number
+          native_build_queue_priority?: number
+          observe_events?: number
           price_m?: number
           price_m_id?: string
           price_y?: number
@@ -3355,6 +3381,8 @@ export type Database = {
           canceled_at: string | null
           churn_reason: string | null
           created_at: string
+          billing_address: Json | null
+          billing_currency: string | null
           customer_country: string | null
           customer_id: string
           extra_mau: number
@@ -3385,6 +3413,8 @@ export type Database = {
           canceled_at?: string | null
           churn_reason?: string | null
           created_at?: string
+          billing_address?: Json | null
+          billing_currency?: string | null
           customer_country?: string | null
           customer_id: string
           extra_mau?: number
@@ -3415,6 +3445,8 @@ export type Database = {
           canceled_at?: string | null
           churn_reason?: string | null
           created_at?: string
+          billing_address?: Json | null
+          billing_currency?: string | null
           customer_country?: string | null
           customer_id?: string
           extra_mau?: number
@@ -3925,18 +3957,24 @@ export type Database = {
       version_meta: {
         Row: {
           app_id: string
+          lifetime: number
+          recorded_at: string
           size: number
           timestamp: string
           version_id: number
         }
         Insert: {
           app_id: string
+          lifetime?: number
+          recorded_at?: string
           size: number
           timestamp?: string
           version_id: number
         }
         Update: {
           app_id?: string
+          lifetime?: number
+          recorded_at?: string
           size?: number
           timestamp?: string
           version_id?: number
@@ -4055,10 +4093,15 @@ export type Database = {
           delivery_version: string
           enabled: boolean
           events: string[]
+          expires_at: string | null
           id: string
+          mcp_arguments: Json | null
+          mcp_event: string | null
+          mcp_verified_at: string | null
           name: string
           org_id: string
           secret: string
+          source: string
           updated_at: string
           url: string
         }
@@ -4068,10 +4111,15 @@ export type Database = {
           delivery_version?: string
           enabled?: boolean
           events: string[]
+          expires_at?: string | null
           id?: string
+          mcp_arguments?: Json | null
+          mcp_event?: string | null
+          mcp_verified_at?: string | null
           name: string
           org_id: string
           secret?: string
+          source?: string
           updated_at?: string
           url: string
         }
@@ -4081,10 +4129,15 @@ export type Database = {
           delivery_version?: string
           enabled?: boolean
           events?: string[]
+          expires_at?: string | null
           id?: string
+          mcp_arguments?: Json | null
+          mcp_event?: string | null
+          mcp_verified_at?: string | null
           name?: string
           org_id?: string
           secret?: string
+          source?: string
           updated_at?: string
           url?: string
         }
@@ -4217,6 +4270,10 @@ export type Database = {
         Args: { event_id: number; note: string }
         Returns: undefined
       }
+      acknowledge_compatibility_events: {
+        Args: { event_ids: number[]; note: string }
+        Returns: undefined
+      }
       apikey_has_current_org_create_capability: {
         Args: { p_apikey_rbac_id: string }
         Returns: boolean
@@ -4226,6 +4283,7 @@ export type Database = {
         Returns: boolean
       }
       app_has_real_bundle: { Args: { p_app_id: string }; Returns: boolean }
+      app_onboarding_cicd_timestamp: { Args: never; Returns: string }
       app_version_manifest_jsonb_unmigrated: {
         Args: {
           p_manifest: Database["public"]["CompositeTypes"]["manifest_entry"][]
@@ -4740,6 +4798,7 @@ export type Database = {
           block_provider_infra_requests: boolean
           build_timeout_seconds: number
           build_timeout_updated_at: string
+          bundle_incompatible_alert: string
           channel_device_count: number
           created_at: string | null
           created_from_onboarding: boolean
@@ -4789,6 +4848,13 @@ export type Database = {
           role_description: string
           role_id: string
           role_name: string
+        }[]
+      }
+      get_app_cicd_encryption_policy: {
+        Args: { p_app_id: string }
+        Returns: {
+          enforce_encrypted_bundles: boolean
+          owner_org: string
         }[]
       }
       get_app_metrics:
@@ -4878,6 +4944,21 @@ export type Database = {
           bundle_name: string
         }[]
       }
+      get_channels_previous_deploys: {
+        Args: {
+          p_app_id: string
+          p_channel_ids: number[]
+          p_cutoffs: (string | null)[]
+          p_exclude_version_id: number
+          p_per_channel: number
+        }
+        Returns: {
+          channel_id: number
+          created_at: string
+          deployed_at: string
+          version_id: number
+        }[]
+      }
       get_credit_auto_top_up_month_total: {
         Args: { p_org_id: string }
         Returns: number
@@ -4889,6 +4970,7 @@ export type Database = {
           build_time_unit: number
           mau: number
           native_build_concurrency: number
+          native_build_queue_priority: number
           storage: number
         }[]
       }
@@ -5086,6 +5168,17 @@ export type Database = {
         Returns: {
           stats_refresh_requested_at: string
           stats_updated_at: string
+        }[]
+      }
+      get_org_storage_billable_bytes: {
+        Args: { p_end_date: string; p_org_id: string; p_start_date: string }
+        Returns: number
+      }
+      get_org_storage_usage: {
+        Args: { orgid: string }
+        Returns: {
+          cycle_hours: number
+          storage_byte_hours: number
         }[]
       }
       get_org_user_access_rbac: {
@@ -5313,6 +5406,16 @@ export type Database = {
             }[]
           }
       get_total_storage_size_org: { Args: { org_id: string }; Returns: number }
+      get_update_daily_counts: {
+        Args: { p_app_ids: string[]; p_end: string; p_start: string }
+        Returns: {
+          app_id: string
+          date: string
+          fail_count: number
+          get_count: number
+          install_count: number
+        }[]
+      }
       get_update_stats: {
         Args: never
         Returns: {
@@ -5742,6 +5845,14 @@ export type Database = {
         }
         Returns: boolean
       }
+      rbac_check_permissions: {
+        Args: { p_checks: Json }
+        Returns: {
+          allowed: boolean
+          idx: number
+          key: string
+        }[]
+      }
       rbac_denied_channel_ids_for_permission: {
         Args: { p_permission_key: string }
         Returns: number[]
@@ -5899,14 +6010,6 @@ export type Database = {
           version_build: string
         }[]
       }
-      read_storage_usage: {
-        Args: { p_app_id: string; p_period_end: string; p_period_start: string }
-        Returns: {
-          app_id: string
-          date: string
-          storage: number
-        }[]
-      }
       read_version_usage: {
         Args: {
           p_app_id: string
@@ -5928,6 +6031,24 @@ export type Database = {
       readable_app_version_ids: { Args: never; Returns: number[] }
       readable_group_ids: { Args: never; Returns: string[] }
       readable_org_customer_ids: { Args: never; Returns: string[] }
+      record_app_cicd_deploy: {
+        Args: {
+          p_apikey_rbac_id: string
+          p_app_id: string
+          p_ci_provider: string
+          p_product: string
+        }
+        Returns: boolean
+      }
+      record_app_cicd_setup: {
+        Args: {
+          p_apikey_rbac_id?: string
+          p_app_id: string
+          p_event: string
+          p_selection?: Json
+        }
+        Returns: Json
+      }
       record_build_time: {
         Args: {
           p_app_id: string
@@ -6015,6 +6136,23 @@ export type Database = {
       remove_old_jobs: { Args: never; Returns: undefined }
       request_actor_email_adress: { Args: never; Returns: string }
       request_actor_user_id: { Args: never; Returns: string }
+      replace_app_storage_hourly: {
+        Args: {
+          p_app_id: string
+          p_app_uuid?: string
+          p_calculated_until?: string
+          p_cycle_end_day: string
+          p_cycle_start_day: string
+          p_end_exclusive_day: string
+          p_owner_org: string
+          p_require_current_owner?: boolean
+          p_rows: Json
+          p_segment_start: string
+          p_transfer_count?: number
+          p_written_at: string
+        }
+        Returns: undefined
+      }
       request_app_chart_refresh: {
         Args: { app_id: string }
         Returns: {
@@ -6175,7 +6313,12 @@ export type Database = {
       }
       updates_cache_purge_enabled: { Args: never; Returns: boolean }
       upsert_version_meta: {
-        Args: { p_app_id: string; p_size: number; p_version_id: number }
+        Args: {
+          p_app_id: string
+          p_size: number
+          p_timestamp?: string
+          p_version_id: number
+        }
         Returns: boolean
       }
       usage_credit_readable_org_ids: { Args: never; Returns: string[] }

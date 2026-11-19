@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { getTransientTestFailure } from '../scripts/run-tests-with-infra-retry.ts'
 
+function sdkUpstreamFailureDiagnostic() {
+  try {
+    expect(false, 'Could not list bundles for app com.example.sdk: upstream_unavailable | Upstream unavailable').toBe(true)
+  }
+  catch (error) {
+    if (!(error instanceof Error))
+      throw error
+    return `FAIL tests/cli-hashed-apikey.test.ts > lists bundles\n${error}`
+  }
+  throw new Error('Expected the SDK success assertion to fail')
+}
+
 describe('transient integration test retry classifier', () => {
   it.each([
     ['FAIL tests/example.test.ts > example\nUnknown Error: An invalid response was received from the upstream server', 'kong_upstream'],
@@ -11,12 +23,20 @@ describe('transient integration test retry classifier', () => {
     expect(getTransientTestFailure(output)).toBe(expected)
   })
 
+  it('retries an explicit SDK upstream failure in the failed assertion', () => {
+    expect(getTransientTestFailure(sdkUpstreamFailureDiagnostic())).toBe('gateway_502_503')
+  })
+
   it.each([
     'FAIL tests/example.test.ts > example\nAssertionError: expected 500 to be 200',
     'FAIL tests/example.test.ts > example\nAssertionError: expected true to be false',
     'Edge Function returned a non-2xx status code',
     'Found local migration files to be inserted before the last migration',
     'The job running on runner has exceeded the maximum execution time',
+    'FAIL tests/example.test.ts > example\nAssertionError: Could not list bundles for app com.example.sdk: invalid_apikey | Invalid API key: expected false to be true',
+    'FAIL tests/example.test.ts > example\nAssertionError: Could not list bundles for app com.example.sdk: forbidden | Permission denied: expected false to be true',
+    'FAIL tests/example.test.ts > example\nAssertionError: expected false to be true\nSource: upstream_unavailable | Upstream unavailable',
+    'FAIL tests/example.test.ts > example\nAssertionError: expected "upstream_unavailable | Upstream unavailable" to be "success"',
   ])('does not retry %s', (output) => {
     expect(getTransientTestFailure(output)).toBeNull()
   })
@@ -49,6 +69,28 @@ describe('transient integration test retry classifier', () => {
       '✓ tests/passing.test.ts',
       'FAIL tests/product.test.ts > product assertion',
       'AssertionError: expected 500 to be 200',
+    ].join('\n')
+
+    expect(getTransientTestFailure(output)).toBeNull()
+  })
+
+  it('does not retry a mixed SDK upstream and ordinary failure', () => {
+    const output = [
+      sdkUpstreamFailureDiagnostic(),
+      'FAIL tests/product.test.ts > product assertion',
+      'AssertionError: expected false to be true',
+    ].join('\n')
+
+    expect(getTransientTestFailure(output)).toBeNull()
+  })
+
+  it('ignores an SDK upstream message outside the failed diagnostic', () => {
+    const output = [
+      'stderr | tests/passing.test.ts > passes',
+      'Could not list bundles for app com.example.sdk: upstream_unavailable | Upstream unavailable',
+      '✓ tests/passing.test.ts',
+      'FAIL tests/product.test.ts > product assertion',
+      'AssertionError: expected false to be true',
     ].join('\n')
 
     expect(getTransientTestFailure(output)).toBeNull()

@@ -15,6 +15,7 @@ import { apikeyPrincipal, authPrincipal, queryJson, withRlsTransaction } from '.
 import { checkPermission } from '../../utils/rbac.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError, isRetryablePostgrestResult, retryWithBackoff } from '../../utils/retry.ts'
 import { readNativeActiveDevicesSummary, readNativeDailyPlatformActive, readNativeVersionUsage } from '../../utils/stats.ts'
+import { isStatisticsRangeTooLarge, MAX_STATISTICS_RANGE_DAYS, statisticsRangeDays } from '../../utils/statistics_range.ts'
 import { isStripeConfigured } from '../../utils/utils.ts'
 import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, fillMissingDailyCounts } from '../../utils/version_stats_helpers.ts'
 
@@ -160,6 +161,7 @@ interface AppMetricRow {
   app_id: string
   date: string
   mau: number
+  /** Byte-hours the app stored that UTC day (daily_storage_hourly). */
   storage: number
   bandwidth: number
   build_time_unit: number
@@ -167,12 +169,6 @@ interface AppMetricRow {
   fail: number
   install: number
   uninstall: number
-}
-
-interface StorageHourlyMetricRow {
-  app_id: string
-  date: string
-  storage_byte_hours: number
 }
 
 interface QueryResult<T> {
@@ -394,6 +390,12 @@ function metricDayNumber(metricDate: string, from: Date, graphDays: number): num
 
 export const statisticsTestUtils = {
   withStatsDb,
+  assembleNormalStats,
+  buildStorageSeries,
+  storageBytesFromByteHours,
+  getApiKeyAppsNormalStats,
+  getNormalStats,
+  checkOrganizationsAccess,
   executeStatsQueryWithRetry,
   fetchAppMetricsRows,
   getMissingAppStatsError,
@@ -405,98 +407,267 @@ export const statisticsTestUtils = {
 }
 
 async function checkOrganizationAccess(c: Context, orgId: string, db: StatsDb) {
-  if (!isStripeConfigured(c)) {
-    return { isPayingAndGoodPlan: true }
-  }
-  // Use the existing PostgreSQL function to check organization payment and plan status
-  let isPayingAndGoodPlan: boolean | null = null
-  let error: unknown = null
-  try {
-    const rows = await db<{ is_paying_and_good_plan_org: boolean | null }>('SELECT public.is_paying_and_good_plan_org(orgid => $1::uuid) AS is_paying_and_good_plan_org', [orgId])
-    isPayingAndGoodPlan = rows[0]?.is_paying_and_good_plan_org ?? null
-  }
-  catch (rpcError) {
-    error = rpcError
-  }
+  await checkOrganizationsAccess(c, [orgId], db)
+  return { isPayingAndGoodPlan: true }
+}
 
-  if (error) {
+/**
+ * Payment and plan check for several organizations in one read. Fails like checking each
+ * organization in order: a read error is a 404, and the first organization that is not paying
+ * (or has a bad plan) is a 402 naming that organization.
+ */
+async function checkOrganizationsAccess(c: Context, orgIds: string[], db: StatsDb) {
+  if (orgIds.length === 0 || !isStripeConfigured(c))
+    return
+
+  // Use the existing PostgreSQL function to check organization payment and plan status
+  let rows: { ord: number | string, is_paying_and_good_plan_org: boolean | null }[]
+  try {
+    rows = await db<{ ord: number | string, is_paying_and_good_plan_org: boolean | null }>(
+      `SELECT input.ord, public.is_paying_and_good_plan_org(orgid => input.org_id) AS is_paying_and_good_plan_org
+       FROM unnest($1::uuid[]) WITH ORDINALITY AS input(org_id, ord)
+       ORDER BY input.ord`,
+      [orgIds],
+    )
+  }
+  catch (error) {
     throw quickError(404, 'organization_not_found', 'Organization not found or error checking status', {
       error,
     })
   }
 
-  // If organization is not paying or doesn't have a good plan, throw error
-  if (!isPayingAndGoodPlan) {
-    throw quickError(402, 'subscription_required', 'Organization subscription required or plan invalid', {
-      orgId,
-      isPayingAndGoodPlan,
-    })
+  // Match by input position: PostgreSQL returns uuids in lowercase canonical form, so keying by
+  // the returned id would miss callers that pass an uppercase organization id.
+  const statusByOrd = new Map(rows.map(row => [Number(row.ord), row.is_paying_and_good_plan_org]))
+  for (const [index, orgId] of orgIds.entries()) {
+    const isPayingAndGoodPlan = statusByOrd.get(index + 1) ?? null
+    // If organization is not paying or doesn't have a good plan, throw error
+    if (!isPayingAndGoodPlan) {
+      throw quickError(402, 'subscription_required', 'Organization subscription required or plan invalid', {
+        orgId,
+        isPayingAndGoodPlan,
+      })
+    }
   }
-
-  return { isPayingAndGoodPlan }
 }
 
-async function getStorageByteHoursByApp(
-  c: Context,
-  ownerOrg: string | null,
-  appIds: string[],
-  from: Date,
-  to: Date,
-  graphDays: number,
-  db: StatsDb,
-) {
-  const storageByteHoursByApp = appIds.reduce((acc, appId) => {
-    acc[appId] = Array.from({ length: graphDays }).fill(0) as number[]
+interface NormalStatsEntry {
+  date: string
+  mau: number
+  storage: number
+  storage_byte_hours: number
+  bandwidth: number
+  build_time_seconds: number
+  get: number | undefined
+}
+
+interface NormalStatsResult {
+  data: any
+  error: any
+}
+
+function createZeroArray(length: number): number[] {
+  return Array.from({ length }, () => 0)
+}
+
+function groupMetricsByApp(metrics: AppMetricRow[]) {
+  return metrics.reduce((acc, metric) => {
+    if (!acc[metric.app_id]) {
+      acc[metric.app_id] = [metric]
+    }
+    else {
+      acc[metric.app_id].push(metric)
+    }
     return acc
-  }, {} as Record<string, number[]>)
-
-  if (appIds.length === 0)
-    return { data: storageByteHoursByApp, error: null }
-
-  const fromDay = dayjs(from).utc().format('YYYY-MM-DD')
-  const toDay = dayjs(to).utc().format('YYYY-MM-DD')
-  const filters = ['date >= $1', 'date < $2']
-  const values: unknown[] = [fromDay, toDay]
-  if (ownerOrg) {
-    values.push(ownerOrg)
-    filters.push(`owner_org = $${values.length}::uuid`)
-  }
-  if (appIds.length === 1) {
-    values.push(appIds[0])
-    filters.push(`app_id = $${values.length}`)
-  }
-
-  const { data, error } = await executeStatsQueryWithRetry<StorageHourlyMetricRow[]>(
-    c,
-    'get_daily_storage_hourly_for_stats',
-    async () => ({
-      data: await db<StorageHourlyMetricRow>(
-        `SELECT app_id, date, storage_byte_hours FROM public.daily_storage_hourly WHERE ${filters.join(' AND ')} ORDER BY date ASC, app_id ASC`,
-        values,
-      ),
-      error: null,
-    }),
-  )
-
-  if (error)
-    return { data: storageByteHoursByApp, error }
-
-  const rows = data ?? []
-  for (const row of rows) {
-    if (!storageByteHoursByApp[row.app_id])
-      continue
-
-    const dayNumber = dayjs(row.date).utc().startOf('day').diff(dayjs(from).utc().startOf('day'), 'day')
-    if (dayNumber < 0 || dayNumber >= graphDays)
-      continue
-
-    storageByteHoursByApp[row.app_id][dayNumber] += Number(row.storage_byte_hours ?? 0)
-  }
-
-  return { data: storageByteHoursByApp, error: null }
+  }, {} as Record<string, AppMetricRow[]>)
 }
 
-async function getNormalStats(c: Context, appId: string | null, ownerOrg: string | null, from: Date, to: Date, db: StatsDb, isDashboard: boolean = false, includeBreakdown: boolean = false, noAccumulate: boolean = false) {
+const HOURS_PER_DAY = 24
+
+/**
+ * Bytes stored on each day: the byte-hours of the day divided by its hours. Today only counts the
+ * hours elapsed so far.
+ */
+function storageBytesFromByteHours(byteHours: number[], from: Date, now = dayjs().utc()): number[] {
+  const firstDay = dayjs(from).utc().startOf('day')
+  return byteHours.map((value, index) => {
+    // Fractional hours: at 00:30 a bundle stored since midnight used half a byte-hour per byte.
+    const hours = Math.min(HOURS_PER_DAY, now.diff(firstDay.add(index, 'day'), 'hour', true))
+    if (hours <= 0)
+      return 0
+    return Math.round((value ?? 0) / hours)
+  })
+}
+
+/** Day-over-day change of a level series, the shape `storage` had when noAccumulate is set. */
+function dailyChanges(levels: number[]): number[] {
+  return levels.map((value, index) => index === 0 ? value : value - levels[index - 1])
+}
+
+interface StorageSeries {
+  /** Bytes stored each day (average over the day), or its daily changes when noAccumulate is set. */
+  storage: number[]
+  /** Byte-hours used each day, accumulated unless noAccumulate is set. */
+  storageByteHours: number[]
+}
+
+function buildStorageSeries(dailyByteHours: number[], from: Date, noAccumulate: boolean): StorageSeries {
+  const levels = storageBytesFromByteHours(dailyByteHours, from)
+  return noAccumulate
+    ? { storage: dailyChanges(levels), storageByteHours: dailyByteHours }
+    : { storage: levels, storageByteHours: accumulateNumbers(dailyByteHours) }
+}
+
+/**
+ * Turns the rows read for one app or one organization into the daily series the endpoints return.
+ * Pure: every database read happens before, so the per-app and batched paths share this exactly.
+ *
+ * Storage has one source, the byte-hours in `get_app_metrics().storage`. `storage_byte_hours`
+ * returns them; the legacy `storage` field returns the bytes stored each day derived from them.
+ */
+function assembleNormalStats(c: Context, params: {
+  metricsByApp: Record<string, AppMetricRow[]>
+  from: Date
+  graphDays: number
+  isDashboard: boolean
+  includeBreakdown: boolean
+  noAccumulate: boolean
+}): NormalStatsResult {
+  const { metricsByApp, from, graphDays, isDashboard, includeBreakdown, noAccumulate } = params
+
+  let mau = createZeroArray(graphDays)
+  const byteHours = createZeroArray(graphDays)
+  let bandwidth = createZeroArray(graphDays)
+  let buildTime = createZeroArray(graphDays)
+  let gets = isDashboard ? createZeroArray(graphDays) : []
+
+  Object.values(metricsByApp)
+    .forEach((arrItem) => {
+      const sortedArrItem = arrItem.toSorted((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      cloudlog({ requestId: c.get('requestId'), message: 'sortedArrItem', data: sortedArrItem })
+      sortedArrItem.forEach((item) => {
+        if (!item.date)
+          return
+        const dayNumber = metricDayNumber(item.date, from, graphDays)
+        if (dayNumber === null)
+          return
+
+        mau[dayNumber] = (mau[dayNumber] ?? 0) + item.mau
+        byteHours[dayNumber] = (byteHours[dayNumber] ?? 0) + Number(item.storage ?? 0)
+        bandwidth[dayNumber] = (bandwidth[dayNumber] ?? 0) + (item.bandwidth ?? 0)
+        buildTime[dayNumber] = (buildTime[dayNumber] ?? 0) + (item.build_time_unit ?? 0)
+
+        if (isDashboard)
+          gets[dayNumber] = (gets[dayNumber] ?? 0) + item.get
+      })
+    })
+
+  const storage = buildStorageSeries(byteHours, from, noAccumulate)
+
+  // Accumulate data if requested (default behavior for backward compatibility)
+  if (noAccumulate === false) {
+    mau = accumulateNumbers(mau)
+    bandwidth = accumulateNumbers(bandwidth)
+    buildTime = accumulateNumbers(buildTime)
+    if (isDashboard) {
+      gets = accumulateNumbers(gets)
+    }
+  }
+  const baseDay = dayjs(from).utc()
+
+  const finalStats = createZeroArray(graphDays) as unknown as NormalStatsEntry[]
+  const today = dayjs().utc()
+  for (let i = 0; i < graphDays; i++) {
+    const day = baseDay.add(i, 'day')
+    if (day.utc().startOf('day').isAfter(today.utc().endOf('day')))
+      continue
+    finalStats[i] = {
+      mau: mau[i],
+      storage: storage.storage[i],
+      storage_byte_hours: storage.storageByteHours[i],
+      bandwidth: bandwidth[i],
+      build_time_seconds: buildTime[i],
+      get: isDashboard ? gets[i] : undefined,
+      date: day.toISOString(),
+    }
+  }
+
+  // If breakdown is requested, return both aggregated and per-app data
+  if (includeBreakdown) {
+    const breakdown: any[] = []
+
+    // Process each app's data through the same aggregation logic
+    Object.keys(metricsByApp).forEach((appId) => {
+      const appMetrics = metricsByApp[appId]
+
+      // Initialize arrays for this app
+      let appMau = createZeroArray(graphDays)
+      const appByteHours = createZeroArray(graphDays)
+      let appBandwidth = createZeroArray(graphDays)
+      let appBuildTime = createZeroArray(graphDays)
+      let appGets = isDashboard ? createZeroArray(graphDays) : []
+
+      // Process metrics for this app (same logic as aggregated version)
+      appMetrics.toSorted((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).forEach((item) => {
+        if (!item.date)
+          return
+        const dayNumber = metricDayNumber(item.date, from, graphDays)
+        if (dayNumber === null)
+          return
+
+        appMau[dayNumber] = (appMau[dayNumber] ?? 0) + item.mau
+        appByteHours[dayNumber] = (appByteHours[dayNumber] ?? 0) + Number(item.storage ?? 0)
+        appBandwidth[dayNumber] = (appBandwidth[dayNumber] ?? 0) + (item.bandwidth ?? 0)
+        appBuildTime[dayNumber] = (appBuildTime[dayNumber] ?? 0) + (item.build_time_unit ?? 0)
+
+        if (isDashboard)
+          appGets[dayNumber] = (appGets[dayNumber] ?? 0) + item.get
+      })
+
+      const appStorage = buildStorageSeries(appByteHours, from, noAccumulate)
+
+      // Accumulate data if requested (default behavior for backward compatibility)
+      if (noAccumulate === false) {
+        appMau = accumulateNumbers(appMau)
+        appBandwidth = accumulateNumbers(appBandwidth)
+        appBuildTime = accumulateNumbers(appBuildTime)
+        if (isDashboard) {
+          appGets = accumulateNumbers(appGets)
+        }
+      }
+
+      // Create final stats for this app
+      for (let i = 0; i < graphDays; i++) {
+        const day = baseDay.add(i, 'day')
+        if (day.utc().startOf('day').isAfter(today.utc().endOf('day')))
+          continue
+
+        breakdown.push({
+          app_id: appId,
+          date: day.toISOString(),
+          mau: appMau[i],
+          storage: appStorage.storage[i],
+          storage_byte_hours: appStorage.storageByteHours[i],
+          bandwidth: appBandwidth[i],
+          build_time_seconds: appBuildTime[i],
+          get: isDashboard ? appGets[i] : undefined,
+        })
+      }
+    })
+
+    return {
+      data: {
+        global: finalStats.filter(x => !!x),
+        byApp: breakdown.filter(x => !!x),
+      },
+      error: null,
+    }
+  }
+
+  return { data: finalStats.filter(x => !!x), error: null }
+}
+
+async function getNormalStats(c: Context, appId: string | null, ownerOrg: string | null, from: Date, to: Date, db: StatsDb, isDashboard: boolean = false, includeBreakdown: boolean = false, noAccumulate: boolean = false): Promise<NormalStatsResult> {
   if (!appId && !ownerOrg)
     return { data: null, error: 'Invalid appId or ownerOrg' }
 
@@ -526,29 +697,8 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
   const metrics = (rawMetrics ?? []) as AppMetricRow[]
   const graphDays = getDaysBetweenDates(from, to)
 
-  const createUndefinedArray = (length: number) => {
-    const arr: any[] = [] as any[]
-    for (let i = 0; i < length; i++)
-      arr.push(0)
-    return arr
-  }
-
-  let mau = createUndefinedArray(graphDays) as number[]
-  let storage = createUndefinedArray(graphDays) as number[]
-  let bandwidth = createUndefinedArray(graphDays) as number[]
-  let buildTime = createUndefinedArray(graphDays) as number[]
-  let gets = isDashboard ? createUndefinedArray(graphDays) as number[] : []
-
   // Group metrics by app_id
-  let metricsByApp = metrics.reduce((acc, metric) => {
-    if (!acc[metric.app_id]) {
-      acc[metric.app_id] = [metric]
-    }
-    else {
-      acc[metric.app_id].push(metric)
-    }
-    return acc
-  }, {} as Record<string, typeof metrics[0][]>)
+  let metricsByApp = groupMetricsByApp(metrics)
 
   if (appId) {
     metricsByApp = { [appId]: metricsByApp[appId] }
@@ -558,172 +708,135 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
     metricsByApp[key] ??= []
   }
 
-  const metricAppIds = Object.keys(metricsByApp).filter(Boolean)
-  const { data: storageByteHoursByApp, error: storageByteHoursError } = await getStorageByteHoursByApp(
-    c,
-    ownerOrgId,
-    appId ? [appId] : metricAppIds,
+  return assembleNormalStats(c, {
+    metricsByApp,
     from,
-    to,
     graphDays,
-    db,
-  )
-  if (storageByteHoursError)
-    return { data: null, error: storageByteHoursError }
+    isDashboard,
+    includeBreakdown: includeBreakdown && !!ownerOrg,
+    noAccumulate,
+  })
+}
 
-  let storageByteHours = createUndefinedArray(graphDays) as number[]
-  Object.values(storageByteHoursByApp).forEach((appStorageByteHours) => {
-    appStorageByteHours.forEach((value, index) => {
-      storageByteHours[index] += value ?? 0
+interface StatsAppAccessRow {
+  app_id: string
+  owner_org: string | null
+  org_read: boolean | null
+  app_read: boolean | null
+}
+
+/**
+ * Account statistics for an API key, one result per app in `appIds` order.
+ *
+ * Each result equals `getNormalStats(c, appId, null, ...)` for that app, but the reads are batched
+ * instead of running four RLS transactions per app over the shared lanes:
+ * - one `apps` lookup for every owner org;
+ * - one access read, using the same checks `get_app_metrics` applies (org read for the org
+ *   overload, app read for the app overload);
+ * - one `get_app_metrics` call per org the key can read, filtered to the key's apps here, so the
+ *   per-org metrics cache JSON is decoded once per org instead of once per app. Orgs the key cannot
+ *   read (app-scoped keys) keep the per-app call, which is what they returned before;
+ * - storage comes from the same `get_app_metrics` rows (byte-hours per day).
+ */
+async function getApiKeyAppsNormalStats(c: Context, appIds: string[], from: Date, to: Date, db: StatsDb, noAccumulate: boolean): Promise<NormalStatsResult[]> {
+  if (appIds.length === 0)
+    return []
+
+  const uniqueAppIds = Array.from(new Set(appIds))
+  const failAll = (error: unknown) => appIds.map(() => ({ data: null, error }))
+
+  const { data: ownerRows, error: ownerError } = await executeStatsQueryWithRetry<StatsAppAccessRow[]>(
+    c,
+    'statistics_apps_access_lookup',
+    async () => ({
+      // `apps` is read under RLS, like `resolveAppOwnerOrg`; an app missing here is reported as not found.
+      data: await db<StatsAppAccessRow>(
+        `WITH input AS (
+           SELECT apps.app_id, apps.owner_org
+           FROM public.apps
+           WHERE apps.app_id = ANY($1::varchar[])
+         ),
+         org_access AS (
+           SELECT orgs.owner_org, public.request_has_org_read_access(orgs.owner_org) AS org_read
+           FROM (SELECT DISTINCT input.owner_org FROM input WHERE input.owner_org IS NOT NULL) AS orgs
+         )
+         SELECT
+           input.app_id,
+           input.owner_org,
+           COALESCE(org_access.org_read, false) AS org_read,
+           CASE WHEN input.owner_org IS NULL THEN false
+             ELSE public.request_has_app_read_access(input.owner_org, input.app_id)
+           END AS app_read
+         FROM input
+         LEFT JOIN org_access ON org_access.owner_org = input.owner_org`,
+        [uniqueAppIds],
+      ),
+      error: null,
+    }),
+  )
+  if (ownerError)
+    return failAll(ownerError)
+
+  const appRows = new Map((ownerRows ?? []).map(row => [row.app_id, row]))
+  const foundApps = uniqueAppIds.filter(appId => appRows.has(appId))
+  const graphDays = getDaysBetweenDates(from, to)
+  const startDate = dayjs(from).utc().format('YYYY-MM-DD')
+  const endDate = dayjs(to).utc().format('YYYY-MM-DD')
+
+  // Group the readable apps by owner org.
+  const appsByOrg = new Map<string, { orgRead: boolean, appIds: string[] }>()
+  for (const appId of foundApps) {
+    const row = appRows.get(appId)!
+    if (!row.owner_org || !row.app_read)
+      continue
+    const group = appsByOrg.get(row.owner_org) ?? { orgRead: !!row.org_read, appIds: [] }
+    group.appIds.push(appId)
+    appsByOrg.set(row.owner_org, group)
+  }
+
+  const metricsTask = Promise.all(Array.from(appsByOrg.entries()).map(async ([orgId, group]) => {
+    if (group.orgRead) {
+      const { data, error } = await fetchAppMetricsRows(c, db, { orgId, startDate, endDate })
+      if (error)
+        return { appIds: group.appIds, rows: [] as AppMetricRow[], error }
+      const wanted = new Set(group.appIds)
+      return { appIds: group.appIds, rows: (data ?? []).filter(row => wanted.has(row.app_id)), error: null }
+    }
+    const results = await Promise.all(group.appIds.map(appId => fetchAppMetricsRows(c, db, { orgId, appId, startDate, endDate })))
+    const error = results.find(result => result.error)?.error ?? null
+    return { appIds: group.appIds, rows: results.flatMap(result => result.data ?? []), error }
+  }))
+
+  const metricGroups = await metricsTask
+
+  const metricsByAppId = new Map<string, AppMetricRow[]>()
+  const metricsErrorByAppId = new Map<string, unknown>()
+  for (const group of metricGroups) {
+    for (const appId of group.appIds) {
+      if (group.error)
+        metricsErrorByAppId.set(appId, group.error)
+      metricsByAppId.set(appId, [])
+    }
+    for (const row of group.rows)
+      metricsByAppId.get(row.app_id)?.push(row)
+  }
+
+  return appIds.map((appId) => {
+    if (!appRows.has(appId))
+      return { data: null, error: { error: 'app_not_found', status: 404, app_id: appId } }
+    const metricsError = metricsErrorByAppId.get(appId)
+    if (metricsError)
+      return { data: null, error: metricsError }
+
+    return assembleNormalStats(c, {
+      metricsByApp: { [appId]: metricsByAppId.get(appId) ?? [] },
+      from,
+      graphDays,
+      isDashboard: false,
+      includeBreakdown: false,
+      noAccumulate,
     })
   })
-
-  Object.values(metricsByApp)
-    .forEach((arrItem) => {
-      const sortedArrItem = arrItem.toSorted((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-      cloudlog({ requestId: c.get('requestId'), message: 'sortedArrItem', data: sortedArrItem })
-      sortedArrItem.forEach((item) => {
-        if (!item.date)
-          return
-        const dayNumber = metricDayNumber(item.date, from, graphDays)
-        if (dayNumber === null)
-          return
-
-        mau[dayNumber] = (mau[dayNumber] ?? 0) + item.mau
-        storage[dayNumber] = (storage[dayNumber] ?? 0) + item.storage
-        bandwidth[dayNumber] = (bandwidth[dayNumber] ?? 0) + (item.bandwidth ?? 0)
-        buildTime[dayNumber] = (buildTime[dayNumber] ?? 0) + (item.build_time_unit ?? 0)
-
-        if (isDashboard)
-          gets[dayNumber] = (gets[dayNumber] ?? 0) + item.get
-      })
-    })
-
-  if (storage.length !== 0) {
-    // some magic, copied from the frontend without much understanding
-    const { data: currentStorageBytes, error: storageError } = await executeStatsQueryWithRetry<number>(
-      c,
-      appId ? 'get_total_app_storage_size_orgs' : 'get_total_storage_size_org',
-      async () => {
-        const rows = appId
-          ? await db<{ size: number | null }>('SELECT public.get_total_app_storage_size_orgs(org_id => $1::uuid, app_id => $2::varchar) AS size', [ownerOrgId!, appId])
-          : await db<{ size: number | null }>('SELECT public.get_total_storage_size_org(org_id => $1::uuid) AS size', [ownerOrgId!])
-        return { data: rows[0]?.size ?? null, error: null }
-      },
-    )
-    if (storageError)
-      return { data: null, error: storageError }
-
-    const storageVariance = storage.reduce((p, c) => (p + (c ?? 0)), 0)
-    const currentStorage = currentStorageBytes ?? 0
-    const initValue = Math.max(0, (currentStorage - storageVariance + (storage[0] ?? 0)))
-    storage[0] = initValue
-  }
-
-  // Accumulate data if requested (default behavior for backward compatibility)
-  if (noAccumulate === false) {
-    storage = accumulateNumbers(storage)
-    storageByteHours = accumulateNumbers(storageByteHours)
-    mau = accumulateNumbers(mau)
-    bandwidth = accumulateNumbers(bandwidth)
-    buildTime = accumulateNumbers(buildTime)
-    if (isDashboard) {
-      gets = accumulateNumbers(gets)
-    }
-  }
-  const baseDay = dayjs(from).utc()
-
-  const finalStats = createUndefinedArray(graphDays) as { date: string, mau: number, storage: number, storage_byte_hours: number, bandwidth: number, build_time_seconds: number, get: number | undefined }[]
-  const today = dayjs().utc()
-  for (let i = 0; i < graphDays; i++) {
-    const day = baseDay.add(i, 'day')
-    if (day.utc().startOf('day').isAfter(today.utc().endOf('day')))
-      continue
-    finalStats[i] = {
-      mau: mau[i],
-      storage: storage[i],
-      storage_byte_hours: storageByteHours[i],
-      bandwidth: bandwidth[i],
-      build_time_seconds: buildTime[i],
-      get: isDashboard ? gets[i] : undefined,
-      date: day.toISOString(),
-    }
-  }
-
-  // If breakdown is requested, return both aggregated and per-app data
-  if (includeBreakdown && ownerOrg) {
-    const breakdown: any[] = []
-
-    // Process each app's data through the same aggregation logic
-    Object.keys(metricsByApp).forEach((appId) => {
-      const appMetrics = metricsByApp[appId]
-
-      // Initialize arrays for this app
-      let appMau = createUndefinedArray(graphDays) as number[]
-      let appStorage = createUndefinedArray(graphDays) as number[]
-      let appStorageByteHours = [...(storageByteHoursByApp[appId] ?? createUndefinedArray(graphDays))] as number[]
-      let appBandwidth = createUndefinedArray(graphDays) as number[]
-      let appBuildTime = createUndefinedArray(graphDays) as number[]
-      let appGets = isDashboard ? createUndefinedArray(graphDays) as number[] : []
-
-      // Process metrics for this app (same logic as aggregated version)
-      appMetrics.toSorted((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).forEach((item) => {
-        if (!item.date)
-          return
-        const dayNumber = metricDayNumber(item.date, from, graphDays)
-        if (dayNumber === null)
-          return
-
-        appMau[dayNumber] = (appMau[dayNumber] ?? 0) + item.mau
-        appStorage[dayNumber] = (appStorage[dayNumber] ?? 0) + item.storage
-        appBandwidth[dayNumber] = (appBandwidth[dayNumber] ?? 0) + (item.bandwidth ?? 0)
-        appBuildTime[dayNumber] = (appBuildTime[dayNumber] ?? 0) + (item.build_time_unit ?? 0)
-
-        if (isDashboard)
-          appGets[dayNumber] = (appGets[dayNumber] ?? 0) + item.get
-      })
-
-      // Accumulate data if requested (default behavior for backward compatibility)
-      if (noAccumulate === false) {
-        appStorage = accumulateNumbers(appStorage)
-        appStorageByteHours = accumulateNumbers(appStorageByteHours)
-        appMau = accumulateNumbers(appMau)
-        appBandwidth = accumulateNumbers(appBandwidth)
-        appBuildTime = accumulateNumbers(appBuildTime)
-        if (isDashboard) {
-          appGets = accumulateNumbers(appGets)
-        }
-      }
-
-      // Create final stats for this app
-      for (let i = 0; i < graphDays; i++) {
-        const day = baseDay.add(i, 'day')
-        if (day.utc().startOf('day').isAfter(today.utc().endOf('day')))
-          continue
-
-        breakdown.push({
-          app_id: appId,
-          date: day.toISOString(),
-          mau: appMau[i],
-          storage: appStorage[i],
-          storage_byte_hours: appStorageByteHours[i],
-          bandwidth: appBandwidth[i],
-          build_time_seconds: appBuildTime[i],
-          get: isDashboard ? appGets[i] : undefined,
-        })
-      }
-    })
-
-    return {
-      data: {
-        global: finalStats.filter(x => !!x),
-        byApp: breakdown.filter(x => !!x),
-      },
-      error: null,
-    }
-  }
-
-  return { data: finalStats.filter(x => !!x), error: null }
 }
 
 async function getBundleUsage(appId: string, from: Date, to: Date, shouldGetLatestVersion: boolean, db: StatsDb) {
@@ -834,7 +947,7 @@ function buildDailyPlatformActiveTotals(rows: NativeDailyPlatformRow[], dates: s
   const hasTotalFromRows = Array.from({ length: dates.length }).fill(false) as boolean[]
 
   rows.forEach((row) => {
-    const date = dayjs(row.date).utc().format('YYYY-MM-DD')
+    const date = dayjs.utc(row.date).format('YYYY-MM-DD')
     const index = dateIndexByLabel.get(date)
     if (index === undefined)
       return
@@ -903,7 +1016,7 @@ function buildNativeVersionCounts(rows: NativeVersionUsageRow[], dates: string[]
   }, {} as Record<string, Record<string, number>>)
 
   rows.forEach((row) => {
-    const date = dayjs(row.date).utc().format('YYYY-MM-DD')
+    const date = dayjs.utc(row.date).format('YYYY-MM-DD')
     const seriesName = getNativeVersionSeriesName(row)
     if (!dateSet.has(date) || !counts[date] || !seriesNames.includes(seriesName))
       return
@@ -1110,9 +1223,19 @@ function getLatestDayVersionShare(
 }
 
 function getDaysBetweenDates(firstDate: Date, secondDate: Date) {
-  const oneDay = 24 * 60 * 60 * 1000
-  const res = Math.round(Math.abs((firstDate.valueOf() - secondDate.valueOf()) / oneDay))
-  return res
+  return statisticsRangeDays(firstDate, secondDate)
+}
+
+// Every day in the range becomes a row per app, so an unbounded range (e.g. 2000 → 2026) costs
+// thousands of rows per app. Reject it before touching the database.
+function assertStatisticsRange(range: { from: Date, to: Date }) {
+  if (isStatisticsRangeTooLarge(range.from, range.to)) {
+    throw simpleError('date_range_too_large', `The range between from and to must be at most ${MAX_STATISTICS_RANGE_DAYS} days`, {
+      from: range.from.toISOString(),
+      to: range.to.toISOString(),
+      maxDays: MAX_STATISTICS_RANGE_DAYS,
+    })
+  }
 }
 
 app.get('/app/:app_id', async (c) => {
@@ -1123,6 +1246,7 @@ app.get('/app/:app_id', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
+  assertStatisticsRange(body)
   const auth = c.get('auth') as AuthInfo
 
   // Use unified RBAC permission check
@@ -1154,6 +1278,7 @@ app.get('/org/:org_id', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
+  assertStatisticsRange(body)
 
   const auth = c.get('auth') as AuthInfo
   // Use unified RBAC permission check
@@ -1188,6 +1313,7 @@ app.get('/app/:app_id/bundle_usage', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
+  assertStatisticsRange(body)
   const principal = await getAuthorizedStatsAppPrincipal(c, appId)
 
   const { data, error } = await withStatsDb(c, principal, db => getBundleUsage(appId, body.from, body.to, useDashboard, db))
@@ -1208,6 +1334,7 @@ app.get('/app/:app_id/native_usage', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
+  assertStatisticsRange(body)
   const principal = await getAuthorizedStatsAppPrincipal(c, appId)
 
   const { data, error } = await getNativeVersionUsage(c, appId, body.from, body.to, principal)
@@ -1230,6 +1357,7 @@ app.get('/user', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
+  assertStatisticsRange(body)
 
   const stats = await withStatsDb<Array<{ data: any, error: any }>>(c, principal, async (db) => {
     let orgs: { org_id: string }[]
@@ -1248,11 +1376,9 @@ app.get('/user', async (c) => {
       throw quickError(401, 'no_organizations_found', 'No organizations found', { data: auth?.userId ?? null })
     }
 
-    // Check organization payment status for each organization before returning stats
-    for (const orgId of orgIds) {
-      if (auth.authType !== 'jwt')
-        await checkOrganizationAccess(c, orgId, db)
-    }
+    // Check organization payment status for every organization before returning stats
+    if (auth.authType !== 'jwt')
+      await checkOrganizationsAccess(c, orgIds, db)
 
     if (auth.authType === 'apikey') {
       let apps: { app_id: string }[]
@@ -1262,7 +1388,7 @@ app.get('/user', async (c) => {
       catch (appsError) {
         throw quickError(404, 'apps_not_found', 'Apps not found', { error: appsError })
       }
-      return await Promise.all(apps.map(app => getNormalStats(c, app.app_id, null, body.from, body.to, db, false, false, body.noAccumulate ?? false)))
+      return await getApiKeyAppsNormalStats(c, apps.map(app => app.app_id), body.from, body.to, db, body.noAccumulate ?? false)
     }
     return await Promise.all(orgIds.map(orgId => getNormalStats(c, null, orgId, body.from, body.to, db, auth.authType === 'jwt', false, body.noAccumulate ?? false)))
   })
@@ -1280,6 +1406,7 @@ app.get('/user', async (c) => {
     date: string
     mau: number
     storage: number
+    storage_byte_hours: number
     bandwidth: number
     build_time_seconds: number
     get?: number
@@ -1290,6 +1417,7 @@ app.get('/user', async (c) => {
     if (current) {
       current.mau += curr.mau
       current.storage += curr.storage
+      current.storage_byte_hours += curr.storage_byte_hours
       current.bandwidth += curr.bandwidth
       current.build_time_seconds += curr.build_time_seconds
     }

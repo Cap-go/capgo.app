@@ -8,6 +8,12 @@ type DialogStore = Pick<ReturnType<typeof useDialogV2Store>, 'openDialog' | 'onD
 
 type Translate = (key: string, params?: Record<string, unknown>) => string
 
+/** The rollout the user confirmed: a guarded write only applies while the channel still has it. */
+export interface ConfirmedRollout {
+  rolloutVersion: number
+  rolloutPercentageBps: number
+}
+
 export interface ChannelRolloutConfirmFlowsDeps {
   dialogStore: DialogStore
   t: Translate
@@ -28,9 +34,16 @@ export interface ChannelRolloutConfirmFlowsDeps {
   stableBundleName: () => string
   rolloutPercentageText: () => string
   saveChannelChange: (key: string, value: unknown) => Promise<boolean | void>
-  saveChannelChanges: (changes: Record<string, unknown>) => Promise<boolean>
+  /** With `guard`, the write only applies while the channel still has that rollout target and percentage. */
+  saveChannelChanges: (changes: Record<string, unknown>, guard?: ConfirmedRollout) => Promise<boolean>
   askUpdateNotificationAfterBundleChange: () => Promise<void>
   openSelectRolloutVersion: () => Promise<void>
+  /**
+   * Starting the configured rollout: the shared impact confirm (who gets the
+   * rollout target first, native-package warning). Resolves with the rollout
+   * target and percentage the user confirmed, or null.
+   */
+  confirmRolloutStart: () => Promise<ConfirmedRollout | null>
 }
 
 function formatRolloutPercentageLabel(percentage: number) {
@@ -191,18 +204,11 @@ export function createChannelRolloutConfirmFlows(deps: ChannelRolloutConfirmFlow
       await deps.openSelectRolloutVersion()
       return
     }
-    await confirm({
-      id: 'confirm-enable-rollout',
-      title: deps.t('confirm-enable-rollout-title'),
-      description: deps.t('confirm-enable-rollout-description', {
-        target: deps.rolloutTargetName(),
-        fallback: deps.stableBundleName(),
-        percent: deps.rolloutPercentageText(),
-      }),
-      onConfirm: async () => {
-        await deps.saveChannelChange('rollout_enabled', true)
-      },
-    })
+    // Only the rollout the user saw gets enabled: if another session changed its
+    // target or percentage meanwhile, the guarded write saves nothing.
+    const confirmed = await deps.confirmRolloutStart()
+    if (confirmed)
+      await deps.saveChannelChanges({ rollout_enabled: true }, confirmed)
   }
 
   async function rollbackRollout() {

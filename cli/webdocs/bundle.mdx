@@ -9,6 +9,28 @@ sidebar:
 📦 Manage app bundles for deployment in Capgo Cloud, including upload, compatibility checks, and encryption.
 
 
+### <a id="bundle-recommend"></a> 🔹 **Recommend**
+
+```bash
+npx @capgo/cli@latest bundle recommend
+```
+
+Suggest the next version using Cloudflare AI (active paid subscription required)
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--base-version** | <code>string</code> | Override the latest Capgo version as the release baseline |
+| **--since** | <code>string</code> | Git ref to compare from (defaults to the latest reachable local tag) |
+| **--ref** | <code>string</code> | Git ref to compare to (defaults to HEAD locally; required for GitHub) |
+| **--repo** | <code>string</code> | Use GitHub comparison history through your authenticated gh CLI |
+| **--changelog** | <code>boolean</code> | Also draft a Markdown changelog |
+| **--json** | <code>boolean</code> | Print the recommendation as JSON |
+| **--dry-run** | <code>boolean</code> | Print local context without sending it to Capgo or AI |
+
 ### <a id="bundle-upload"></a> ⬆️ **Upload**
 
 **Alias:** `u`

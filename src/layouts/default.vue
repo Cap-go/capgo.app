@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { OrganizationApp } from '~/stores/organization'
 import { Capacitor } from '@capacitor/core'
 import { useLocalStorage, useMediaQuery } from '@vueuse/core'
 import { computed, defineAsyncComponent, ref, useTemplateRef, watch } from 'vue'
@@ -21,6 +22,7 @@ const OnboardingExploreBanner = defineAsyncComponent(() => import('~/components/
 const OnboardingExploreReminder = defineAsyncComponent(() => import('~/components/dashboard/OnboardingExploreReminder.vue'))
 const PastDueBanner = defineAsyncComponent(() => import('~/components/dashboard/PastDueBanner.vue'))
 const TrialCardPrompt = defineAsyncComponent(() => import('~/components/dashboard/TrialCardPrompt.vue'))
+const ConsoleUpdatePrompt = defineAsyncComponent(() => import('~/components/changelog/ConsoleUpdatePrompt.vue'))
 
 const sidebarOpen = ref(false)
 const sidebarCollapsedPreference = useLocalStorage('capgo-sidebar-collapsed', false)
@@ -37,6 +39,7 @@ const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 const main = useMainStore()
 let onboardingLookupRun = 0
+const ONBOARDING_APPS_MAX_AGE_MS = 60_000
 
 const selectableOrganizations = computed(() => organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)))
 const selectableOrganizationIds = computed(() => selectableOrganizations.value.map(org => org.gid).sort().join(','))
@@ -45,10 +48,13 @@ async function refreshPendingOnboardingApp() {
   const lookupRun = ++onboardingLookupRun
   pendingOnboardingAppId.value = ''
 
-  if (/^\/app\/new\/?$/.test(route.path) || /^\/app\/[^/]+\/getting-started\/?$/.test(route.path) || route.path === '/onboarding' || route.path.startsWith('/onboarding/'))
+  if (/^\/app\/new\/?$/.test(route.path) || /^\/app\/[^/]+\/getting-started\/?$/.test(route.path) || /^\/app\/[^/]+\/ci-cd\/?$/.test(route.path) || route.path === '/onboarding' || route.path.startsWith('/onboarding/'))
     return
 
   await organizationStore.awaitInitialLoad()
+  // A newer lookup (route change) started while this one waited.
+  if (lookupRun !== onboardingLookupRun)
+    return
 
   const singleOrganization = selectableOrganizations.value.length === 1
     ? selectableOrganizations.value[0]
@@ -59,17 +65,28 @@ async function refreshPendingOnboardingApp() {
   const routeAppId = 'app' in route.params && typeof route.params.app === 'string' ? route.params.app : null
   const candidateAppId = routeAppId ?? getOnboardingResumeAppId(main.user?.id ?? main.auth?.id)
 
-  const { data, error } = await capgo.from('apps')
-    .select('app_id, need_onboarding, onboarding')
-    .eq('owner_org', singleOrganization.gid)
-    .limit(2)
+  // Reuse the organization store's apps when it loaded them recently, instead
+  // of querying the apps table on every route change. An app registered
+  // outside this session (CLI or AI agent) shows up within that window.
+  const storeApps = organizationStore.getFreshOrgApps(singleOrganization.gid, ONBOARDING_APPS_MAX_AGE_MS)
+  let data: Pick<OrganizationApp, 'app_id' | 'need_onboarding' | 'onboarding'>[] | null
+  if (storeApps) {
+    data = storeApps.slice(0, 2)
+  }
+  else {
+    const result = await capgo.from('apps')
+      .select('app_id, need_onboarding, onboarding')
+      .eq('owner_org', singleOrganization.gid)
+      .limit(2)
 
-  if (lookupRun !== onboardingLookupRun)
-    return
+    if (lookupRun !== onboardingLookupRun)
+      return
 
-  if (error) {
-    console.error('Cannot resolve pending onboarding app', error)
-    return
+    if (result.error) {
+      console.error('Cannot resolve pending onboarding app', result.error)
+      return
+    }
+    data = result.data
   }
 
   if (!data || data.length !== 1)
@@ -93,6 +110,11 @@ watch([
   () => route.path,
   selectableOrganizationIds,
   () => main.user?.id ?? main.auth?.id,
+  // Onboarding state the store refreshed (getting started, CLI progress).
+  () => {
+    const orgs = selectableOrganizations.value
+    return orgs.length === 1 ? JSON.stringify(organizationStore.getFreshOrgApps(orgs[0].gid, ONBOARDING_APPS_MAX_AGE_MS)?.slice(0, 2).map(app => [app.app_id, app.need_onboarding, app.onboarding]) ?? null) : ''
+  },
 ], refreshPendingOnboardingApp, { immediate: true })
 
 // Initialize realtime CLI activity feed (toasts for CLI actions)
@@ -163,5 +185,7 @@ useEdgeSwipeBack(contentShell, {
     </div>
     <AssistantChat />
     <TrialCardPrompt />
+    <!-- Web only: the native app receives console updates through Capgo live updates. -->
+    <ConsoleUpdatePrompt />
   </div>
 </template>

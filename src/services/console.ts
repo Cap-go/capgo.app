@@ -410,16 +410,16 @@ export async function getAllDashboard(orgId: string, startDate?: string, endDate
   }
 }
 
-export async function getTotalStorage(orgId?: string): Promise<number> {
-  if (!orgId)
-    return 0
+/** Storage GB-hours of the org's current billing cycle, as billed (byte-hours and cycle hours). */
+export async function getOrgStorageUsage(orgId: string): Promise<{ storage_byte_hours: number, cycle_hours: number } | null> {
   const { data, error } = await useConsole()
-    .rpc('get_total_storage_size_org', { org_id: orgId })
-    .single()
+    .rpc('get_org_storage_usage', { orgid: orgId })
   if (error)
     throw new Error(error.message)
-
-  return data ?? 0
+  const row = Array.isArray(data) ? data[0] : data
+  if (!row)
+    return null
+  return { storage_byte_hours: Number(row.storage_byte_hours ?? 0), cycle_hours: Number(row.cycle_hours ?? 0) }
 }
 
 // Canonical frontend platform-admin verification.

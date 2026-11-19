@@ -229,6 +229,10 @@ export function getOnboardingResumeRedirect(options: {
     return null
   if (options.organizationCount !== 1 || options.appCount !== 1 || !options.appId)
     return null
+  // Direct-offer users need to subscribe before finishing setup. Keep billing
+  // reachable without requiring them to dismiss onboarding first.
+  if (/^\/settings\/organization\/(?:plans|billing|credits)(?:\/|$)/.test(options.path))
+    return null
   // The pending app already exists. Let the user open it, its devices, bundles,
   // and settings without bouncing back to Getting started.
   if (matchesAppPath(options.path, options.appId))

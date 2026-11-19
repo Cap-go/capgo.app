@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { sqlRestRequest } from './sql-rest-request'
 import {
   APIKEY_TEST_ORG_SUPER_ADMIN,
   createDirectApiKeyWithBindings,
   executeSQL,
-  fetchTestRequest,
   getAuthHeaders,
   getAuthHeadersForCredentials,
   getSupabaseClient,
@@ -111,14 +111,7 @@ interface ManifestRow {
 }
 
 function getRestManifestUrl(searchParams: Record<string, string>): string {
-  const supabaseUrl = process.env.SUPABASE_URL
-  if (!supabaseUrl)
-    throw new Error('SUPABASE_URL is missing')
-
-  const url = new URL('/rest/v1/manifest', supabaseUrl)
-  for (const [key, value] of Object.entries(searchParams))
-    url.searchParams.set(key, value)
-  return url.toString()
+  return `manifest?${new URLSearchParams(searchParams).toString()}`
 }
 
 async function parseResponseBody(response: Response): Promise<unknown> {
@@ -139,7 +132,7 @@ async function fetchManifestRows(headers: Record<string, string>, appVersionId: 
   if (!anonKey)
     throw new Error('SUPABASE_ANON_KEY is missing')
 
-  const response = await fetchTestRequest(getRestManifestUrl({
+  const response = await sqlRestRequest(getRestManifestUrl({
     select: 'id,file_name,file_hash,s3_path,app_version_id',
     app_version_id: `eq.${appVersionId}`,
   }), {
@@ -160,7 +153,7 @@ async function insertManifestRow(headers: Record<string, string>, row: Omit<Mani
   if (!anonKey)
     throw new Error('SUPABASE_ANON_KEY is missing')
 
-  const response = await fetchTestRequest(getRestManifestUrl({
+  const response = await sqlRestRequest(getRestManifestUrl({
     select: 'id,file_name,file_hash,s3_path,app_version_id',
   }), {
     method: 'POST',
@@ -183,7 +176,7 @@ async function deleteManifestRow(headers: Record<string, string>, manifestId: nu
   if (!anonKey)
     throw new Error('SUPABASE_ANON_KEY is missing')
 
-  const response = await fetchTestRequest(getRestManifestUrl({
+  const response = await sqlRestRequest(getRestManifestUrl({
     select: 'id',
     id: `eq.${manifestId}`,
   }), {

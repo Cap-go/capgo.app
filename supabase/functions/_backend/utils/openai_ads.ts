@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { Database } from './supabase.types.ts'
+import { normalizeOpenAIClickReference } from '../../shared/openai-click-reference.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getEnv } from './utils.ts'
 
@@ -7,7 +8,7 @@ import { getEnv } from './utils.ts'
 // Event schemas: https://developers.openai.com/ads/supported-events
 const OPENAI_ADS_EVENTS_URL = 'https://bzr.openai.com/v1/events'
 // Same Pixel ID as the website measurement pixel; events must share it to deduplicate.
-const DEFAULT_OPENAI_ADS_PIXEL_ID = '5Fiq7Kwp18THe1MThKS7GL'
+const DEFAULT_OPENAI_ADS_PIXEL_ID = '2Hvm75NK5qA45jWSMVWAdK'
 const REGISTRATION_SOURCE_URL = 'https://capgo.app/register/'
 // Used when WEBAPP_URL (the console, whose plans page starts the first payment) is not a public https URL.
 const DEFAULT_SUBSCRIPTION_SOURCE_URL = 'https://capgo.app/'
@@ -18,13 +19,14 @@ const OPENAI_ADS_TIMEOUT_MS = 8_000
 const DEFAULT_RETRY_DELAYS_MS = [500, 2_000]
 
 type UserRow = Database['public']['Tables']['users']['Row']
-export type OpenAIAdsUserRecord = Pick<UserRow, 'id' | 'email' | 'first_name' | 'last_name' | 'country'>
+export type OpenAIAdsUserRecord = Pick<UserRow, 'id' | 'email' | 'first_name' | 'last_name' | 'country'> & { oppref?: unknown }
 type OpenAIRegistrationRecord = OpenAIAdsUserRecord & Pick<UserRow, 'created_at'>
 
 export interface OpenAIAdsEvent {
   id: string
   type: 'registration_completed' | 'subscription_created'
   timestamp_ms: number
+  oppref?: string
   source_url: string
   action_source: 'web'
   user: Record<string, string[]>
@@ -92,6 +94,7 @@ export async function buildOpenAIRegistrationEvent(record: OpenAIRegistrationRec
     id: `registration_${user.external_ids_sha256[0]}`,
     type: 'registration_completed',
     timestamp_ms: timestampMs,
+    ...(normalizeOpenAIClickReference(record.oppref) ? { oppref: normalizeOpenAIClickReference(record.oppref) } : {}),
     source_url: REGISTRATION_SOURCE_URL,
     action_source: 'web',
     user,
@@ -140,6 +143,7 @@ export async function buildOpenAISubscriptionEvent(input: OpenAISubscriptionInpu
     id: `subscription_${await sha256Hex(input.orgId.trim())}`,
     type: 'subscription_created',
     timestamp_ms: timestampMs,
+    ...(normalizeOpenAIClickReference(input.user.oppref) ? { oppref: normalizeOpenAIClickReference(input.user.oppref) } : {}),
     source_url: input.sourceUrl || DEFAULT_SUBSCRIPTION_SOURCE_URL,
     action_source: 'web',
     user: await buildOpenAIAdsUser(input.user),

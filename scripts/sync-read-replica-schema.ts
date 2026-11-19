@@ -4,8 +4,11 @@ import type {
   ReadReplicaSchemaSyncPlan,
   ReadReplicaSchemaSyncStatement,
 } from '../read_replicate/schema_additive_sync.ts'
+import type { Queryable } from '../read_replicate/schema_catalog.ts'
 import type { SchemaCompatibilityIssue } from '../read_replicate/schema_compatibility.ts'
 import { randomUUID } from 'node:crypto'
+import { Client } from 'pg'
+import { googleReplicaPgClientConfig } from '../read_replicate/google_replica_connection.ts'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,6 +22,16 @@ import {
   stableStringify,
 } from '../read_replicate/schema_catalog.ts'
 import { readReplicaSchemaCatalogFromMigrations } from '../read_replicate/schema_catalog_from_migrations.ts'
+import {
+  assertReadReplicaSubscriberUrlConfigured,
+  loadLocalReadReplicaEnvIfNeeded,
+  readReplicaDatabaseUrlFromEnv,
+} from '../read_replicate/load_replica_env.ts'
+import {
+  filterReadReplicaSchemaPlanForApply,
+  partitionGuardSkipped,
+  resolveReadReplicaSchemaSyncMode,
+} from '../read_replicate/schema_sync_apply.ts'
 import { readReplicaSubscriberCompatibilityIssues } from '../read_replicate/schema_compatibility.ts'
 
 interface BunSubprocess {
@@ -136,72 +149,186 @@ async function refreshSubscription(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (process.argv.includes('--refresh-subscription')) {
+  const mode = resolveReadReplicaSchemaSyncMode(process.argv, process.env)
+  if (mode === 'refresh-subscription') {
     await refreshSubscription()
     return
   }
+  loadLocalReadReplicaEnvIfNeeded()
   const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
-  const dryRun = process.argv.includes('--dry-run')
+  const allowDrop = process.argv.includes('--allow-drop')
   console.log(
     'Building the read-replica schema catalog from local migrations through Tinbase/PGlite...',
   )
   const expected = await readReplicaSchemaCatalogFromMigrations()
   const replica = googleDataApiClient(GOOGLE_READ_REPLICA, deadline)
-  const actual = await readReplicaSchemaCatalog(replica)
-  const plan = planReadReplicaSchemaSync(expected, actual)
-
-  // Both checks run before the SQL object is uploaded or Cloud SQL is asked to
-  // import anything. The import receives this exact already-reviewed plan.
-  assertGoogleReadReplicaSchemaPlan(plan)
-  const preflightIssues = preflightCompatibilityIssues(expected, actual, plan)
-  if (preflightIssues.length) {
-    throw new Error(
-      `Read-replica schema preflight found residual drift: ${stableStringify(preflightIssues)}`,
+  const replicaRead = await openReplicaSchemaCatalogClient(deadline, replica)
+  try {
+    const actual = await readReplicaSchemaCatalog(replicaRead)
+    const plan = filterReadReplicaSchemaPlanForApply(
+      planReadReplicaSchemaSync(expected, actual),
+      allowDrop,
     )
-  }
 
-  if (dryRun) {
-    console.log('Read-replica schema dry run result:')
-    console.log(stableStringify({
-      statements: plan.statements.map(({ kind, table, name }) => ({ kind, table, name })),
-      skipped: plan.skipped,
-    }))
-    return
-  }
-
-  if (plan.statements.length) {
-    const applyPlan = replica.applyReadReplicaSchemaPlan
-    if (!applyPlan) {
+    // Both checks run before the SQL object is uploaded or Cloud SQL is asked to
+    // import anything. The import receives this exact already-reviewed plan.
+    assertGoogleReadReplicaSchemaPlan(plan)
+    const preflightIssues = preflightCompatibilityIssues(expected, actual, plan)
+    if (preflightIssues.length) {
       throw new Error(
-        'Cloud SQL schema reconciliation requires a server-side plan importer.',
+        `Read-replica schema preflight found residual drift: ${stableStringify(preflightIssues)}`,
       )
     }
-    await applyPlan(plan)
-  }
 
-  const finalActual = await readReplicaSchemaCatalog(replica)
-  const issues = readReplicaSubscriberCompatibilityIssues(expected, finalActual)
-  const result = {
-    applied: plan.statements.map(({ kind, table, name }) => ({ kind, table, name })),
-    skipped: plan.skipped,
-  }
+    if (mode === 'dry-run' || mode === 'guard') {
+      if (mode === 'guard') {
+        const { blocking, warned } = partitionGuardSkipped(plan.skipped)
+        if (warned.length) {
+          console.warn(
+            'Read-replica schema guard: subscriber has legacy indexes not present in migrations '
+            + '(drops require --allow-drop and are not run in guard mode): '
+            + stableStringify(warned),
+          )
+        }
+        if (blocking.length) {
+          throw new Error(
+            `Read-replica schema guard found unsupported drift: ${stableStringify(blocking)}`,
+          )
+        }
+        if (plan.statements.length) {
+          throw new Error(
+            `Read-replica schema guard found pending additive changes: ${stableStringify(
+              plan.statements.map(({ kind, table, name }) => ({ kind, table, name })),
+            )}`,
+          )
+        }
+        if (preflightIssues.length) {
+          throw new Error(
+            `Read-replica schema guard found residual drift: ${stableStringify(preflightIssues)}`,
+          )
+        }
+        console.log('Read-replica schema guard passed: subscriber matches migrations.')
+        return
+      }
 
-  if (issues.length) {
-    console.error(
-      '::error title=Read-replica schema did not converge::Cloud SQL server-side import completed with residual drift.',
+      console.log('Read-replica schema dry run result:')
+      console.log(stableStringify({
+        statements: plan.statements.map(({ kind, table, name }) => ({ kind, table, name })),
+        skipped: plan.skipped,
+      }))
+      if (mode === 'dry-run') {
+        console.error(
+          'No subscriber changes were applied. Pass --apply to mutate the Google subscriber (never implied by loading internal/cloudflare/.env.prod).',
+        )
+      }
+      return
+    }
+
+    if (plan.statements.length) {
+      const applyPlan = replica.applyReadReplicaSchemaPlan
+      if (!applyPlan) {
+        throw new Error(
+          'Cloud SQL schema reconciliation requires a server-side plan importer.',
+        )
+      }
+      await applyPlan(plan)
+    }
+
+    const finalActual = await readReplicaSchemaCatalog(replicaRead)
+    const issues = readReplicaSubscriberCompatibilityIssues(expected, finalActual)
+    const result = {
+      applied: plan.statements.map(({ kind, table, name }) => ({ kind, table, name })),
+      skipped: plan.skipped,
+    }
+
+    if (issues.length) {
+      console.error(
+        '::error title=Read-replica schema did not converge::Cloud SQL server-side import completed with residual drift.',
+      )
+      console.error(
+        stableStringify({ error: 'schema_not_converged', ...result, issues }),
+      )
+      process.exitCode = 1
+      return
+    }
+
+    console.log('Read-replica Cloud SQL server-side import result:')
+    console.log(stableStringify({ ...result, issues }))
+    console.log(
+      'Read replica accepts the schema derived from local migrations before primary migrations.',
     )
-    console.error(
-      stableStringify({ error: 'schema_not_converged', ...result, issues }),
-    )
-    process.exitCode = 1
-    return
   }
+  finally {
+    await replicaRead.close()
+  }
+}
 
-  console.log('Read-replica Cloud SQL server-side import result:')
-  console.log(stableStringify({ ...result, issues }))
-  console.log(
-    'Read replica accepts the schema derived from local migrations before primary migrations.',
-  )
+async function openReplicaSchemaCatalogClient(
+  deadline: number,
+  dataApi: ReadReplicaSchemaSyncClient,
+): Promise<Queryable & { close: () => Promise<void> }> {
+  const connectionString = readReplicaDatabaseUrlFromEnv()
+  if (connectionString) {
+    console.log('Reading subscriber schema catalog over direct PostgreSQL.')
+    return connectGoogleReplica(deadline, connectionString)
+  }
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    console.log(
+      'Reading subscriber schema catalog through gcloud sql execute-sql (GOOGLE_SERVICE_ACCOUNT).',
+    )
+    return googleDataApiCatalogQueryable(dataApi)
+  }
+  assertReadReplicaSubscriberUrlConfigured('read-replica schema sync')
+  throw new Error('unreachable')
+}
+
+function googleDataApiCatalogQueryable(
+  dataApi: ReadReplicaSchemaSyncClient,
+): Queryable & { close: () => Promise<void> } {
+  const query = dataApi.query
+  if (!query) {
+    throw new Error('Cloud SQL Data API client cannot read the schema catalog.')
+  }
+  return {
+    query,
+    close: async () => {},
+  }
+}
+
+async function connectGoogleReplica(
+  deadline: number,
+  connectionString: string,
+): Promise<Queryable & { close: () => Promise<void> }> {
+  const client = new Client({
+    ...googleReplicaPgClientConfig(connectionString),
+    connectionTimeoutMillis: 10_000,
+  })
+  await client.connect()
+  const bounded = deadlineBoundCatalogClient({
+    query: (queryText, values) => client.query(queryText, values),
+  }, deadline)
+  return {
+    query: (queryText, values) => bounded.query(queryText, values),
+    close: () => client.end(),
+  }
+}
+
+function deadlineBoundCatalogClient(client: Queryable, deadline: number): Queryable {
+  return {
+    async query(queryText: string, values?: unknown[]) {
+      if (queryText !== READ_REPLICA_SCHEMA_CATALOG_SQL)
+        return client.query(queryText, values)
+
+      const timeoutMs = remainingBudgetMs(deadline, 'read the schema catalog')
+      await client.query(`SET statement_timeout = ${timeoutMs}`)
+      try {
+        return await client.query(queryText, values)
+      }
+      finally {
+        await client.query('RESET statement_timeout')
+      }
+    },
+  }
 }
 
 export function preflightCompatibilityIssues(
@@ -321,7 +448,8 @@ function googleDataApiClient(
 export function assertGoogleReadReplicaSchemaPlan(
   plan: ReadReplicaSchemaSyncPlan,
 ): void {
-  const skipped = plan.skipped[0]
+  const { blocking } = partitionGuardSkipped(plan.skipped)
+  const skipped = blocking[0]
   if (skipped) {
     throw new Error(
       `Cloud SQL server-side import cannot reconcile skipped ${skipped.kind} ${skipped.table}.${skipped.name} (${skipped.reason}) before primary migrations.`,
@@ -835,7 +963,7 @@ async function executeGoogleSql(
         `--database=${database}`,
         `--sql=${sql}`,
         '--format=json',
-        '--partial_result_mode=FAIL_PARTIAL_RESULT',
+        GCLOUD_PARTIAL_RESULT_FLAG,
         '--quiet',
       ],
       { stdout: 'pipe', stderr: 'pipe', env: process.env },
@@ -986,13 +1114,19 @@ function remainingBudgetMs(deadline: number, operation: string): number {
   return remainingMs
 }
 
-function dataApiCommandError(value: string): Error {
+// gcloud spells flags with hyphens; it rejects the underscore form.
+export const GCLOUD_PARTIAL_RESULT_FLAG = '--partial-result-mode=FAIL_PARTIAL_RESULT'
+
+export function dataApiCommandError(value: string): Error {
   const output = commandOutput(value)
+  // Checked first: the rejected flag name itself matches the size patterns below.
+  if (/unrecognized arguments|invalid choice|argument .+: (?:expected|invalid)/i.test(output))
+    return new Error(`gcloud rejected the Cloud SQL Data API command arguments: ${output}`)
   if (
     /0\.5\s*mb|request.*(?:size|limit)|payload.*(?:size|limit)/i.test(output)
   ) {
     return new Error(
-      'Cloud SQL Data API rejected the SQL request at its 0.5 MB request limit. Keep the selected schema catalog bounded.',
+      `Cloud SQL Data API rejected the SQL request at its 0.5 MB request limit. Keep the selected schema catalog bounded. gcloud output: ${output}`,
     )
   }
   if (
@@ -1001,7 +1135,7 @@ function dataApiCommandError(value: string): Error {
     )
   ) {
     return new Error(
-      'Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded.',
+      `Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded. gcloud output: ${output}`,
     )
   }
   return new Error(`Cloud SQL Data API query failed: ${output}`)

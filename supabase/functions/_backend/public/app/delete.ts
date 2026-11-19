@@ -3,14 +3,13 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { PgClient, PgQueryClient } from '../../utils/pg.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
-import { removeImageFolder } from '../../utils/image_storage.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { apikeyPrincipal, queryJsonOne, withRlsTransaction } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { s3 } from '../../utils/s3.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
+import { expireSimulatorSessions } from '../build/concurrency.ts'
 
 const STORAGE_LIST_PAGE_SIZE = 100
 const STORAGE_REMOVE_BATCH_SIZE = 1000
@@ -78,13 +77,13 @@ async function removeSupabaseStorageFolder(
 const APIKEY_DELETE_TABLES = ['app_versions_meta', 'channel_devices', 'channels', 'devices'] as const
 
 // Internal tables that need the service connection. Keep daily_mau / daily_bandwidth /
-// daily_build_time: they stay billable through deleted_apps for the rest of the cycle
+// daily_build_time / daily_storage_hourly: they stay billable through deleted_apps for the rest of the cycle
 // (anti-fraud, so deleting and recreating an app cannot reset usage).
 // delete_old_deleted_apps purges them after 35 days, same as the dashboard deletion path.
 // An app_id recreated in that window, even by another org, shares these rows on purpose;
 // see docs/billing-usage-retention.md. App deletion is already authorized, so app-scoped
 // org_users cleanup is internal; deploy_history has a "Deny delete" policy.
-const ADMIN_DELETE_TABLES = ['daily_version', 'version_usage', 'bandwidth_usage', 'storage_usage', 'device_usage', 'daily_storage', 'stats', 'org_users', 'deploy_history'] as const
+const ADMIN_DELETE_TABLES = ['daily_version', 'version_usage', 'bandwidth_usage', 'storage_usage', 'device_usage', 'stats', 'org_users', 'deploy_history'] as const
 
 // Each delete used to be its own PostgREST request whose error was ignored; a savepoint
 // keeps that isolation for statements sharing the API-key transaction.
@@ -103,37 +102,30 @@ async function deleteAppRows(c: Context<MiddlewareKeyVariables>, client: PgClien
   }
 }
 
-async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<string | null> {
+async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<void> {
   const pg = await getPgClient(c)
   try {
     // Use the API key's RLS context for data queries - RLS will enforce access
     const apikeyRls = apikeyPrincipal(c, apikey.key)
 
-    // Get the app's owner_org for image cleanup
+    // The app's org, read before any row is deleted: simulator sessions of a device that
+    // stopped by itself are settled for this org below, before the apps row goes away.
     const app = await withRlsTransaction(pg, apikeyRls, client => queryJsonOne<{ owner_org: string }>(
       client,
       'SELECT owner_org FROM public.apps WHERE app_id = $1',
       [appId],
-    )).catch(() => null)
-    const appStoragePrefix = app?.owner_org ? `orgs/${app.owner_org}/apps/${appId}/` : null
+    )).catch((error) => {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'error settling simulator sessions', error, app_id: appId })
+      return null
+    })
 
     // Legacy per-user Supabase storage folder used by older CLI uploads.
     // The `apps` bucket stores objects under {user_id}/{app_id}/...
     if (apikey.user_id)
       await removeSupabaseStorageFolder(c, 'apps', `${apikey.user_id}/${appId}`, appId, 'legacy user-scoped app storage')
 
-    // Delete app icon from image storage (R2) before deleting the app
-    // App icons are stored at: images/org/{org_id}/{app_id}/icon
-    if (app?.owner_org) {
-      try {
-        const deleted = await removeImageFolder(c, `org/${app.owner_org}/${appId}`)
-        if (deleted > 0)
-          cloudlog({ requestId: c.get('requestId'), message: 'deleted app images', count: deleted, app_id: appId })
-      }
-      catch (error) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'error deleting app images', error, app_id: appId })
-      }
-    }
+    // R2 bundle storage (orgs/{org}/apps/{app}/) and the app icon (images/org/{org}/{app}/)
+    // are removed by the on_app_delete trigger, in bounded passes, after the apps row is gone.
 
     // User-facing tables (have RLS): deleted under the API key, each failure ignored like before
     await withRlsTransaction(pg, apikeyRls, async (client) => {
@@ -148,6 +140,13 @@ async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, 
     // Delete versions (last) - needs admin because no DELETE policy for anon role
     await deleteAppRows(c, pg, 'app_versions', appId, false)
 
+    // A simulator whose device stopped by itself is billed up to that stop: settle it now, before the
+    // apps delete trigger settles the sessions still open at the current time.
+    if (app?.owner_org) {
+      await expireSimulatorSessions(c, app.owner_org)
+        .catch(error => cloudlogErr({ requestId: c.get('requestId'), message: 'error settling simulator sessions', error, app_id: appId }))
+    }
+
     // Finally delete the app - needs admin because no DELETE policy for anon role
     try {
       await pg.query('DELETE FROM public.apps WHERE app_id = $1', [appId])
@@ -155,8 +154,6 @@ async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, 
     catch (dbError) {
       throw simpleError('cannot_delete_app', 'Cannot delete app', { supabaseError: dbError })
     }
-
-    return appStoragePrefix
   }
   finally {
     closeClient(c, pg)
@@ -175,17 +172,7 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
     throw simpleError('cannot_delete_app', 'You can\'t access this app', { app_id: appId })
   }
 
-  const appStoragePrefix = await deleteAppData(c, appId, apikey)
-
-  if (appStoragePrefix) {
-    try {
-      const deletedObjectCount = await s3.deleteObjectsWithPrefix(c, appStoragePrefix)
-      cloudlog({ requestId: c.get('requestId'), message: 'deleted app storage objects', count: deletedObjectCount, app_id: appId })
-    }
-    catch (error) {
-      cloudlog({ requestId: c.get('requestId'), message: 'error deleting app storage objects', error, app_id: appId })
-    }
-  }
+  await deleteAppData(c, appId, apikey)
 
   return c.json(BRES)
 }

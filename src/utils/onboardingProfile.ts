@@ -11,6 +11,12 @@ interface OnboardingProfileUser {
 
 export const PROFILE_ONBOARDING_HANDOFF_KEY = 'capgoProfileOnboardingHandoff'
 
+export function readOnboardingCompanyName(onboarding: Json | undefined): string {
+  if (!onboarding || typeof onboarding !== 'object' || Array.isArray(onboarding))
+    return ''
+  return typeof onboarding.org_name === 'string' ? onboarding.org_name.trim() : ''
+}
+
 export function canEditInitialOnboardingName(user: OnboardingProfileUser | null | undefined, hasOrganizations = false): boolean {
   return Boolean(user && !hasOrganizations && !user.created_via_invite)
 }

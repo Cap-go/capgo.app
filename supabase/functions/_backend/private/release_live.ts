@@ -815,7 +815,7 @@ function withoutDeniedHistory(candidates: ReleaseCandidates, deniedChannelIds: S
   }
 }
 
-async function readReleaseLive(
+export async function readReleaseLive(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
   channelId?: number,

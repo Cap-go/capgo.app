@@ -5,7 +5,12 @@ import { nextTick, ref, watch } from 'vue'
 const mockEq = vi.fn()
 const mockDelete = vi.fn(() => ({ eq: mockEq }))
 const mockIn = vi.fn()
-const mockSelect = vi.fn(() => ({ in: mockIn }))
+// The app catalog is read in pages (.in().order().range()); other app reads
+// (onboarding refresh) call .in() directly. Both go through mockIn.
+const APP_CATALOG_COLUMNS = 'app_id, name, owner_org, need_onboarding, icon_url, onboarding'
+const mockSelect = vi.fn((columns?: string) => columns === APP_CATALOG_COLUMNS
+  ? { in: (...args: unknown[]) => ({ order: () => ({ range: () => mockIn(...args) }) }) }
+  : { in: mockIn })
 const mockFrom = vi.fn((table: string) => {
   if (table === 'apps') {
     return {
@@ -200,6 +205,92 @@ describe('organization store refreshOrganizationLogos', () => {
   })
 })
 
+describe('organization store request fan-out', () => {
+  const orgId = 'org-fanout'
+  const baseOrganization = {
+    'gid': orgId,
+    'created_by': 'owner-fanout',
+    'role': 'org_super_admin',
+    'is_invite': false,
+    'app_count': 2,
+    'logo': null,
+    'name': 'Fan-out organization',
+    'password_policy_config': null,
+    'enforcing_2fa': false,
+    '2fa_has_access': true,
+    'password_has_access': true,
+    'paying': true,
+    'trial_left': 0,
+    'can_use_more': true,
+  }
+  const appRows = [
+    { app_id: 'com.example.fanout-a', name: 'A', owner_org: orgId, need_onboarding: false, icon_url: null, onboarding: {} },
+    { app_id: 'com.example.fanout-b', name: 'B', owner_org: orgId, need_onboarding: true, icon_url: null, onboarding: {} },
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIn.mockReset().mockResolvedValue({ data: [], error: null })
+    mockRpc.mockReset()
+    mainStore.auth = { id: 'auth-user-123' }
+    mainStore.user = { id: 'user-123' }
+    vi.stubGlobal('localStorage', { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() })
+  })
+
+  async function flushWatchers() {
+    for (let turn = 0; turn < 6; turn++) {
+      await Promise.resolve()
+      await nextTick()
+    }
+  }
+
+  it('refreshes the dashboard on an organization switch, not when a refetch replaces the same organization', async () => {
+    mockRpc.mockResolvedValue({ data: [{ ...baseOrganization }], error: null })
+    mockIn.mockResolvedValueOnce({ data: appRows, error: null })
+    const { useOrganizationStore } = await import('../src/stores/organization.ts')
+    const store = useOrganizationStore(createPinia())
+    await store.fetchOrganizations({ loadImages: false })
+    await flushWatchers()
+    expect(mockUpdateDashboard).toHaveBeenCalledOnce()
+
+    // A settings save refetches the list: a new object for the same organization.
+    mockRpc.mockResolvedValue({ data: [{ ...baseOrganization, name: 'Renamed' }], error: null })
+    await store.fetchOrganizations({ loadImages: false })
+    await flushWatchers()
+    expect(store.currentOrganization?.name).toBe('Renamed')
+    expect(mockUpdateDashboard).toHaveBeenCalledOnce()
+    // Derived state still follows the replaced object.
+    mockRpc.mockResolvedValue({ data: [{ ...baseOrganization, paying: false, can_use_more: false }], error: null })
+    await store.fetchOrganizations({ loadImages: false })
+    await flushWatchers()
+    expect(store.currentOrganizationFailed).toBe(true)
+    expect(mockUpdateDashboard).toHaveBeenCalledOnce()
+  })
+
+  it('serves the app catalog from the store until the organization list reports another app count', async () => {
+    mockRpc.mockResolvedValue({ data: [{ ...baseOrganization }], error: null })
+    mockIn.mockResolvedValueOnce({ data: appRows, error: null })
+    const { useOrganizationStore } = await import('../src/stores/organization.ts')
+    const store = useOrganizationStore(createPinia())
+    await store.fetchOrganizations({ loadImages: false })
+    await store.awaitInitialLoad()
+    await vi.waitFor(() => expect(store.getFreshOrgApps(orgId)?.map(app => app.app_id)).toEqual(['com.example.fanout-a', 'com.example.fanout-b']))
+    expect(store.getFreshOrgApps(orgId, -1)).toBeUndefined()
+    expect(mockIn).toHaveBeenCalledTimes(1)
+
+    // Same count: the catalog is not reloaded.
+    await store.fetchOrganizations({ loadImages: false })
+    expect(mockIn).toHaveBeenCalledTimes(1)
+
+    // An app was deleted elsewhere: the store stops vouching and reloads once.
+    mockRpc.mockResolvedValue({ data: [{ ...baseOrganization, app_count: 1 }], error: null })
+    mockIn.mockResolvedValueOnce({ data: [appRows[0]], error: null })
+    await store.fetchOrganizations({ loadImages: false })
+    await vi.waitFor(() => expect(store.getFreshOrgApps(orgId)?.map(app => app.app_id)).toEqual(['com.example.fanout-a']))
+    expect(mockIn).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('organization store fetchOrganizations', () => {
   it('loads many app icons without invalidating the entire app catalog for every icon', async () => {
     vi.stubGlobal('localStorage', {
@@ -335,5 +426,91 @@ describe('organization store fetchOrganizations', () => {
 
     expect(store.organizations.map(org => org.gid)).toEqual(['org-b'])
     expect(store.currentOrganization?.gid).toBe('org-b')
+  })
+})
+
+describe('organization store onboarding refresh', () => {
+  const orgId = 'org-onboarding-refresh'
+  const mockAppIn = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIn.mockReset().mockResolvedValue({ data: [], error: null })
+    mockRpc.mockReset()
+    mockAppIn.mockReset()
+    mainStore.auth = { id: 'auth-user-123' }
+    mainStore.user = { id: 'user-123' }
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn(),
+    })
+  })
+
+  async function loadStore(count = 4) {
+    const rows = Array.from({ length: count }, (_, index) => ({
+      app_id: `com.example.refresh-${index}`,
+      owner_org: orgId,
+      name: `Refresh app ${index}`,
+      icon_url: null,
+      need_onboarding: false,
+      onboarding: { features: { ota: { succeeded_at: '2026-10-01T00:00:00.000Z' } } },
+    }))
+    mockRpc.mockResolvedValueOnce({ data: [{ gid: orgId, role: 'org_super_admin', is_invite: false, app_count: count, name: 'Refresh organization', logo: null }], error: null })
+    mockIn.mockResolvedValueOnce({ data: rows, error: null })
+    const { useOrganizationStore } = await import('../src/stores/organization.ts')
+    const store = useOrganizationStore(createPinia())
+    await store.fetchOrganizations({ loadImages: false })
+    await store.awaitInitialLoad()
+    mockIn.mockClear()
+    return { store, rows }
+  }
+
+  it('narrows periodic reads and does not republish unchanged app data', async () => {
+    const { store, rows } = await loadStore()
+    const firstId = 'com.example.refresh-0'
+    const other = store.getAppByAppId('com.example.refresh-1')
+    const row = { ...rows[0], app_id: firstId, onboarding: { cicd: { marked_done_at: '2026-11-06T12:00:00.000Z' } } }
+    mockIn.mockReturnValue({ in: mockAppIn })
+    mockAppIn.mockResolvedValue({ data: [row], error: null })
+    await store.refreshAppsOnboarding(orgId, { appIds: [firstId] })
+    expect(mockAppIn).toHaveBeenCalledWith('app_id', [firstId])
+    expect(store.getAppByAppId(firstId)?.onboarding).toEqual(row.onboarding)
+    expect(store.getAppByAppId('com.example.refresh-1')).toBe(other)
+    const catalog = store.getAppsByOrgId(orgId)
+    const current = store.getAppByAppId(firstId)
+    await store.refreshAppsOnboarding(orgId, { appIds: [firstId] })
+    expect(store.getAppsByOrgId(orgId)).toBe(catalog)
+    expect(store.getAppByAppId(firstId)).toBe(current)
+  })
+
+  it('keeps unscoped refreshes complete and publishes a large batch once', async () => {
+    const { store, rows } = await loadStore(1000)
+    mockIn.mockResolvedValueOnce({ data: rows.map(row => ({ ...row, need_onboarding: true })), error: null })
+    const onCatalogChange = vi.fn()
+    const stop = watch(() => store.getAppsByOrgId(orgId), onCatalogChange, { flush: 'sync' })
+    await store.refreshAppsOnboarding(orgId)
+    stop()
+    expect(mockIn).toHaveBeenCalledWith('owner_org', [orgId])
+    expect(mockAppIn).not.toHaveBeenCalled()
+    expect(store.getAppsByOrgId(orgId).every(app => app.need_onboarding)).toBe(true)
+    expect(onCatalogChange).toHaveBeenCalledOnce()
+  })
+
+  it('preserves newer narrow reads and local writes without discarding other app results', async () => {
+    const { store, rows } = await loadStore()
+    const { createDeferredPromise } = await import('../src/utils/promise.ts')
+    const fullRows = rows.map(row => ({ ...row, onboarding: { cicd: { marked_done_at: 'older-response' } } }))
+    const full = createDeferredPromise<{ data: typeof fullRows, error: null }>()
+    mockIn.mockReturnValueOnce(full.promise)
+    const pending = store.refreshAppsOnboarding(orgId)
+    mockIn.mockReturnValueOnce({ in: mockAppIn })
+    const firstId = 'com.example.refresh-0'
+    mockAppIn.mockResolvedValueOnce({ data: [{ ...rows[0], app_id: firstId, onboarding: { cicd: { marked_done_at: 'newer-response' } } }], error: null })
+    await store.refreshAppsOnboarding(orgId, { appIds: [firstId] })
+    store.updateAppOnboarding('com.example.refresh-2', { cicd: { marked_done_at: 'local-write' } })
+    full.resolve({ data: fullRows, error: null })
+    await pending
+    expect(store.getAppByAppId(firstId)?.onboarding).toEqual({ cicd: { marked_done_at: 'newer-response' } })
+    expect(store.getAppByAppId('com.example.refresh-1')?.onboarding).toEqual({ cicd: { marked_done_at: 'older-response' } })
+    expect(store.getAppByAppId('com.example.refresh-2')?.onboarding).toEqual({ cicd: { marked_done_at: 'local-write' } })
   })
 })

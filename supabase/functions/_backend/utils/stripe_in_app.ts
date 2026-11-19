@@ -1,3 +1,8 @@
+import { currencyScheduleCancelAt, updateCurrencyDiscountSchedule } from './billing_currency_discounts.ts'
+import { billingRequestOptions, withBillingProfileLock } from './billing_profile_lock.ts'
+import { clearCurrencyTransition, CURRENCY_TRANSITION_KEY } from './billing_currency_transition.ts'
+import { BILLING_CURRENCY_KEY } from './billing_currency.ts'
+import { syncBillingProfile } from './stripe_billing_profile_sync.ts'
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { BillingAccount } from './stripe_billing.ts'
@@ -41,6 +46,7 @@ export interface CardSummary {
 }
 
 export interface SubscriptionSummary {
+  pendingCurrency?: string
   status: Stripe.Subscription.Status
   cancelAtPeriodEnd: boolean
   cancelAt: string | null
@@ -207,10 +213,12 @@ export async function getSubscriptionSummary(c: Context, ctx: InAppBillingContex
   try {
     const subscription = await ctx.stripe.subscriptions.retrieve(subscriptionId)
     const periodEnd = Math.max(0, ...subscription.items.data.map(item => item.current_period_end ?? 0))
+    const cancelAt = subscription.cancel_at ?? await currencyScheduleCancelAt(ctx.stripe, subscription)
     return {
+      ...((subscription.cancel_at_period_end || cancelAt) && subscription.metadata?.[CURRENCY_TRANSITION_KEY] ? { pendingCurrency: subscription.metadata[CURRENCY_TRANSITION_KEY] } : {}),
       status: subscription.status,
       cancelAtPeriodEnd: subscription.cancel_at_period_end,
-      cancelAt: toIso(subscription.cancel_at),
+      cancelAt: toIso(cancelAt),
       currentPeriodEnd: toIso(periodEnd),
     }
   }
@@ -424,10 +432,16 @@ async function requireActiveSubscriptionId(c: Context, ctx: InAppBillingContext)
 // Ends at period end, like the portal did; the reason is kept on the Stripe subscription.
 export async function scheduleSubscriptionCancel(c: Context, ctx: InAppBillingContext, feedback: CancelFeedback, comment?: string) {
   const subscriptionId = await requireActiveSubscriptionId(c, ctx)
-  await releaseTrialPlanSchedule(c, ctx.stripe, subscriptionId)
-  await ctx.stripe.subscriptions.update(subscriptionId, {
-    cancel_at_period_end: true,
-    cancellation_details: { feedback, ...(comment ? { comment } : {}) },
+  await withBillingProfileLock(c, ctx.billingAccount, ctx.customerId, async (assertHeld) => {
+    await assertHeld()
+    const scheduled = await updateCurrencyDiscountSchedule(ctx.stripe, subscriptionId, true, assertHeld, { metadata: clearCurrencyTransition })
+    await releaseTrialPlanSchedule(c, ctx.stripe, subscriptionId)
+    await assertHeld()
+    await ctx.stripe.subscriptions.update(subscriptionId, {
+      ...(scheduled ? {} : { cancel_at_period_end: true }),
+      metadata: clearCurrencyTransition,
+      cancellation_details: { feedback, ...(comment ? { comment } : {}) },
+    })
   })
   cloudlog({ requestId: c.get('requestId'), message: 'in-app subscription cancel scheduled', customerId: ctx.customerId, subscriptionId, feedback })
   await syncSubscriptionData(c, ctx.customerId, subscriptionId)
@@ -436,13 +450,21 @@ export async function scheduleSubscriptionCancel(c: Context, ctx: InAppBillingCo
 
 export async function resumeSubscription(c: Context, ctx: InAppBillingContext) {
   const subscriptionId = await requireActiveSubscriptionId(c, ctx)
-  await releaseTrialPlanSchedule(c, ctx.stripe, subscriptionId)
-  // Clear both cancel styles: period end, and an explicit cancel_at date.
-  await ctx.stripe.subscriptions.update(subscriptionId, {
-    cancel_at: '',
-    cancel_at_period_end: false,
-    cancellation_details: { feedback: '', comment: '' },
+  await withBillingProfileLock(c, ctx.billingAccount, ctx.customerId, async (assertHeld) => {
+    await releaseTrialPlanSchedule(c, ctx.stripe, subscriptionId)
+    const scheduled = await updateCurrencyDiscountSchedule(ctx.stripe, subscriptionId, false, assertHeld, { metadata: clearCurrencyTransition })
+    // Clear both cancel styles: period end, and an explicit cancel_at date.
+    await assertHeld()
+    const subscription = await ctx.stripe.subscriptions.update(subscriptionId, {
+      ...(scheduled ? {} : { cancel_at: '', cancel_at_period_end: false }),
+      metadata: clearCurrencyTransition,
+      cancellation_details: { feedback: '', comment: '' },
+    }, billingRequestOptions)
+    // Keeping the current plan also abandons a pending currency change.
+    await assertHeld()
+    await ctx.stripe.customers.update(ctx.customerId, { metadata: { [BILLING_CURRENCY_KEY]: subscription.currency } }, billingRequestOptions)
   })
+  await syncBillingProfile(c, ctx)
   await syncSubscriptionData(c, ctx.customerId, subscriptionId)
   return await getSubscriptionSummary(c, ctx)
 }

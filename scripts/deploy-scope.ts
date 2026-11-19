@@ -1,8 +1,9 @@
+import type { DeploymentState } from './deployment-state.ts'
 import { execFileSync } from 'node:child_process'
-import process from 'node:process'
-import { TextDecoder } from 'node:util'
+import { z } from 'zod'
+import { keysForEnvironment } from './deployment-state.ts'
 
-export type DeployTarget = 'supabase' | 'api' | 'translation' | 'files' | 'plugins'
+export type DeployTarget = 'supabase' | 'api' | 'translation' | 'files' | 'plugins' | 'gotrue'
 export type DeployScope = Record<DeployTarget, boolean>
 type GitRunner = (args: string[]) => string
 
@@ -13,7 +14,8 @@ export interface DeployScopeResult {
   scope: DeployScope
 }
 
-const deployTargets = ['supabase', 'api', 'translation', 'files', 'plugins'] as const satisfies readonly DeployTarget[]
+const deployTargets = ['supabase', 'api', 'translation', 'files', 'plugins', 'gotrue'] as const satisfies readonly DeployTarget[]
+const deployTargetSchema = z.enum(deployTargets)
 
 const workerDependencyMatchers = [
   /^package\.json$/,
@@ -31,9 +33,14 @@ const backendUtilityMatchers = [
   /^supabase\/functions\/_backend\/utils\//,
 ]
 
+const mcpCatalogMatchers = [
+  /^cli\/src\/mcp\/(skill-catalog\.ts|skills\.generated\.json)$/,
+]
+
 export const deployMatchers: Record<DeployTarget, RegExp[]> = {
   supabase: [
     ...backendDependencyMatchers,
+    ...mcpCatalogMatchers,
     /^supabase\/config\.toml$/,
     /^supabase\/functions\//,
     /^supabase\/migrations\//,
@@ -45,6 +52,7 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
   ],
   api: [
     ...workerDependencyMatchers,
+    ...mcpCatalogMatchers,
     ...backendDependencyMatchers,
     ...backendUtilityMatchers,
     /^cloudflare_workers\/api\//,
@@ -79,6 +87,10 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
     /^supabase\/functions\/_backend\/plugin_runtime\//,
     /^supabase\/functions\/(updates|stats|channel_self|updates_debug)\//,
   ],
+  // Every rollout restarts GoTrue, so only its own folder triggers one.
+  gotrue: [
+    /^cloudflare_workers\/gotrue\//,
+  ],
 }
 
 function runGit(args: string[]): string {
@@ -86,45 +98,6 @@ function runGit(args: string[]): string {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim()
-}
-
-function stringifyGitErrorOutput(value: unknown): string {
-  if (typeof value === 'string') {
-    return value
-  }
-
-  if (value instanceof Uint8Array) {
-    return new TextDecoder().decode(value)
-  }
-
-  return ''
-}
-
-function getGitErrorText(error: unknown): string {
-  const parts = []
-
-  if (error instanceof Error) {
-    parts.push(error.message)
-  }
-
-  if (typeof error === 'object' && error !== null) {
-    const outputs = error as { stdout?: unknown, stderr?: unknown }
-    parts.push(stringifyGitErrorOutput(outputs.stdout))
-    parts.push(stringifyGitErrorOutput(outputs.stderr))
-  }
-
-  return parts.filter(Boolean).join('\n')
-}
-
-function isNoMatchingTagError(error: unknown): boolean {
-  return /no matching tag|no names found|no tags can describe|fatal: no tag/i.test(getGitErrorText(error))
-}
-
-function allTargets(value: boolean): DeployScope {
-  return deployTargets.reduce((scope, target) => {
-    scope[target] = value
-    return scope
-  }, {} as DeployScope)
 }
 
 export function matchesDeployTarget(target: DeployTarget, files: string[]): boolean {
@@ -146,88 +119,35 @@ export function requiresSchemaTypesSync(result: DeployScopeResult): boolean {
   return result.base === null || hasMigrationChanges(result.files)
 }
 
+// Generated release package/version changes are not deploy-source changes.
 export function getComparableDeployHead(after: string, run: GitRunner = runGit): string {
   const subject = run(['log', '-1', '--format=%s', after])
-  if (!subject.startsWith('chore(release):')) {
-    return after
-  }
-
-  try {
-    return run(['rev-parse', `${after}^`])
-  }
-  catch {
-    return after
-  }
+  return subject.startsWith('chore(release):') ? run(['rev-parse', `${after}^`]) : after
 }
 
-export function isAlphaDeployRef(after: string, run: GitRunner = runGit): boolean {
-  if (after.includes('-alpha')) {
-    return true
-  }
-
-  return run(['log', '-1', '--format=%s', after]).includes('-alpha')
-}
-
-export function getPreviousCapgoTag(head: string, includePrereleaseTags: boolean, run: GitRunner = runGit): string | null {
-  try {
-    const args = ['describe', '--tags', '--match', 'capgo-[0-9]*']
-    if (!includePrereleaseTags) {
-      args.push('--exclude', 'capgo-*-alpha*')
+export function resolveDeployScopeFromGit(
+  head: string,
+  state: DeploymentState,
+  run: GitRunner = runGit,
+): DeployScopeResult {
+  const comparableHead = getComparableDeployHead(head, run)
+  const scope: DeployScope = { supabase: false, api: false, translation: false, files: false, plugins: false, gotrue: false }
+  const changed = new Set<string>()
+  let unknownSupabase = false
+  for (const key of keysForEnvironment(state.environment)) {
+    const target: DeployTarget = key.startsWith('plugins_') ? 'plugins' : deployTargetSchema.parse(key)
+    const entry = state.entries[key]
+    if (!entry?.success || entry.pending) {
+      scope[target] = true
+      if (target === 'supabase')
+        unknownSupabase = true
+      continue
     }
-    args.push('--abbrev=0', head)
-
-    const tag = run(args)
-    return tag || null
+    const files = entry.success.sha === head ? [] : run(['diff', '--name-only', '--diff-filter=ACMRTD', `${entry.success.sha}..${comparableHead}`]).split('\n').filter(Boolean)
+    if (matchesDeployTarget(target, files))
+      scope[target] = true
+    if (target === 'supabase')
+      files.forEach(file => changed.add(file))
   }
-  catch (error) {
-    if (!isNoMatchingTagError(error)) {
-      throw error
-    }
-
-    return null
-  }
-}
-
-function getChangedFiles(base: string, head: string, run: GitRunner = runGit): string[] {
-  const files = run(['diff', '--name-only', '--diff-filter=ACMRTD', `${base}..${head}`])
-  return files ? files.split('\n').filter(Boolean) : []
-}
-
-export function resolveDeployScopeFromGit(after = 'HEAD', run: GitRunner = runGit): DeployScopeResult {
-  const includePrereleaseTags = isAlphaDeployRef(after, run)
-  const head = getComparableDeployHead(after, run)
-  const base = getPreviousCapgoTag(head, includePrereleaseTags, run)
-
-  if (!base) {
-    return {
-      base: null,
-      files: [],
-      head,
-      scope: allTargets(true),
-    }
-  }
-
-  const files = getChangedFiles(base, head, run)
-  return {
-    base,
-    files,
-    head,
-    scope: resolveDeployScopeFromFiles(files),
-  }
-}
-
-if (import.meta.main) {
-  const result = resolveDeployScopeFromGit(process.argv[2] ?? 'HEAD')
-
-  console.error(`Deploy scope base: ${result.base ?? '<none>'}`)
-  console.error(`Deploy scope head: ${result.head}`)
-  console.error(`Deploy scope changed files: ${result.files.length}`)
-  for (const file of result.files) {
-    console.error(`- ${file}`)
-  }
-
-  for (const target of deployTargets) {
-    console.log(`${target}=${result.scope[target]}`)
-  }
-  console.log(`requires_schema_types_sync=${requiresSchemaTypesSync(result)}`)
+  return { base: unknownSupabase ? null : state.entries.supabase?.success?.sha ?? null, files: [...changed], head, scope }
 }

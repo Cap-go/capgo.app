@@ -1,7 +1,11 @@
 import type { Database } from '../../utils/supabase.types.ts'
 import type { AiBumpLevelBody } from './ai_bump_level.ts'
 import type { GetLatest } from './get.ts'
-import { getBodyOrQuery, honoFactory } from '../../utils/hono.ts'
+import type { UpsertBundleBody } from './upsert.ts'
+import { bodyLimit } from 'hono/body-limit'
+import { recommendRelease } from './recommend.ts'
+import { recordCicdDeploy } from '../../utils/cicdDetection.ts'
+import { getBodyOrQuery, honoFactory, quickError } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { aiBumpLevel } from './ai_bump_level.ts'
 import { cleanupBundles } from './cleanup.ts'
@@ -41,13 +45,21 @@ app.put('/', writeBundleMiddleware, async (c) => {
 app.post('/', writeBundleMiddleware, async (c) => {
   const body = await getBodyOrQuery<any>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-  return createBundle(c, body, apikey)
+  const response = await createBundle(c, body, apikey)
+  if (response.ok)
+    await recordCicdDeploy(c, { appId: body?.app_id, product: 'ota', apikeyRbacId: apikey?.rbac_id })
+  return response
 })
 
 app.post('/upsert', writeBundleMiddleware, async (c) => {
-  const body = await getBodyOrQuery<any>(c)
+  const body = await getBodyOrQuery<UpsertBundleBody>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-  return upsertBundle(c, body, apikey)
+  const response = await upsertBundle(c, body, apikey)
+  // The CLI sets storage_provider only after the zip and manifest uploads finish.
+  // Initial metadata creation and the intermediate TUS r2_path update are not deployments.
+  if (response.ok && (body.storage_provider === 'r2' || (body.storage_provider === 'external' && body.external_url)))
+    await recordCicdDeploy(c, { appId: body?.app_id, product: 'ota', apikeyRbacId: apikey?.rbac_id })
+  return response
 })
 
 // Server-side `bundle cleanup`: picks and soft-deletes old bundles in one request.
@@ -80,4 +92,12 @@ app.post('/ai_bump_level', writeBundleMiddleware, async (c) => {
   const body = await getBodyOrQuery<AiBumpLevelBody>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return aiBumpLevel(c, body, apikey)
+})
+
+app.post('/recommend', bodyLimit({ maxSize: 64 * 1024, onError: () => quickError(413, 'request_too_large', 'Release context exceeds 64 KiB') }), writeBundleMiddleware, async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const apikey = c.get('apikey')
+  if (!apikey)
+    throw quickError(401, 'not_authorized', 'API key required')
+  return recommendRelease(c, body, apikey)
 })

@@ -1,6 +1,7 @@
 import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { sqlRestRequest } from './sql-rest-request'
 import {
   APIKEY_TEST_ALL,
   APIKEY_TEST_UPLOAD,
@@ -32,10 +33,9 @@ async function patchVersionManifestAsApiKey(
   versionId: number,
   manifest: Database['public']['CompositeTypes']['manifest_entry'][],
 ) {
-  const supabaseUrl = process.env.SUPABASE_URL as string
   const anonKey = process.env.SUPABASE_ANON_KEY as string
 
-  return fetch(`${supabaseUrl}/rest/v1/app_versions?id=eq.${versionId}`, {
+  return sqlRestRequest(`app_versions?id=eq.${versionId}`, {
     method: 'PATCH',
     headers: {
       'apikey': anonKey,

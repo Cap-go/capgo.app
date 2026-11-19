@@ -9,12 +9,12 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconActivity from '~icons/lucide/activity'
-import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconAlertTriangle from '~icons/lucide/alert-triangle'
 import IconDownload from '~icons/lucide/download'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconLayers from '~icons/lucide/layers'
 import IconSmartphone from '~icons/lucide/smartphone'
+import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
 import { Bar } from '~/components/dashboard/lazyCharts'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
@@ -689,18 +689,7 @@ watch(() => [
         </template>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('app-not-found') }}
-      </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-400">
-        {{ t('app-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="$router.push(`/apps`)">
-        {{ t('back-to-apps') }}
-      </button>
-    </div>
+    <AppPageNotFound v-else />
   </div>
 </template>
 

@@ -8,7 +8,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-05-ai-analyze-streaming-design.md` (same worktree). Read it first.
 
-**Tech Stack:** Cloudflare Workers (builder + capgo API), Hono, Supabase JS (Postgres), Workers AI (`@cf/moonshotai/kimi-k2.6`), vitest (builder + capgo), bun `.mjs` scripts (CLI tests), TypeScript.
+**Tech Stack:** Cloudflare Workers (builder + capgo API), Hono, Supabase JS (Postgres), Workers AI (`@cf/deepseek-ai/deepseek-v4.1-flash-1017`), vitest (builder + capgo), bun `.mjs` scripts (CLI tests), TypeScript.
 
 **Repos / working copies:**
 - `capgo` — this worktree (`.claude/worktrees/ai-analyze-streaming-spec`). Tests: `bunx vitest run tests/<file>` from repo root; CLI tests: `cd cli && bun test/<file>.mjs`.
@@ -274,7 +274,7 @@ describe('handleAiAnalyze streaming', () => {
     const res = await handleAiAnalyze(req, env as any, 'job-abc')
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('text/event-stream')
-    expect(env.AI.run).toHaveBeenCalledWith('@cf/moonshotai/kimi-k2.6', expect.objectContaining({ stream: true }))
+    expect(env.AI.run).toHaveBeenCalledWith('@cf/deepseek-ai/deepseek-v4.1-flash-1017', expect.objectContaining({ stream: true }))
     const body = await readAll(res)
     expect(body).toContain('event: chunk\ndata: {"text":"diag"}\n\n')
     expect(body).toContain('event: done')

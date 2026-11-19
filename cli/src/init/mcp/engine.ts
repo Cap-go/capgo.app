@@ -4,7 +4,7 @@ import type { ChoiceOption, LiveUpdatePhase, NextStepResult, Platform } from './
 import type { LiveUpdateProgress } from './progress.js'
 import type { IosSimulatorCompatibility } from '../../run/ios-compatibility.js'
 import { LIVE_UPDATE_ROADMAP, LIVE_UPDATE_RULES, NEXT_STEP_TOOL } from './contract.js'
-import { explainForState } from './explanations.js'
+import { BUNDLE_ENCRYPTION_GUIDANCE, explainForState } from './explanations.js'
 import { withMonorepoUploadRetryHint } from '../upload-recovery.js'
 import { initOnboardingSteps } from '../ui.js'
 import { clearSession, getSession, mergeSession } from './session-state.js'
@@ -281,13 +281,13 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
   const title = initOnboardingSteps[stepNumber - 1]?.title ?? state
 
   if (stepNumber === 5 && !session.encryptionChoice && progress?.encryptionEnabled === undefined) {
-    return baseResult(stepNumber, 'setup-encryption', 'choice', `${title} — enable end-to-end bundle encryption?`, {
+    return baseResult(stepNumber, 'setup-encryption', 'choice', `${title}. ${BUNDLE_ENCRYPTION_GUIDANCE}`, {
       options: [
-        { value: 'enable', label: 'Enable encryption', note: 'generates RSA keys for bundle encryption' },
-        { value: 'skip', label: 'Skip', note: 'standard signed bundles only' },
+        { value: 'skip', label: 'Skip encryption (recommended for most apps)', note: 'no encryption keys to manage' },
+        { value: 'enable', label: 'Enable encryption', note: 'for an explicit request or a concrete bundle confidentiality requirement' },
       ],
       next: nextAction(
-        'Ask the user, then call next_step with encryptionChoice.',
+        'Use the app purpose and bundle contents already known from the conversation or project context to explain your recommendation. Do not ask the user to repeat known app details. Recommend "skip" unless the user requested encryption or has a concrete requirement for encrypted bundle delivery. Never enable it just as a conservative default. If the requirement is unclear, ask one focused question. Present the options, wait for the user\'s choice, then call next_step with encryptionChoice.',
         { encryptionChoice: '<enable|skip>' },
         `${NEXT_STEP_TOOL}({ encryptionChoice: "skip" })`,
       ),

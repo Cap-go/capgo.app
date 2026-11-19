@@ -3,6 +3,7 @@
 // agent's workspace. The server must follow the client's MCP roots, and
 // capgo_set_project_dir must let the agent point it at the project explicitly.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -125,12 +126,12 @@ function toolText(result) {
   return (result?.content ?? []).map(c => c.text ?? '').join('\n')
 }
 
-async function withServer(roots, fn, cwd = spawnDir) {
+async function withServer(roots, fn, cwd = spawnDir, env = {}) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [bundlePath, 'mcp'],
     cwd,
-    env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '1' },
+    env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '1', ...env },
     stderr: 'pipe',
   })
   const client = new Client({ name: 'capgo-mcp-project-dir-test', version: '0.0.0' }, roots ? { capabilities: { roots: { listChanged: true } } } : undefined)
@@ -205,13 +206,75 @@ else {
     })
   })
 
-  await test('every registered tool accepts projectDir and cwd, including tools without inputs and both onboarding flows', async () => {
+  await test('cloud monitoring uses independent credentials despite ambiguous roots and preserves local selection requirements', async () => {
+    const requests = []
+    const api = createServer((req, res) => {
+      requests.push({ url: req.url, key: req.headers.capgkey })
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify(req.url.startsWith('/build/status')
+        ? { job_id: 'ci-job', status: 'queued' }
+        : req.url.startsWith('/build/logs')
+          ? { job_id: 'ci-job', logs: 'building', cursor: 1, truncated: false }
+          : { app_id: 'com.example.app', view: 'release', release: null }))
+    })
+    await new Promise(resolve => api.listen(0, '127.0.0.1', resolve))
+    const fakeHome = join(tmp, 'monitoring-home')
+    mkdirSync(fakeHome, { recursive: true })
+    const baseEnv = { HOME: fakeHome, USERPROFILE: fakeHome, CAPGO_API_HOST: `http://127.0.0.1:${api.address().port}` }
+    try {
+      for (const source of ['env', 'global', 'global-after-start']) {
+        if (source === 'global-after-start') {
+          rmSync(join(fakeHome, '.capgo'))
+          writeFileSync(join(spawnDir, '.capgo'), 'example-stale-local-key')
+        }
+        if (source === 'global') writeFileSync(join(fakeHome, '.capgo'), 'example-global-monitoring-key')
+        await withServer([fileRoot(multiple)], async (client) => {
+          if (source === 'global-after-start') writeFileSync(join(fakeHome, '.capgo'), 'example-global-monitoring-key')
+          const requestStart = requests.length
+          for (const name of ['capgo_get_build_status', 'capgo_get_build_logs']) {
+            const beforeRequest = requests.length
+            const result = await client.callTool({ name, arguments: { appId: 'com.example.app', job_id: 'ci-job' } })
+            ok(requests.length === beforeRequest + 1, `${name} must send one request`)
+            ok(!result.isError, toolText(result))
+          }
+          const observeResult = await client.callTool({ name: 'capgo_observe', arguments: { appId: 'com.example.app', view: 'release' } })
+          ok(!observeResult.isError, toolText(observeResult))
+          const expectedKey = source === 'env' ? 'example-env-monitoring-key' : 'example-global-monitoring-key'
+          ok(requests.length === requestStart + 3, 'each monitoring tool must send a request')
+          ok(requests.slice(-3).every(request => request.key === expectedKey), 'monitoring must use the current independent credential')
+          const rejected = await client.callTool({ name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'ci-job', projectDir: join(tmp, 'missing-app') } })
+          ok(rejected.isError, 'explicit invalid project paths must not be bypassed')
+          const local = await client.callTool({ name: 'capgo_generate_encryption_keys', arguments: {} })
+          ok(local.isError && toolText(local).includes('Multiple Capacitor apps'), toolText(local))
+        }, spawnDir, { ...baseEnv, CAPGO_TOKEN: source === 'env' ? 'example-env-monitoring-key' : '' })
+      }
+      rmSync(join(fakeHome, '.capgo'))
+      writeFileSync(join(spawnDir, '.capgo'), 'example-local-monitoring-key')
+      const before = requests.length
+      await withServer([fileRoot(multiple)], async (client) => {
+        const result = await client.callTool({ name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'ci-job' } })
+        ok(result.isError && toolText(result).includes('Multiple Capacitor apps'), toolText(result))
+      }, spawnDir, { ...baseEnv, CAPGO_TOKEN: '' })
+      eq(requests.length, before, 'ambiguous local credentials must not reach the API')
+    }
+    finally {
+      rmSync(join(spawnDir, '.capgo'), { force: true })
+      await new Promise(resolve => api.close(resolve))
+    }
+  })
+
+  await test('every app tool accepts projectDir and cwd, including tools without inputs and both onboarding flows', async () => {
     await withServer(undefined, async (client) => {
       const { tools } = await client.listTools()
       ok(tools.some(tool => tool.name === 'capgo_list_apps'), 'account tools must be registered')
       ok(tools.some(tool => tool.name === 'start_capgo_builder_onboarding'), 'builder tools must be registered')
       ok(tools.some(tool => tool.name === 'start_capgo_live_update_onboarding'), 'live-update tools must be registered')
       for (const tool of tools) {
+        if (['capgo_list_skills', 'capgo_get_skill'].includes(tool.name)) {
+          eq(tool.inputSchema.properties.projectDir, undefined, `${tool.name} must work independently of a project`)
+          eq(tool.inputSchema.properties.cwd, undefined, `${tool.name} must not select a project`)
+          continue
+        }
         eq(tool.inputSchema.properties.projectDir.type, 'string', `${tool.name} must accept projectDir`)
         eq(tool.inputSchema.properties.cwd.type, 'string', `${tool.name} must accept cwd`)
       }

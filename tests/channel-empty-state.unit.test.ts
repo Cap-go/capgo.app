@@ -28,12 +28,17 @@ vi.mock('~/stores/organization', async () => {
   const { ref } = await import('vue')
   return { useOrganizationStore: defineStore('channel-test-org', () => ({ currentOrganization: ref({ gid: 'preview-org' }) })) }
 })
-vi.mock('~/services/permissions', () => ({
-  checkPermissions: async (permission: string, scope: { appId?: string, channelId?: number }) => {
+vi.mock('~/services/permissions', () => {
+  const checkPermissions = async (permission: string, scope: { appId?: string, channelId?: number }) => {
     state.permissionChecks.push({ permission, scope })
     return permission === 'app.create_channel' ? state.createPermissions[scope.appId!] ?? state.canCreate : true
-  },
-}))
+  }
+  return {
+    checkPermissions,
+    checkPermissionsBatch: async (requests: Array<{ permissions: string, scope: { appId?: string, channelId?: number } }>) =>
+      Promise.all(requests.map(request => checkPermissions(request.permissions, request.scope))),
+  }
+})
 vi.mock('~/components/dashboard/ChannelIntroduction.vue', async () => {
   const { defineComponent, h } = await import('vue')
   return { default: defineComponent({

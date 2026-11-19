@@ -1,5 +1,6 @@
 import { platform } from 'node:os'
 import { version as nodeVersion } from 'node:process'
+import { name as ciName, isCI } from 'ci-info'
 import pack from '../../package.json'
 import { CliUserError } from '../shared/cli-user-error'
 
@@ -60,6 +61,18 @@ export function validateCliRequestHeaderValue(headerName: string, value: unknown
 }
 
 /**
+ * `x-cli-ci` value when the CLI runs in CI: the CI name (e.g. "GitHub Actions"),
+ * or `ci` when ci-info cannot name it. Capgo uses it to mark the onboarding
+ * CI/CD step done. Undefined outside CI.
+ */
+export function cliCiHeaderValue(ci: boolean = isCI, name: string | null = ciName): string | undefined {
+  if (!ci)
+    return undefined
+  const provider = (name ?? '').replace(/[^\x20-\x7E]/g, '').trim().slice(0, 64)
+  return provider || 'ci'
+}
+
+/**
  * Build Capgo API request headers that identify this CLI invocation.
  * Does not invent an API key — callers merge Authorization/capgkey when available.
  */
@@ -71,6 +84,9 @@ export function buildCliRequestHeaders(extra?: Record<string, string>): Record<s
     'x-cli-node': nodeVersion,
     'x-cli-os': platform(),
   }
+  const ci = cliCiHeaderValue()
+  if (ci)
+    headers['x-cli-ci'] = ci
 
   if (extra) {
     for (const [name, value] of Object.entries(extra))

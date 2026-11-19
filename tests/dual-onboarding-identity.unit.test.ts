@@ -61,7 +61,10 @@ describe('dual-checklist identity hydration', () => {
     localStorage.clear()
     saveChecklistPreference(user, appId, { path: 'builder', platform: 'android' })
   })
-  afterEach(() => cleanups.splice(0).forEach(cleanup => cleanup()))
+  afterEach(() => {
+    cleanups.splice(0).forEach(cleanup => cleanup())
+    vi.useRealTimers()
+  })
 
   it('opens an explicitly requested Builder path over existing OTA progress and a late preference', async () => {
     saveChecklistPreference(user, appId, { path: 'ota' })
@@ -113,13 +116,17 @@ describe('dual-checklist identity hydration', () => {
   })
 
   it('preserves deliberate path, platform and task inspection while identity loads', async () => {
+    // Keep deliberate clicks later than listener attachment without relying on timer precision.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-08T00:00:00Z'))
     saveChecklistPreference(user, appId, { path: 'ota', platform: 'android' })
     const { host, userId } = mountChecklist()
-    await new Promise(resolve => setTimeout(resolve, 1))
+    vi.setSystemTime(Date.now() + 1)
     ;(host.querySelectorAll('[role="tab"]')[1] as HTMLButtonElement).click()
     await nextTick()
-    await new Promise(resolve => setTimeout(resolve, 1))
+    vi.setSystemTime(Date.now() + 1)
     ;(host.querySelector('[data-test="ios"]') as HTMLButtonElement).click()
+    vi.setSystemTime(Date.now() + 1)
     ;(host.querySelector('[data-test="inspect"]') as HTMLButtonElement).click()
     await nextTick()
     userId.value = user

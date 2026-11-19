@@ -363,7 +363,7 @@ onMounted(async () => {
 
                         <button
                           type="button"
-                          class="d-btn min-h-11 border-primary-500 bg-primary-500 text-white hover:border-primary-500 hover:bg-primary-500/90 disabled:border-white/15 disabled:bg-slate-800 disabled:text-slate-500"
+                          class="d-btn min-h-11 d-btn-primary disabled:border-white/15 disabled:bg-slate-800 disabled:text-slate-500"
                           :disabled="isResolvingInvitation"
                           data-test="pending-invite-join"
                           @click="resolveInvitation(invitation, 'accept')"

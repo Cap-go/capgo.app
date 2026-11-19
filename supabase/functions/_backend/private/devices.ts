@@ -8,7 +8,7 @@ import { sanitizeFilename, toCsv } from '../utils/csv.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { appIdSchema, cursorSchema, deviceIdSchema, hasInvalidQueryLimitInput, hasUnsafeDevicesQueryText, queryLimitSchema, safeQueryTextSchema } from '../utils/privateAnalyticsValidation.ts'
+import { appIdSchema, cursorSchema, deviceIdListSchema, devicesPageOffsetSchema, hasInvalidQueryLimitInput, MAX_DEVICE_ID_FILTER, hasUnsafeDevicesQueryText, queryLimitSchema, safeQueryTextSchema } from '../utils/privateAnalyticsValidation.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { countDevices, countInstallSources, readDevices } from '../utils/stats.ts'
@@ -42,6 +42,8 @@ interface DataDevice {
   cursor?: string
   /** Limit for results (default 1000) */
   limit?: number
+  /** Rows to skip after the cursor (0..MAX_DEVICES_PAGE_OFFSET), to jump to a far page in one request */
+  offset?: number
   updated_at_gt?: string
   updated_at_lte?: string
   format?: 'csv' | 'json'
@@ -60,7 +62,9 @@ const DEFAULT_EXPORT_LIMIT = 10_000
 // The ids end up in the device query itself (a PostgREST in-list or an Analytics
 // Engine IN clause), which stays reliable up to PostgREST's 1000-row page. Beyond
 // that the request is refused rather than silently showing a subset.
-const MAX_OVERRIDE_DEVICE_IDS = 1000
+const MAX_OVERRIDE_DEVICE_IDS = MAX_DEVICE_ID_FILTER
+// Install sources are a short fixed set; the list becomes an IN clause.
+const MAX_INSTALL_SOURCES = 50
 const devicesBodyShape = {
   appId: appIdSchema,
   count: z.boolean().optional(),
@@ -72,16 +76,17 @@ const devicesBodyShape = {
   osVersionOp: versionCompareOpSchema.optional(),
   platform: platformSchema.optional(),
   defaultChannel: safeQueryTextSchema.optional(),
-  devicesId: z.array(deviceIdSchema).optional(),
-  deviceIds: z.array(deviceIdSchema).optional(),
+  devicesId: deviceIdListSchema.optional(),
+  deviceIds: deviceIdListSchema.optional(),
   overrides: z.boolean().optional(),
   overrideChannelId: z.number().int().positive().optional(),
-  installSources: z.array(safeQueryTextSchema).optional(),
+  installSources: z.array(safeQueryTextSchema).max(MAX_INSTALL_SOURCES).optional(),
   search: safeQueryTextSchema.optional(),
   customIdMode: z.boolean().optional(),
   order: z.array(orderItemSchema).optional(),
   cursor: cursorSchema.optional(),
   limit: queryLimitSchema.optional(),
+  offset: devicesPageOffsetSchema.optional(),
   updated_at_gt: z.string().min(1).max(64).optional(),
   updated_at_lte: z.string().min(1).max(64).optional(),
 }
@@ -207,6 +212,7 @@ function toReadDevicesParams(body: z.infer<typeof devicesBodySchema>, limit?: nu
       search: body.search,
       order: body.order,
       cursor: body.cursor,
+      offset: body.offset,
       limit,
       updated_at_gt: body.updated_at_gt,
       updated_at_lte: body.updated_at_lte,
@@ -264,7 +270,7 @@ app.post('/export', middlewareAuth(), async (c) => {
   // An override filter that matches nothing exports nothing rather than every device.
   const rows = overrideIds?.length === 0
     ? []
-    : (await readDevices(c, { ...params, cursor: undefined }, customIdMode)).data
+    : (await readDevices(c, { ...params, cursor: undefined, offset: undefined }, customIdMode)).data
 
   if (format === 'json') {
     return c.json({

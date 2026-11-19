@@ -189,6 +189,12 @@ test.describe('Subscription Checkout', () => {
     })
 
     await expect(planCard).toHaveCount(1)
+    // A monthly org that was loaded before navigation must not default to annual.
+    await expect(page.locator('[data-test="billing-monthly"]')).toHaveAttribute('aria-pressed', 'true')
+    await page.locator('[data-test="billing-yearly"]').click()
+    await expect(page.locator('[data-test="billing-yearly"]')).toHaveAttribute('aria-pressed', 'true')
+    await page.locator('[data-test="billing-monthly"]').click()
+    await expect(page.locator('[data-test="billing-monthly"]')).toHaveAttribute('aria-pressed', 'true')
     await expect(planCard.getByText('3 concurrent native builds')).toBeVisible()
     await expect(planCard.getByRole('button', { name: 'Upgrade' })).toBeEnabled()
     await planCard.locator('[data-test="plan-action-button"]').click()

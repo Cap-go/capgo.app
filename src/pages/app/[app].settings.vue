@@ -7,7 +7,7 @@ const { id, app, isLoading } = useAppPage({ routeName: '/app/[app].settings' })
 </script>
 
 <template>
-  <AppPageFrame card :found="!!app" :loading="isLoading">
+  <AppPageFrame :found="!!app" :loading="isLoading">
     <AppSetting :app-id="id" />
   </AppPageFrame>
 </template>

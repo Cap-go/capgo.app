@@ -1,0 +1,12 @@
+<p>Hi {{ visitor.first_name | default: "there" | escape }},</p>
+{% if visitor.tags contains 'onboarding_intent:builder' %}
+<p>Ready to build your next iOS or Android release with Capgo?</p>
+<p>Build in the cloud, check the logs, and keep your release workflow in one place.</p>
+{% else %}
+<p>Ready to ship your next live update with Capgo?</p>
+<p>Send JavaScript, CSS, and HTML updates to a test channel, check the result, then roll out to your users.</p>
+{% endif %}
+<p>Compare the plans in your dashboard and choose one that fits your app.</p>
+<p><a href="https://console.capgo.app/settings/organization/plans/" style="display: inline-block; padding: 12px 20px; background-color: #2563eb; border-radius: 6px; color: #ffffff; text-decoration: none; font-weight: bold;">View Capgo plans</a></p>
+<p>Still deciding? Reply with what you need to ship or where you got stuck. I'll help you work out the next step.</p>
+<p><small><a href="https://console.capgo.app/settings/account/notifications">Email preferences</a> · <a href="{{ visitor.unsubscribe_url }}">Unsubscribe</a></small></p>

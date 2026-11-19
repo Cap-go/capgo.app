@@ -8,7 +8,6 @@ import {
   findBestPlan,
   getAllDashboard,
   getLocalConfig,
-  getTotalStorage,
   isPlatformAdmin,
   normalizeDashboardDateRange,
   useConsole,
@@ -16,6 +15,8 @@ import {
 import { getDaysBetweenDates } from '~/services/conversion'
 import { normalizeToUtcStartOfDay } from '~/services/date'
 import { reset } from '~/services/posthog'
+import { clearSimulatorSessions } from '~/services/simulatorSessions'
+import { billableStorageBytes } from '~/services/storageUsage'
 import { setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
 
@@ -52,7 +53,6 @@ export const useMainStore = defineStore('main', () => {
   const dashboardPlanOrgId = ref<string | null>(null)
   const dashboardByapp = ref<AppUsageByApp[]>([])
   const totalDevices = ref<number>(0)
-  const totalStorage = ref<number>(0)
   const dashboardFetched = ref<boolean>(false)
   const _initialLoadPromise = ref(createDeferredPromise<boolean>())
   let dashboardLoadId = 0
@@ -99,8 +99,10 @@ export const useMainStore = defineStore('main', () => {
     return resolvePlatformAdminStatus()
   }
 
-  watch(auth, () => {
+  watch(auth, (next, previous) => {
     authGeneration.value += 1
+    if (previous?.id !== next?.id)
+      clearSimulatorSessions()
     dashboardOrgId.value = null
     dashboardPlanOrgId.value = null
     bestPlan.value = ''
@@ -124,7 +126,6 @@ export const useMainStore = defineStore('main', () => {
     return dashboard.value.reduce((acc: TotalStats, cur: AppUsageGlobal) => {
       acc.mau += cur.mau
       acc.bandwidth += cur.bandwidth
-      acc.storage += cur.storage
       acc.build_time_seconds += cur.build_time_seconds
       return acc
     }, {
@@ -168,11 +169,10 @@ export const useMainStore = defineStore('main', () => {
         totalDevices.value = dashboard.value[monthDay]?.mau ?? 0
         totalDownload.value = dashboard.value[monthDay]?.get ?? 0
 
-        const storage = await getTotalStorage()
-        if (!isCurrent())
-          return
-        totalStorage.value = storage
-        totalStats.value = getTotalStats()
+        // Storage is billed in GB-hours: plan fit uses the average stored over the range
+        // (byte-hours / hours), like get_total_metrics does for the billing cycle.
+        const storageByteHours = dashboard.value.reduce((acc, cur) => acc + (cur.storage_byte_hours ?? 0), 0)
+        totalStats.value = { ...getTotalStats(), storage: billableStorageBytes(storageByteHours, start, end) }
 
         const plan = await findBestPlan(totalStats.value)
         if (!isCurrent())
@@ -241,7 +241,6 @@ export const useMainStore = defineStore('main', () => {
     invalidatePlatformAdminStatus,
     refreshPlatformAdminStatus,
     resolvePlatformAdminStatus,
-    totalStorage,
     totalStats,
     bestPlan,
     totalDevices,

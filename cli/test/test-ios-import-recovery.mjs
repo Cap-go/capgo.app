@@ -392,12 +392,25 @@ await test('import-provide-profile-path (valid file) -> import-pick-profile; car
   assert(res.transient?.profilePickerOpened === true, 'marks the picker as opened (idempotency guard)')
   assert(res.transient?.chosenProfile, 'the synthesized profile rides transient')
   assertEquals(res.transient.chosenProfile.uuid, 'IMPORTED-UUID', 'the parsed profile becomes the chosen profile')
-  assertEquals(res.transient.chosenProfile.path, '/Users/me/Downloads/profile.mobileprovision', 'the on-disk path is preserved for import-exporting')
+  assertEquals(res.transient.chosenProfile.path, '/Users/me/Downloads/profile.mobileprovision', 'TUI path is preserved for later disk read at export')
   const inj = res.transient.importMatches.find(m => m.identity.sha1 === IDENTITY_A.sha1)
   assertEquals(inj.profiles.length, 1, 'the profile is injected into the chosen identity match')
   assert(deps.__calls.some(c => c.name === 'openProfilePicker'), 'opened the native picker')
   assert(deps.__calls.some(c => c.name === 'parseMobileprovisionDetailed'), 'parsed the chosen file')
   assert(!deps.__calls.some(c => c.name === 'saveProgress'), 'nothing is persisted (the synthesized profile is transient)')
+})
+
+await test('import-provide-profile-path (MCP scoped read) stores profileBase64 and empty path (no export re-read)', async () => {
+  const scopedBytes = Buffer.from('SCOPED-MANUAL-PROFILE-BYTES')
+  const deps = makeDeps({
+    carried: { chosenIdentity: IDENTITY_A, importMatches: MATCHES_A_NO_PROFILE, noMatchReason: 'no-profile-on-disk' },
+    readMcpMobileprovision: async (p) => { deps.__calls.push({ name: 'readMcpMobileprovision', args: [p] }); return scopedBytes },
+  })
+  const res = await runIosEffect('import-provide-profile-path', iosProgress(), deps)
+  assertEquals(res.next, 'import-pick-profile')
+  assertEquals(res.transient.chosenProfile.path, '', 'MCP path carries bytes on the profile, not a disk path')
+  assertEquals(res.transient.chosenProfile.profileBase64, scopedBytes.toString('base64'))
+  assert(deps.__calls.some(c => c.name === 'readMcpMobileprovision'), 'scoped reader is used for MCP manual path')
 })
 
 await test('import-provide-profile-path IDEMPOTENT: already-opened guard -> import-no-match-recovery WITHOUT re-opening; STICKY reason kept', async () => {

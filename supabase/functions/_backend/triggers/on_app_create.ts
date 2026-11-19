@@ -4,7 +4,7 @@ import type { Database } from '../utils/supabase.types.ts'
 import type { BentoTrackingPayload } from '../utils/tracking.ts'
 import { eq, or } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
-import { buildAppCreatorEventDetails } from '../utils/app_creator.ts'
+import { buildAppCreatedTrackingIdentity, buildAppCreatorEventDetails } from '../utils/app_creator.ts'
 import { createIfNotExistStoreInfo } from '../utils/cloudflare.ts'
 import { purgeOnPremCache } from '../utils/cloudflare_cache_purge.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
@@ -148,17 +148,20 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
       })
   }
 
+  const trackingIdentity = buildAppCreatedTrackingIdentity(record.onboarding, ownerOrg)
   await sendEventToTracking(c, {
     bento: appCreatedBentoEvent,
     channel: 'app-created',
     event: isDemo ? 'Demo App Created' : isPendingOnboarding ? 'Onboarding App Created' : 'App Created',
     sentToBento: Boolean(appCreatedBentoEvent),
-    user_id: ownerOrg,
+    user_id: trackingIdentity.user_id,
     groups: { organization: ownerOrg },
-    tags: {
+    // Event-only properties: the distinct_id is now a real user, so don't $set app fields on the person.
+    nonPersonTags: {
       app_id: record.app_id,
       is_demo: isDemo ? 'true' : 'false',
       need_onboarding: isPendingOnboarding ? 'true' : 'false',
+      source: trackingIdentity.source,
     },
   })
 
