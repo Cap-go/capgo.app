@@ -39,6 +39,34 @@ CREATE TABLE IF NOT EXISTS public.daily_storage (
   storage bigint
 );
 
+INSERT INTO auth.users (
+  instance_id,
+  id,
+  aud,
+  role,
+  email,
+  encrypted_password,
+  email_confirmed_at,
+  raw_app_meta_data,
+  raw_user_meta_data,
+  created_at,
+  updated_at
+)
+VALUES (
+  '00000000-0000-0000-0000-000000000000'::uuid,
+  '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
+  'authenticated',
+  'authenticated',
+  'lock-test-user@example.com',
+  '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi',
+  now(),
+  '{"provider": "email", "providers": ["email"]}'::jsonb,
+  '{"test_identifier": "storage_lock_concurrency"}'::jsonb,
+  now(),
+  now()
+)
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO public.users (id, email)
 VALUES (
   '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
