@@ -35,12 +35,11 @@ describe('release scope matching', () => {
       'scripts/setup-bun.sh',
       'scripts/setup-bun.ps1',
       'scripts/sync-notifications-package-version.ts',
-      'scripts/release-scope.ts',
       'tests/release-scope.test.ts',
     ], null],
     ['root package and test inputs', ['package.json', 'bun.lock', 'tsconfig.json', 'vitest.config.ts'], 'capgo'],
     ['read-replica schema sync scripts', ['scripts/sync-read-replica-schema.ts', 'scripts/check-read-replica-hyperdrive-schema.sh'], 'capgo'],
-    ['capgo deploy workflow', ['.github/workflows/build_and_deploy.yml', 'scripts/deploy-scope.ts', 'scripts/deploy-state.ts', 'scripts/deployment-state.ts', 'scripts/resolve-deploy-tag.ts'], 'capgo'],
+    ['capgo deploy workflow', ['.github/workflows/build_and_deploy.yml', 'scripts/deploy-scope.ts', 'scripts/deploy-state.ts', 'scripts/deployment-state.ts', 'scripts/resolve-deploy-tag.ts', 'scripts/release-scope.ts', 'scripts/push-release-migrations.sh'], 'capgo'],
     ['inventory queue provisioning', ['scripts/ensure-r2-inventory-queues.ts'], 'capgo'],
     ['console runtime code', ['src/pages/index.vue'], 'capgo'],
     ['CLI runtime code', ['cli/src/index.ts'], 'cli'],
@@ -51,7 +50,16 @@ describe('release scope matching', () => {
       expect(matchesComponent(candidate, [...files]), candidate).toBe(candidate === component)
   })
 
-  it.concurrent('does not release the packages changed only by the release-scope fix', () => {
+  it.concurrent.each([
+    'scripts/push-release-migrations.sh',
+    'scripts/release-scope.ts',
+  ] as const)('scopes %s to capgo only', (file) => {
+    expect(matchesComponent('capgo', [file])).toBe(true)
+    expect(matchesComponent('cli', [file])).toBe(false)
+    expect(matchesComponent('notifications', [file])).toBe(false)
+  })
+
+  it.concurrent('releases capgo but not cli or notifications for release-scope tooling-only commits', () => {
     const files = [
       '.github/workflows/publish_cli.yml',
       '.github/workflows/publish_notifications.yml',
@@ -62,9 +70,15 @@ describe('release scope matching', () => {
     const run = gitStub({
       'rev-list --reverse release-parent..release-fix': 'release-fix',
       'show --format= --name-only release-fix': files.join('\n'),
+      'log -1 --format=%s release-fix': 'fix(release): scope release tooling to capgo',
+      'log -1 --format=%b release-fix': '',
     })
 
-    for (const component of ['capgo', 'cli', 'notifications'] as const) {
+    expect(resolveReleaseScope('capgo', 'release-parent', 'release-fix', run)).toEqual({
+      shouldRelease: true,
+      releaseAs: 'patch',
+    })
+    for (const component of ['cli', 'notifications'] as const) {
       expect(resolveReleaseScope(component, 'release-parent', 'release-fix', run)).toEqual({
         shouldRelease: false,
         releaseAs: 'patch',
