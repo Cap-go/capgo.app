@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
@@ -119,20 +120,31 @@ function cloneProvisionedSchema(sourceUrl: string, targetUrl: string) {
     '--schema-only',
     '--no-owner',
     '--no-privileges',
-    '--exclude-schema=cron',
+    '--schema=public',
+    '--schema=auth',
+    '--schema=extensions',
+    '--schema=pgmq',
+    '--schema=storage',
   ], {
     encoding: 'utf8',
     maxBuffer: 512 * 1024 * 1024,
   })
   if (dump.status !== 0 || dump.error)
     throw new Error(`pg_dump failed: ${dump.error?.message ?? dump.stderr ?? dump.stdout}`)
-  const apply = spawnSync('psql', [targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-X'], {
-    input: filterSchemaDumpForDisposableDb(dump.stdout ?? ''),
-    encoding: 'utf8',
-    maxBuffer: 512 * 1024 * 1024,
-  })
-  if (apply.status !== 0 || apply.error)
-    throw new Error(`psql schema clone failed: ${apply.error?.message ?? apply.stderr ?? apply.stdout}`)
+  const scratchDir = mkdtempSync(resolve(tmpdir(), 'capgo-schema-clone-'))
+  const schemaFile = resolve(scratchDir, 'schema.sql')
+  try {
+    writeFileSync(schemaFile, filterSchemaDumpForDisposableDb(dump.stdout ?? ''), 'utf8')
+    const apply = spawnSync('psql', [targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-X', '-f', schemaFile], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    if (apply.status !== 0 || apply.error)
+      throw new Error(`psql schema clone failed: ${apply.error?.message ?? apply.stderr ?? apply.stdout}`)
+  }
+  finally {
+    rmSync(scratchDir, { recursive: true, force: true })
+  }
 }
 
 async function provisionBeforeStorageMigration(adminUrl: string, targetUrl: string) {
