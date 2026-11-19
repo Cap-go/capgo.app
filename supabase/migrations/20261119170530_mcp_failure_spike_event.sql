@@ -1,4 +1,4 @@
--- Ordered after 20261110144000_mcp_events_webhooks on main.
+-- Ordered after 20261118170054_plugin_state_eu_source on main.
 ALTER TABLE public.webhooks
   ADD COLUMN IF NOT EXISTS mcp_spike_last_fired_at timestamp with time zone;
 
@@ -20,6 +20,8 @@ DECLARE
   queue_names text[];
   should_run boolean;
   lock_acquired boolean;
+  task_started_at timestamptz;
+  task_duration_ms numeric;
 BEGIN
   lock_acquired := pg_catalog.pg_try_advisory_lock(1);
 
@@ -62,6 +64,7 @@ BEGIN
       END IF;
 
       IF should_run THEN
+        task_started_at := pg_catalog.clock_timestamp();
         BEGIN
           CASE task.task_type
             WHEN 'function' THEN
@@ -89,6 +92,10 @@ BEGIN
           WHEN OTHERS THEN
             RAISE WARNING 'cron task "%" failed: %', task.name, SQLERRM;
         END;
+        task_duration_ms := EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - task_started_at)) * 1000;
+        IF task_duration_ms >= 1000 THEN
+          RAISE WARNING 'cron task "%" slow: duration_ms=%', task.name, pg_catalog.round(task_duration_ms);
+        END IF;
       END IF;
     END LOOP;
 
@@ -109,7 +116,12 @@ BEGIN
       );
     END IF;
 
+    task_started_at := pg_catalog.clock_timestamp();
     PERFORM public.process_function_queue(ARRAY['cron_rollout_auto_pause', 'cron_mcp_failure_spike']);
+    task_duration_ms := EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - task_started_at)) * 1000;
+    IF task_duration_ms >= 1000 THEN
+      RAISE WARNING 'cron task "cron_rollout_auto_pause dispatch" slow: duration_ms=%', pg_catalog.round(task_duration_ms);
+    END IF;
   EXCEPTION WHEN OTHERS THEN
     PERFORM pg_catalog.pg_advisory_unlock(1);
     RAISE;
