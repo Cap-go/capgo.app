@@ -7,6 +7,8 @@ function createContext() {
   return {
     get: (key: string) => key === 'requestId' ? 'stripe-subscribe-replay-test' : undefined,
     req: { header: () => undefined },
+    env: {},
+    res: { headers: { get: () => null } },
   } as any
 }
 
@@ -49,8 +51,8 @@ describe('Stripe webhook replay dedupe (same event.id)', () => {
 
   afterEach(async () => {
     await executeSQL('DELETE FROM public.processed_stripe_events WHERE customer_id = $1', [customerId])
-    await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [customerId])
     await executeSQL('DELETE FROM public.orgs WHERE id = $1', [orgId])
+    await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [customerId])
     await executeSQL('DELETE FROM public.users WHERE id = $1', [ownerId])
     await executeSQL('DELETE FROM auth.users WHERE id = $1', [ownerId])
   })
