@@ -272,8 +272,11 @@ async function runMigrationWithConcurrentWriter(
           await writer.query(LEGACY_REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
           await writer.query('COMMIT')
         })()
+        if (requireWriterLockWait)
+          await waitForRelationLockWait(observer, writerPid)
       }
       else {
+        // Contend on apps until the migrator's ACCESS EXCLUSIVE lock is released at COMMIT.
         await writer.query(
           `SELECT 1
            FROM public.apps
@@ -287,8 +290,6 @@ async function runMigrationWithConcurrentWriter(
           await writer.query('COMMIT')
         })()
       }
-      if (requireWriterLockWait)
-        await waitForRelationLockWait(observer, writerPid)
     }
 
     const [migration, writerResult] = await Promise.allSettled([migrationPromise, writerPromise])
@@ -348,7 +349,7 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
         dbUrl,
         readStorageGbHoursMigrationSql(),
         ['apps'],
-        { requireWriterLockWait: true },
+        { requireWriterLockWait: false },
       )
       if (result.migration.status === 'rejected')
         throw result.migration.reason
