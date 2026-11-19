@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { invertStorageMigrationLockOrder } from './storage-gb-hours-migration-lock-concurrency.test.ts'
 
 const migrationPath = new URL(
   '../supabase/migrations/20261118193000_storage_gb_hours_billing.sql',
@@ -52,6 +53,13 @@ describe('storage gb-hours billing migration lock order (source positions)', () 
     expect(migration).toMatch(
       /DO \$capgo_drop_daily_storage_hourly_app_fk\$[\s\S]*DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey[\s\S]*\$capgo_drop_daily_storage_hourly_app_fk\$;/,
     )
+  })
+
+  it('mutation invert puts daily_storage_hourly lock before apps lock in source order', () => {
+    const inverted = invertStorageMigrationLockOrder(migration)
+    const appsLock = inverted.indexOf(appsLockMarker)
+    const dshLock = inverted.indexOf(dshLockMarker)
+    expect(appsLock).toBeGreaterThan(dshLock)
   })
 
   it('wraps legacy daily_storage drops in a retry DO block', () => {
