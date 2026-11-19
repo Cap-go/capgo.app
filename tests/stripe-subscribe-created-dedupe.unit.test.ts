@@ -125,7 +125,7 @@ const SOLO_PLAN = {
   regional_price_ids: null,
 }
 
-const { createdOrUpdated, resolveActiveSubscriptionStatus } = stripeEventTestUtils
+const { createdOrUpdated } = stripeEventTestUtils
 
 function createContext() {
   return {
@@ -245,13 +245,6 @@ describe('subscription subscribe_created Bento dedupe', () => {
       previousPriceId: null,
       isUpgrade: false,
     }
-    resolveActiveSubscriptionStatus(
-      stripeData.data.status,
-      { status: 'updated' } as any,
-      stripeData.data.subscription_id,
-      'paid',
-    )
-
     await createdOrUpdated(
       makeCreatedWebhookContext('evt_created_order'),
       stripeData as any,
