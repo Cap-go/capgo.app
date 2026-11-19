@@ -1063,6 +1063,26 @@ async function persistStripeInfoAndRevenueMovement(
           await pgClient.query('ROLLBACK')
           return { status: 'duplicate', firstPaidAt: null }
         }
+        await pgClient.query('SAVEPOINT capgo_processed_stripe_event_claim')
+        const claimedEvent = await pgClient.query(`
+          INSERT INTO public.processed_stripe_events (
+            event_id,
+            customer_id,
+            date_id
+          )
+          VALUES ($1, $2, $3)
+          ON CONFLICT (event_id) DO NOTHING
+        `, [
+          stripeEventId,
+          customerId,
+          getEventDateId(eventOccurredAtIso),
+        ])
+        if ((claimedEvent.rowCount ?? 0) === 0) {
+          await pgClient.query('ROLLBACK TO SAVEPOINT capgo_processed_stripe_event_claim')
+          await pgClient.query('ROLLBACK')
+          return { status: 'duplicate', firstPaidAt: null }
+        }
+        await pgClient.query('ROLLBACK TO SAVEPOINT capgo_processed_stripe_event_claim')
       }
       else {
         const processedEvent = await pgClient.query(`
