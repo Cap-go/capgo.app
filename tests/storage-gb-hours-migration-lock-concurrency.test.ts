@@ -218,10 +218,13 @@ async function runMigrationWithConcurrentWriter(
   options: {
     requireWriterLockWait?: boolean
     writerMode?: 'post-migrate' | 'legacy-during-migration'
+    /** Hold apps FOR SHARE before starting migration (inverted-order deadlock probe). */
+    writerHoldsAppsShareFirst?: boolean
   } = {},
 ): Promise<ConcurrentRunResult> {
   const requireWriterLockWait = options.requireWriterLockWait ?? true
   const writerMode = options.writerMode ?? 'post-migrate'
+  const writerHoldsAppsShareFirst = options.writerHoldsAppsShareFirst ?? false
   const migrator = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
   const writer = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
   const observer = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
@@ -230,9 +233,6 @@ async function runMigrationWithConcurrentWriter(
   try {
     const migratorPid = (await migrator.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid
     const writerPid = (await writer.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid
-    const migrationPromise = migrator.query(migrationSql)
-
-    await waitForMigratorLocks(observer, migratorPid, waitRelations)
 
     const cycleDay = (await observer.query<{ day: string }>(
       `SELECT CURRENT_DATE::text AS day`,
@@ -241,29 +241,53 @@ async function runMigrationWithConcurrentWriter(
       { cycle_start: cycleDay, date: cycleDay, storage_byte_hours: 1 },
     ])
 
-    const writerPromise = (async () => {
-      await writer.query('BEGIN')
-      // Wait out the migrator's ACCESS EXCLUSIVE window; prod cron uses 5s but this test must not give up first.
-      await writer.query(`SET LOCAL lock_timeout = '0'`)
-      if (writerMode === 'legacy-during-migration') {
-        await writer.query(LEGACY_REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
-      }
-      else {
-        await writer.query(
-          `SELECT 1
-           FROM public.apps
-           WHERE app_id = $1
-             AND owner_org = $2
-           FOR SHARE`,
-          [DEMO_APP, ORG_ID],
-        )
-        await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID, cycleDay, hourlyRows])
-      }
-      await writer.query('COMMIT')
-    })()
+    let migrationPromise: Promise<unknown>
+    let writerPromise: Promise<unknown>
 
-    if (requireWriterLockWait)
-      await waitForRelationLockWait(observer, writerPid)
+    if (writerHoldsAppsShareFirst) {
+      await writer.query('BEGIN')
+      await writer.query(`SET LOCAL lock_timeout = '0'`)
+      await writer.query(
+        `SELECT 1
+         FROM public.apps
+         WHERE app_id = $1
+           AND owner_org = $2
+         FOR SHARE`,
+        [DEMO_APP, ORG_ID],
+      )
+      migrationPromise = migrator.query(migrationSql)
+      await waitForMigratorLocks(observer, migratorPid, waitRelations)
+      writerPromise = (async () => {
+        await writer.query(LEGACY_REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
+        await writer.query('COMMIT')
+      })()
+    }
+    else {
+      migrationPromise = migrator.query(migrationSql)
+      await waitForMigratorLocks(observer, migratorPid, waitRelations)
+      writerPromise = (async () => {
+        await writer.query('BEGIN')
+        // Wait out the migrator's ACCESS EXCLUSIVE window; prod cron uses 5s but this test must not give up first.
+        await writer.query(`SET LOCAL lock_timeout = '0'`)
+        if (writerMode === 'legacy-during-migration') {
+          await writer.query(LEGACY_REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
+        }
+        else {
+          await writer.query(
+            `SELECT 1
+             FROM public.apps
+             WHERE app_id = $1
+               AND owner_org = $2
+             FOR SHARE`,
+            [DEMO_APP, ORG_ID],
+          )
+          await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID, cycleDay, hourlyRows])
+        }
+        await writer.query('COMMIT')
+      })()
+      if (requireWriterLockWait)
+        await waitForRelationLockWait(observer, writerPid)
+    }
 
     const [migration, writerResult] = await Promise.allSettled([migrationPromise, writerPromise])
     return { migration, writer: writerResult }
@@ -342,7 +366,11 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
         dbUrl,
         inverted,
         ['daily_storage_hourly'],
-        { requireWriterLockWait: false, writerMode: 'legacy-during-migration' },
+        {
+          writerMode: 'legacy-during-migration',
+          writerHoldsAppsShareFirst: true,
+          requireWriterLockWait: false,
+        },
       )
 
       const migrationFailed = result.migration.status === 'rejected'
