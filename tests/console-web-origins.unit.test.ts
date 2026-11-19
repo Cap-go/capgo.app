@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { collectConsoleWebOrigins, DEFAULT_CONSOLE_WEB_ORIGINS, isAllowedConsoleWebOrigin, stripeRedirectOriginExtras } from '../supabase/functions/_backend/utils/console_web_origins.ts'
+import { collectConsoleWebOrigins, DEFAULT_CONSOLE_WEB_ORIGINS, isAllowedConsoleWebOrigin } from '../supabase/functions/_backend/utils/console_web_origins.ts'
 
 const mockedEnv: Record<string, string> = {
   WEBAPP_URL: 'https://console.selfhost.example',
@@ -34,17 +34,6 @@ describe('console web origins', () => {
     mockedEnv.WEBAPP_URL = 'https://console.capgo.app'
     expect(isAllowedConsoleWebOrigin(createContext(), 'https://console.preprod.capgo.app')).toBe(false)
     expect(isAllowedConsoleWebOrigin(createContext(), 'https://console.development.capgo.app')).toBe(false)
-  })
-
-  it('stripe redirect extras allow China console on local WEBAPP_URL but not on preprod', () => {
-    mockedEnv.WEBAPP_URL = 'https://capgo.test'
-    const localExtras = stripeRedirectOriginExtras(createContext())
-    expect(isAllowedConsoleWebOrigin(createContext(), 'https://console.capgo.com.cn', localExtras)).toBe(true)
-
-    mockedEnv.WEBAPP_URL = 'https://console.preprod.capgo.app'
-    const preprodExtras = stripeRedirectOriginExtras(createContext())
-    expect(preprodExtras).toBe('')
-    expect(isAllowedConsoleWebOrigin(createContext(), 'https://console.capgo.com.cn', preprodExtras)).toBe(false)
   })
 
   it('allows Stripe redirects on the China console host', () => {
