@@ -962,30 +962,11 @@ function buildStripeInfoUpdateStatement(customerId: string, updateData: StripeIn
   }
 }
 
-interface PersistStripeInfoOptions {
-  /** Record processed_stripe_events only after post-commit subscribe effects (createdOrUpdated). */
-  deferProcessedStripeEventLedger?: boolean
-}
-
-async function recordProcessedStripeEventLedger(
-  c: Context,
-  customerId: string,
-  stripeEventId: string,
-  eventOccurredAtIso: string,
-) {
-  await withAdminPg(c, pg => pg.query(`
-    INSERT INTO public.processed_stripe_events (
-      event_id,
-      customer_id,
-      date_id
-    )
-    VALUES ($1, $2, $3)
-    ON CONFLICT (event_id) DO NOTHING
-  `, [
-    stripeEventId,
-    customerId,
-    getEventDateId(eventOccurredAtIso),
-  ]))
+async function releaseProcessedStripeEventLedger(c: Context, stripeEventId: string) {
+  await withAdminPg(c, pg => pg.query(
+    'DELETE FROM public.processed_stripe_events WHERE event_id = $1',
+    [stripeEventId],
+  ))
 }
 
 async function persistStripeInfoAndRevenueMovement(
@@ -995,7 +976,6 @@ async function persistStripeInfoAndRevenueMovement(
   updateData: StripeInfoUpdate,
   eventOccurredAtIso: string,
   movement: RevenueMovement,
-  options: PersistStripeInfoOptions = {},
 ): Promise<PersistRevenueMovementResult> {
   const transactionUpdateData: StripeInfoUpdate = {
     ...updateData,
@@ -1054,55 +1034,23 @@ async function persistStripeInfoAndRevenueMovement(
     const shouldRecordProcessedEvent = shouldRecordProcessedStripeEvent(updateStatement, movement)
 
     if (shouldRecordProcessedEvent) {
-      if (options.deferProcessedStripeEventLedger) {
-        const existing = await pgClient.query(
-          'SELECT 1 FROM public.processed_stripe_events WHERE event_id = $1',
-          [stripeEventId],
+      const processedEvent = await pgClient.query(`
+        INSERT INTO public.processed_stripe_events (
+          event_id,
+          customer_id,
+          date_id
         )
-        if ((existing.rowCount ?? 0) > 0) {
-          await pgClient.query('ROLLBACK')
-          return { status: 'duplicate', firstPaidAt: null }
-        }
-        await pgClient.query('SAVEPOINT capgo_processed_stripe_event_claim')
-        const claimedEvent = await pgClient.query(`
-          INSERT INTO public.processed_stripe_events (
-            event_id,
-            customer_id,
-            date_id
-          )
-          VALUES ($1, $2, $3)
-          ON CONFLICT (event_id) DO NOTHING
-        `, [
-          stripeEventId,
-          customerId,
-          getEventDateId(eventOccurredAtIso),
-        ])
-        if ((claimedEvent.rowCount ?? 0) === 0) {
-          await pgClient.query('ROLLBACK TO SAVEPOINT capgo_processed_stripe_event_claim')
-          await pgClient.query('ROLLBACK')
-          return { status: 'duplicate', firstPaidAt: null }
-        }
-        await pgClient.query('ROLLBACK TO SAVEPOINT capgo_processed_stripe_event_claim')
-      }
-      else {
-        const processedEvent = await pgClient.query(`
-          INSERT INTO public.processed_stripe_events (
-            event_id,
-            customer_id,
-            date_id
-          )
-          VALUES ($1, $2, $3)
-          ON CONFLICT (event_id) DO NOTHING
-        `, [
-          stripeEventId,
-          customerId,
-          getEventDateId(eventOccurredAtIso),
-        ])
+        VALUES ($1, $2, $3)
+        ON CONFLICT (event_id) DO NOTHING
+      `, [
+        stripeEventId,
+        customerId,
+        getEventDateId(eventOccurredAtIso),
+      ])
 
-        if ((processedEvent.rowCount ?? 0) === 0) {
-          await pgClient.query('ROLLBACK')
-          return { status: 'duplicate', firstPaidAt: null }
-        }
+      if ((processedEvent.rowCount ?? 0) === 0) {
+        await pgClient.query('ROLLBACK')
+        return { status: 'duplicate', firstPaidAt: null }
       }
     }
 
@@ -1644,14 +1592,14 @@ async function createdOrUpdated(
     const revenueMovement = classifyRevenueMovement(currentStripeInfo, updateData, revenuePlans)
     if (shouldTrackOrganizationUpgrade(stripeData.isUpgrade, revenueMovement))
       updateData.upgraded_at = eventOccurredAtIso
+    const stripeEventId = c.get('stripeEvent')!.id
     const { status: didPersist, firstPaidAt } = await persistStripeInfoAndRevenueMovement(
       c,
       stripeData.data.customer_id,
-      c.get('stripeEvent')!.id,
+      stripeEventId,
       updateData,
       eventOccurredAtIso,
       revenueMovement,
-      { deferProcessedStripeEventLedger: true },
     )
     if (!shouldSendSubscriptionSubscribeTrackingAfterPersist(didPersist)) {
       if (didPersist === 'duplicate') {
@@ -1681,9 +1629,10 @@ async function createdOrUpdated(
         return quickError(404, 'succeeded_customer_id_not_found', `succeeded: customer_id not found`, { stripeData })
     }
 
-    await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist, currentStripeInfo)
+    try {
+      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, stripeData, didPersist, currentStripeInfo)
 
-    const openAIFirstPaymentAt = getOpenAIFirstPaymentAt({
+      const openAIFirstPaymentAt = getOpenAIFirstPaymentAt({
       firstPaidAt,
       currentPaidAt: currentStripeInfo?.paid_at,
       stripeEvent: c.get('stripeEvent'),
@@ -1791,25 +1740,33 @@ async function createdOrUpdated(
       ]))
     }
 
-    await sendEventToTracking(c, {
-      bento: buildSubscriptionSubscribeBentoPayload(statusName, eventName, plan.name, subscriptionMetadata),
-      channel: 'usage',
-      event: isNewSubscription ? 'User subscribe' : 'User update subscribe',
-      sentToBento: true,
-      user_id: org.id,
-      groups: { organization: org.id },
-      tags: {
-        ...subscriptionMetadata,
-        ...(isNewSubscription ? {} : await loadSignupAttributionTags()),
-      },
-    })
-
-    await recordProcessedStripeEventLedger(
-      c,
-      stripeData.data.customer_id,
-      c.get('stripeEvent')!.id,
-      eventOccurredAtIso,
-    )
+      await sendEventToTracking(c, {
+        bento: buildSubscriptionSubscribeBentoPayload(statusName, eventName, plan.name, subscriptionMetadata),
+        channel: 'usage',
+        event: isNewSubscription ? 'User subscribe' : 'User update subscribe',
+        sentToBento: true,
+        user_id: org.id,
+        groups: { organization: org.id },
+        tags: {
+          ...subscriptionMetadata,
+          ...(isNewSubscription ? {} : await loadSignupAttributionTags()),
+        },
+      })
+    }
+    catch (error) {
+      try {
+        await releaseProcessedStripeEventLedger(c, stripeEventId)
+      }
+      catch (releaseError) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'Failed to release processed Stripe event ledger after subscribe side-effect error',
+          stripeEventId,
+          error: releaseError,
+        })
+      }
+      throw error
+    }
   }
   else {
     const segment = await customerToSegmentOrg(c, org, stripeData.data.price_id)
@@ -2613,7 +2570,7 @@ export const stripeEventTestUtils = {
   shouldRecordProcessedStripeEvent,
   shouldSendSubscriptionSubscribeTrackingAfterPersist,
   persistStripeInfoAndRevenueMovement,
-  recordProcessedStripeEventLedger,
+  releaseProcessedStripeEventLedger,
   getEventDateId,
   getPaidAtUpdate,
   resolveFirstPaidAt,

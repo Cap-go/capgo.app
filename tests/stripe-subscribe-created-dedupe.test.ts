@@ -57,7 +57,7 @@ describe('Stripe webhook replay dedupe (same event.id)', () => {
     await executeSQL('DELETE FROM auth.users WHERE id = $1', [ownerId])
   })
 
-  it('marks a replayed Stripe event id as duplicate so subscribe tracking is skipped', async () => {
+  it('claims processed_stripe_events in persist so a replay is duplicate', async () => {
     expect(stripeEventTestUtils.shouldSendSubscriptionSubscribeTrackingAfterPersist('duplicate')).toBe(false)
 
     const stripeEventId = `evt_replay_${orgId.slice(0, 8)}`
@@ -75,13 +75,6 @@ describe('Stripe webhook replay dedupe (same event.id)', () => {
       updateData,
       eventOccurredAt,
       movement,
-      { deferProcessedStripeEventLedger: true },
-    )
-    await stripeEventTestUtils.recordProcessedStripeEventLedger(
-      createContext(),
-      customerId,
-      stripeEventId,
-      eventOccurredAt,
     )
     const replay = await stripeEventTestUtils.persistStripeInfoAndRevenueMovement(
       createContext(),
@@ -90,10 +83,47 @@ describe('Stripe webhook replay dedupe (same event.id)', () => {
       updateData,
       eventOccurredAt,
       movement,
-      { deferProcessedStripeEventLedger: true },
     )
 
     expect(first.status).toBe('applied')
     expect(replay.status).toBe('duplicate')
+  })
+
+  it('allows only one concurrent persist claim for the same Stripe event id', async () => {
+    const stripeEventId = `evt_concurrent_${orgId.slice(0, 8)}`
+    const updateData = { status: 'created' as const }
+    const movement = stripeEventTestUtils.classifyRevenueMovement(
+      { status: 'updated', paid_at: null, price_id: null, product_id: null, is_good_plan: false },
+      updateData,
+      [],
+    )
+
+    const [first, second] = await Promise.all([
+      stripeEventTestUtils.persistStripeInfoAndRevenueMovement(
+        createContext(),
+        customerId,
+        stripeEventId,
+        updateData,
+        eventOccurredAt,
+        movement,
+      ),
+      stripeEventTestUtils.persistStripeInfoAndRevenueMovement(
+        createContext(),
+        customerId,
+        stripeEventId,
+        updateData,
+        eventOccurredAt,
+        movement,
+      ),
+    ])
+
+    const statuses = [first.status, second.status].sort()
+    expect(statuses).toEqual(['applied', 'duplicate'])
+
+    const ledger = await executeSQL<{ count: string }>(
+      'SELECT count(*)::text AS count FROM public.processed_stripe_events WHERE event_id = $1',
+      [stripeEventId],
+    )
+    expect(ledger[0]?.count).toBe('1')
   })
 })
