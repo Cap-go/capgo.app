@@ -44,7 +44,7 @@ BEGIN
     'standard',
     'mcp',
     'update.failure_spike',
-  pg_catalog.jsonb_build_object(
+    pg_catalog.jsonb_build_object(
       'org_id', v_org_id,
       'app_id', 'com.demo.app'
     ),
@@ -59,17 +59,18 @@ BEGIN
 END;
 $seed$;
 
+WITH claim AS (
+  UPDATE public.webhooks AS w
+  SET mcp_spike_last_fired_at = '2026-11-19T12:00:00+00'::timestamptz
+  WHERE w.id = 'd7820000-0000-4000-8000-0000000000c1'::uuid
+    AND (
+      w.mcp_spike_last_fired_at IS NULL
+      OR w.mcp_spike_last_fired_at <= '2026-11-19T11:45:00+00'::timestamptz
+    )
+  RETURNING w.id
+)
 SELECT ok(
-  (
-    UPDATE public.webhooks AS w
-    SET mcp_spike_last_fired_at = '2026-11-19T12:00:00+00'::timestamptz
-    WHERE w.id = 'd7820000-0000-4000-8000-0000000000c1'::uuid
-      AND (
-        w.mcp_spike_last_fired_at IS NULL
-        OR w.mcp_spike_last_fired_at <= '2026-11-19T11:45:00+00'::timestamptz
-      )
-    RETURNING w.id
-  ) IS NOT NULL,
+  (SELECT count(*)::int FROM claim) = 1,
   'cooldown claim succeeds when mcp_spike_last_fired_at is null'
 );
 
@@ -82,28 +83,30 @@ SELECT ok(
   'cooldown claim writes the new fired-at timestamp'
 );
 
+WITH blocked AS (
+  UPDATE public.webhooks AS w
+  SET mcp_spike_last_fired_at = '2026-11-19T12:15:00+00'::timestamptz
+  WHERE w.id = 'd7820000-0000-4000-8000-0000000000c1'::uuid
+    AND (
+      w.mcp_spike_last_fired_at IS NULL
+      OR w.mcp_spike_last_fired_at <= '2026-11-19T11:45:00+00'::timestamptz
+    )
+  RETURNING w.id
+)
 SELECT ok(
-  (
-    UPDATE public.webhooks AS w
-    SET mcp_spike_last_fired_at = '2026-11-19T12:15:00+00'::timestamptz
-    WHERE w.id = 'd7820000-0000-4000-8000-0000000000c1'::uuid
-      AND (
-        w.mcp_spike_last_fired_at IS NULL
-        OR w.mcp_spike_last_fired_at <= '2026-11-19T11:45:00+00'::timestamptz
-      )
-    RETURNING w.id
-  ) IS NULL,
+  (SELECT count(*)::int FROM blocked) = 0,
   'cooldown claim is skipped while still inside cooldown window'
 );
 
+WITH restore AS (
+  UPDATE public.webhooks AS w
+  SET mcp_spike_last_fired_at = '2026-11-19T10:00:00+00'::timestamptz
+  WHERE w.id = 'd7820000-0000-4000-8000-0000000000c1'::uuid
+    AND w.mcp_spike_last_fired_at = '2026-11-19T12:00:00+00'::timestamptz
+  RETURNING w.id
+)
 SELECT ok(
-  (
-    UPDATE public.webhooks AS w
-    SET mcp_spike_last_fired_at = '2026-11-19T10:00:00+00'::timestamptz
-    WHERE w.id = 'd7820000-0000-4000-8000-0000000000c1'::uuid
-      AND w.mcp_spike_last_fired_at = '2026-11-19T12:00:00+00'::timestamptz
-    RETURNING w.id
-  ) IS NOT NULL,
+  (SELECT count(*)::int FROM restore) = 1,
   'failed delivery restore reverts only our claim timestamp'
 );
 
