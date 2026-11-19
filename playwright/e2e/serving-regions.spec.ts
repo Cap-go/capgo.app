@@ -113,6 +113,7 @@ test('saves and reloads serving regions and both outside-region modes', async ({
     await expect(mode).toBeDisabled()
     for (const region of regions)
       await expect(controls.locator(`input[name="serving-region-${region}"]`)).toBeDisabled()
+    await expect(page.locator('#update-app').getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
     await expect(page.getByRole('button', { name: 'Delete app', exact: true })).toBeEnabled()
   }
   finally {
@@ -144,12 +145,47 @@ const settingsTest = test.extend<{ servingApp: { appId: string, admin: ReturnTyp
       await page.login('test@capgo.app', 'testtest')
       await page.goto(`/app/${appId}/settings`)
       await expect(page.locator('[data-test="serving-regions"]')).toBeVisible()
+      await expect(page.locator('[name="serving-region-EU"]')).toBeEnabled()
       await use({ appId, admin })
     }
     finally {
       await admin.from('apps').delete().eq('app_id', appId)
     }
   },
+})
+
+settingsTest('waits for settings permission before enabling Save', async ({ page, servingApp }) => {
+  const { admin, appId } = servingApp
+  const permissionGate = Promise.withResolvers<void>()
+  let permissionRequested = false
+  await routeConsoleQuery(page, 'rbac_check_permissions', async (route, query) => {
+    const checks = consoleQueryPayload(query)?.p_checks ?? []
+    if (!checks.some((check: { permission_key: string, app_id: string | null }) => check.permission_key === 'app.update_settings' && check.app_id === appId))
+      return route.fallback()
+    permissionRequested = true
+    await permissionGate.promise
+    return route.fallback()
+  })
+  try {
+    await page.reload()
+    await expect.poll(() => permissionRequested).toBe(true)
+    await expect(page.locator('[data-test="serving-regions"]')).toBeVisible()
+    const save = page.locator('#update-app').getByRole('button', { name: 'Save', exact: true })
+    await page.locator('[name="app_name"]').fill('Saved after permission check')
+    await expect(save).toBeDisabled()
+
+    permissionGate.resolve()
+    await expect(save).toBeEnabled()
+    await save.click()
+    await expect.poll(async () => {
+      const saved = await admin.from('apps').select('name').eq('app_id', appId).single()
+      return saved.data?.name
+    }).toBe('Saved after permission check')
+    await expect(page.getByText('Insufficient permissions', { exact: true })).toHaveCount(0)
+  }
+  finally {
+    permissionGate.resolve()
+  }
 })
 
 settingsTest('does not offer regional settings before the service can apply them', async ({ page, servingApp }) => {

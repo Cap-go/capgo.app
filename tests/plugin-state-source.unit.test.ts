@@ -6,15 +6,18 @@ import { Hono } from 'hono/tiny'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { servingRegionReaderEpoch } from '../supabase/functions/_backend/plugin_runtime/utils/servingRegionRollout.js'
-import { app as syncApp, buildManifestDoc, createPluginStateSourceReader, drainPluginStateSync, drainServingPolicies } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
+import { app as syncApp, buildManifestDoc, createPluginStateSourceReader, createPluginStateSourceWork, drainPluginStateSync, drainServingPolicies, inventoryPluginState } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
 import { getPgClient } from '../supabase/functions/_backend/utils/pg.ts'
 import { publicationProviders } from './plugin-state-publication-fixture.ts'
 
 interface Connection { id: number, inTransaction: boolean }
 
 const provider = vi.hoisted(() => ({
-  connect: vi.fn<() => Promise<Connection>>(),
+  connect: vi.fn<(context?: unknown, route?: boolean | 'eu-replica') => Promise<Connection>>(),
+  select: vi.fn(),
   execute: vi.fn(),
+  marker: vi.fn(),
+  inventory: vi.fn(),
   transaction: vi.fn(),
   close: vi.fn(),
   log: vi.fn(),
@@ -27,7 +30,21 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/servingRegionRollou
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: provider.connect,
-  getDrizzleClient: (client: Connection) => ({ execute: (query: SQL) => provider.execute(client, query) }),
+  getDrizzleClient: (client: Connection) => ({ select: (...args: unknown[]) => provider.select(client, ...args), execute: async (query: SQL) => {
+    const statement = dialect.sqlToQuery(query)
+    if (statement.sql.includes('FROM public.read_replica_commit_marker'))
+      return provider.marker(client, query)
+    if (statement.sql.includes('public.prepare_plugin_state_inventory('))
+      return provider.inventory(client, query)
+    const result = await provider.execute(client, query)
+    if (statement.sql.includes('public.claim_plugin_state_sync(')) {
+      for (const row of result.rows)
+        row.result.apps?.forEach((app: { required_commit_at: string }) => { app.required_commit_at = barrier })
+    }
+    if (statement.sql.includes('public.claim_serving_policy_sync_source('))
+      result.rows.forEach((row: { required_commit_at: string }) => { row.required_commit_at = barrier })
+    return result
+  } }),
   withPgTransaction: provider.transaction,
   closeClient: provider.close,
 }))
@@ -37,6 +54,7 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   serializeError: (error: unknown) => error,
 }))
 
+const barrier = '2026-11-18 12:00:00.123456+00'
 const dialect = new PgDialect()
 let activeTransactions = 0
 let peakTransactions = 0
@@ -44,9 +62,12 @@ let nextConnection = 0
 
 beforeEach(() => {
   vi.clearAllMocks()
+  provider.select.mockReset()
   activeTransactions = 0
   peakTransactions = 0
   nextConnection = 0
+  provider.marker.mockResolvedValue({ rows: [{ ready: true }] })
+  provider.inventory.mockResolvedValue({ rows: [{ page: null }] })
   provider.connect.mockImplementation(async () => ({ id: nextConnection++, inTransaction: false }))
   provider.transaction.mockImplementation(async <T>(client: Connection, run: (client: Connection) => Promise<T>, options?: { appendSql?: string }) => {
     expect(client.inTransaction).toBe(false)
@@ -89,7 +110,7 @@ describe('fresh plugin snapshot source transactions', () => {
     let claims = 0
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
-      if (statement.sql.includes('public.claim_serving_policy_sync('))
+      if (statement.sql.includes('public.claim_serving_policy_sync_source('))
         return { rows: [] }
       if (statement.sql.includes('public.plugin_state_sync_enabled()'))
         return { rows: [{ enabled: true }] }
@@ -124,13 +145,31 @@ describe('fresh plugin snapshot source transactions', () => {
     expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
     expect(claims).toBe(1)
     expect(storage.publishedValue(await pluginStateVersionKey('com.test.freshsnapshot', '1.0.0'))).toMatchObject({ id: 202 })
-    expect(provider.transaction).toHaveBeenCalledTimes(6)
+    expect(provider.transaction).toHaveBeenCalledTimes(8)
     expect(provider.close).toHaveBeenCalledTimes(2)
+  })
+
+  it('routes source snapshots to EU even when the API worker is in another region', async () => {
+    await inContext(async (c) => {
+      const source = createPluginStateSourceReader(c, Date.now() + 10_000, barrier)
+      await source.read(async () => undefined)
+      expect(provider.connect).toHaveBeenCalledWith(c, 'eu-replica')
+    })
+  })
+
+  it('does not expose source data while the replicated commit marker trails the claim', async () => {
+    provider.marker.mockResolvedValue({ rows: [{ ready: false }] })
+    const load = vi.fn(async () => 'stale-source')
+    await inContext(async (c) => {
+      const source = createPluginStateSourceReader(c, Date.now() + 10_000, barrier)
+      await expect(source.read(load)).rejects.toThrow()
+      expect(load).not.toHaveBeenCalled()
+    })
   })
 
   it('uses separate handles and caps concurrent source snapshots at four', async () => {
     await inContext(async (c) => {
-      const source = createPluginStateSourceReader(c, Date.now() + 10_000)
+      const source = createPluginStateSourceReader(c, Date.now() + 10_000, barrier)
       const ready = Promise.withResolvers<void>()
       const release = Promise.withResolvers<void>()
       let started = 0
@@ -154,13 +193,13 @@ describe('fresh plugin snapshot source transactions', () => {
 
   it('holds the manifest gate across build and publication for all apps', async () => {
     await inContext(async (c) => {
-      const source = createPluginStateSourceReader(c, Date.now() + 10_000)
       const ready = Promise.withResolvers<void>()
       const release = Promise.withResolvers<void>()
       let active = 0
       let peak = 0
       let started = 0
-      const all = Promise.all(Array.from({ length: 8 }, () => source.manifest(async () => {
+      const shared = createPluginStateSourceWork()
+      const all = Promise.all(Array.from({ length: 8 }, () => createPluginStateSourceReader(c, Date.now() + 10_000, barrier, shared).manifest(async () => {
         active++
         started++
         peak = Math.max(peak, active)
@@ -180,7 +219,7 @@ describe('fresh plugin snapshot source transactions', () => {
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       expect(client.inTransaction).toBe(true)
       const statement = dialect.sqlToQuery(query)
-      if (statement.sql.includes('public.claim_serving_policy_sync('))
+      if (statement.sql.includes('public.claim_serving_policy_sync_source('))
         return { rows: [] }
       if (statement.sql.includes('public.plugin_state_sync_enabled()'))
         return { rows: [{ enabled: true }] }
@@ -191,7 +230,7 @@ describe('fresh plugin snapshot source transactions', () => {
       throw new Error('manifest rows should not be loaded after the memory preflight')
     })
     await inContext(async (c) => {
-      const source = createPluginStateSourceReader(c, Date.now() + 10_000)
+      const source = createPluginStateSourceReader(c, Date.now() + 10_000, barrier)
       expect(await buildManifestDoc(source, 202)).toMatchObject({
         f: 1, version_id: 202, app_id: 'com.test.freshsnapshot', fallback: 'replica', reason: 'worker_memory_limit',
       })
@@ -202,8 +241,8 @@ describe('fresh plugin snapshot source transactions', () => {
 
   it('releases the checked-out handle when a source snapshot fails', async () => {
     await inContext(async (c) => {
-      const source = createPluginStateSourceReader(c, Date.now() + 10_000)
-      await expect(source.read(async () => { throw new Error('synthetic source failure') })).rejects.toThrow('synthetic source failure')
+      const source = createPluginStateSourceReader(c, Date.now() + 10_000, barrier)
+      await expect(source.read(async () => { throw new Error('synthetic source failure') })).rejects.toThrow('EU plugin state source unavailable')
       expect(activeTransactions).toBe(0)
       expect(provider.close).toHaveBeenCalledTimes(1)
     })
@@ -228,7 +267,7 @@ describe('plugin state queue mutation transactions', () => {
     const cachedFirstClaim = claimResult(0)
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
-      if (statement.sql.includes('public.claim_serving_policy_sync('))
+      if (statement.sql.includes('public.claim_serving_policy_sync_source('))
         return { rows: [] }
       if (statement.sql.includes('public.plugin_state_sync_enabled()'))
         return { rows: [{ enabled: true }] }
@@ -296,7 +335,7 @@ describe('plugin state queue mutation transactions', () => {
     const acknowledgements: unknown[][] = []
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
-      if (statement.sql.includes('public.claim_serving_policy_sync('))
+      if (statement.sql.includes('public.claim_serving_policy_sync_source('))
         return { rows: [] }
       if (statement.sql.includes('public.plugin_state_sync_enabled()'))
         return { rows: [{ enabled: true }] }
@@ -349,7 +388,7 @@ describe('plugin state queue mutation transactions', () => {
     const appId = 'com.test.explicitmutationrepair'
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
-      if (statement.sql.includes('public.claim_serving_policy_sync('))
+      if (statement.sql.includes('public.claim_serving_policy_sync_source('))
         return { rows: [] }
       if (statement.sql.includes('public.plugin_state_sync_enabled()'))
         return { rows: [{ enabled: true }] }
@@ -390,7 +429,7 @@ describe('competing full backfills', () => {
     const continuations: string[] = []
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
-      if (statement.sql.includes('public.claim_serving_policy_sync('))
+      if (statement.sql.includes('public.claim_serving_policy_sync_source('))
         return { rows: [] }
       if (statement.sql.includes('public.plugin_state_sync_enabled()'))
         return { rows: [{ enabled: true }] }
@@ -450,7 +489,7 @@ describe('policy-only publication with payload sync disabled', () => {
       expect(client.inTransaction).toBe(true)
       const statement = dialect.sqlToQuery(query)
       statements.push(statement.sql)
-      if (statement.sql.includes('public.claim_serving_policy_sync(')) {
+      if (statement.sql.includes('public.claim_serving_policy_sync_source(')) {
         if (!available)
           return { rows: [] }
         available = false
@@ -492,7 +531,7 @@ describe('policy and payload failure isolation', () => {
       expect(client.inTransaction).toBe(true)
       const statement = dialect.sqlToQuery(query)
       statements.push(statement.sql)
-      if (statement.sql.includes('public.claim_serving_policy_sync(')) {
+      if (statement.sql.includes('public.claim_serving_policy_sync_source(')) {
         if (fault === 'claim')
           throw new Error('Synthetic policy epoch mismatch')
         return { rows: [{ token: 'policy-lease', generation: '1', app_id: appId, active_epoch: null }] }
@@ -520,7 +559,7 @@ describe('policy and payload failure isolation', () => {
     expect(storage.publishedValue(await pluginStateVersionKey(appId, '1.0.0'))).toMatchObject({ id: 202 })
     expect(statements.filter(value => value.includes('public.claim_plugin_state_sync('))).toHaveLength(1)
     expect(statements.filter(value => value.includes('public.ack_plugin_state_sync_progress('))).toHaveLength(1)
-    expect(statements.filter(value => value.includes('public.claim_serving_policy_sync('))).toHaveLength(1)
+    expect(statements.filter(value => value.includes('public.claim_serving_policy_sync_source('))).toHaveLength(1)
     expect(provider.log).toHaveBeenCalledWith(expect.objectContaining({ message: 'serving policy sync drain failed' }))
   })
 })
@@ -547,7 +586,7 @@ describe('policy and payload queue fairness', () => {
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       expect(client.inTransaction).toBe(true)
       const statement = dialect.sqlToQuery(query)
-      if (statement.sql.includes('public.claim_serving_policy_sync(')) {
+      if (statement.sql.includes('public.claim_serving_policy_sync_source(')) {
         const generation = String(++policyClaims)
         return { rows: [{ token: `policy-lease-${generation}`, generation, app_id: `com.example.policy-backlog-${generation}`, active_epoch: null }] }
       }
@@ -621,7 +660,7 @@ describe('policy publication iteration reservations', () => {
     storage.pointers.put.mockImplementation(async (...args) => ++attempts < 5 ? null : put(...args))
     provider.execute.mockImplementation(async (_client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
-      if (statement.sql.includes('public.claim_serving_policy_sync('))
+      if (statement.sql.includes('public.claim_serving_policy_sync_source('))
         return { rows: [{ token: 'fixture-policy-reservation', generation: '1', app_id: 'com.example.policy-reservation', active_epoch: servingRegionReaderEpoch }] }
       if (statement.sql.includes('SELECT serving_regions, serving_region_mode FROM public.apps'))
         return { rows: [{ serving_regions: ['EU'], serving_region_mode: 'route' }] }
@@ -633,7 +672,7 @@ describe('policy publication iteration reservations', () => {
     })
     await inContext(async (c) => {
       const deadline = Date.now() + 10_000
-      await drainServingPolicies(await getPgClient(c), createPluginStateSourceReader(c, deadline), storage.pointers, budget, deadline, result)
+      await drainServingPolicies(c, await getPgClient(c), storage.pointers, budget, deadline, result)
     })
     if (remaining === 10) {
       expect(provider.execute).not.toHaveBeenCalled()
@@ -656,7 +695,7 @@ describe('policy publication iteration reservations', () => {
     let claims = 0
     provider.execute.mockImplementation(async (_client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
-      if (statement.sql.includes('public.claim_serving_policy_sync(')) {
+      if (statement.sql.includes('public.claim_serving_policy_sync_source(')) {
         if (++claims > 2)
           throw new Error('policy no-op claim limit exceeded')
         return { rows: [{ token: `fixture-deleted-policy-${claims}`, generation: String(claims), app_id: `com.example.deleted-policy-${claims}`, active_epoch: null }] }
@@ -667,11 +706,192 @@ describe('policy publication iteration reservations', () => {
     })
     await inContext(async (c) => {
       const deadline = Date.now() + 10_000
-      await drainServingPolicies(await getPgClient(c), createPluginStateSourceReader(c, deadline), storage.pointers, budget, deadline, result)
+      await drainServingPolicies(c, await getPgClient(c), storage.pointers, budget, deadline, result)
     })
     expect(result).toEqual({ claims: 2, apps: 2, failed: 0 })
     expect(budget.remaining).toBe(22)
     expect(storage.pointers.get).not.toHaveBeenCalled()
     expect(storage.pointers.put).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('EU source deferral and inventory', () => {
+  function ackArguments(statement: ReturnType<typeof dialect.sqlToQuery>) {
+    return Object.fromEntries([...statement.sql.matchAll(/(p_\w+)\s*=>\s*\$(\d+)/g)].map(match => [match[1], statement.params[Number(match[2]) - 1]]))
+  }
+
+  it('batches primary bookkeeping and preserves each app status without reading source rows there', async () => {
+    const storage = publicationProviders()
+    const appIds = ['com.example.pending-history', 'com.example.finished-history']
+    const bookkeeping = vi.fn()
+    const ack = vi.fn()
+    let claims = 0
+    provider.select.mockImplementation((client: Connection) => {
+      expect(client.id).toBeGreaterThan(0)
+      return { from: () => ({ where: () => ({ leftJoin: () => ({ limit: async () => [] }) }) }) }
+    })
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('claim_serving_policy_sync_source'))
+        return { rows: [] }
+      if (statement.sql.includes('plugin_state_sync_enabled'))
+        return { rows: [{ enabled: true }] }
+      if (statement.sql.includes('claim_plugin_state_sync(')) {
+        if (++claims > 1)
+          return { rows: [{ result: { status: 'empty' } }] }
+        return { rows: [{ result: { status: 'ok', lease_token: 'fixture-lease', generation: '2', has_more: false,
+          apps: appIds.map(app_id => ({ app_id, jobs: [{ kind: 'app', ref: '' }], attempts: 1 })),
+        } }] }
+      }
+      if (statement.sql.includes('public.plugin_state_sync_apps')) {
+        expect(client.id).toBe(0)
+        bookkeeping(statement.params)
+        return { rows: appIds.map((app_id, index) => ({ app_id, fully_synced: index === 1, pending_full: index === 0, archived_full: false })) }
+      }
+      if (statement.sql.includes('FROM public.apps')) {
+        expect(client.id).toBeGreaterThan(0)
+        return { rows: [] }
+      }
+      if (statement.sql.includes('ack_plugin_state_sync_progress')) {
+        ack(ackArguments(statement))
+        return { rows: [] }
+      }
+      if (statement.sql.includes('claim_plugin_state_gc'))
+        return { rows: [{ result: null }] }
+      throw new Error(`unexpected query: ${statement.sql}`)
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(await response.json()).toEqual({ claims: 1, apps: 2, failed: 0 })
+    expect(bookkeeping).toHaveBeenCalledExactlyOnceWith([appIds])
+    expect(provider.select).toHaveBeenCalledTimes(2)
+    expect(provider.connect.mock.calls.slice(1).every(call => call[1] === 'eu-replica')).toBe(true)
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({
+      p_done: appIds, p_continuations: JSON.stringify({ [appIds[1]]: '' }),
+    }))
+  })
+
+  it.each(['lag', 'missing-marker', 'connection-failure', 'missing-barrier'])('preserves every full cursor/key without publication or completion ACK on %s', async (failure) => {
+    const storage = publicationProviders()
+    const ack = vi.fn()
+    const appId = 'com.example.replica-defer'
+    if (failure === 'lag')
+      provider.marker.mockResolvedValue({ rows: [{ ready: false }] })
+    if (failure === 'missing-marker')
+      provider.marker.mockResolvedValue({ rows: [] })
+    if (failure === 'connection-failure') {
+      provider.connect.mockImplementation(async (_c?: unknown, route?: boolean | 'eu-replica') => {
+        if (route === 'eu-replica')
+          throw new Error('synthetic replica outage')
+        return { id: nextConnection++, inTransaction: false }
+      })
+    }
+    provider.execute.mockImplementation(async (_client: Connection, query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('claim_serving_policy_sync_source'))
+        return { rows: [] }
+      if (statement.sql.includes('plugin_state_sync_enabled'))
+        return { rows: [{ enabled: true }] }
+      if (statement.sql.includes('claim_plugin_state_sync(')) {
+        return { rows: [{ result: { status: 'ok', lease_token: 'fixture-lease', generation: '2', has_more: false,
+          apps: [{ app_id: appId, jobs: [{ kind: 'full', ref: '{"p":"versions","after":"old"}' }, { kind: 'manifest', ref: '10' }], attempts: 5 }],
+        } }] }
+      }
+      if (statement.sql.includes('ack_plugin_state_sync_progress')) {
+        ack(ackArguments(statement))
+        return { rows: [] }
+      }
+      if (statement.sql.includes('claim_plugin_state_gc'))
+        return { rows: [{ result: null }] }
+      throw new Error(`unexpected source access: ${statement.sql}`)
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    // Missing barriers are also checked directly, without the claim-fixture default.
+    if (failure === 'missing-barrier') {
+      await inContext(async (c) => {
+        const source = createPluginStateSourceReader(c, Date.now() + 10_000, '')
+        await expect(source.read(async () => 'unsafe')).rejects.toThrow('EU plugin state source unavailable')
+      })
+      expect(provider.connect).not.toHaveBeenCalled()
+      return
+    }
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(await response.json()).toEqual({ claims: 1, apps: 0, failed: 0 })
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({
+      p_done: [], p_failed: [], p_deferred: [appId], p_full_done: [], p_removed: [],
+      p_changed_apps: [], p_continuations: '{}', p_completed: '{}',
+    }))
+    expect(storage.namespace.put).not.toHaveBeenCalled()
+    expect(storage.pointers.put).not.toHaveBeenCalled()
+    expect(provider.connect.mock.calls.filter(call => call.length < 2)).toHaveLength(1)
+    expect(provider.log).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'plugin state source deferred', app_id: appId, error: expect.any(Error),
+    }))
+  })
+
+  it('settles only a proven version key when a later manifest snapshot loses its replica', async () => {
+    const storage = publicationProviders()
+    const appId = 'com.example.replica-partial'
+    const ack = vi.fn()
+    provider.marker.mockResolvedValueOnce({ rows: [{ ready: true }] }).mockResolvedValue({ rows: [{ ready: false }] })
+    provider.execute.mockImplementation(async (_client: Connection, query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('claim_serving_policy_sync_source'))
+        return { rows: [] }
+      if (statement.sql.includes('plugin_state_sync_enabled'))
+        return { rows: [{ enabled: true }] }
+      if (statement.sql.includes('claim_plugin_state_sync('))
+        return { rows: [{ result: { status: 'ok', lease_token: 'fixture-lease', generation: '2', has_more: false,
+          apps: [{ app_id: appId, jobs: [{ kind: 'version', ref: '1.0.0' }, { kind: 'manifest', ref: '10' }], attempts: 1 }],
+        } }] }
+      if (statement.sql.includes('FROM public.app_versions av'))
+        return { rows: [{ id: 10, owner_org: 'fixture-org', name: '1.0.0', deleted: false }] }
+      if (statement.sql.includes('ack_plugin_state_sync_progress')) {
+        ack(ackArguments(statement))
+        return { rows: [] }
+      }
+      if (statement.sql.includes('claim_plugin_state_gc'))
+        return { rows: [{ result: null }] }
+      throw new Error(`unexpected query: ${statement.sql}`)
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({
+      p_done: [], p_failed: [], p_deferred: [appId],
+      p_completed: JSON.stringify({ [appId]: [{ kind: 'version', ref: '1.0.0' }] }),
+    }))
+    expect(storage.publishedValue(await pluginStateVersionKey(appId, '1.0.0'))).toMatchObject({ id: 10 })
+  })
+
+  it.each([false, true])('commits inventory only after the same EU snapshot proves its barrier, ready=%s', async (ready) => {
+    provider.inventory.mockResolvedValue({ rows: [{ page: { after: 'com.example.a', required_commit_at: barrier, epoch: null, known_ids: ['com.example.deleted'] } }] })
+    provider.marker.mockResolvedValue({ rows: [{ ready }] })
+    const commit = vi.fn()
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('FROM public.apps')) {
+        expect(client.inTransaction).toBe(true)
+        expect(provider.marker).toHaveBeenCalledWith(client, expect.anything())
+        expect(statement.params).toEqual(['com.example.a', 25, ['com.example.deleted'], 25])
+        return { rows: [{ app_id: 'com.example.b' }, { app_id: 'com.example.deleted' }] }
+      }
+      if (statement.sql.includes('commit_plugin_state_inventory')) {
+        commit(statement.params)
+        return { rows: [] }
+      }
+      throw new Error(`unexpected inventory query: ${statement.sql}`)
+    })
+    await inContext(async (c) => {
+      await inventoryPluginState(c, await getPgClient(c), Date.now() + 10_000, 'payload')
+    })
+    if (ready)
+      expect(commit).toHaveBeenCalledWith(['payload', 'com.example.a', barrier, null, ['com.example.b', 'com.example.deleted']])
+    else
+      expect(commit).not.toHaveBeenCalled()
+    expect(provider.connect.mock.calls.at(-1)?.[1]).toBe('eu-replica')
   })
 })

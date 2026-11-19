@@ -26,12 +26,26 @@ FROM generate_series(1,5500) n CROSS JOIN (SELECT owner_org FROM public.apps WHE
 SELECT is((SELECT count(*)::int FROM public.serving_policy_sync_pending),5500,'app inserts queue policy work with payload writer disabled');
 DELETE FROM public.serving_policy_sync_pending;
 UPDATE public.serving_policy_sync_progress SET epoch='', after_app=NULL, done_at=NULL;
+-- Model the worker's EU inventory page separately from the primary-only tick.
+CREATE FUNCTION pg_temp.eu_policy_inventory_page() RETURNS void LANGUAGE plpgsql SET search_path = '' AS $$
+DECLARE p jsonb; ids text[];
+BEGIN
+  p := public.prepare_plugin_state_inventory('policy');
+  IF p IS NULL THEN RETURN; END IF;
+  SELECT array_agg(app_id ORDER BY app_id) INTO ids FROM (
+    SELECT app_id FROM public.apps WHERE app_id > COALESCE(p->>'after','') ORDER BY app_id LIMIT 100
+  ) a;
+  PERFORM public.commit_plugin_state_inventory('policy', p->>'after', (p->>'required_commit_at')::timestamptz, p->>'epoch', COALESCE(ids,'{}'));
+END;
+$$;
 SELECT public.plugin_state_sync_tick();
-SELECT is((SELECT count(*)::int FROM public.serving_policy_sync_pending),100,'existing periodic tick bootstraps only 100 policies per pass');
+SELECT pg_temp.eu_policy_inventory_page();
+SELECT is((SELECT count(*)::int FROM public.serving_policy_sync_pending),100,'EU inventory bootstraps only 100 policies per pass');
 CREATE TEMP TABLE first_cursor AS SELECT after_app FROM public.serving_policy_sync_progress;
 CREATE TEMP TABLE bootstrap_seen AS SELECT app_id FROM public.serving_policy_sync_pending;
 DELETE FROM public.serving_policy_sync_pending;
 SELECT public.plugin_state_sync_tick();
+SELECT pg_temp.eu_policy_inventory_page();
 SELECT ok((SELECT p.after_app > f.after_app FROM public.serving_policy_sync_progress p CROSS JOIN first_cursor f),'bootstrap resumes after its durable cursor');
 SELECT is((SELECT count(*)::int FROM public.serving_policy_sync_pending),100,'second bootstrap pass stays bounded');
 DO $$
@@ -40,6 +54,7 @@ BEGIN
     INSERT INTO bootstrap_seen SELECT app_id FROM public.serving_policy_sync_pending;
     DELETE FROM public.serving_policy_sync_pending;
     PERFORM public.plugin_state_sync_tick();
+    PERFORM pg_temp.eu_policy_inventory_page();
     EXIT WHEN EXISTS (SELECT 1 FROM public.serving_policy_sync_progress WHERE done_at IS NOT NULL);
   END LOOP;
 END;

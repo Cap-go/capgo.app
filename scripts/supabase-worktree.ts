@@ -137,10 +137,14 @@ function upsertEnvValue(content: string, key: string, value: string): string {
     : `${content}\n${line}\n`
 }
 
-export function buildFunctionsEnvFile(source: string, apiPort: number, cloudflareFunctionUrl?: string): string {
+export function buildFunctionsEnvFile(source: string, apiPort: number, projectId: string, cloudflareFunctionUrl?: string): string {
   const s3Endpoint = `127.0.0.1:${apiPort}/storage/v1/s3`
   let generated = upsertEnvValue(source, 'S3_ENDPOINT', s3Endpoint)
   generated = upsertEnvValue(generated, 'FILES_PUBLIC_URL', `http://127.0.0.1:${apiPort}/functions/v1`)
+  // Only local `functions serve` uses this file. The isolated database is the
+  // explicit replica fixture; plugin reads must not regain a primary fallback.
+  generated = upsertEnvValue(generated, 'ENV_NAME', 'capgo_api-local')
+  generated = upsertEnvValue(generated, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL', `postgresql://postgres:postgres@supabase_db_${projectId}:5432/postgres`)
 
   if (cloudflareFunctionUrl)
     generated = upsertEnvValue(generated, 'CLOUDFLARE_FUNCTION_URL', cloudflareFunctionUrl)
@@ -158,7 +162,7 @@ function ensureFunctionsEnvFile(repoRoot: string, workdir: string, cfg: ReturnTy
   const sourcePath = resolve(repoRoot, 'supabase', 'functions', '.env')
   const targetPath = resolve(workdir, 'functions.local.env')
   const source = existsSync(sourcePath) ? readFileSync(sourcePath, 'utf8') : ''
-  const generated = buildFunctionsEnvFile(source, cfg.ports.api, process.env.CLOUDFLARE_FUNCTION_URL)
+  const generated = buildFunctionsEnvFile(source, cfg.ports.api, cfg.projectId, process.env.CLOUDFLARE_FUNCTION_URL)
 
   writeFileSync(targetPath, generated)
   return targetPath
