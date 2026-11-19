@@ -96,3 +96,46 @@ VALUES (
 ON CONFLICT (app_id) DO NOTHING;
 
 SET session_replication_role = DEFAULT;
+
+-- Pre-20261118193000 writer installed on the reverted daily_storage_hourly pk (app_id, date).
+CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
+    p_app_id character varying,
+    p_owner_org uuid,
+    p_cycle_start_day date,
+    p_cycle_end_day date,
+    p_end_exclusive_day date,
+    p_segment_start timestamptz,
+    p_rows jsonb,
+    p_written_at timestamptz,
+    p_require_current_owner boolean DEFAULT true,
+    p_app_uuid uuid DEFAULT NULL,
+    p_calculated_until timestamptz DEFAULT NULL,
+    p_transfer_count integer DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+BEGIN
+  IF p_require_current_owner THEN
+    PERFORM 1
+    FROM public.apps
+    WHERE apps.app_id = p_app_id
+      AND apps.owner_org = p_owner_org
+    FOR SHARE;
+    IF NOT FOUND THEN
+      RETURN;
+    END IF;
+  END IF;
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours, updated_at)
+  VALUES (p_app_id, p_owner_org, CURRENT_DATE, 1, pg_catalog.clock_timestamp())
+  ON CONFLICT (app_id, date) DO UPDATE
+    SET storage_byte_hours = EXCLUDED.storage_byte_hours,
+        updated_at = EXCLUDED.updated_at;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(
+  character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz, integer
+) TO service_role;

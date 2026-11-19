@@ -17,57 +17,13 @@ const DEMO_APP = 'com.demo.app'
 const REPLACE_HOURLY_SQL = `SELECT public.replace_app_storage_hourly(
   $1::varchar,
   $2::uuid,
-  CURRENT_DATE,
-  CURRENT_DATE + 1,
-  CURRENT_DATE + 2,
+  $3::date,
+  ($3::date + 1),
+  ($3::date + 2),
   '-infinity'::timestamptz,
-  '[]'::jsonb,
+  $4::jsonb,
   pg_catalog.clock_timestamp(),
   true)`
-
-/** Pre-deploy writer: FOR SHARE on apps, then writes daily_storage_hourly (legacy pk). */
-const LEGACY_CRON_WRITER_SQL = `
-CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
-    p_app_id character varying,
-    p_owner_org uuid,
-    p_cycle_start_day date,
-    p_cycle_end_day date,
-    p_end_exclusive_day date,
-    p_segment_start timestamptz,
-    p_rows jsonb,
-    p_written_at timestamptz,
-    p_require_current_owner boolean DEFAULT true,
-    p_app_uuid uuid DEFAULT NULL,
-    p_calculated_until timestamptz DEFAULT NULL,
-    p_transfer_count integer DEFAULT NULL
-)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO ''
-AS $$
-BEGIN
-  IF p_require_current_owner THEN
-    PERFORM 1
-    FROM public.apps
-    WHERE apps.app_id = p_app_id
-      AND apps.owner_org = p_owner_org
-    FOR SHARE;
-    IF NOT FOUND THEN
-      RETURN;
-    END IF;
-  END IF;
-  INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours, updated_at)
-  VALUES (p_app_id, p_owner_org, CURRENT_DATE, 1, pg_catalog.clock_timestamp())
-  ON CONFLICT (app_id, date) DO UPDATE
-    SET storage_byte_hours = EXCLUDED.storage_byte_hours,
-        updated_at = EXCLUDED.updated_at;
-END;
-$$;
-GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(
-  character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz, integer
-) TO service_role;
-`
 
 function databaseUrl(baseUrl: string, database: string) {
   const url = new URL(baseUrl)
@@ -183,7 +139,6 @@ async function provisionBeforeStorageMigration(adminUrl: string, targetUrl: stri
       readFileSync(resolve(repoRoot, 'tests/fixtures/storage-gb-hours-revert-migration.sql'), 'utf8'),
       'storage-gb-hours-revert-migration.sql',
     )
-    await runSqlFile(client, LEGACY_CRON_WRITER_SQL, 'legacy replace_app_storage_hourly')
   }
   finally {
     await client.end()
@@ -248,7 +203,9 @@ async function runMigrationWithConcurrentWriter(
   dbUrl: string,
   migrationSql: string,
   waitRelations: string[],
+  options: { requireWriterLockWait?: boolean } = {},
 ): Promise<ConcurrentRunResult> {
+  const requireWriterLockWait = options.requireWriterLockWait ?? true
   const migrator = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
   const writer = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
   const observer = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
@@ -261,15 +218,23 @@ async function runMigrationWithConcurrentWriter(
 
     await waitForMigratorLocks(observer, migratorPid, waitRelations)
 
+    const cycleDay = (await observer.query<{ day: string }>(
+      `SELECT CURRENT_DATE::text AS day`,
+    )).rows[0].day
+    const hourlyRows = JSON.stringify([
+      { cycle_start: cycleDay, date: cycleDay, storage_byte_hours: 1 },
+    ])
+
     const writerPromise = (async () => {
       await writer.query('BEGIN')
       // Wait out the migrator's ACCESS EXCLUSIVE window; prod cron uses 5s but this test must not give up first.
       await writer.query(`SET LOCAL lock_timeout = '0'`)
-      await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
+      await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID, cycleDay, hourlyRows])
       await writer.query('COMMIT')
     })()
 
-    await waitForRelationLockWait(observer, writerPid)
+    if (requireWriterLockWait)
+      await waitForRelationLockWait(observer, writerPid)
 
     const [migration, writerResult] = await Promise.allSettled([migrationPromise, writerPromise])
     return { migration, writer: writerResult }
@@ -328,6 +293,7 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
         dbUrl,
         readStorageGbHoursMigrationSql(),
         ['apps'],
+        { requireWriterLockWait: true },
       )
       if (result.migration.status === 'rejected')
         throw result.migration.reason
@@ -347,6 +313,7 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
         dbUrl,
         inverted,
         ['daily_storage_hourly'],
+        { requireWriterLockWait: false },
       )
 
       const migrationFailed = result.migration.status === 'rejected'
