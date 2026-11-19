@@ -100,42 +100,6 @@ export type Bindings = {
 const TRACK_DEVICE_USAGE_CACHE_PATH = '/.track-device-usage-cache'
 // Cache per device per day to ensure rolling windows still see active devices.
 const TRACK_DEVICE_USAGE_CACHE_MAX_AGE_SECONDS = 2 * 24 * 60 * 60
-// Colo cache misses (20ms timeout) otherwise rewrite the same device on every
-// request. This isolate remembers the keys it already wrote today.
-const WRITE_MEMORY_MAX = 20_000
-const deviceUsageMemory = new Map<string, string>()
-const deviceInfoMemory = new Map<string, string>()
-
-function rememberWrite(map: Map<string, string>, key: string, value: string) {
-  map.delete(key)
-  map.set(key, value)
-  if (map.size <= WRITE_MEMORY_MAX)
-    return
-  const oldest = map.keys().next().value
-  if (oldest !== undefined)
-    map.delete(oldest)
-}
-
-function deviceUsageMemoryKey(appId: string, deviceId: string, day: string, platform: string, versionBuild: string) {
-  return `${day}\0${appId}\0${deviceId}\0${platform}\0${versionBuild}`
-}
-
-function deviceInfoMemoryValue(signature: string, atMs: number) {
-  return `${atMs}\0${signature}`
-}
-
-function deviceInfoMemoryFresh(stored: string | undefined, signature: string, nowMs: number) {
-  if (!stored)
-    return false
-  const splitAt = stored.indexOf('\0')
-  if (splitAt < 0)
-    return false
-  const atMs = Number(stored.slice(0, splitAt))
-  if (!Number.isFinite(atMs) || stored.slice(splitAt + 1) !== signature)
-    return false
-  const ageMs = nowMs - atMs
-  return ageMs >= 0 && ageMs < DEVICE_INFO_REFRESH_TTL_SECONDS * 1000
-}
 
 function normalizeUsagePlatform(platform?: string | null) {
   return platform?.trim().toLowerCase() || 'unknown'
@@ -177,9 +141,6 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
 
   const normalizedPlatform = normalizeUsagePlatform(platform)
   const normalizedVersionBuild = version_build || 'unknown'
-  const usageMemoryKey = deviceUsageMemoryKey(app_id, device_id, formatLocalYmd(), normalizedPlatform, normalizedVersionBuild)
-  if (deviceUsageMemory.get(usageMemoryKey) === '1')
-    return
 
   try {
     const usageCache = new CacheHelper(c)
@@ -195,7 +156,6 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
     const cachedUsage = await usageCache.matchJson<{ t: number }>(usageCacheRequest)
     if (cachedUsage) {
       // Device/version already tracked for this day, skip write
-      rememberWrite(deviceUsageMemory, usageMemoryKey, '1')
       return
     }
 
@@ -207,7 +167,6 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
       doubles: [platformValue],
       indexes: [app_id],
     })
-    rememberWrite(deviceUsageMemory, usageMemoryKey, '1')
 
     // Cache the write for this native version during the current day (put timed out).
     await usageCache.putJson(usageCacheRequest, { t: Date.now() }, TRACK_DEVICE_USAGE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
@@ -220,7 +179,6 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
       doubles: [platformValue],
       indexes: [app_id],
     })
-    rememberWrite(deviceUsageMemory, usageMemoryKey, '1')
   }
 }
 
@@ -325,40 +283,72 @@ function appLogDimensionBlobs(dimensions?: AppLogDimensions) {
   ]
 }
 
-// These actions were 79% of app_log writes on 2026-11-18 (~120M points/day).
-// One write in 20, with the rate in double2, brings app_log down by about 4x.
-// Insights multiply double2 back in. double2 = 0 on older rows still counts as 1.
-// app_launch_ready, failures, installs, downloads and crashes are not in this list.
-export const APP_LOG_VOLUME_SAMPLE_RATE = 20
+// Measured 2026-11-18, app_log ~120.5M points that day.
+// Foreground, background, noNew and getChannel were 58.5% and are not used by
+// failure insights or native observe. They are not stored.
+// Launch start, dom loaded, page loaded and under-native were 20.4%. One device
+// in 5 is kept in full (stable hash, not a per-event coin flip) and double2
+// holds 5 so population totals scale back. Launch-ready, failures, installs
+// and crashes stay complete. That mix removes ~75% of the day's writes.
+export const APP_LOG_VOLUME_SAMPLE_RATE = 5
+
+export const APP_LOG_DROPPED_ACTIONS = [
+  'app_moved_to_background',
+  'app_moved_to_foreground',
+  'getChannel',
+  'noNew',
+] as const
 
 export const APP_LOG_VOLUME_SAMPLED_ACTIONS = [
   'app_launch_start',
-  'app_moved_to_background',
-  'app_moved_to_foreground',
   'disableAutoUpdateUnderNative',
-  'getChannel',
-  'noNew',
   'webview_dom_content_loaded',
   'webview_page_loaded',
 ] as const
 
+const APP_LOG_DROPPED_ACTION_SET: ReadonlySet<string> = new Set(APP_LOG_DROPPED_ACTIONS)
 const APP_LOG_VOLUME_SAMPLED_ACTION_SET: ReadonlySet<string> = new Set(APP_LOG_VOLUME_SAMPLED_ACTIONS)
 
+// Population totals. A single device's own rows are complete, so do not use this
+// when the query is grouped by device id.
 const APP_LOG_EVENT_COUNT_SQL = 'sum(_sample_interval * if(double2 > 0, double2, 1.0))'
+const APP_LOG_OWN_EVENT_COUNT_SQL = 'sum(_sample_interval)'
 
-function keepAppLogVolumeSample(action: string) {
+function scaleCohortDeviceCount(row: { device_count?: unknown, sample_rate_min?: unknown, sample_rate_max?: unknown }) {
+  const min = Number(row.sample_rate_min)
+  const max = Number(row.sample_rate_max)
+  const seen = Number(row.device_count)
+  // Mixed windows still contain unsampled history (double2 = 0). Scaling those
+  // would multiply every historical device. Only scale when the whole group
+  // was written at one rate.
+  if (Number.isFinite(min) && Number.isFinite(max) && max > 1 && min === max && Number.isFinite(seen))
+    row.device_count = seen * max
+}
+
+function appLogDeviceHash(deviceId: string) {
+  let hash = 2166136261
+  for (let i = 0; i < deviceId.length; i++)
+    hash = Math.imul(hash ^ deviceId.charCodeAt(i), 16777619)
+  return hash >>> 0
+}
+
+export function appLogDeviceKept(deviceId: string) {
+  const limit = Math.floor((2 ** 32) / APP_LOG_VOLUME_SAMPLE_RATE)
+  return appLogDeviceHash(deviceId) < limit
+}
+
+function keepAppLogVolumeSample(action: string, deviceId: string) {
+  if (APP_LOG_DROPPED_ACTION_SET.has(action))
+    return false
   if (!APP_LOG_VOLUME_SAMPLED_ACTION_SET.has(action))
     return true
-  // Threshold, not modulo: floor(2^32 / rate) / 2^32 is the keep probability,
-  // and there is no remainder bias for CodeQL to flag.
-  const limit = Math.floor((2 ** 32) / APP_LOG_VOLUME_SAMPLE_RATE)
-  return crypto.getRandomValues(new Uint32Array(1))[0]! < limit
+  return appLogDeviceKept(deviceId)
 }
 
 export function trackLogsCF(c: Context, app_id: string, device_id: string, action: string, version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
   if (!c.env.APP_LOG)
     return Promise.resolve()
-  if (!keepAppLogVolumeSample(action))
+  if (!keepAppLogVolumeSample(action, device_id))
     return Promise.resolve()
 
   const durationMs = parseStatsDurationMs(metadata)
@@ -419,12 +409,6 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
     return
   }
 
-  const comparableDevice = toComparableDevice(device)
-  const infoKey = `${device.app_id}\0${device.device_id}`
-  const infoSignature = JSON.stringify(comparableDevice)
-  if (deviceInfoMemoryFresh(deviceInfoMemory.get(infoKey), infoSignature, Date.now()))
-    return
-
   try {
     const trackDeviceCache = new CacheHelper(c)
     const trackDeviceCacheRequest = trackDeviceCache.buildRequest(TRACK_DEVICE_CACHE_PATH, {
@@ -435,8 +419,6 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
     const cachedDevice = await trackDeviceCache.matchJson<DeviceInfoWriteCachePayload>(trackDeviceCacheRequest)
     if (canSkipDeviceInfoWrite(cachedDevice, device)) {
       outcome = 'cache_hit'
-      const cachedAtMs = Date.parse(cachedDevice?.cached_at ?? '')
-      rememberWrite(deviceInfoMemory, infoKey, deviceInfoMemoryValue(infoSignature, Number.isFinite(cachedAtMs) ? cachedAtMs : Date.now()))
       cloudlog({
         requestId: c.get('requestId'),
         message: 'Cache hit – device unchanged, skipping write',
@@ -447,6 +429,8 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       })
       return
     }
+
+    const comparableDevice = toComparableDevice(device)
 
     // Write to Analytics Engine - this is the primary store now (sync; needs no waitUntil)
     cloudlog({ requestId: c.get('requestId'), message: 'Writing to Analytics Engine DEVICE_INFO' })
@@ -474,13 +458,11 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       indexes: [device.app_id],
     })
 
-    const writtenAtMs = Date.now()
-    rememberWrite(deviceInfoMemory, infoKey, deviceInfoMemoryValue(infoSignature, writtenAtMs))
     const cachePayload: DeviceInfoWriteCachePayload = {
       ...comparableDevice,
       app_id: device.app_id,
       device_id: device.device_id,
-      cached_at: new Date(writtenAtMs).toISOString(),
+      cached_at: new Date().toISOString(),
     }
     await trackDeviceCache.putJson(trackDeviceCacheRequest, cachePayload, TRACK_DEVICE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
   }
@@ -2056,6 +2038,8 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
     blob2 AS action,
     ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
+    min(if(double2 > 1, double2, 1.0)) AS sample_rate_min,
+    max(if(double2 > 1, double2, 1.0)) AS sample_rate_max,
     COUNT(DISTINCT blob3) AS version_count,
     min(timestamp) AS first_seen,
     max(timestamp) AS last_seen,
@@ -2081,6 +2065,8 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
     blob3 AS version_name,
     ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
+    min(if(double2 > 1, double2, 1.0)) AS sample_rate_min,
+    max(if(double2 > 1, double2, 1.0)) AS sample_rate_max,
     max(timestamp) AS last_seen
   FROM app_log
   WHERE ${baseWhere}
@@ -2091,7 +2077,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const devicesQuery = `SELECT
     blob2 AS action,
     blob1 AS device_id,
-    ${APP_LOG_EVENT_COUNT_SQL} AS total,
+    ${APP_LOG_OWN_EVENT_COUNT_SQL} AS total,
     argMax(blob3, timestamp) AS version_name,
     max(timestamp) AS last_seen
   FROM app_log
@@ -2110,6 +2096,11 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
       runQueryToCFA<StatsInsightRawVersion>(c, versionsQuery),
       runQueryToCFA<StatsInsightRawDevice>(c, devicesQuery),
     ])
+
+    for (const row of actionRows)
+      scaleCohortDeviceCount(row)
+    for (const row of versionRows)
+      scaleCohortDeviceCount(row)
 
     return normalizeStatsInsightsResult({
       summary: summaryRows[0],

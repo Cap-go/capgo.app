@@ -439,11 +439,40 @@ function toNativeObserveEventSamples(events: UpdateDeliveryTimingEventCF[]): Nat
   return samples
 }
 
+interface CohortDevices {
+  devices: Set<string>
+  /** Devices that still have an unsampled row. They count as themselves. */
+  fullDevices: Set<string>
+  /** Rate on sampled-only devices. 1 when this cohort was not sampled. */
+  sampleRate: number
+}
+
+function emptyCohort(): CohortDevices {
+  return { devices: new Set(), fullDevices: new Set(), sampleRate: 1 }
+}
+
+function noteCohortDevice(cohort: CohortDevices, deviceId: string, weight: number) {
+  cohort.devices.add(deviceId)
+  if (weight <= 1)
+    cohort.fullDevices.add(deviceId)
+  else if (weight > cohort.sampleRate)
+    cohort.sampleRate = weight
+}
+
+function cohortDeviceCount(cohort: CohortDevices) {
+  if (cohort.sampleRate <= 1)
+    return cohort.devices.size
+  let estimated = 0
+  for (const id of cohort.devices)
+    estimated += cohort.fullDevices.has(id) ? 1 : cohort.sampleRate
+  return estimated
+}
+
 interface NativeObserveVersionBucket {
   version_name: string
   platform: string | null
   channel_name: string | null
-  devices: Set<string>
+  devices: CohortDevices
   issueDevices: Set<string>
   events: number
   issueCount: number
@@ -452,11 +481,11 @@ interface NativeObserveVersionBucket {
 }
 
 interface NativeObserveAggregateState {
-  dailyMap: Map<string, { events: number, devices: Set<string>, durations: number[] }>
-  actionMap: Map<string, { events: number, devices: Set<string>, durations: number[] }>
+  dailyMap: Map<string, NativeObserveMetricBucket>
+  actionMap: Map<string, NativeObserveMetricBucket>
   versionMap: Map<string, NativeObserveVersionBucket>
   versionGroup: NativeObserveVersionGroup
-  allDevices: Set<string>
+  allDevices: CohortDevices
   issueDevices: Set<string>
   issueCount: number
   launchTimeoutCount: number
@@ -476,7 +505,7 @@ function createNativeObserveAggregateState(
     actionMap: new Map(),
     versionMap: new Map(),
     versionGroup,
-    allDevices: new Set(),
+    allDevices: emptyCohort(),
     issueDevices: new Set(),
     issueCount: 0,
     launchTimeoutCount: 0,
@@ -487,7 +516,7 @@ function createNativeObserveAggregateState(
   }
 }
 
-interface NativeObserveMetricBucket { events: number, devices: Set<string>, durations: number[] }
+interface NativeObserveMetricBucket { events: number, devices: CohortDevices, durations: number[] }
 function bumpMetricBucket(
   map: Map<string, NativeObserveMetricBucket>,
   key: string,
@@ -495,9 +524,9 @@ function bumpMetricBucket(
   durationMs: number | null,
   weight: number,
 ) {
-  const bucket = map.get(key) ?? { events: 0, devices: new Set<string>(), durations: [] }
+  const bucket = map.get(key) ?? { events: 0, devices: emptyCohort(), durations: [] }
   bucket.events += weight
-  bucket.devices.add(deviceId)
+  noteCohortDevice(bucket.devices, deviceId, weight)
   if (durationMs !== null)
     pushDurationSample(bucket.durations, durationMs)
   map.set(key, bucket)
@@ -516,7 +545,7 @@ function foldOverviewCounters(state: NativeObserveAggregateState, sample: Native
   const weight = observeSampleWeight(sample)
   state.rowsRead += 1
   state.events += weight
-  state.allDevices.add(sample.device_id)
+  noteCohortDevice(state.allDevices, sample.device_id, weight)
   if (issueActionSet.has(sample.action)) {
     state.issueCount += weight
     state.issueDevices.add(sample.device_id)
@@ -543,7 +572,7 @@ function foldVersionBucket(state: NativeObserveAggregateState, sample: NativeObs
     version_name: sample.version_name,
     platform,
     channel_name: channelName,
-    devices: new Set<string>(),
+    devices: emptyCohort(),
     issueDevices: new Set<string>(),
     events: 0,
     issueCount: 0,
@@ -552,7 +581,7 @@ function foldVersionBucket(state: NativeObserveAggregateState, sample: NativeObs
   }
   const weight = observeSampleWeight(sample)
   version.events += weight
-  version.devices.add(sample.device_id)
+  noteCohortDevice(version.devices, sample.device_id, weight)
   if (issueActionSet.has(sample.action)) {
     version.issueCount += weight
     version.issueDevices.add(sample.device_id)
@@ -584,7 +613,7 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
         day,
         action: action!,
         events: value.events,
-        devices: value.devices.size,
+        devices: cohortDeviceCount(value.devices),
         ...metricFromDurations(value.durations),
       }
     })
@@ -597,7 +626,7 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
     .map(([action, value]) => ({
       action,
       events: value.events,
-      devices: value.devices.size,
+      devices: cohortDeviceCount(value.devices),
       ...metricFromDurations(value.durations),
     }))
     .sort((a, b) => {
@@ -615,7 +644,7 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
         platform: value.platform,
         channel_name: value.channel_name,
         events: value.events,
-        devices: value.devices.size,
+        devices: cohortDeviceCount(value.devices),
         issue_count: value.issueCount,
         affected_devices: value.issueDevices.size,
         launch_p90_ms: launchMetrics.p90_ms,
@@ -645,7 +674,7 @@ function finalizeNativeObserveAggregate(state: NativeObserveAggregateState): {
     versionRows,
     overviewRow: {
       events: state.events,
-      devices: state.allDevices.size,
+      devices: cohortDeviceCount(state.allDevices),
       issue_count: state.issueCount,
       affected_devices: state.issueDevices.size,
       launch_timeout_count: state.launchTimeoutCount,

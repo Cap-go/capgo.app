@@ -326,12 +326,36 @@ describe('native observe stats helpers', () => {
       },
     ])
     expect(aggregates.overviewRow.events).toBe(20)
-    expect(aggregates.overviewRow.devices).toBe(1)
+    expect(aggregates.overviewRow.devices).toBe(20)
     expect(aggregates.overviewRow.webview_load_p50_ms).toBe(800)
     expect(aggregates.actionRows[0]).toEqual(expect.objectContaining({
       action: 'webview_page_loaded',
       events: 20,
-      devices: 1,
+      devices: 20,
     }))
+  })
+
+  it.concurrent('does not scale a device that still has an unsampled row', () => {
+    const aggregates = nativeObserveStatsTestUtils.aggregateNativeObserveSamples([
+      {
+        day: '2026-07-01',
+        action: 'app_launch_ready',
+        version_name: '1.0.0',
+        device_id: 'full',
+        duration_ms: 400,
+        weight: 1,
+      },
+      {
+        day: '2026-07-01',
+        action: 'webview_page_loaded',
+        version_name: '1.0.0',
+        device_id: 'cohort',
+        duration_ms: 800,
+        weight: 5,
+      },
+    ])
+    expect(aggregates.overviewRow.devices).toBe(6)
+    expect(aggregates.actionRows.find(row => row.action === 'app_launch_ready')?.devices).toBe(1)
+    expect(aggregates.actionRows.find(row => row.action === 'webview_page_loaded')?.devices).toBe(5)
   })
 })
