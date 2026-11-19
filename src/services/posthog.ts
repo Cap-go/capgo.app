@@ -77,6 +77,7 @@ export function sanitizePostHogInvitationEvent(event: unknown) {
   return { ...event, properties: sanitizedProperties }
 }
 
+/** PostHog client options for the console: autocapture and web vitals off, invitation URLs sanitized. */
 export function createPosthogClientOptions() {
   return {
     api_host: 'https://psthg.capgo.app',

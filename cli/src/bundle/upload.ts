@@ -761,6 +761,7 @@ async function uploadBundleToCapgoCloud(apikey: string, client: CapgoClientType,
     log.info(`[Verbose] Performance event sent successfully`)
 }
 
+/** Sends the legacy zip upload performance event; skipped for TUS uploads. */
 export async function sendUploadZipPerformanceEvent(
   apikey: string,
   orgId: string,

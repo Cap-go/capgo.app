@@ -14,8 +14,9 @@ describe('cli posthog volume guardrails', () => {
     await sendUploadZipPerformanceEvent('capgo-key', 'org-1', 'com.example.app', '1.23', true)
     expect(sendEventMock).not.toHaveBeenCalled()
 
-    await sendUploadZipPerformanceEvent('capgo-key', 'org-1', 'com.example.app', '4.56', false)
+    await sendUploadZipPerformanceEvent('capgo-key', 'org-1', 'com.example.app', '4.56', false, true)
     expect(sendEventMock).toHaveBeenCalledOnce()
+    expect(sendEventMock.mock.calls[0]?.[2]).toBe(true)
     expect(sendEventMock.mock.calls[0]?.[1]).toMatchObject({
       channel: 'performance',
       event: 'Upload zip performance',
