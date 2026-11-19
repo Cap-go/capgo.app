@@ -162,13 +162,13 @@ is_failed_migration_hotfix() {
 }
 
 # capgo-22.63.1: 20261117152120 never applied in prod; atomic replacement at
-# 20261118193000 after invoice 152412 (R085 rename of 152120 on this branch).
+# 20261119233941 after invoice 152412 and plugin_state 170054 (R085 rename of 152120 on this branch).
 is_storage_gb_hours_152120_repair() {
   local file="$1"
   local blob
   blob="$(git hash-object "$file")"
   case "${file}:${blob}" in
-    supabase/migrations/20261118193000_storage_gb_hours_billing.sql:a2bcd8fc3bb09e516e570675aa75533acfb2f023) return 0 ;;
+    supabase/migrations/20261119233941_storage_gb_hours_billing.sql:a2bcd8fc3bb09e516e570675aa75533acfb2f023) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -178,6 +178,14 @@ is_storage_gb_hours_split_delete() {
   case "$1" in
     supabase/migrations/20261117152410_storage_gb_hours_billing_data.sql) return 0 ;;
     supabase/migrations/20261117152411_storage_gb_hours_billing_apps_locks.sql) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Branch-only restamp of 20261118193000 to a newer timestamp (capgo.app#4190).
+is_storage_gb_hours_93000_restamp_delete() {
+  case "$1" in
+    supabase/migrations/20261118193000_storage_gb_hours_billing.sql) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -235,6 +243,11 @@ if [[ -n "$modified_files" ]]; then
       continue
     fi
 
+    if is_storage_gb_hours_93000_restamp_delete "$file"; then
+      echo "⚠️  Allowing restamp deletion of unapplied 20261118193000: $file"
+      continue
+    fi
+
     disallowed_modified_files+="${file}"$'\n'
   done <<< "$modified_files"
 
@@ -282,6 +295,10 @@ if [[ -n "$deleted_files" && "$allow_migration_squash" -ne 1 ]]; then
     [[ -z "$file" ]] && continue
     if is_storage_gb_hours_split_delete "$file"; then
       echo "⚠️  Allowing removal of unapplied storage gb-hours split migration: $file"
+      continue
+    fi
+    if is_storage_gb_hours_93000_restamp_delete "$file"; then
+      echo "⚠️  Allowing removal of unapplied storage gb-hours restamp 20261118193000: $file"
       continue
     fi
     disallowed_deleted_files+="${file}"$'\n'

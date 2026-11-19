@@ -1,12 +1,7 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { invertStorageMigrationLockOrder } from './storage-gb-hours-migration-lock-helpers.ts'
+import { invertStorageMigrationLockOrder, readStorageGbHoursMigrationSql } from './storage-gb-hours-migration-lock-helpers.ts'
 
-const migrationPath = new URL(
-  '../supabase/migrations/20261118193000_storage_gb_hours_billing.sql',
-  import.meta.url,
-)
-const migration = readFileSync(migrationPath, 'utf8')
+const migration = readStorageGbHoursMigrationSql()
 
 const appsLockMarker = '$capgo_lock_apps_for_storage_triggers$'
 const dshLockMarker = '$capgo_lock_daily_storage_hourly$'

@@ -360,6 +360,27 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
     })
   }, 300_000)
 
+  it('control: real migration succeeds with legacy cron writer holding apps FOR SHARE during migration', async () => {
+    await withFreshDatabase(async (dbUrl) => {
+      const result = await runMigrationWithConcurrentWriter(
+        dbUrl,
+        readStorageGbHoursMigrationSql(),
+        ['apps'],
+        {
+          writerMode: 'legacy-during-migration',
+          writerHoldsAppsShareFirst: true,
+          requireWriterLockWait: false,
+        },
+      )
+      if (result.migration.status === 'rejected')
+        throw result.migration.reason
+      expect(result.migration.status).toBe('fulfilled')
+      if (result.writer.status === 'rejected')
+        throw result.writer.reason
+      expect(result.writer.status).toBe('fulfilled')
+    })
+  }, 300_000)
+
   it('mutation: inverted lock order in migration SQL fails under the same writer', async () => {
     await withFreshDatabase(async (dbUrl) => {
       const inverted = invertStorageMigrationLockOrder(readStorageGbHoursMigrationSql())
@@ -387,7 +408,7 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
       expect(rejection?.status).toBe('rejected')
       if (rejection?.status === 'rejected') {
         const code = (rejection.reason as { code?: string })?.code
-        expect(['40P01', '55P03', '57014']).toContain(code)
+        expect(['40P01', '55P03']).toContain(code)
       }
     })
   }, 300_000)
