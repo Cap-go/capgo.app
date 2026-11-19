@@ -122,13 +122,14 @@ describe('production read-replica release gate', () => {
         refreshDef?.steps?.some(step => step.run?.includes('resolve-deploy-tag.ts --assert-current')),
         'read_replica_subscription must run an executable assert-current step',
       ).toBe(true)
-      const expectedIf = {
+      const workerJobs = ['deploy_api', 'deploy_files', 'deploy_plugin_regions', 'deploy_translation_worker'] as const
+      const expectedIf: Record<typeof workerJobs[number], string> = {
         deploy_api: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.api == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\') && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
         deploy_translation_worker: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.translation == \'true\' && (needs.supabase_deploy.result == \'success\' || (needs.supabase_deploy.result == \'skipped\' && needs.changes.outputs.supabase != \'true\')) && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
         deploy_files: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.files == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\') && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
         deploy_plugin_regions: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.plugins == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\') && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
       }
-      for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions', 'deploy_translation_worker']) {
+      for (const job of workerJobs) {
         const jobDef = parsed.jobs?.[job]
         expect(jobDef, `${job} must exist in build_and_deploy.yml`).toBeDefined()
         const needs = jobDef?.needs
