@@ -538,7 +538,7 @@ function createNativeObserveAggregateState(
   }
 }
 
-interface NativeObserveMetricBucket { events: number, devices: CohortDevices, durations: number[] }
+interface NativeObserveMetricBucket { events: number, devices: CohortDevices, durations: WeightedDuration[] }
 function bumpMetricBucket(
   map: Map<string, NativeObserveMetricBucket>,
   key: string,

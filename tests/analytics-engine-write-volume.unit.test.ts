@@ -123,6 +123,31 @@ describe('analytics engine write volume', () => {
     expect(plugin.APP_LOG_VOLUME_SAMPLE_RATE).toBe(api.APP_LOG_VOLUME_SAMPLE_RATE)
     expect([...plugin.APP_LOG_DROPPED_ACTIONS]).toEqual([...api.APP_LOG_DROPPED_ACTIONS])
     expect([...plugin.APP_LOG_VOLUME_SAMPLED_ACTIONS]).toEqual([...api.APP_LOG_VOLUME_SAMPLED_ACTIONS])
+
+    let kept = ''
+    let skipped = ''
+    for (let i = 0; i < 200 && (!kept || !skipped); i++) {
+      const id = `parity-device-${i}`
+      if (plugin.appLogDeviceKept(id) !== api.appLogDeviceKept(id))
+        throw new Error(`sample decision diverged for ${id}`)
+      if (plugin.appLogDeviceKept(id))
+        kept = kept || id
+      else
+        skipped = skipped || id
+    }
+
+    async function written(track: typeof plugin.trackLogsCF) {
+      const writeDataPoint = vi.fn()
+      const c = createContext({ APP_LOG: { writeDataPoint } })
+      await track(c, 'com.example.app', kept, 'webview_page_loaded', '1.0.0', { duration_ms: '15' })
+      await track(c, 'com.example.app', kept, 'webview_page_loaded', '1.0.0', { duration_ms: '15' })
+      await track(c, 'com.example.app', skipped, 'webview_page_loaded', '1.0.0', { duration_ms: '15' })
+      await track(c, 'com.example.app', kept, 'noNew', '1.0.0')
+      await track(c, 'com.example.app', skipped, 'app_launch_ready', '1.0.0')
+      return writeDataPoint.mock.calls.map(([point]) => point)
+    }
+
+    expect(await written(plugin.trackLogsCF)).toEqual(await written(api.trackLogsCF))
   })
 
   it('scales population totals and leaves one device\'s own count unscaled', async () => {
