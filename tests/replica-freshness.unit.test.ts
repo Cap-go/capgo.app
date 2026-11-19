@@ -41,6 +41,14 @@ describe('replica freshness', () => {
     expect(isReadReplicaSource('unknown')).toBe(false)
   })
 
+  it('never selects a primary for a plugin read even without the worker middleware flag', () => {
+    const c = { ...contextFrom(undefined), env: {
+      HYPERDRIVE_CAPGO_DIRECT_EU: { connectionString: 'postgresql://primary' },
+      MAIN_SUPABASE_DB_URL: 'postgresql://primary-pooler', SUPABASE_DB_URL: 'postgresql://primary-direct',
+    }, set: vi.fn() }
+    expect(() => getDatabaseURL(c, true)).toThrow('Read replica is required')
+  })
+
   it('keeps the full TTL for primary reads, even with a lagging figure recorded for them', async () => {
     stubCaches()
     setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_DIRECT_EU', { status: 'lagging', max_lag_seconds: 2400 })

@@ -127,13 +127,12 @@ describe('buildBundleCompatibilityBentoEvent', () => {
 // when the version bump keeps the bundle off devices still running the previous
 // (incompatible) native build, the breaking change was done correctly.
 describe('isBundleIncompatibleAlertForChannel', () => {
-  it.concurrent('emails only the default upload channel unless the app opts into every channel', () => {
-    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', channel: 'production', defaultChannel: 'production' })).toBe(true)
-    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', channel: 'staging', defaultChannel: 'production' })).toBe(false)
-    expect(isBundleIncompatibleAlertForChannel({ alert: 'all', channel: 'staging', defaultChannel: 'production' })).toBe(true)
-    expect(isBundleIncompatibleAlertForChannel({ alert: undefined, channel: 'staging', defaultChannel: 'production' })).toBe(false)
-    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', channel: undefined, defaultChannel: 'production' })).toBe(true)
-    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', channel: 'staging', defaultChannel: undefined })).toBe(true)
+  it.concurrent('inherits platform download defaults and honors explicit channel overrides', () => {
+    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', isDefaultDownload: true })).toBe(true)
+    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', isDefaultDownload: false })).toBe(false)
+    expect(isBundleIncompatibleAlertForChannel({ alert: 'all', isDefaultDownload: false })).toBe(true)
+    expect(isBundleIncompatibleAlertForChannel({ alert: 'all', isDefaultDownload: true, override: false })).toBe(false)
+    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', isDefaultDownload: false, override: true })).toBe(true)
     expect(isBundleIncompatibleAlert('default')).toBe(true)
     expect(isBundleIncompatibleAlert('all')).toBe(true)
     expect(isBundleIncompatibleAlert('staging')).toBe(false)

@@ -35,8 +35,6 @@ describe('pooled PostgreSQL transaction access modes', () => {
   it.each([
     ['API', 'node', getPgClient, closeClient],
     ['API', 'workerd', getPgClient, closeClient],
-    ['plugin fallback', 'node', getPluginPgClient, closePluginClient],
-    ['plugin fallback', 'workerd', getPluginPgClient, closePluginClient],
   ] as const)('never pins a transaction for %s primary reads in %s', async (_name, runtimeKey, create, close) => {
     runtime.key = runtimeKey
     const c = context()
@@ -56,9 +54,10 @@ describe('pooled PostgreSQL transaction access modes', () => {
     }
   })
 
-  it('opens primary reader transactions read-only and closes them', async () => {
+  it.each([[getPgClient, closeClient], [getPluginPgClient, closePluginClient]])('opens replica reader transactions read-only and closes them (%#)', async (create, close) => {
     const c = context()
-    const reader = await getPgClient(c, true)
+    c.env.HYPERDRIVE_CAPGO_READ_EU = { connectionString }
+    const reader = await create(c, true)
     try {
       await withPgTransaction(reader, async (client) => {
         expect((await client.query('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('on')
@@ -74,7 +73,7 @@ describe('pooled PostgreSQL transaction access modes', () => {
       releasePgClient(reader, client)
     }
     finally {
-      await closeClient(c, reader)
+      await close(c, reader)
     }
   })
 
@@ -222,8 +221,9 @@ describe('pooled PostgreSQL transaction access modes', () => {
     }
   })
 
-  it('opens a lazy primary reader transaction read-only', async () => {
+  it('opens a lazy replica reader transaction read-only', async () => {
     const c = context()
+    c.env.HYPERDRIVE_CAPGO_READ_EU = { connectionString }
     const lazy = createLazyPgClient(c, true)
     try {
       await getPluginDrizzleClient(lazy.client, { logger: false }).transaction(async (tx) => {

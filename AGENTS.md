@@ -1081,6 +1081,18 @@ it returns is serialized twice. Keep each one bounded and cheap:
 When a PR changes customer-facing UI (layout, spacing, colors, components, or
 copy placement), reviewers need a before/after screenshot diff.
 
+The automatic review fails when a visual file changes and the pull request
+description has no screenshot. The review says `missing screenshot for review`
+and requests changes. Visual files are `src/**/*.vue`, `src/**/*.css`,
+`src/**/*.scss`, `src/**/*.sass`, `src/**/*.less`, `src/**/*.svg`,
+`supabase/templates/**/*.html`,
+`cloudflare_workers/api/email_templates/**/*.html`, `ios/**/*.storyboard`,
+`ios/**/*.xib`, `android/**/res/layout/**/*.xml`, and
+`android/**/res/drawable*/**/*.xml`. A screenshot is an image or video in the
+description. The word "screenshot", the empty Screenshots heading, HTML
+comments, images inside code fences, and Cubic or Codesmith footer badges do
+not count.
+
 **Request the automated PR report** by either:
 
 - adding the `visual-change` label to the PR, or
@@ -1190,7 +1202,7 @@ Only after **all** of these are true:
 - You believe the implementation is complete (no known leftover work).
 - **Every** required GitHub Actions / CI check on the PR is **green** (no failing, no still-required pending).
 - The PR description follows the required sections below (with `(AI generated)` where applicable).
-- UX/UI changes include any required visual proof (see visual-diff rules).
+- UX/UI changes include a screenshot in the pull request description. Without it, the review fails with `missing screenshot for review` (see visual-diff rules).
 
 …then mark the PR **Ready for review** in GitHub (undraft).
 
