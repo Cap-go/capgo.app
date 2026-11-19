@@ -44,7 +44,6 @@ inserted AS (
 current_orgs AS (
   SELECT DISTINCT rb.org_id
   FROM public.role_bindings rb
-  INNER JOIN public.orgs o ON o.id = rb.org_id
   WHERE rb.principal_type = public.rbac_principal_user()
     AND rb.principal_id = $1::uuid
     AND rb.org_id IS NOT NULL
@@ -55,7 +54,6 @@ current_orgs AS (
   SELECT DISTINCT g.org_id
   FROM public.group_members gm
   INNER JOIN public.groups g ON g.id = gm.group_id
-  INNER JOIN public.orgs o ON o.id = g.org_id
   INNER JOIN public.role_bindings rb
     ON rb.principal_type = public.rbac_principal_group()
     AND rb.principal_id = gm.group_id

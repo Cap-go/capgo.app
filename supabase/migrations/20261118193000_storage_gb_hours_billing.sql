@@ -15,15 +15,40 @@
 -- cycle, so the billable value never goes down mid cycle and overage debits
 -- stay monotonic.
 -- ---------------------------------------------------------------------------
--- Atomic deploy (capgo-22.63.1): one transaction. Heavy DDL first (only
--- AccessShare on apps / app_versions), then short AccessExclusive on
--- app_versions + apps for FK drop and lifetime triggers. lock_timeout 500ms on
--- each lock acquisition (below prod deadlock_timeout 1s).
--- Writers: version_meta via upsert_version_meta and storage backfills;
--- daily_storage_hourly via replace_app_storage_hourly / cron_stat_app. While
--- this transaction holds AccessExclusive on those tables, writers stall for
--- the rest of the migration (tens of seconds at prod daily_storage_hourly size).
+-- Atomic deploy (capgo-22.63.1): one transaction. lock_timeout 500ms on each
+-- lock acquisition (below prod deadlock_timeout 1s).
+-- replace_app_storage_hourly takes FOR SHARE on apps then writes
+-- daily_storage_hourly, so this migration must take AccessExclusive on
+-- app_versions + apps (and drop the DSH->apps FK) before locking
+-- daily_storage_hourly or version_meta. Triggers on apps/app_versions run under
+-- the same initial app locks held until COMMIT.
 BEGIN;
+
+-- ---------------------------------------------------------------------------
+-- 0. Apps / app_versions before any daily_storage_hourly writer path
+-- ---------------------------------------------------------------------------
+DO $capgo_lock_apps_for_storage_triggers$
+DECLARE
+  attempt int;
+BEGIN
+  FOR attempt IN 1..30 LOOP
+    BEGIN
+      SET LOCAL lock_timeout = '500ms';
+      LOCK TABLE public.app_versions, public.apps IN ACCESS EXCLUSIVE MODE;
+      RETURN;
+    EXCEPTION
+      WHEN lock_not_available OR deadlock_detected THEN
+        IF attempt >= 30 THEN
+          RAISE;
+        END IF;
+        PERFORM pg_sleep(0.1);
+    END;
+  END LOOP;
+END;
+$capgo_lock_apps_for_storage_triggers$;
+
+ALTER TABLE public.daily_storage_hourly
+DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
 
 -- ---------------------------------------------------------------------------
 -- 1. Byte-hours of deleted apps stay billable until delete_old_deleted_apps
@@ -1500,21 +1525,28 @@ COMMENT ON FUNCTION public.delete_old_deleted_apps() IS
 -- get_total_storage_size_org / get_total_app_storage_size_orgs no longer feed
 -- billing, the console or the statistics API. They are kept for this release
 -- because statistics workers of the previous deploy call them until replaced.
-DROP FUNCTION IF EXISTS public.read_storage_usage(character varying, timestamp without time zone, timestamp without time zone);
-DROP TABLE IF EXISTS public.daily_storage;
-
-
--- ---------------------------------------------------------------------------
--- Deadlock-safe final locks (apps / app_versions)
--- ---------------------------------------------------------------------------
-DO $capgo_lock_apps_for_storage_triggers$
+DO $capgo_drop_legacy_daily_storage$
 DECLARE
   attempt int;
+  v_has_daily_storage boolean;
 BEGIN
+  SELECT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_class c
+    INNER JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'daily_storage'
+      AND c.relkind = 'r'
+  ) INTO v_has_daily_storage;
+
   FOR attempt IN 1..30 LOOP
     BEGIN
       SET LOCAL lock_timeout = '500ms';
-      LOCK TABLE public.app_versions, public.apps IN ACCESS EXCLUSIVE MODE;
+      IF v_has_daily_storage THEN
+        LOCK TABLE public.daily_storage IN ACCESS EXCLUSIVE MODE;
+      END IF;
+      DROP FUNCTION IF EXISTS public.read_storage_usage(character varying, timestamp without time zone, timestamp without time zone);
+      DROP TABLE IF EXISTS public.daily_storage;
       RETURN;
     EXCEPTION
       WHEN lock_not_available OR deadlock_detected THEN
@@ -1525,14 +1557,7 @@ BEGIN
     END;
   END LOOP;
 END;
-$capgo_lock_apps_for_storage_triggers$;
-
--- Drop after the LOCK retry block (not before it): ALTER on daily_storage_hourly
--- takes AccessExclusiveLock on public.apps and is held until COMMIT, so doing
--- this before LOCK TABLE would keep apps locked through failed retries.
--- Still after the long version_meta phase so that work does not run under apps.
-ALTER TABLE public.daily_storage_hourly
-DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
+$capgo_drop_legacy_daily_storage$;
 
 -- ---------------------------------------------------------------------------
 -- 2e. Close bundle lifetimes when an app is deleted
