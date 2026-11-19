@@ -113,6 +113,11 @@ async function provisionBeforeStorageMigration(targetUrl: string) {
   try {
     await runSqlFile(
       bootstrapClient,
+      readFileSync(resolve(repoRoot, 'tests/fixtures/local-db-disposable-auth-stub.sql'), 'utf8'),
+      'local-db-disposable-auth-stub.sql',
+    )
+    await runSqlFile(
+      bootstrapClient,
       readFileSync(resolve(supabaseDir, 'bootstrap.sql'), 'utf8'),
       'bootstrap.sql',
     )
