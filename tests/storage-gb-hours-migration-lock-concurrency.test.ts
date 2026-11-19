@@ -105,11 +105,11 @@ function filterSchemaDumpForDisposableDb(sql: string): string {
     .filter((line) => {
       if (line.startsWith('\\'))
         return false
-      if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?public(")?\s*;/i.test(line))
+      if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?public(")?\b/i.test(line))
         return false
-      if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?extensions(")?\s*;/i.test(line))
+      if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?extensions(")?\b/i.test(line))
         return false
-      if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?pgmq(")?\s*;/i.test(line))
+      if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?pgmq(")?\b/i.test(line))
         return false
       if (/^\s*CREATE\s+EXTENSION/i.test(line) && /pg_cron/i.test(line))
         return false
