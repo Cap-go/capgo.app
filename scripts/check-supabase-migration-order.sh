@@ -157,6 +157,8 @@ is_failed_migration_hotfix() {
   case "${file}:${blob}" in
     supabase/migrations/20260713114104_harden_rbac_compat_cleanup_after_rls.sql:17dfb3f478bff6b52bc71a85f0016cce11f1d789) return 0 ;;
     supabase/migrations/20261027220500_delta_storage_backfill.sql:0bf94d5123ca6e72cca0b72dd3013857846f20c4) return 0 ;;
+    # Restamp of 20261117231402 with ADD COLUMN IF NOT EXISTS for preprod or alpha.
+    supabase/migrations/20261119180122_channel_bundle_alert_override.sql:274466eb85719d51e9922bd23864aee68d7c3240) return 0 ;;
     *) return 1 ;;
   esac
 }
