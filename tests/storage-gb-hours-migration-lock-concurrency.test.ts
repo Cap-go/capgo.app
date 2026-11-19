@@ -263,7 +263,8 @@ async function runMigrationWithConcurrentWriter(
 
     const writerPromise = (async () => {
       await writer.query('BEGIN')
-      await writer.query(`SET LOCAL lock_timeout = '5s'`)
+      // Wait out the migrator's ACCESS EXCLUSIVE window; prod cron uses 5s but this test must not give up first.
+      await writer.query(`SET LOCAL lock_timeout = '0'`)
       await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
       await writer.query('COMMIT')
     })()
@@ -328,7 +329,11 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
         readStorageGbHoursMigrationSql(),
         ['apps'],
       )
+      if (result.migration.status === 'rejected')
+        throw result.migration.reason
       expect(result.migration.status).toBe('fulfilled')
+      if (result.writer.status === 'rejected')
+        throw result.writer.reason
       expect(result.writer.status).toBe('fulfilled')
     })
   }, 300_000)
