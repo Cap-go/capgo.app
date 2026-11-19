@@ -34,7 +34,7 @@ test('production CSP permits the serving policy check', async ({ page }) => {
   expect(requests).toBe(1)
 })
 
-test('saves and reloads serving regions and both outside-region modes', async ({ page }) => {
+test('defaults to all update regions and saves and reloads deselection', async ({ page }) => {
   const status = getSupabaseStatus()
   if (!status)
     throw new Error('Local Supabase must be running')
@@ -54,16 +54,13 @@ test('saves and reloads serving regions and both outside-region modes', async ({
     await expect(controls).toBeVisible()
     for (const region of regions)
       await expect(controls.locator(`input[name="serving-region-${region}"]`)).toBeChecked()
-    const mode = controls.getByRole('combobox', { name: 'Requests outside these regions' })
-    await expect(mode).toHaveValue('route')
+    await expect(controls.getByRole('combobox')).toHaveCount(0)
     for (const region of regions.filter(region => region !== 'NA'))
       await controls.locator(`input[name="serving-region-${region}"]`).uncheck()
-    await mode.selectOption('block')
     const savedBlock = page.waitForResponse(response => response.request().postData()?.includes('serving_regions') === true)
     await page.locator('#update-app').getByRole('button', { name: 'Save', exact: true }).click()
     expect((await savedBlock).ok()).toBe(true)
     await page.reload()
-    await expect(mode).toHaveValue('block')
     await expect(controls.getByRole('status')).toHaveText('Applying your changes.')
     await page.setViewportSize({ width: 1280, height: 1200 })
     await controls.evaluate(element => element.scrollIntoView({ block: 'center' }))
@@ -71,18 +68,16 @@ test('saves and reloads serving regions and both outside-region modes', async ({
     await expect(controls.locator('input[name="serving-region-NA"]')).toBeChecked()
     await expect(controls.locator('input[name="serving-region-EU"]')).not.toBeChecked()
     await controls.locator('input[name="serving-region-NA"]').uncheck()
-    await expect(controls.getByRole('alert')).toHaveText('Select at least one serving region.')
+    await expect(controls.getByRole('alert')).toHaveText('Select at least one update region.')
     await page.locator('#update-app').getByRole('button', { name: 'Save', exact: true }).click()
     const noEmpty = await admin.from('apps').select('serving_regions').eq('app_id', APP_ID).single()
     expect(noEmpty.data?.serving_regions).toEqual(['NA'])
     for (const region of regions)
       await controls.locator(`input[name="serving-region-${region}"]`).check()
-    await mode.selectOption('route')
     const savedRoute = page.waitForResponse(response => response.request().postData()?.includes('serving_regions') === true)
     await page.locator('#update-app').getByRole('button', { name: 'Save', exact: true }).click()
     expect((await savedRoute).ok()).toBe(true)
     await page.reload()
-    await expect(mode).toHaveValue('route')
     await expect(controls.getByRole('status')).toHaveText('Up to date.')
     await page.setViewportSize({ width: 1280, height: 1200 })
     await controls.evaluate(element => element.scrollIntoView({ block: 'center' }))
@@ -95,7 +90,7 @@ test('saves and reloads serving regions and both outside-region modes', async ({
     await expect(europe).not.toBeChecked()
     await europe.press('Space')
     await expect(europe).toBeChecked()
-    await expect(page.getByRole('group', { name: 'Serving regions' })).toBeVisible()
+    await expect(page.getByRole('group', { name: 'Update regions' })).toBeVisible()
 
     let deniedSettingsChecks = 0
     await routeConsoleQuery(page, 'rbac_check_permissions', (route, query) => {
@@ -110,9 +105,9 @@ test('saves and reloads serving regions and both outside-region modes', async ({
     })
     await page.reload()
     await expect.poll(() => deniedSettingsChecks).toBeGreaterThan(0)
-    await expect(mode).toBeDisabled()
     for (const region of regions)
       await expect(controls.locator(`input[name="serving-region-${region}"]`)).toBeDisabled()
+    await expect(page.locator('#update-app').getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
     await expect(page.getByRole('button', { name: 'Delete app', exact: true })).toBeEnabled()
   }
   finally {
@@ -144,12 +139,47 @@ const settingsTest = test.extend<{ servingApp: { appId: string, admin: ReturnTyp
       await page.login('test@capgo.app', 'testtest')
       await page.goto(`/app/${appId}/settings`)
       await expect(page.locator('[data-test="serving-regions"]')).toBeVisible()
+      await expect(page.locator('[name="serving-region-EU"]')).toBeEnabled()
       await use({ appId, admin })
     }
     finally {
       await admin.from('apps').delete().eq('app_id', appId)
     }
   },
+})
+
+settingsTest('waits for settings permission before enabling Save', async ({ page, servingApp }) => {
+  const { admin, appId } = servingApp
+  const permissionGate = Promise.withResolvers<void>()
+  let permissionRequested = false
+  await routeConsoleQuery(page, 'rbac_check_permissions', async (route, query) => {
+    const checks = consoleQueryPayload(query)?.p_checks ?? []
+    if (!checks.some((check: { permission_key: string, app_id: string | null }) => check.permission_key === 'app.update_settings' && check.app_id === appId))
+      return route.fallback()
+    permissionRequested = true
+    await permissionGate.promise
+    return route.fallback()
+  })
+  try {
+    await page.reload()
+    await expect.poll(() => permissionRequested).toBe(true)
+    await expect(page.locator('[data-test="serving-regions"]')).toBeVisible()
+    const save = page.locator('#update-app').getByRole('button', { name: 'Save', exact: true })
+    await page.locator('[name="app_name"]').fill('Saved after permission check')
+    await expect(save).toBeDisabled()
+
+    permissionGate.resolve()
+    await expect(save).toBeEnabled()
+    await save.click()
+    await expect.poll(async () => {
+      const saved = await admin.from('apps').select('name').eq('app_id', appId).single()
+      return saved.data?.name
+    }).toBe('Saved after permission check')
+    await expect(page.getByText('Insufficient permissions', { exact: true })).toHaveCount(0)
+  }
+  finally {
+    permissionGate.resolve()
+  }
 })
 
 settingsTest('does not offer regional settings before the service can apply them', async ({ page, servingApp }) => {
@@ -217,21 +247,20 @@ settingsTest('ignores region order and advances the baseline after intentional p
   expect(policyWrites).toBe(0)
 
   await europe.uncheck()
-  await page.locator('[name="serving_region_mode"]').selectOption('block')
-  await save.click()
-  await expect.poll(async () => {
-    const saved = await admin.from('apps').select('serving_regions,serving_region_mode').eq('app_id', appId).single()
-    return saved.data
-  }).toEqual({ serving_regions: regions.filter(region => region !== 'EU'), serving_region_mode: 'block' })
-  await expect(page.locator('[name="app_name"]')).toBeVisible()
-  expect(policyWrites).toBe(1)
-
-  await page.locator('[name="serving_region_mode"]').selectOption('route')
   await save.click()
   await expect.poll(async () => {
     const saved = await admin.from('apps').select('serving_regions,serving_region_mode').eq('app_id', appId).single()
     return saved.data
   }).toEqual({ serving_regions: regions.filter(region => region !== 'EU'), serving_region_mode: 'route' })
+  await expect(page.locator('[name="app_name"]')).toBeVisible()
+  expect(policyWrites).toBe(1)
+
+  await europe.check()
+  await save.click()
+  await expect.poll(async () => {
+    const saved = await admin.from('apps').select('serving_regions,serving_region_mode').eq('app_id', appId).single()
+    return saved.data
+  }).toEqual({ serving_regions: [...regions.filter(region => region !== 'EU'), 'EU'], serving_region_mode: 'route' })
   await expect(page.locator('[name="app_name"]')).toBeVisible()
   expect(policyWrites).toBe(2)
 

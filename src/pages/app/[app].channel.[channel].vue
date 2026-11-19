@@ -29,6 +29,7 @@ import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { bundleChannelCompatibility, readBundleChannelCompatibility } from '~/services/nativePackageCompatibility'
 import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
+import { sendEvent } from '~/services/tracking'
 import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/versions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -50,6 +51,7 @@ type ChannelUpdate = Database['public']['Tables']['channels']['Update']
 type EditableChannelKey = 'allow_dev'
   | 'allow_device'
   | 'allow_device_self_set'
+  | 'bundle_alert_enabled'
   | 'allow_emulator'
   | 'allow_prod'
   | 'android'
@@ -736,6 +738,20 @@ async function openPromoteToChannel() {
     await promoteBundleToChannel(target)
 }
 
+async function saveReviewedPromotion(channelId: number, bundleId: number, reviewedVersionId: number | null) {
+  let promotion = capgo.from('channels').update({ version: bundleId }).eq('id', channelId)
+  promotion = reviewedVersionId === null
+    ? promotion.is('version', null)
+    : promotion.eq('version', reviewedVersionId)
+  const { data: updated, error } = await promotion.select('id')
+  if (error || !updated?.length) {
+    console.error('cannot promote bundle', error)
+    toast.error(t(error ? (channelUpdatePackageErrorKey(error) ?? 'error-update-channel') : 'promotion-target-changed'))
+    return false
+  }
+  return true
+}
+
 async function promoteBundleToChannel(target: PromoteTargetChannel) {
   const source = channel.value
   if (!source?.version)
@@ -784,17 +800,26 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
     return
   }
 
-  const { data: updated, error } = await capgo
-    .from('channels')
-    .update({ version: appVersion.id })
-    .eq('id', target.id)
-    .select('id')
-  if (error || !updated?.length) {
-    console.error('cannot promote bundle', error)
-    toast.error(t(error ? (channelUpdatePackageErrorKey(error) ?? 'error-update-channel') : 'no-permission'))
+  if (!(await saveReviewedPromotion(target.id, appVersion.id, targetState.versionId)))
     return
-  }
 
+  if (compatibility && targetState.versionId !== appVersion.id) {
+    void sendEvent({
+      channel: 'bundle',
+      event: 'Bundle Incompatible',
+      org_id: source.owner_org,
+      tracking_version: 2,
+      tags: {
+        source: 'promotion',
+        app_id: source.app_id,
+        channel: target.name,
+        channel_overwritten: true,
+        version_new_name: appVersion.name,
+        ...(targetState.versionId !== null && { version_old_id: targetState.versionId }),
+        ...(targetState.versionName && { version_old_name: targetState.versionName }),
+      },
+    })
+  }
   invalidateChannelImpact(target.id)
   toast.info(t('cloud-replication-delay'))
   toast.success(t('promote-to-channel-success', { bundle: appVersion.name, channel: target.name }))
@@ -1277,6 +1302,13 @@ function getAutoUpdateLabel(value: string) {
     default:
       return t('none')
   }
+}
+
+async function onChangeBundleAlert(event: Event) {
+  const select = event.target as HTMLSelectElement
+  const value = select.value
+  select.value = String(channel.value?.bundle_alert_enabled ?? 'inherit')
+  await saveChannelChange('bundle_alert_enabled', value === 'inherit' ? null : value === 'true')
 }
 
 async function onSelectAutoUpdate(value: Database['public']['Enums']['disable_update']) {
@@ -2039,6 +2071,25 @@ async function copyCurlCommand() {
                 :value="channel?.[platform]"
                 @change="saveChannelChange(platform, !channel?.[platform])"
               />
+            </InfoRow>
+            <InfoRow :label="t('bundle-incompatible-alert')">
+              <select
+                :aria-label="t('bundle-incompatible-alert')"
+                :disabled="!canUpdateChannelSettings"
+                :value="String(channel.bundle_alert_enabled ?? 'inherit')"
+                class="d-select d-select-bordered d-select-sm"
+                @change="onChangeBundleAlert"
+              >
+                <option value="inherit">
+                  {{ t('bundle-alert-inherit') }}
+                </option>
+                <option value="true">
+                  {{ t('enabled') }}
+                </option>
+                <option value="false">
+                  {{ t('disabled') }}
+                </option>
+              </select>
             </InfoRow>
             <InfoRow :label="t('disable-auto-downgra')">
               <Toggle

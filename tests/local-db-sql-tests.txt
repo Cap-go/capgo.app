@@ -54,3 +54,4 @@ tests/user-bento-event-jsonb-patch.test.ts
 tests/user-created-via-invite.test.ts
 tests/users-onboarding-size.test.ts
 tests/webnative-onboarding-schema.test.ts
+tests/plugin-state-eu-source.test.ts

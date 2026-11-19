@@ -7,7 +7,7 @@ logic. Stats collection and device channel writes retain their existing sinks.
 
 The database remains the source of truth. Statement triggers enqueue changed
 apps, bundle names, manifests, and device overrides. The API worker reads the
-primary on this write path, writes immutable KV documents, and conditionally
+EU read replica on this write path, writes immutable KV documents, and conditionally
 publishes pointers to them in R2. It then queues the app's Cache API purge.
 Plugin requests never rebuild state from the primary.
 
@@ -165,7 +165,7 @@ fits one immutable KV document. Tests cover that size and a separate
 1,001-manifest pagination check that resumes across invocations. These are
 local checks, not a production throughput benchmark.
 
-Source reads use at most four concurrent primary transactions per drain.
+Source reads use at most four concurrent EU replica transactions per drain.
 Queue claims, acknowledgements, garbage-collection progress and explicit repair
 enqueue calls also use separate short read-write transactions. These functions
 mutate queue state even though they are invoked with `SELECT`; allowing
@@ -402,10 +402,60 @@ from the source. Do not assume that daily app refresh or a successful unrelated
 publication repaired non-app dependencies. Failed archive entries require an
 explicit repair; do not reset poison-job retry budgets automatically each day.
 
-Source snapshots use fresh, bounded internal repeatable-read transactions on
-the primary, after which provider I/O runs with the transaction released. This
-is background publication, not a device request or a request-path Hyperdrive
-cache bypass. Gate primary load before increasing writer/backfill work.
+Source snapshots use bounded internal repeatable-read transactions on EU,
+then release the transaction before provider I/O. Every source transaction
+checks its durable primary claim barrier against `read_replica_commit_marker`
+in that same snapshot. A claim reserves a strictly increasing marker value
+in its primary control transaction after observing committed producer rows.
+The existing heartbeat preserves this ordering even if the primary clock moves
+backward. One marker write is needed per newly claimed payload batch, policy
+claim, or new inventory pass; deferrals reuse their durable barrier. All ten source tables must also
+be streaming in the marker's subscription; a heartbeat alone does not prove
+initial table-copy completion. Missing markers, unready subscriptions, replica
+lag, connection errors, or missing EU bindings defer publication without a
+primary source fallback or completion ACK. Deferral preserves the exact barrier
+and cursor and refunds the unused publication attempt; actual publication
+failures still have at most five attempts. Full continuations carry the barrier
+forward. Independently published keys can still settle on a later deferral.
+
+Parallel work retains every failure. A provider write failure consumes its
+publication attempt even if another worker loses the source snapshot. Only a
+pure source/deadline/capacity stop defers unfinished payload work; serving-policy
+capacity failures after provider I/O still consume an attempt. Source loss
+inside a full scan retains the original full cursor instead of acknowledging a
+replacement continuation. Ordinary capacity yields may advance proven pages.
+
+When full history work also carries a current app or device change, it reserves
+app-key publication capacity and time before scanning. The reservation covers a
+pointer GET, immutable KV PUT and five CAS/GET pairs within the shared 800-operation
+cap. A yielded scan publishes the bounded current snapshot before acknowledging
+that change; a terminal scan writes only its complete snapshot. If that refresh
+cannot complete, current work and the original full cursor remain queued.
+Queued serving policies run before inventory. Inventory errors are reported
+separately and leave their cursor unchanged without aborting queued publication.
+
+Backfill and policy inventory page `apps(app_id)` on EU, at most 25 and 100
+identities per wake respectively. Primary merges bounded bookkeeping identities
+for deleted apps, then atomically commits enqueue and cursor progress with a
+compare-and-swap check. The periodic database tick performs only control-plane
+work. An explicit `enqueue_plugin_state_full_sync(NULL)` now requests this
+asynchronous inventory and returns zero immediately; explicit app lists retain
+their synchronous enqueue behavior. Only an explicit repair can refresh poison
+budgets or restore archived exact keys. Normal backfill preserves the archive.
+Repeated explicit repairs reuse a never-claimed fresh full job. Claim coordination
+serializes this check with claims; an already claimed or source-deferred job keeps
+its durable barrier and cannot absorb a newer repair request. Archived exact-key
+restoration still runs when a fresh full job is reused.
+
+The API worker's prod and alpha environments reuse the existing
+`HYPERDRIVE_CAPGO_READ_EU` resource used by plugin workers, under the dedicated
+`HYPERDRIVE_CAPGO_READ_PLUGIN_STATE_EU` binding. This leaves unrelated API
+read helpers on their existing routes. Preprod has no EU
+publisher binding and fails closed because its legacy plugin read resource
+points to a development primary. Local/CI must explicitly configure
+`LOCAL_READ_REPLICA_SUPABASE_DB_URL` in a `*-local` runtime; only that fixture
+mode omits the logical-subscription readiness check. No request-path cache
+bypass or shared Hyperdrive cache change is involved.
 
 Timing logs have `message=plugin_state_request_timing`, the path, method,
 response source, status, Cloudflare colo, duration in milliseconds, and sampling

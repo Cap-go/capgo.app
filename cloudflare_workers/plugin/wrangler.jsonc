@@ -22,7 +22,8 @@
         // off | on | share of devices like 1%) is a worker secret so it changes
         // without a deploy:
         //   bun run updates-edge-cache:set 1%
-        "ENV_NAME": "capgo_plugin-eu-prod"
+        "ENV_NAME": "capgo_plugin-eu-prod",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.eu.capgo.app/files/read/attachments/"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -198,7 +199,8 @@
     "prod_me": {
       "name": "capgo_plugin-me-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-me-prod"
+        "ENV_NAME": "capgo_plugin-me-prod",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.eu.capgo.app/files/read/attachments/"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -296,7 +298,8 @@
     "prod_hk": {
       "name": "capgo_plugin-hk-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-hk-prod"
+        "ENV_NAME": "capgo_plugin-hk-prod",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.eu.capgo.app/files/read/attachments/"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -394,7 +397,8 @@
     "prod_jp": {
       "name": "capgo_plugin-jp-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-jp-prod"
+        "ENV_NAME": "capgo_plugin-jp-prod",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.eu.capgo.app/files/read/attachments/"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -492,7 +496,8 @@
     "prod_as": {
       "name": "capgo_plugin-as-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-as-prod"
+        "ENV_NAME": "capgo_plugin-as-prod",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.eu.capgo.app/files/read/attachments/"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -590,7 +595,8 @@
     "prod_na": {
       "name": "capgo_plugin-na-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-na-prod"
+        "ENV_NAME": "capgo_plugin-na-prod",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.eu.capgo.app/files/read/attachments/"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -688,7 +694,8 @@
     "prod_af": {
       "name": "capgo_plugin-af-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-af-prod"
+        "ENV_NAME": "capgo_plugin-af-prod",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.eu.capgo.app/files/read/attachments/"
       },
       "placement": {
         "region": "gcp:africa-south1"
@@ -786,7 +793,8 @@
     "prod_oc": {
       "name": "capgo_plugin-oc-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-oc-prod"
+        "ENV_NAME": "capgo_plugin-oc-prod",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.eu.capgo.app/files/read/attachments/"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -884,7 +892,8 @@
     "prod_sa": {
       "name": "capgo_plugin-sa-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-sa-prod"
+        "ENV_NAME": "capgo_plugin-sa-prod",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.eu.capgo.app/files/read/attachments/"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -970,7 +979,8 @@
     "preprod": {
       "name": "capgo_plugin-eu-preprod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-eu-preprod"
+        "ENV_NAME": "capgo_plugin-eu-preprod",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.preprod.capgo.app/files/read/attachments/"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -1065,7 +1075,8 @@
     "alpha": {
       "name": "capgo_plugin-alpha",
       "vars": {
-        "ENV_NAME": "capgo_plugin-alpha"
+        "ENV_NAME": "capgo_plugin-alpha",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "https://plugin.dev.capgo.app/files/read/attachments/"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -1164,6 +1175,7 @@
       "name": "capgo_plugin-local",
       "vars": {
         "ENV_NAME": "capgo_plugin-local",
+        "PLUGIN_FILE_DOWNLOAD_BASE_URL": "http://localhost:8789/files/read/attachments/",
         "CAPGO_PREVENT_BACKGROUND_FUNCTIONS": "true"
       },
       "kv_namespaces": [

@@ -147,6 +147,10 @@
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
           "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_PLUGIN_STATE_EU",
+          "id": "d5aae8be75f446868352110502fa9a1e"
         }
       ],
       "r2_buckets": [
@@ -367,6 +371,10 @@
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
           "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_PLUGIN_STATE_EU",
+          "id": "d5aae8be75f446868352110502fa9a1e"
         }
       ],
       "r2_buckets": [

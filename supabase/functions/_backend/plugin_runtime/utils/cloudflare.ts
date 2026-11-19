@@ -273,14 +273,81 @@ function appLogDimensionBlobs(dimensions?: AppLogDimensions) {
   ]
 }
 
+// Measured 2026-11-18, app_log ~120.5M points that day.
+// Foreground, background, noNew and getChannel were 58.5% and are not used by
+// failure insights or native observe. They are not stored.
+// Launch start, dom loaded, page loaded and under-native were 20.4%. One device
+// in 5 is kept in full (stable hash, not a per-event coin flip) and double2
+// holds 5 so population totals scale back. Launch-ready, failures, installs
+// and crashes stay complete. That mix removes ~75% of the day's writes.
+export const APP_LOG_VOLUME_SAMPLE_RATE = 5
+
+export const APP_LOG_DROPPED_ACTIONS = [
+  'app_moved_to_background',
+  'app_moved_to_foreground',
+  'getChannel',
+  'noNew',
+] as const
+
+export const APP_LOG_VOLUME_SAMPLED_ACTIONS = [
+  'app_launch_start',
+  'disableAutoUpdateUnderNative',
+  'webview_dom_content_loaded',
+  'webview_page_loaded',
+] as const
+
+const APP_LOG_DROPPED_ACTION_SET: ReadonlySet<string> = new Set(APP_LOG_DROPPED_ACTIONS)
+const APP_LOG_VOLUME_SAMPLED_ACTION_SET: ReadonlySet<string> = new Set(APP_LOG_VOLUME_SAMPLED_ACTIONS)
+
+// Population totals. A single device's own rows are complete, so do not use this
+// when the query is grouped by device id.
+const APP_LOG_EVENT_COUNT_SQL = 'sum(_sample_interval * if(double2 > 0, double2, 1.0))'
+const APP_LOG_OWN_EVENT_COUNT_SQL = 'sum(_sample_interval)'
+
+function scaleCohortDeviceCount(row: { device_count?: unknown, sample_rate_min?: unknown, sample_rate_max?: unknown }) {
+  const min = Number(row.sample_rate_min)
+  const max = Number(row.sample_rate_max)
+  const seen = Number(row.device_count)
+  // Mixed windows still contain unsampled history (double2 = 0). Scaling those
+  // would multiply every historical device. Only scale when the whole group
+  // was written at one rate.
+  if (Number.isFinite(min) && Number.isFinite(max) && max > 1 && min === max && Number.isFinite(seen))
+    row.device_count = seen * max
+}
+
+function appLogDeviceHash(deviceId: string) {
+  let hash = 2166136261
+  for (let i = 0; i < deviceId.length; i++)
+    hash = Math.imul(hash ^ deviceId.charCodeAt(i), 16777619)
+  return hash >>> 0
+}
+
+export function appLogDeviceKept(deviceId: string) {
+  const limit = Math.floor((2 ** 32) / APP_LOG_VOLUME_SAMPLE_RATE)
+  return appLogDeviceHash(deviceId) < limit
+}
+
+function keepAppLogVolumeSample(action: string, deviceId: string) {
+  if (APP_LOG_DROPPED_ACTION_SET.has(action))
+    return false
+  if (!APP_LOG_VOLUME_SAMPLED_ACTION_SET.has(action))
+    return true
+  return appLogDeviceKept(deviceId)
+}
+
 export function trackLogsCF(c: Context, app_id: string, device_id: string, action: string, version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
   if (!c.env.APP_LOG)
     return Promise.resolve()
+  if (!keepAppLogVolumeSample(action, device_id))
+    return Promise.resolve()
 
   const durationMs = parseStatsDurationMs(metadata)
+  const doubles = APP_LOG_VOLUME_SAMPLED_ACTION_SET.has(action)
+    ? [durationMs ?? 0, APP_LOG_VOLUME_SAMPLE_RATE]
+    : (durationMs !== null ? [durationMs] : null)
   c.env.APP_LOG.writeDataPoint({
     blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
-    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
+    ...(doubles ? { doubles } : {}),
     indexes: [app_id],
   })
 
@@ -1276,16 +1343,20 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
     ${actionFilter}`
 
   const summaryQuery = `SELECT
-    sum(_sample_interval) AS total,
+    ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
+    min(if(double2 > 1, double2, 1.0)) AS sample_rate_min,
+    max(if(double2 > 1, double2, 1.0)) AS sample_rate_max,
     COUNT(DISTINCT blob2) AS action_count
   FROM app_log
   WHERE ${baseWhere}`
 
   const actionsQuery = `SELECT
     blob2 AS action,
-    sum(_sample_interval) AS total,
+    ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
+    min(if(double2 > 1, double2, 1.0)) AS sample_rate_min,
+    max(if(double2 > 1, double2, 1.0)) AS sample_rate_max,
     COUNT(DISTINCT blob3) AS version_count,
     min(timestamp) AS first_seen,
     max(timestamp) AS last_seen,
@@ -1300,7 +1371,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const dailyQuery = `SELECT
     formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
     blob2 AS action,
-    sum(_sample_interval) AS total
+    ${APP_LOG_EVENT_COUNT_SQL} AS total
   FROM app_log
   WHERE ${baseWhere}
   GROUP BY date, action
@@ -1309,8 +1380,10 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const versionsQuery = `SELECT
     blob2 AS action,
     blob3 AS version_name,
-    sum(_sample_interval) AS total,
+    ${APP_LOG_EVENT_COUNT_SQL} AS total,
     COUNT(DISTINCT blob1) AS device_count,
+    min(if(double2 > 1, double2, 1.0)) AS sample_rate_min,
+    max(if(double2 > 1, double2, 1.0)) AS sample_rate_max,
     max(timestamp) AS last_seen
   FROM app_log
   WHERE ${baseWhere}
@@ -1321,7 +1394,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const devicesQuery = `SELECT
     blob2 AS action,
     blob1 AS device_id,
-    sum(_sample_interval) AS total,
+    ${APP_LOG_OWN_EVENT_COUNT_SQL} AS total,
     argMax(blob3, timestamp) AS version_name,
     max(timestamp) AS last_seen
   FROM app_log
@@ -1340,6 +1413,13 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
       runQueryToCFA<StatsInsightRawVersion>(c, versionsQuery),
       runQueryToCFA<StatsInsightRawDevice>(c, devicesQuery),
     ])
+
+    if (summaryRows[0])
+      scaleCohortDeviceCount(summaryRows[0])
+    for (const row of actionRows)
+      scaleCohortDeviceCount(row)
+    for (const row of versionRows)
+      scaleCohortDeviceCount(row)
 
     return normalizeStatsInsightsResult({
       summary: summaryRows[0],

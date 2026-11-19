@@ -1,0 +1,207 @@
+name: Visual screenshot review
+
+concurrency:
+  group: visual-screenshot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+
+permissions:
+  contents: read
+  # Pull request comments return 403 with read-only PR permissions.
+  issues: write
+  pull-requests: write
+
+jobs:
+  screenshot:
+    name: Visual screenshot review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            scripts/pr-visual-screenshot.ts
+            scripts/setup-bun.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+
+      - name: List changed files
+        uses: actions/github-script@v8
+        env:
+          FILES_PATH: ${{ runner.temp }}/visual-files.txt
+        with:
+          script: |
+            const fs = require('node:fs')
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            })
+            const names = []
+            for (const file of files) {
+              names.push(file.filename)
+              if (file.previous_filename)
+                names.push(file.previous_filename)
+            }
+            fs.writeFileSync(process.env.FILES_PATH, `${names.join('\n')}\n`)
+
+      - name: Check the pull request description
+        id: check
+        continue-on-error: true
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          VISUAL_SCREENSHOT_RESULT: ${{ runner.temp }}/visual-screenshot.json
+        run: bun scripts/pr-visual-screenshot.ts --files "${{ runner.temp }}/visual-files.txt"
+
+      - name: Publish the review
+        if: steps.check.outcome == 'success' || steps.check.outcome == 'failure'
+        uses: actions/github-script@v8
+        env:
+          RESULT_PATH: ${{ runner.temp }}/visual-screenshot.json
+        with:
+          script: |
+            const fs = require('node:fs')
+            const marker = '<!-- capgo-visual-screenshot -->'
+            const phrase = 'missing screenshot for review'
+            const { owner, repo } = context.repo
+            const pull_number = context.payload.pull_request.number
+
+            function reviewBody(files) {
+              const shown = files.slice(0, 40)
+              const lines = [
+                marker,
+                phrase,
+                '',
+                'Visual files changed and the pull request description has no screenshot:',
+                '',
+              ]
+              for (const file of shown)
+                lines.push(`- \`${String(file).replaceAll('`', "'")}\``)
+              if (files.length > shown.length)
+                lines.push(`- and ${files.length - shown.length} more`)
+              lines.push('', 'Add a screenshot or video to the pull request description. An empty Screenshots section does not count.')
+              return lines.join('\n')
+            }
+
+            async function ourReviews() {
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner,
+                repo,
+                pull_number,
+                per_page: 100,
+              })
+              return reviews.filter(review => review.body?.includes(marker))
+            }
+
+            async function dismissOurs() {
+              for (const review of await ourReviews()) {
+                if (review.state !== 'CHANGES_REQUESTED' && review.state !== 'APPROVED')
+                  continue
+                await github.rest.pulls.dismissReview({
+                  owner,
+                  repo,
+                  pull_number,
+                  review_id: review.id,
+                  message: 'Screenshot check re-ran.',
+                  event: 'DISMISS',
+                })
+              }
+            }
+
+            async function commentWithMarker() {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pull_number,
+                per_page: 100,
+              })
+              return comments.find(comment => comment.body?.includes(marker))
+            }
+
+            const resultPath = process.env.RESULT_PATH
+            if (!fs.existsSync(resultPath)) {
+              core.setFailed('Visual screenshot check did not write a result.')
+              return
+            }
+
+            const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'))
+            if (result.ok) {
+              try {
+                await dismissOurs()
+              }
+              catch (error) {
+                core.warning(`Could not dismiss the previous screenshot review: ${error}`)
+              }
+              try {
+                const existing = await commentWithMarker()
+                if (existing) {
+                  await github.rest.issues.deleteComment({
+                    owner,
+                    repo,
+                    comment_id: existing.id,
+                  })
+                }
+              }
+              catch (error) {
+                core.warning(`Could not remove the screenshot comment: ${error}`)
+              }
+              return
+            }
+
+            const body = reviewBody(Array.isArray(result.files) ? result.files : [])
+            try {
+              await dismissOurs()
+            }
+            catch (error) {
+              core.warning(`Could not dismiss the previous screenshot review: ${error}`)
+            }
+            try {
+              await github.rest.pulls.createReview({
+                owner,
+                repo,
+                pull_number,
+                commit_id: context.payload.pull_request.head.sha,
+                body,
+                event: 'REQUEST_CHANGES',
+              })
+            }
+            catch (error) {
+              core.warning(`Could not request changes: ${error}`)
+            }
+
+            const existing = await commentWithMarker()
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              })
+            }
+            else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pull_number,
+                body,
+              })
+            }
+
+      - name: Fail the review
+        if: steps.check.outcome == 'failure'
+        run: |
+          echo "::error::missing screenshot for review"
+          exit 1

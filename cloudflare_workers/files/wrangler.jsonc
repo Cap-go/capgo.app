@@ -56,6 +56,42 @@
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
           "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_NA",
+          "id": "a09d6932219c4a6a918fe6fdad5565ae"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_EU",
+          "id": "d5aae8be75f446868352110502fa9a1e"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_SA",
+          "id": "f874494b5d7b45ff82fd79778a6b2c7f"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_OC",
+          "id": "01688f6b86784166abdfa4105f58933f"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_AS_JAPAN",
+          "id": "a67b33ba7ef54219978ec56eca5096e1"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_AS_INDIA",
+          "id": "7f6e8255a9124531b1b07f11fdc257a7"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_HK",
+          "id": "f9b9990c5ee34327947299bd5e70d273"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_AF",
+          "id": "339dcaae4c204d808903a6dc6fa372d0"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_ME",
+          "id": "0efae3d612984c16b030f1447e269442"
         }
       ],
       "routes": [
@@ -134,6 +170,10 @@
           "binding": "ATTACHMENT_BUCKET",
           "bucket_name": "capgo",
           "preview_bucket_name": "capgo"
+        },
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod-20261114-recovery"
         }
       ],
       "analytics_engine_datasets": [
@@ -194,6 +234,10 @@
           "binding": "ATTACHMENT_BUCKET",
           "bucket_name": "capgo-preprod",
           "preview_bucket_name": "capgo-preprod"
+        },
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-preprod"
         }
       ],
       "analytics_engine_datasets": [
@@ -216,6 +260,46 @@
       "vars": {
         "ENV_NAME": "capgo_files-alpha"
       },
+      // Same replicas as the alpha plugin worker: deletion lookups of apps
+      // with region deselections read them, never the primary.
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_NA",
+          "id": "a09d6932219c4a6a918fe6fdad5565ae"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_EU",
+          "id": "d5aae8be75f446868352110502fa9a1e"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_SA",
+          "id": "f874494b5d7b45ff82fd79778a6b2c7f"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_OC",
+          "id": "01688f6b86784166abdfa4105f58933f"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_AS_JAPAN",
+          "id": "a67b33ba7ef54219978ec56eca5096e1"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_AS_INDIA",
+          "id": "7f6e8255a9124531b1b07f11fdc257a7"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_HK",
+          "id": "f9b9990c5ee34327947299bd5e70d273"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_AF",
+          "id": "339dcaae4c204d808903a6dc6fa372d0"
+        },
+        {
+          "binding": "HYPERDRIVE_CAPGO_READ_ME",
+          "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
       "observability": {
         "issues": { "enabled": true },
         "enabled": true
@@ -243,6 +327,10 @@
           "binding": "ATTACHMENT_BUCKET",
           "bucket_name": "capgo-alpha",
           "preview_bucket_name": "capgo-alpha"
+        },
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-alpha"
         }
       ],
       "analytics_engine_datasets": [
@@ -276,6 +364,10 @@
           "binding": "ATTACHMENT_BUCKET",
           "bucket_name": "capgo-local",
           "preview_bucket_name": "capgo-local"
+        },
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "local-plugin-state-pointers"
         }
       ]
     }

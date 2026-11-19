@@ -6,13 +6,14 @@ import { brotliDecompressSync } from 'node:zlib'
 import { getRuntimeKey } from 'hono/adapter'
 import { buildChannelPreviewSubdomain, buildPreviewSubdomain, parsePreviewHostname } from '../../shared/preview-subdomain.ts'
 import { CacheHelper } from '../utils/cache.ts'
-import { getBundleUrl } from '../utils/downloadUrl.ts'
+import { getBundleUrl } from '../plugin_runtime/utils/downloadUrl.ts'
 import { simpleError } from '../utils/hono.ts'
 import type { PgClient } from '../utils/pg.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { queryJson } from '../utils/pg_rls.ts'
 import { backgroundTask, getEnv, isValidAppId } from '../utils/utils.ts'
+import { enforcePreviewServingPolicy, withFileServingHeaders } from './file_serving_policy.ts'
 import { applyPreviewXRobotsTag } from './preview-host-headers.ts'
 import { DEFAULT_RETRY_PARAMS, RetryBucket } from './retry.ts'
 
@@ -200,7 +201,8 @@ export async function handlePreviewSubdomain(c: Context<MiddlewareKeyVariables>)
   if (isPreviewRobotsTxtPath(c.req.path))
     return buildPreviewRobotsTxtResponse()
 
-  return handlePreviewRequest(c)
+  await enforcePreviewServingPolicy(c)
+  return withFileServingHeaders(await handlePreviewRequest(c))
 }
 
 export async function buildPreviewDownloadPayload(c: Context, appId: string, bundle: PreviewDownloadBundle): Promise<PreviewDownloadPayload> {

@@ -56,6 +56,24 @@ test('saves and reloads the incompatible-bundle alert scope', async ({ page }) =
     await expect(page.getByText('Updated incompatible bundle alerts')).toBeVisible()
     await page.reload()
     await expect(scope).toHaveValue('default')
+
+    const { data: channel } = await admin.from('channels').insert({
+      app_id: APP_ID,
+      name: 'development',
+      owner_org: demo!.owner_org,
+      created_by: demo!.user_id,
+    }).select('id').single().throwOnError()
+    await page.goto(`/app/${APP_ID}/channel/${channel!.id}`)
+    const override = page.getByRole('combobox', { name: 'Incompatible bundle alerts' })
+    for (const choice of ['false', 'true', 'inherit']) {
+      await override.selectOption(choice)
+      await expect.poll(async () => {
+        const { data } = await admin.from('channels').select('bundle_alert_enabled').eq('id', channel!.id).single().throwOnError()
+        return data!.bundle_alert_enabled
+      }).toBe(choice === 'inherit' ? null : choice === 'true')
+      await page.reload()
+      await expect(override).toHaveValue(choice)
+    }
   }
   finally {
     await admin.from('apps').delete().eq('app_id', APP_ID)
