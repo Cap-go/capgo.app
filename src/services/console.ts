@@ -161,11 +161,18 @@ export function mergeRemoteConfig(localConfig: CapgoConfig, remoteConfig: Partia
 
 const CONFIG_PROBE_MS = 4_000
 
-async function fetchWithConfigTimeout(url: string): Promise<Response> {
+async function fetchPrivateConfigWithTimeout(url: string): Promise<{ ok: true, payload: unknown } | { ok: false }> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), CONFIG_PROBE_MS)
   try {
-    return await fetch(url, { signal: controller.signal })
+    const response = await fetch(url, { signal: controller.signal })
+    if (!response.ok)
+      return { ok: false }
+    const payload: unknown = await response.json()
+    return { ok: true, payload }
+  }
+  catch {
+    return { ok: false }
   }
   finally {
     clearTimeout(timeout)
@@ -175,16 +182,8 @@ async function fetchWithConfigTimeout(url: string): Promise<Response> {
 async function probeChinaApiReachable(): Promise<boolean> {
   if (!chinaConsoleSuggestionGate())
     return false
-  try {
-    const response = await fetchWithConfigTimeout(`${CHINA_API_HOST}/private/config`)
-    if (!response.ok)
-      return false
-    const data: unknown = await response.json()
-    return isValidRemoteConfigPayload(data)
-  }
-  catch {
-    return false
-  }
+  const result = await fetchPrivateConfigWithTimeout(`${CHINA_API_HOST}/private/config`)
+  return result.ok && isValidRemoteConfigPayload(result.payload)
 }
 
 async function chinaReachableAfterMainFailure(): Promise<boolean> {
@@ -216,15 +215,15 @@ export async function getRemoteConfig() {
   if (isLoopbackConsoleApiHost(apiHost))
     return localConfig
   try {
-    const response = await fetchWithConfigTimeout(`${apiHost}/private/config`)
-    if (!response.ok) {
+    const result = await fetchPrivateConfigWithTimeout(`${apiHost}/private/config`)
+    if (!result.ok) {
       console.log('Local config', localConfig)
       stripeEnabled.value = localConfig.stripeEnabled ?? stripeEnabled.value
       const chinaReachable = await chinaReachableAfterMainFailure()
       updateChinaConsoleSuggestion(false, chinaReachable)
       return localConfig as CapgoConfig
     }
-    const data = await response.json() as Partial<CapgoConfig>
+    const data = result.payload as Partial<CapgoConfig>
     const merged = mergeRemoteConfig(localConfig, data)
     config = merged
     stripeEnabled.value = merged.stripeEnabled ?? stripeEnabled.value

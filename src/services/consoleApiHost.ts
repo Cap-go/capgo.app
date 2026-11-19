@@ -14,6 +14,13 @@ export function getConsoleApiHost(): string {
   return import.meta.env.VITE_API_HOST as string
 }
 
+/** CLI `--api-host` is for the China console only, not preprod/dev/self-hosted API hosts. */
+export function buildChinaConsoleCliApiHostArg(): string {
+  if (getConsoleApiHost() === CHINA_API_HOST)
+    return ` --api-host ${CHINA_API_HOST}`
+  return ''
+}
+
 export interface GlobalConsoleWebHostContext {
   hostname?: string
   isNativePlatform?: boolean

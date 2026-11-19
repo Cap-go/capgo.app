@@ -14,7 +14,8 @@ import IconRotate from '~icons/lucide/rotate-ccw'
 import IconSparkles from '~icons/lucide/sparkles'
 import { applyBuildStreamMessage, buildTimeline, createBuildLiveState, resolveBuildOutcome, stepCopy } from '~/services/buildLiveStream'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { getConsoleApiHost, getLocalConfig, PROD_API_URL, useConsole } from '~/services/console'
+import { useConsole } from '~/services/console'
+import { buildChinaConsoleCliApiHostArg } from '~/services/consoleApiHost'
 import { buildPreviewQrCodeDataUrl } from '~/services/previewQrCode'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
@@ -42,8 +43,7 @@ const MAX_RECONNECTS = 5
 const { t } = useI18n()
 const capgo = useConsole()
 const organizationStore = useOrganizationStore()
-const config = getLocalConfig()
-const localCommand = config.apiHost !== PROD_API_URL ? ` --api-host ${getConsoleApiHost()}` : ''
+const localCommand = buildChinaConsoleCliApiHostArg()
 const row = ref<BuildRow | null>(null)
 const live = ref<BuildLiveState>(createBuildLiveState())
 const now = ref(Date.now())

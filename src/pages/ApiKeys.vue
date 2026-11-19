@@ -31,7 +31,8 @@ import {
 } from '~/services/apikeys'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { shouldShowCliLoginGuidance } from '~/services/cliLogin'
-import { getConsoleApiHost, getLocalConfig, PROD_API_URL, useConsole } from '~/services/console'
+import { useConsole } from '~/services/console'
+import { buildChinaConsoleCliApiHostArg } from '~/services/consoleApiHost'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissionsBatch } from '~/services/permissions'
@@ -114,8 +115,7 @@ const capgo = useConsole()
 const keys = ref<ApiKeyRow[]>([])
 const hasLoadedKeys = ref(false)
 const now = useNow({ interval: 60_000 })
-const config = getLocalConfig()
-const localCommand = config.apiHost !== PROD_API_URL ? ` --api-host ${getConsoleApiHost()}` : ''
+const localCommand = buildChinaConsoleCliApiHostArg()
 const cliLoginCommand = computed(() => buildLoginCliCommand(localCommand))
 const cliLoginGuidanceDescriptionKey = computed(() => (
   localCommand ? 'cli-login-guidance-description-china-api' : 'cli-login-guidance-description'

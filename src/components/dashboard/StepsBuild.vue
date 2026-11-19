@@ -19,7 +19,8 @@ import BuildLiveProgress from '~/components/dashboard/BuildLiveProgress.vue'
 import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'
 import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
-import { getConsoleApiHost, getLocalConfig, PROD_API_URL, useConsole } from '~/services/console'
+import { useConsole } from '~/services/console'
+import { buildChinaConsoleCliApiHostArg } from '~/services/consoleApiHost'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -73,9 +74,8 @@ const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 // The AI agent card comes first unless the user last picked the manual way.
 const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
-const config = getLocalConfig()
 const initialOnboarding = props.onboarding
-const localCommand = config.apiHost !== PROD_API_URL ? ` --api-host ${getConsoleApiHost()}` : ''
+const localCommand = buildChinaConsoleCliApiHostArg()
 
 const platformBuildCounts = computed<PlatformBuildCounts>(() => ({
   ios: props.platformBuildCounts?.ios ?? 0,

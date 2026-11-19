@@ -19,6 +19,27 @@ function hangUntilAbort(_url: string, init?: RequestInit): Promise<Response> {
   })
 }
 
+function hangJsonUntilAbort(_url: string, init?: RequestInit): Promise<Response> {
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    json() {
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal
+        if (!signal) {
+          reject(new Error('expected AbortSignal'))
+          return
+        }
+        if (signal.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'))
+          return
+        }
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    },
+  } as Response)
+}
+
 const validConfigJson = { stripeEnabled: true }
 
 describe('getRemoteConfig config fetch timeouts', () => {
@@ -143,6 +164,19 @@ describe('getRemoteConfig config fetch timeouts', () => {
     await getRemoteConfig()
     expect(suggestChinaConsole.value).toBe(false)
   })
+
+  it('aborts a slow /private/config JSON body read within the config probe budget', async () => {
+    vi.stubGlobal('window', {
+      location: { hostname: 'console.capgo.app', origin: 'https://console.capgo.app' },
+    })
+    const fetchMock = vi.fn(hangJsonUntilAbort)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { getRemoteConfig, suggestChinaConsole } = await import('../src/services/console')
+    await expect(getRemoteConfig()).resolves.toMatchObject({ apiHost: 'https://api.capgo.app' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(suggestChinaConsole.value).toBe(false)
+  }, 10_000)
 
   it('aborts the main fetch and bounds the China probe on console.capgo.app', async () => {
     vi.stubGlobal('window', {
