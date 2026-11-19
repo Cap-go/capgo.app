@@ -119,6 +119,6 @@ SELECT ok(
 
 SELECT tests.clear_authentication();
 
-SELECT * FROM finish();
+SELECT * FROM finish(); -- noqa: AM04
 
 ROLLBACK;
