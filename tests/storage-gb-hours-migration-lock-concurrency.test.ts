@@ -229,6 +229,14 @@ async function runMigrationWithConcurrentWriter(
       await writer.query('BEGIN')
       // Wait out the migrator's ACCESS EXCLUSIVE window; prod cron uses 5s but this test must not give up first.
       await writer.query(`SET LOCAL lock_timeout = '0'`)
+      await writer.query(
+        `SELECT 1
+         FROM public.apps
+         WHERE app_id = $1
+           AND owner_org = $2
+         FOR SHARE`,
+        [DEMO_APP, ORG_ID],
+      )
       await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID, cycleDay, hourlyRows])
       await writer.query('COMMIT')
     })()
