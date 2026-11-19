@@ -12,6 +12,28 @@ import { MANIFEST_UPLOAD_CAPABILITY_HEADER } from '../utils/manifest_upload_capa
 /** Non standard TUS use: client left before the body finished (nginx style 499). */
 export const TUS_CLIENT_DISCONNECTED_STATUS = 499 as const
 
+/**
+ * Storage key of a Supabase TUS upload ID: base64 of
+ * `capgo/orgs/<org>/apps/<app>/<path>/<uuid>`, decoded to `orgs/<org>/apps/<app>/<path>`.
+ * Null when the ID is not one (it is then used as is).
+ */
+export function decodeTusUploadStorageKey(id: string): string | null {
+  let decoded: string
+  try {
+    decoded = atob(id)
+  }
+  catch {
+    return null
+  }
+  if (!decoded.startsWith('capgo/') || !decoded.includes('/orgs/'))
+    return null
+  const parts = decoded.split('/')
+  if (parts.length < 6 || parts[0] !== 'capgo' || parts[1] !== 'orgs' || parts[3] !== 'apps')
+    return null
+  const pathParts = parts.slice(1, -1)
+  return pathParts.length > 0 ? pathParts.join('/') : null
+}
+
 export class TusClientDisconnectedError extends Error {
   readonly status = TUS_CLIENT_DISCONNECTED_STATUS
   constructor(message = 'request aborted') {

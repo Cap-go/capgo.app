@@ -461,11 +461,11 @@ function getLocalReadOnlyDatabaseURL(c: Context): string | null {
   return fixSupabaseHost(getEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL'))
 }
 
-export function getDatabaseURL(c: Context, readOnly = false): string {
+export function getDatabaseURL(c: Context, readOnly = false, preferredReadRegion?: ServingRegion): string {
   const policy = requestServingPolicy(c)
   if (!readOnly && policy && isRestrictedServingPolicy(policy))
     throw quickError(503, 'serving_region_unavailable', 'Legacy server storage is unavailable with regional serving restrictions')
-  const dbRegion = getClientDbRegionSB(c)
+  const dbRegion = readOnly ? preferredReadRegion ?? getClientDbRegionSB(c) : getClientDbRegionSB(c)
 
   // For read-only queries, use region to avoid Network latency
   if (readOnly) {
@@ -528,7 +528,7 @@ function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
  *
  * Non-Hyperdrive (local/direct/pooler): `Pool` + explicit `closeClient`/`end()`.
  */
-export async function getPgClient(c: Context, readOnly = false): Promise<PluginPgClient> {
+export async function getPgClient(c: Context, readOnly = false, preferredReadRegion?: ServingRegion): Promise<PluginPgClient> {
   if (isPluginStateServed(c)) {
     // A request answered from the KV plugin state reached Postgres: a query
     // the state does not cover. Strict mode (tests) fails it.
@@ -536,7 +536,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
       throw new PluginStateMiss('strict mode: database connection requested by a request served from KV')
     cloudlog({ requestId: c.get('requestId'), message: 'plugin state request opened a database connection', path: c.req.path })
   }
-  const dbUrl = getDatabaseURL(c, readOnly)
+  const dbUrl = getDatabaseURL(c, readOnly, preferredReadRegion)
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')
