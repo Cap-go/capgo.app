@@ -27,7 +27,7 @@ const withTimeout = (promise, ms = operationTimeoutMs) => Promise.race([
 ])
 const callToolWithTelemetry = async (client, toolName, arguments_, listenerDeadlineMs = operationTimeoutMs, toolDeadlineMs = operationTimeoutMs) => {
   const eventPromise = once(notifications, toolName, { signal: AbortSignal.timeout(listenerDeadlineMs) })
-  const [result, record] = await withTimeout(Promise.all([
+  const [result, [record]] = await withTimeout(Promise.all([
     client.callTool({ name: toolName, arguments: arguments_ }),
     eventPromise,
   ]), toolDeadlineMs)
