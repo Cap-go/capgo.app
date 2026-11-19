@@ -88,7 +88,7 @@ describe('storage gb-hours migration lock order vs replace_app_storage_hourly', 
     await writer.query('ROLLBACK')
   })
 
-  it('dsh-first lock order stalls the migration on apps while the writer holds a share lock', async () => {
+  it('dsh-first lock order cannot take apps exclusive while the writer holds share', async () => {
     const migrator = connect()
     const writer = connect()
     await migrator.connect()
@@ -98,10 +98,8 @@ describe('storage gb-hours migration lock order vs replace_app_storage_hourly', 
     await migrator.query(`SET LOCAL lock_timeout = '2s'`)
     await migrator.query('LOCK TABLE public.daily_storage_hourly IN ACCESS EXCLUSIVE MODE')
 
-    const writerWork = (async () => {
-      await writer.query('BEGIN')
-      await writer.query(`SET LOCAL lock_timeout = '2s'`)
-      await writer.query(
+    void writer.query('BEGIN').then(() =>
+      writer.query(
         `SELECT public.replace_app_storage_hourly(
           $1::varchar,
           $2::uuid,
@@ -113,11 +111,10 @@ describe('storage gb-hours migration lock order vs replace_app_storage_hourly', 
           pg_catalog.clock_timestamp(),
           true)`,
         [DEMO_APP, ORG_ID],
-      )
-      return writer.query('COMMIT')
-    })()
+      ),
+    )
 
-    await withTimeout(writerWork, 10_000, 'writer share lock and DSH write')
+    await new Promise(resolve => setTimeout(resolve, 500))
 
     await migrator.query(`SET LOCAL lock_timeout = '500ms'`)
     await expect(migrator.query('LOCK TABLE public.app_versions, public.apps IN ACCESS EXCLUSIVE MODE'))
