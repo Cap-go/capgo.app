@@ -111,26 +111,43 @@ function filterSchemaDumpForDisposableDb(sql: string): string {
         return false
       if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?pgmq(")?\b/i.test(line))
         return false
-      if (/^\s*CREATE\s+EXTENSION/i.test(line) && /pg_cron/i.test(line))
+      if (/^\s*CREATE\s+EXTENSION/i.test(line))
         return false
-      if (/^\s*COMMENT ON EXTENSION pg_cron/i.test(line))
+      if (/^\s*COMMENT ON EXTENSION/i.test(line))
         return false
       return true
     })
     .join('\n')
 }
 
-function cloneProvisionedSchema(sourceUrl: string, targetUrl: string) {
+const EXCLUDED_DUMP_SCHEMAS = new Set(['cron', 'information_schema', 'pg_catalog', 'pg_toast'])
+
+async function listCloneableSchemas(sourceUrl: string): Promise<string[]> {
+  const client = new Client({ connectionString: sourceUrl, connectionTimeoutMillis: 10_000 })
+  await client.connect()
+  try {
+    const { rows } = await client.query<{ nspname: string }>(
+      `SELECT nspname
+       FROM pg_catalog.pg_namespace
+       WHERE nspname !~ '^pg_temp_'
+         AND nspname !~ '^pg_toast_temp_'
+       ORDER BY nspname`,
+    )
+    return rows.map(row => row.nspname).filter(name => !EXCLUDED_DUMP_SCHEMAS.has(name))
+  }
+  finally {
+    await client.end()
+  }
+}
+
+async function cloneProvisionedSchema(sourceUrl: string, targetUrl: string) {
+  const schemas = await listCloneableSchemas(sourceUrl)
   const dump = spawnSync('pg_dump', [
     sourceUrl,
     '--schema-only',
     '--no-owner',
     '--no-privileges',
-    '--schema=public',
-    '--schema=auth',
-    '--schema=extensions',
-    '--schema=pgmq',
-    '--schema=storage',
+    ...schemas.flatMap(schema => ['--schema', schema]),
   ], {
     encoding: 'utf8',
     maxBuffer: 512 * 1024 * 1024,
@@ -164,7 +181,7 @@ async function provisionBeforeStorageMigration(adminUrl: string, targetUrl: stri
       readFileSync(resolve(repoRoot, 'tests/fixtures/local-db-disposable-extensions-stub.sql'), 'utf8'),
       'local-db-disposable-extensions-stub.sql',
     )
-    cloneProvisionedSchema(adminUrl, targetUrl)
+    await cloneProvisionedSchema(adminUrl, targetUrl)
     await runSqlFile(
       client,
       readFileSync(resolve(repoRoot, 'tests/fixtures/storage-gb-hours-revert-migration.sql'), 'utf8'),
