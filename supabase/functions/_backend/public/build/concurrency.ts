@@ -5,6 +5,7 @@ import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
+import { recordStoppedSimulatorDevices } from './simulator_host.ts'
 
 export const NATIVE_BUILD_TERMINAL_STATUSES = ['succeeded', 'failed', 'expired', 'released', 'cancelled', 'canceled'] as const
 export const NATIVE_BUILD_CONCURRENCY_ERROR = 'native_build_concurrency_limit_exceeded'
@@ -193,6 +194,8 @@ export function occupiedBuilderSlotsSql(excludeBuildRequestId?: string): string 
 }
 
 export async function expireSimulatorSessions(c: Context, orgId: string): Promise<void> {
+  // A device the host stopped for lack of input is settled now, up to its stop time.
+  await recordStoppedSimulatorDevices(c, orgId)
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   let client: PgClient | null = null
   try {

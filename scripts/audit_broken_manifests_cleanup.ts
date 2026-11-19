@@ -9,8 +9,7 @@
  *
  * Usage: bun scripts/audit_broken_manifests_cleanup.ts
  */
-import { createClient } from '@supabase/supabase-js'
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import { connectScriptDb, getDatabaseUrl } from './script_db.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const OUTPUT_DIR = './tmp/unused_versions'
@@ -84,11 +83,7 @@ async function main() {
   }
 
   const env = await loadEnv(ENV_FILE)
-  const supabase = createClient<Database>(
-    env.SUPABASE_URL,
-    env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-  )
+  const db = await connectScriptDb(getDatabaseUrl(env))
 
   const candidates: Array<{
     id: number
@@ -100,17 +95,15 @@ async function main() {
 
   const chunks = chunkArray(candidateIds, PAGE_SIZE)
   for (const chunk of chunks) {
-    const { data, error } = await supabase
-      .from('app_versions')
-      .select('id, app_id, owner_org, name, manifest_count, deleted')
-      .in('id', chunk)
-
-    if (error) {
+    const { rows: data } = await db.query(
+      'SELECT id, app_id, owner_org, name, manifest_count, deleted FROM public.app_versions WHERE id = ANY($1::bigint[])',
+      [chunk],
+    ).catch((error) => {
       console.error('Error fetching app_versions:', error)
       process.exit(1)
-    }
+    })
 
-    for (const row of data ?? []) {
+    for (const row of data) {
       if (row.deleted) continue
       if (row.app_id.startsWith('com.capdemo')) continue
       const manifestCount = row.manifest_count ?? 0
@@ -141,3 +134,4 @@ async function main() {
 }
 
 await main()
+process.exit(0)

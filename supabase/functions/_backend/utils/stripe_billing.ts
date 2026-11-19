@@ -5,7 +5,10 @@ import { isPriceTier } from './country_price_tier.ts'
 import { isUsBillingCountry } from './us_billing_countries.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
+import { getRequestCountry } from './request_country.ts'
 import { getEnv } from './utils.ts'
+
+export { getRequestCountry } from './request_country.ts'
 
 export type BillingAccount = 'ee' | 'us'
 
@@ -22,15 +25,6 @@ export interface PlanStripeIds {
 
 export function normalizeBillingAccount(value: string | null | undefined): BillingAccount {
   return value === 'us' ? 'us' : 'ee'
-}
-
-export function getRequestCountry(c: Context): string | null {
-  // Cloudflare sets request.cf.country; the header covers Supabase/proxied requests.
-  const raw = (c.req.raw as { cf?: { country?: unknown } } | undefined)?.cf?.country ?? c.req.header('cf-ipcountry')
-  if (typeof raw !== 'string')
-    return null
-  const country = raw.trim().toUpperCase()
-  return /^[A-Z]{2}$/.test(country) ? country : null
 }
 
 export function canChooseUsBillingAccount(c: Context): boolean {

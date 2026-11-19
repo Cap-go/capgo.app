@@ -3,6 +3,16 @@ BEGIN;
 
 SELECT plan(9);
 
+-- seed.sql enqueues channel_device_counts deltas. pg_cron usually drains
+-- them before this file runs, but not when tests start right after the
+-- seed, and then the processor calls below pick up seed messages too.
+-- Drain first; the ROLLBACK at the end undoes it.
+DO $$
+BEGIN
+    PERFORM public.process_channel_device_counts_queue(1000);
+END
+$$;
+
 CREATE TEMP TABLE tmp_channel_device_counts AS
 SELECT channel_device_count AS base_count
 FROM
@@ -76,7 +86,7 @@ SELECT
             FROM
                 pgmq.q_channel_device_counts
             WHERE
-                message ->> 'device_id' = 'queue-test-device'
+                message ->> 'app_id' = 'com.demo.app'
                 AND (message ->> 'delta')::integer = 1
         ),
         'Insert enqueues +1 delta'
@@ -118,7 +128,7 @@ SELECT
             FROM
                 pgmq.q_channel_device_counts
             WHERE
-                message ->> 'device_id' = 'queue-test-device'
+                message ->> 'app_id' = 'com.demo.app'
                 AND (message ->> 'delta')::integer = -1
         ),
         'Delete enqueues -1 delta'

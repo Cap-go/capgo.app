@@ -25,8 +25,6 @@ export type FailureSpikeMetrics = {
   windowEnd: string
 }
 
-const UPDATE_CHECK_INSIGHT_ACTIONS = ['install', 'fail', 'noNew'] as const
-
 /** Load windowed install/fail counters and up-to-date checks for spike evaluation. */
 export async function gatherFailureSpikeMetrics(
   c: Context,
@@ -44,42 +42,47 @@ export async function gatherFailureSpikeMetrics(
   let failures = 0
   let version = 'unknown'
   let maxInstall = 0
+  let dominantInstall = 0
+  let dominantFail = 0
   for (const row of versionStats) {
     const install = Number(row.install ?? 0)
     const fail = Number(row.fail ?? 0)
-    failures += fail
     if (channelName) {
       checks += install + fail
+      failures += fail
     }
     if (install > maxInstall) {
       maxInstall = install
       version = row.version_name
+      dominantInstall = install
+      dominantFail = fail
     }
   }
 
   if (!channelName) {
+    failures = dominantFail
+    checks = dominantInstall + dominantFail
     const checkInsights = await readStatsInsights(c, {
       app_id: appId,
       start_date: start,
       end_date: end,
-      actions: [...UPDATE_CHECK_INSIGHT_ACTIONS],
+      actions: ['noNew'],
     })
     for (const entry of checkInsights.actions) {
-      if ((UPDATE_CHECK_INSIGHT_ACTIONS as readonly string[]).includes(entry.action))
+      if (entry.action === 'noNew')
         checks += entry.total
     }
   }
 
   let topFailureActionCodes: FailureSpikeMetrics['topFailureActionCodes'] = []
-  if (!channelName) {
-    const insightsParams = {
+  if (version !== 'unknown') {
+    const insights = await readStatsInsights(c, {
       app_id: appId,
       start_date: start,
       end_date: end,
       actions: [...PUBLIC_FAILURE_ACTIONS],
-      ...(version !== 'unknown' ? { version_name: version } : {}),
-    }
-    const insights = await readStatsInsights(c, insightsParams)
+      version_name: version,
+    })
     topFailureActionCodes = insights.actions
       .filter(entry => (PUBLIC_FAILURE_ACTIONS as readonly string[]).includes(entry.action))
       .sort((left, right) => right.total - left.total)

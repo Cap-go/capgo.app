@@ -110,6 +110,9 @@ beforeEach(async () => {
   await supabase.from('daily_bandwidth').delete().eq('app_id', APPNAME)
   await supabase.from('daily_bandwidth').insert({ app_id: APPNAME, date: today, bandwidth: 0 })
 
+  // Reset storage byte-hours for this app
+  await executeSQL('DELETE FROM public.daily_storage_hourly WHERE app_id = $1', [APPNAME])
+
   // Clear app_metrics_cache for this org
   await supabase.from('app_metrics_cache').delete().eq('org_id', TEST_ORG_ID)
 })
@@ -120,6 +123,7 @@ afterAll(async () => {
   await supabase.from('app_metrics_cache').delete().eq('org_id', TEST_ORG_ID)
   await supabase.from('daily_mau').delete().eq('app_id', APPNAME)
   await supabase.from('daily_bandwidth').delete().eq('app_id', APPNAME)
+  await executeSQL('DELETE FROM public.daily_storage_hourly WHERE app_id = $1', [APPNAME])
   await supabase.from('app_versions_meta').delete().eq('app_id', APPNAME)
   await supabase.from('app_versions').delete().eq('app_id', APPNAME)
   await supabase.from('channels').delete().eq('app_id', APPNAME)
@@ -134,14 +138,26 @@ type UsageKind = 'mau' | 'storage' | 'bandwidth'
 const OVER_LIMIT: Record<UsageKind, number> = { mau: 1_000_000, storage: 2_000_000_000, bandwidth: 20_000_000_000 }
 const USAGE_KINDS = Object.keys(OVER_LIMIT) as UsageKind[]
 
+// Storage is billed in GB-hours: `value` bytes stored for the whole current billing cycle.
+async function setStorageUsage(value: number) {
+  await executeSQL(
+    `INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours)
+     SELECT $1, $2::uuid, (cycle.cycle_start AT TIME ZONE 'UTC')::date, (cycle.cycle_start AT TIME ZONE 'UTC')::date,
+       $3::double precision * ((cycle.cycle_end AT TIME ZONE 'UTC')::date - (cycle.cycle_start AT TIME ZONE 'UTC')::date) * 24
+     FROM public.get_org_billing_cycle($2::uuid) AS cycle
+     ON CONFLICT (app_id, owner_org, cycle_start, date, segment_start) DO UPDATE SET storage_byte_hours = EXCLUDED.storage_byte_hours`,
+    [APPNAME, TEST_ORG_ID, value],
+  )
+}
+
 async function setUsage(kind: UsageKind, value: number) {
+  if (kind === 'storage')
+    return setStorageUsage(value)
   const supabase = getSupabaseClient()
   // beforeEach leaves exactly one daily_mau/daily_bandwidth row (today) per app.
   const { error } = kind === 'mau'
     ? await supabase.from('daily_mau').update({ mau: value }).eq('app_id', APPNAME)
-    : kind === 'bandwidth'
-      ? await supabase.from('daily_bandwidth').update({ bandwidth: value }).eq('app_id', APPNAME)
-      : await supabase.from('app_versions_meta').update({ size: value }).eq('app_id', APPNAME)
+    : await supabase.from('daily_bandwidth').update({ bandwidth: value }).eq('app_id', APPNAME)
   expect(error).toBeFalsy()
 }
 

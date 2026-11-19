@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { sqlRestRequest } from './sql-rest-request'
 import {
   createDirectApiKeyWithBindings,
   getAuthHeaders,
@@ -8,7 +9,6 @@ import {
   getEndpointUrl,
   getSupabaseClient,
   SUPABASE_ANON_KEY,
-  SUPABASE_BASE_URL,
   USER_ID,
   USER_ID_2,
   USER_PASSWORD,
@@ -81,8 +81,8 @@ async function expectRankGuard(response: Response) {
 
 async function readGroupRows(headers: Record<string, string>) {
   const [groupsResponse, membersResponse] = await Promise.all([
-    fetch(`${SUPABASE_BASE_URL}/rest/v1/groups?id=eq.${groupId}&select=id`, { headers }),
-    fetch(`${SUPABASE_BASE_URL}/rest/v1/group_members?group_id=eq.${groupId}&select=user_id`, { headers }),
+    sqlRestRequest(`groups?id=eq.${groupId}&select=id`, { headers }),
+    sqlRestRequest(`group_members?group_id=eq.${groupId}&select=user_id`, { headers }),
   ])
   const [groupsBody, membersBody] = await Promise.all([
     groupsResponse.text(),

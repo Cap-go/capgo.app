@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { ensureCapacitorCorePlaceholder, toNativePackageMap } from '../supabase/functions/_backend/utils/app_native_packages.ts'
+import {
+  buildReportedPackageMap,
+  ensureCapacitorCorePlaceholder,
+  reportedPackageMapFromCatalogRow,
+  toNativePackageMap,
+} from '../supabase/functions/_backend/utils/app_native_packages.ts'
 import { matchAppPackagesToAdvisories } from '../supabase/functions/_backend/utils/security_advisory_matching.ts'
 import { filterInScopePackages } from '../supabase/functions/_backend/utils/security_advisory_packages.ts'
 import { fixtureAdvisoryFeedForTests } from '../supabase/functions/_backend/utils/security_advisory_feed.ts'
@@ -31,6 +36,48 @@ describe('toNativePackageMap', () => {
       { name: '@capacitor/core', version: '' },
     ])
     expect(map.get('@capacitor/core')).toBe('6.1.0')
+  })
+})
+
+describe('reportedPackageMapFromCatalogRow', () => {
+  it('matches loadAppReportedPackages when production native_packages are null', () => {
+    const production = { native_packages: null, cli_version: '1.0.0' as string | null }
+    const latest = {
+      native_packages: [{ name: '@capacitor/core', version: '6.1.0' }],
+      cli_version: '2.0.0' as string | null,
+    }
+    const perApp = buildReportedPackageMap(production, latest)
+    const fromCatalog = reportedPackageMapFromCatalogRow({
+      app_id: 'com.test.app',
+      has_production_channel: true,
+      production_native_packages: null,
+      production_cli_version: '1.0.0',
+      has_latest_upload: true,
+      latest_native_packages: latest.native_packages,
+      latest_cli_version: '2.0.0',
+    })
+    expect(fromCatalog).toEqual(perApp)
+    expect(fromCatalog.has('@capacitor/core')).toBe(false)
+    expect(fromCatalog.get('@capgo/cli')).toBe('2.0.0')
+  })
+
+  it('uses latest upload when no production channel exists', () => {
+    const latest = {
+      native_packages: [{ name: '@capacitor/core', version: '6.1.0' }],
+      cli_version: '1.9.0' as string | null,
+    }
+    const perApp = buildReportedPackageMap(latest, latest)
+    const fromCatalog = reportedPackageMapFromCatalogRow({
+      app_id: 'com.test.app',
+      has_production_channel: false,
+      production_native_packages: null,
+      production_cli_version: null,
+      has_latest_upload: true,
+      latest_native_packages: latest.native_packages,
+      latest_cli_version: '1.9.0',
+    })
+    expect(fromCatalog).toEqual(perApp)
+    expect(fromCatalog.get('@capacitor/core')).toBe('6.1.0')
   })
 })
 

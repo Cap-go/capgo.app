@@ -6,7 +6,8 @@ import { createHono, quickError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient, withPgTransaction } from '../../utils/pg.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
+import { getRequestCountry } from '../../utils/request_country.ts'
+import { gotrueAdmin } from '../../utils/gotrue_admin.ts'
 import { version } from '../../utils/version.ts'
 import { mappedAttributes, parseStoredRoleMapping, readAttributeValues, resolveSsoAccess } from './role-mapping.ts'
 
@@ -19,6 +20,7 @@ interface PublicUserSeed {
   email: string
   first_name: string | null
   last_name: string | null
+  country: string | null
 }
 
 type OrgRoleName
@@ -258,12 +260,13 @@ async function setAuthUserSsoOnly(pgClient: PgExecutor, userId: string, authoriz
   )
 }
 
-function buildPublicUserSeed(userId: string, email: string, userMetadata: Record<string, unknown> | undefined): PublicUserSeed {
+function buildPublicUserSeed(c: Context, userId: string, email: string, userMetadata: Record<string, unknown> | undefined): PublicUserSeed {
   return {
     id: userId,
     email,
     first_name: typeof userMetadata?.first_name === 'string' ? userMetadata.first_name : null,
     last_name: typeof userMetadata?.last_name === 'string' ? userMetadata.last_name : null,
+    country: getRequestCountry(c),
   }
 }
 
@@ -302,9 +305,9 @@ async function ensurePublicUserRowExists(
   if (!existingUser) {
     try {
       await pgPool.query(
-        `insert into public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters)
-        values ($1, $2, $3, $4, true, true)`,
-        [user.id, user.email, user.first_name, user.last_name],
+        `insert into public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters, country)
+        values ($1, $2, $3, $4, true, true, $5)`,
+        [user.id, user.email, user.first_name, user.last_name, user.country],
       )
     }
     catch (insertError) {
@@ -336,13 +339,13 @@ async function ensurePublicUserRowExistsInTransaction(
   try {
     await pgClient.query(
       `
-        insert into public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters)
-        values ($1, $2, $3, $4, true, true)
+        insert into public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters, country)
+        values ($1, $2, $3, $4, true, true, $5)
         on conflict (id) do update
         set email = excluded.email
         where public.users.email is distinct from excluded.email
       `,
-      [user.id, user.email, user.first_name, user.last_name],
+      [user.id, user.email, user.first_name, user.last_name, user.country],
     )
   }
   catch (error) {
@@ -754,7 +757,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
     return quickError(401, 'not_authorized', 'User ID not found in auth context')
   }
 
-  const admin = supabaseAdmin(c)
+  const admin = gotrueAdmin(c)
   let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   const getSharedPgClient = async () => {
     pgClient ??= await getPgClient(c)
@@ -763,7 +766,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
 
   try {
     // Verify the user actually authenticated via SSO (not email/password)
-    const { data: userAuth, error: userAuthError } = await admin.auth.admin.getUserById(userId)
+    const { data: userAuth, error: userAuthError } = await admin.getUserById(userId)
 
     if (userAuthError || !userAuth?.user) {
       cloudlogErr({ requestId, message: 'Failed to retrieve user auth data for SSO verification', userId, error: userAuthError })
@@ -790,7 +793,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
     if (!userEmail) {
       return quickError(400, 'no_email', 'User has no email address')
     }
-    const publicUserSeed = buildPublicUserSeed(userId, userEmail, userAuth.user.user_metadata)
+    const publicUserSeed = buildPublicUserSeed(c, userId, userEmail, userAuth.user.user_metadata)
 
     const userDomain = userEmail.split('@')[1]?.toLowerCase().trim()
     if (!userDomain) {
@@ -891,7 +894,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
       }
 
       // Step 3: Delete the duplicate auth user (cascades to public.users, orgs, org_users)
-      const { error: deleteError } = await admin.auth.admin.deleteUser(userId)
+      const { error: deleteError } = await admin.deleteUser(userId)
       if (deleteError) {
         cloudlogErr({ requestId, message: 'Failed to delete duplicate SSO user after identity transfer', userId, originalUserId, error: deleteError })
         // Identity already transferred — log but still return merged so frontend redirects to login

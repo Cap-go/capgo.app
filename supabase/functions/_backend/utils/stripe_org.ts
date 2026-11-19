@@ -2,14 +2,16 @@ import type { Context } from 'hono'
 import type { BillingAccount } from './stripe.ts'
 import type { Database } from './supabase.types.ts'
 import { resolveNewOrgTrialEnd } from './direct_offer.ts'
+import { gotrueAdmin } from './gotrue_admin.ts'
 import type { PgQueryClient } from './pg.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import { createCustomer, getPlanProductId, normalizeBillingAccount, planProductIdOrFilter } from './stripe.ts'
 import { queryPlanByProductId } from './stripe_billing.ts'
-import { getDefaultPlan, getStripeCustomer, supabaseAdmin } from './supabase.ts'
+import { getDefaultPlan, getStripeCustomer } from './supabase.ts'
 
 type OrgRow = Database['public']['Tables']['orgs']['Row']
+type OrgWithCreatorCountry = OrgRow & { creator_country: string | null }
 
 function adminQuery<T>(c: Context, run: (client: PgQueryClient) => Promise<T>) {
   return withRlsContext(c, servicePrincipal, run)
@@ -51,10 +53,10 @@ function isUniqueViolation(error: { code?: string, message?: string } | null | u
 }
 
 async function requireOrg(c: Context, orgId: string) {
-  let data: OrgRow | null = null
+  let data: OrgWithCreatorCountry | null = null
   let errorMessage: string | undefined
   try {
-    data = (await adminQuery(c, client => queryJson<OrgRow>(client, 'SELECT * FROM public.orgs WHERE id = $1', [orgId])))[0] ?? null
+    data = (await adminQuery(c, client => queryJson<OrgWithCreatorCountry>(client, 'SELECT o.*, u.country AS creator_country FROM public.orgs o LEFT JOIN public.users u ON u.id = o.created_by WHERE o.id = $1', [orgId])))[0] ?? null
   }
   catch (error) {
     errorMessage = error instanceof Error ? error.message : String(error)
@@ -172,8 +174,9 @@ export async function createStripeCustomer(c: Context, org: OrgRow) {
 
   // Direct-offer (paid ads) creators get no trial; everyone else gets the standard trial.
   // Resolve before creating the Stripe customer so a failed lookup retries cleanly.
-  const trial_at = await resolveNewOrgTrialEnd(c, supabaseAdmin(c), current.created_by)
-  const customer = await createCustomer(c, current.management_email, current.created_by, current.id, current.name, billingAccount)
+  const trial_at = await resolveNewOrgTrialEnd(c, gotrueAdmin(c), current.created_by)
+  // This runs in a queue: its request location belongs to the worker, not the user.
+  const customer = await createCustomer(c, current.management_email, current.created_by, current.id, current.name, billingAccount, current.creator_country ?? null)
   cloudlog({ requestId: c.get('requestId'), message: 'createInfo', plan: selectedPlan, customer, billingAccount })
 
   let createInfoError: { code?: string, message?: string } | null = null

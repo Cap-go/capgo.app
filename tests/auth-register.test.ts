@@ -23,10 +23,10 @@ function buildRegisterPayload(overrides: Record<string, unknown> = {}) {
   }
 }
 
-async function postRegister(body: Record<string, unknown>) {
+async function postRegister(body: Record<string, unknown>, country?: string) {
   return fetch(getEndpointUrl('/auth/register'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(country ? { 'cf-ipcountry': country } : {}) },
     body: JSON.stringify(body),
   })
 }
@@ -34,7 +34,7 @@ async function postRegister(body: Record<string, unknown>) {
 describe('pOST /auth/register', () => {
   it('creates a user and returns session tokens', async () => {
     const payload = buildRegisterPayload()
-    const response = await postRegister(payload)
+    const response = await postRegister(payload, 'IN')
     expect(response.status).toBe(200)
 
     const body = await response.json() as {
@@ -49,7 +49,7 @@ describe('pOST /auth/register', () => {
     const admin = getSupabaseClient()
     const { data: profile, error: profileError } = await admin
       .from('users')
-      .select('email, first_name, last_name')
+      .select('email, first_name, last_name, country')
       .eq('id', body.user.id)
       .single()
     expect(profileError).toBeNull()
@@ -57,6 +57,8 @@ describe('pOST /auth/register', () => {
       email: payload.email,
       first_name: payload.first_name,
       last_name: payload.last_name,
+      // Worker geo takes precedence over the forwarded header in Cloudflare CI.
+      country: process.env.USE_CLOUDFLARE_WORKERS === 'true' ? expect.stringMatching(/^[A-Z]{2}$/) : 'IN',
     })
 
     const { data: authUser, error: authUserError } = await admin.auth.admin.getUserById(body.user.id)

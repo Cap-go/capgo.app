@@ -86,9 +86,10 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
   Docker required)
 - `bun test:db` - Run the DB-only test subset listed in
   `tests/tinbase-db-tests.txt` against a throwaway Tinbase instance (no Docker;
-  boots in ~5s). Add a test file to that list only if it talks purely to
-  PostgREST/auth via supabase-js — no edge functions, Cloudflare workers, or raw
-  Postgres TCP (`executeSQL`/`getPostgresClient`)
+  boots in ~5s). Add a test file to that list only if it uses just the test
+  data client (`createClient` from `tests/sql-data-client.ts`, which finds
+  Tinbase's private Postgres socket) and auth — no edge functions, Cloudflare
+  workers, or `executeSQL`/`getPostgresClient`
 - `bun test:backend:integration` - Run backend tests excluding unit and CLI
   tests (requires running Supabase; this is what CI shards across runners; CLI
   integration tests run via `bun test:cli`)
@@ -110,12 +111,34 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
   testing
 
 Note: Prefer Tinbase (`bun test:db` / `tests/tinbase-db-tests.txt`) for
-PostgREST/auth-only coverage so Docker/Cloudflare shards stay small and can
+data/auth-only coverage so Docker/Cloudflare shards stay small and can
 run at high concurrency. CI caps every test job at 5 minutes and shards
 backend/Cloudflare/Playwright aggressively instead of lowering concurrency.
 
 See [CLOUDFLARE_TESTING.md](CLOUDFLARE_TESTING.md) for detailed information on
 testing against Cloudflare Workers.
+
+#### NEVER rely on PostgREST from tests
+
+**Tests must NEVER call PostgREST** (`/rest/v1`, or a supabase-js client's
+`from()` / `rpc()` sent to the Supabase API). The app no longer uses PostgREST,
+and the test suite has to keep running once it is gone.
+
+- Table and RPC access: `createClient` from `tests/sql-data-client.ts` (also
+  what `getSupabaseClient()` returns). Same signature and builder API as
+  supabase-js, but `from()` / `rpc()` run as SQL in one transaction with the
+  role, JWT claims, `request.headers` (`capgkey`) and `request.method`
+  PostgREST would have set, so RLS and triggers behave the same. `auth`
+  (GoTrue) and `storage` stay on supabase-js.
+- Tests that assert raw HTTP status and JSON body: `sqlRestRequest` from
+  `tests/sql-rest-request.ts`.
+- Raw SQL: `executeSQL` / `getPostgresClient` from `tests/test-utils.ts`.
+- Never import `createClient` from `@supabase/supabase-js` in a test and never
+  build a `/rest/v1` URL. `tests/no-postgrest-in-tests.unit.test.ts` fails if
+  you do, and `getEndpointUrl('/rest/...')` throws.
+- Only exception: `tests/cli-compat.test.ts` runs the pinned published CLI
+  (`MIN_CLI_VERSION`), which calls PostgREST itself. That is the product
+  behaviour under test, not test plumbing.
 
 ### Code Quality
 
@@ -135,6 +158,19 @@ testing against Cloudflare Workers.
 - `bun run supabase:db:reset` - Reset and seed local database
 - `bun backend` - Start Supabase functions locally
 - `bun reset` - Reset Supabase database
+
+### Local Postgres without the Supabase stack
+
+For work that only needs the database (SQL tests, checking that a migration applies), use one Docker container instead of `supabase start`. No Supabase CLI involved.
+
+- `bun run db:up` - Start this worktree's Postgres (`supabase/local-db.compose.yml`, the same `supabase/postgres` image `supabase start` uses)
+- `bun run db:provision` - Run `supabase/bootstrap.sql`, apply pending migrations (recorded in `supabase_migrations.schema_migrations`), and run `seed.sql` on a fresh database. Safe to re-run.
+- `bun run db:test` - Run the pgTAP tests in `supabase/tests` against it (after `db:provision`). CI runs this next to `supabase test db`.
+- `bun run test:db:sql` - Run the vitest files listed in `tests/local-db-sql-tests.txt` against it (after `db:provision`), with no Supabase API: any HTTP call fails. CI runs them here and excludes them from the Supabase shards. Add a file to that list only if it passes this way with no skipped tests.
+- `bun run db:url` - Print the connection URL
+- `bun run db:down` - Stop it and delete its data (`db:down && db:up && db:provision` gives a fresh database)
+
+It is a separate database from `supabase start`'s, with no GoTrue, Storage, PostgREST or edge functions, so the app and the other vitest integration suites still need `bun run supabase:start`. `supabase/bootstrap.sql` adds only the `auth`/`storage` objects GoTrue and storage-api would create; if a new migration or seed needs another one, add it there.
 
 ## Architecture Overview
 
@@ -412,7 +448,8 @@ or edge cache. Still return deleted when the DB row is deleted or a deleted mark
 ### Email Templates
 
 - `supabase/templates/invite_new_user_to_org.html` and `supabase/templates/invite_existing_user_to_org.html` are Bento templates.
-- Every other file in `supabase/templates/` is a Supabase auth or notification template.
+- All files under `supabase/templates/bento/` are also Bento templates, including `deploy_report_24h.html` (Bento template 85726).
+- Other files in `supabase/templates/` are Supabase auth or notification templates.
 - Supabase templates use Supabase template syntax.
 - Bento templates use Bento template syntax.
 - Updating templates in the repository does not upload them anywhere automatically.
@@ -569,10 +606,13 @@ Then in your test file, use ONLY these dedicated resources for modifications.
   process_all_cron_tasks function in a new migration file to add your job if
   needed.
 - For runtime feature flags and security-related toggles, use runtime config from
-  Vault-backed settings and avoid mutable singleton tables in application code.
+  `private.settings` (postgres-only table, replaced Supabase Vault) and avoid
+  mutable singleton tables in application code.
 - Do not store environment-driven behavior in singleton tables.
-- Use Vault-backed configuration values as the source of truth and runtime
-  environment values only for deployment-time overrides.
+- Use `private.settings` configuration values as the source of truth and runtime
+  environment values only for deployment-time overrides. Read them only through
+  `SECURITY DEFINER` functions; never grant the table or the `private` schema to
+  `anon`, `authenticated` or `service_role`.
 - Never use the Supabase admin SDK (with service key) for user-facing APIs.
   Always use the client SDK with user authentication so RLS policies are
   enforced. The admin SDK should only be used when accessing data that is not
@@ -732,8 +772,9 @@ Platform admin is **NOT** a general-purpose superuser capability.
 - Never use platform admin as a shortcut around normal auth/RLS for mutating
   APIs. If an action could cause privilege elevation, do not expose it behind
   platform admin.
-- Platform admins are defined from runtime Vault-backed configuration, not from
-  mutable database state.
+- Platform admins are defined from the `admin_users` runtime setting in
+  `private.settings` (writable by the `postgres` role only), not from
+  application-writable database state.
 - There must be no API, UI, or database path to grant/revoke platform admin
   dynamically. The only supported way to change platform admins is to publish a
   new runtime version with updated environment configuration.
@@ -1040,6 +1081,18 @@ it returns is serialized twice. Keep each one bounded and cheap:
 When a PR changes customer-facing UI (layout, spacing, colors, components, or
 copy placement), reviewers need a before/after screenshot diff.
 
+The automatic review fails when a visual file changes and the pull request
+description has no screenshot. The review says `missing screenshot for review`
+and requests changes. Visual files are `src/**/*.vue`, `src/**/*.css`,
+`src/**/*.scss`, `src/**/*.sass`, `src/**/*.less`, `src/**/*.svg`,
+`supabase/templates/**/*.html`,
+`cloudflare_workers/api/email_templates/**/*.html`, `ios/**/*.storyboard`,
+`ios/**/*.xib`, `android/**/res/layout/**/*.xml`, and
+`android/**/res/drawable*/**/*.xml`. A screenshot is an image or video in the
+description. The word "screenshot", the empty Screenshots heading, HTML
+comments, images inside code fences, and Cubic or Codesmith footer badges do
+not count.
+
 **Request the automated PR report** by either:
 
 - adding the `visual-change` label to the PR, or
@@ -1149,7 +1202,7 @@ Only after **all** of these are true:
 - You believe the implementation is complete (no known leftover work).
 - **Every** required GitHub Actions / CI check on the PR is **green** (no failing, no still-required pending).
 - The PR description follows the required sections below (with `(AI generated)` where applicable).
-- UX/UI changes include any required visual proof (see visual-diff rules).
+- UX/UI changes include a screenshot in the pull request description. Without it, the review fails with `missing screenshot for review` (see visual-diff rules).
 
 …then mark the PR **Ready for review** in GitHub (undraft).
 

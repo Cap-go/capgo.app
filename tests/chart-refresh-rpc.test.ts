@@ -1,6 +1,6 @@
 import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './sql-data-client'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   executeSQL,
@@ -549,13 +549,6 @@ describe('chart refresh RPCs', () => {
       app_id: staleAppId,
       bandwidth: 0,
       date: metricDateText,
-    }, {
-      onConflict: 'app_id,date',
-    }).throwOnError()
-    await getSupabaseClient().from('daily_storage').upsert({
-      app_id: staleAppId,
-      date: metricDateText,
-      storage: 0,
     }, {
       onConflict: 'app_id,date',
     }).throwOnError()

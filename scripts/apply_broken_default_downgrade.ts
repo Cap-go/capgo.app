@@ -7,8 +7,7 @@
  * Optional:
  *   --input=./tmp/unused_versions/broken_default_downgrade_candidates.json
  */
-import { createClient } from '@supabase/supabase-js'
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import { connectScriptDb, getDatabaseUrl } from './script_db.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const DEFAULT_INPUT = './tmp/unused_versions/broken_default_downgrade_candidates.json'
@@ -77,11 +76,7 @@ async function main() {
   }
 
   const env = await loadEnv(ENV_FILE)
-  const supabase = createClient<Database>(
-    env.SUPABASE_URL,
-    env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-  )
+  const db = await connectScriptDb(getDatabaseUrl(env))
 
   const chunks = chunkArray(items, CHUNK_SIZE)
   let updated = 0
@@ -89,15 +84,10 @@ async function main() {
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i]
     for (const row of chunk) {
-      const { error } = await supabase
-        .from('channels')
-        .update({ version: row.candidate_version_id })
-        .eq('id', row.channel_id)
-
-      if (error) {
+      await db.query('UPDATE public.channels SET version = $1 WHERE id = $2', [row.candidate_version_id, row.channel_id]).catch((error) => {
         console.error('Error updating channel:', { channel_id: row.channel_id, error })
         process.exit(1)
-      }
+      })
       updated += 1
       process.stdout.write(`\rUpdated ${updated}/${items.length}`)
     }
@@ -108,3 +98,4 @@ async function main() {
 }
 
 await main()
+process.exit(0)

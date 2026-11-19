@@ -1,14 +1,16 @@
 import type { Context } from 'hono'
+import type { GotrueAdmin } from '../utils/gotrue_admin.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { gotrueAdmin } from '../utils/gotrue_admin.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { authPrincipal, withRlsContext } from '../utils/pg_rls.ts'
-import { emptySupabase, supabaseAdmin as useSupabaseAdmin } from '../utils/supabase.ts'
+import { emptySupabase } from '../utils/supabase.ts'
 
 export const bodySchema = z.object({
   user_id: z.string().optional(),
@@ -32,8 +34,6 @@ export type LogAsIdentifier
     | { kind: 'email', value: string }
     | { kind: 'org_id', value: string }
     | { kind: 'identifier', value: string }
-
-type SupabaseAdmin = Awaited<ReturnType<typeof useSupabaseAdmin>>
 
 function normalizeIdentifierValue(value: string | undefined): string | null {
   const normalized = value?.trim()
@@ -89,8 +89,8 @@ export function resolveLogAsIdentifier(body: LogAsBody): LogAsIdentifier {
   return identifiers[0]
 }
 
-async function getUserEmailById(supabaseAdmin: SupabaseAdmin, userId: string): Promise<{ email: string | null, error: unknown }> {
-  const { data: userData, error: userError } = await supabaseAdmin.auth.admin.getUserById(userId)
+async function getUserEmailById(admin: GotrueAdmin, userId: string): Promise<{ email: string | null, error: unknown }> {
+  const { data: userData, error: userError } = await admin.getUserById(userId)
 
   return {
     email: userData?.user?.email ?? null,
@@ -177,20 +177,20 @@ async function getOrgOwner(c: Context<MiddlewareKeyVariables>, orgId: string): P
   }
 }
 
-async function getOrgOwnerEmail(c: Context<MiddlewareKeyVariables>, supabaseAdmin: SupabaseAdmin, orgId: string): Promise<string> {
+async function getOrgOwnerEmail(c: Context<MiddlewareKeyVariables>, admin: GotrueAdmin, orgId: string): Promise<string> {
   const owner = await getOrgOwner(c, orgId)
 
   if (!owner)
     throw simpleError('org_does_not_exist', 'Organization does not exist', { orgId })
 
-  const { email, error } = await getUserEmailById(supabaseAdmin, owner.userId)
+  const { email, error } = await getUserEmailById(admin, owner.userId)
   if (!email)
     throw simpleError('org_owner_does_not_exist', 'Organization owner does not exist', { orgId, ownerUserId: owner.userId, error })
 
   return email
 }
 
-async function resolveUserEmail(c: Context<MiddlewareKeyVariables>, supabaseAdmin: SupabaseAdmin, identifier: LogAsIdentifier): Promise<string> {
+async function resolveUserEmail(c: Context<MiddlewareKeyVariables>, admin: GotrueAdmin, identifier: LogAsIdentifier): Promise<string> {
   if (identifier.kind === 'email') {
     const email = await getUserEmailByAuthEmail(c, identifier.value)
     if (!email)
@@ -199,14 +199,14 @@ async function resolveUserEmail(c: Context<MiddlewareKeyVariables>, supabaseAdmi
   }
 
   if (identifier.kind === 'org_id')
-    return getOrgOwnerEmail(c, supabaseAdmin, identifier.value)
+    return getOrgOwnerEmail(c, admin, identifier.value)
 
-  const { email, error } = await getUserEmailById(supabaseAdmin, identifier.value)
+  const { email, error } = await getUserEmailById(admin, identifier.value)
   if (email)
     return email
 
   if (identifier.kind === 'identifier' && UUID_REGEX.test(identifier.value))
-    return getOrgOwnerEmail(c, supabaseAdmin, identifier.value)
+    return getOrgOwnerEmail(c, admin, identifier.value)
 
   throw simpleError('user_does_not_exist', 'User does not exist', { userId: identifier.value, error })
 }
@@ -227,7 +227,7 @@ app.post('/', middlewareAuth, async (c) => {
     throw simpleError('invalid_json_body', 'Invalid json body', { body, parsedBodyResult })
   }
 
-  const supabaseAdmin = await useSupabaseAdmin(c)
+  const admin = gotrueAdmin(c)
 
   // Canonical platform-admin check for impersonation.
   // This endpoint must only use is_platform_admin for user-facing platform-rights.
@@ -246,9 +246,9 @@ app.post('/', middlewareAuth, async (c) => {
     throw simpleError('not_admin', 'Not admin')
 
   const identifier = resolveLogAsIdentifier(parsedBodyResult.data)
-  const userEmail = await resolveUserEmail(c, supabaseAdmin, identifier)
+  const userEmail = await resolveUserEmail(c, admin, identifier)
 
-  const { data: magicLink, error: magicError } = await supabaseAdmin.auth.admin.generateLink({
+  const { data: magicLink, error: magicError } = await admin.generateLink({
     type: 'magiclink',
     email: userEmail,
   })

@@ -2,8 +2,10 @@ import type { Database } from '../../utils/supabase.types.ts'
 import type { AiBumpLevelBody } from './ai_bump_level.ts'
 import type { GetLatest } from './get.ts'
 import type { UpsertBundleBody } from './upsert.ts'
+import { bodyLimit } from 'hono/body-limit'
+import { recommendRelease } from './recommend.ts'
 import { recordCicdDeploy } from '../../utils/cicdDetection.ts'
-import { getBodyOrQuery, honoFactory } from '../../utils/hono.ts'
+import { getBodyOrQuery, honoFactory, quickError } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { aiBumpLevel } from './ai_bump_level.ts'
 import { cleanupBundles } from './cleanup.ts'
@@ -90,4 +92,12 @@ app.post('/ai_bump_level', writeBundleMiddleware, async (c) => {
   const body = await getBodyOrQuery<AiBumpLevelBody>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return aiBumpLevel(c, body, apikey)
+})
+
+app.post('/recommend', bodyLimit({ maxSize: 64 * 1024, onError: () => quickError(413, 'request_too_large', 'Release context exceeds 64 KiB') }), writeBundleMiddleware, async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const apikey = c.get('apikey')
+  if (!apikey)
+    throw quickError(401, 'not_authorized', 'API key required')
+  return recommendRelease(c, body, apikey)
 })

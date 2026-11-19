@@ -11,6 +11,7 @@ import AssistantChat from '../src/components/assistant/AssistantChat.vue'
 import DialogV2 from '../src/components/DialogV2.vue'
 import { AssistantUpstreamError } from '../src/services/assistantAgent'
 import { CHATGPT_REDIRECT_URI } from '../src/services/chatgptAuth'
+import { pushEvent } from '../src/services/posthog'
 
 const mocks = vi.hoisted(() => ({
   nativePlatform: vi.fn(() => false),
@@ -29,7 +30,7 @@ const mocks = vi.hoisted(() => ({
   removeListener: vi.fn(async () => {}),
 }))
 
-vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: mocks.nativePlatform }, CapacitorHttp: {} }))
+vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: () => 'web', isNativePlatform: mocks.nativePlatform }, CapacitorHttp: {} }))
 vi.mock('@capgo/capacitor-inappbrowser', () => ({
   InAppBrowser: {
     openWebView: mocks.openWebView,
@@ -40,6 +41,7 @@ vi.mock('@capgo/capacitor-inappbrowser', () => ({
     }),
   },
 }))
+vi.mock('~/services/posthog', () => ({ pushEvent: vi.fn() }))
 vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.test', useConsole: () => ({}) }))
 vi.mock('~/stores/main', () => ({ useMainStore: () => ({ user: { id: 'assistant-ui-test-user' } }) }))
 vi.mock('~/stores/organization', () => ({
@@ -140,15 +142,22 @@ describe('assistant ChatGPT callback instructions', () => {
     await flushUpdates()
     input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await vi.waitFor(() => expect(element('[data-test="assistant-messages"]').textContent).toContain(en['assistant-session-required']))
+    expect(element('[data-test="assistant-messages"]').closest('.ph-no-capture')).not.toBeNull()
     expect(mocks.signOut).not.toHaveBeenCalled()
     expect(mocks.saveKey).not.toHaveBeenCalled()
     expect(document.querySelector('[data-test="assistant-chatgpt-button"]')).toBeNull()
     expect(element('[data-test="assistant-chatgpt-indicator"]')).toBeDefined()
+    expect(pushEvent).toHaveBeenCalledWith('Assistant Turn Finished', expect.any(String), expect.objectContaining({ outcome: 'error', error_code: 'assistant_session_required' }))
   })
 
-  it('explains the expected error page and callback before opening sign-in or creating a key', async () => {
+  it('explains the value, privacy and manual callback before opening sign-in or creating a key', async () => {
     await requestSignIn()
     const instructions = element('[data-test="assistant-chatgpt-sign-in-instructions"]')
+    expect(instructions.textContent).toContain(en['assistant-chatgpt-sign-in-value'])
+    expect(instructions.textContent).toContain(en['assistant-chatgpt-sign-in-privacy-account'])
+    expect(instructions.textContent).toContain(en['assistant-chatgpt-sign-in-privacy-proxy'])
+    expect(instructions.textContent).toContain(en['assistant-chatgpt-sign-in-privacy-device'])
+    expect(instructions.textContent).toContain(en['assistant-chatgpt-sign-in-manual'])
     expect(instructions.textContent).toContain(en['assistant-chatgpt-sign-in-step-copy'])
     expect(instructions.textContent).toContain(en['assistant-chatgpt-sign-in-step-paste'])
     expect(instructions.textContent).toContain(en['assistant-chatgpt-sign-in-private'])
@@ -180,6 +189,7 @@ describe('assistant ChatGPT callback instructions', () => {
     expect(mocks.beginSignIn).toHaveBeenCalledWith('assistant-ui-test-user')
     expect(popup.location.href).toBe('https://auth.openai.com/test-sign-in')
     const input = element<HTMLInputElement>('[data-test="assistant-chatgpt-paste-input"]')
+    expect(input.closest('.ph-no-capture')).not.toBeNull()
     expect(input.getAttribute('aria-label')).toBe(en['assistant-chatgpt-callback-label'])
     input.value = `${CHATGPT_REDIRECT_URI}?code=test-code&state=test-state&client_id=test-client`
     input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -188,6 +198,9 @@ describe('assistant ChatGPT callback instructions', () => {
     await flushUpdates()
     expect(mocks.completeSignIn).toHaveBeenCalledWith('assistant-ui-test-user', { code: 'test-code', state: 'test-state', clientId: 'test-client', error: undefined })
     expect(popup.close).toHaveBeenCalledOnce()
+    expect(pushEvent).toHaveBeenCalledWith('Assistant Connection Started', expect.any(String), expect.any(Object))
+    expect(pushEvent).toHaveBeenCalledWith('Assistant Connection Finished', expect.any(String), expect.objectContaining({ outcome: 'success' }))
+    expect(JSON.stringify(vi.mocked(pushEvent).mock.calls)).not.toMatch(/test-code|test-state|test-access-token|test-client/)
   })
 
   it('dismisses instructions with Escape without closing the assistant', async () => {
@@ -218,5 +231,6 @@ describe('assistant ChatGPT callback instructions', () => {
     await flushUpdates()
     expect(mocks.completeSignIn).toHaveBeenCalledWith('assistant-ui-test-user', { code: 'native-code', state: 'native-state', clientId: 'test-client', error: undefined })
     expect(mocks.closeWebView).toHaveBeenCalledOnce()
+    expect(pushEvent).toHaveBeenCalledWith('Assistant Connection Finished', expect.any(String), expect.objectContaining({ outcome: 'success' }))
   })
 })

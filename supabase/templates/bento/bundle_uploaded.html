@@ -1,0 +1,9 @@
+<p>Hi {{ visitor.first_name | default: "there" | escape }},</p>
+<p>Your bundle <strong>{{ event.details.bundle_name | default: "your bundle" | escape }}</strong> has been uploaded to Capgo.</p>
+<p>This confirms the upload. Check its channel assignment to see where it will be available, or use a test channel before rolling it out to users.</p>
+{% if event.details.app_id != blank and event.details.bundle_id != blank %}
+<p><a href="https://console.capgo.app/app/{{ event.details.app_id | url_encode }}/bundle/{{ event.details.bundle_id | url_encode }}" style="display: inline-block; padding: 12px 20px; background-color: #2563eb; border-radius: 6px; color: #ffffff; text-decoration: none; font-weight: bold;">View bundle</a></p>
+{% else %}
+<p><a href="https://console.capgo.app/apps">View your apps</a></p>
+{% endif %}
+<p><small>To stop upload confirmations, turn off “New bundle uploads” in <a href="https://console.capgo.app/settings/account/notifications">email preferences</a>. <a href="{{ visitor.unsubscribe_url }}">Unsubscribe</a></small></p>

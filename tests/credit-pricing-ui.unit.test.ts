@@ -10,7 +10,7 @@ const messages: Record<string, string> = {
   'credits-pricing-tier-range': 'From {from} to {to}',
   'credits-pricing-tier-over': 'Over {from}',
   'credits-pricing-unit-per-gib': 'per GiB',
-  'credits-pricing-unit-per-mau': 'per MAU',
+  'credits-pricing-unit-per-1k-users': 'per 1k users',
   'credits-pricing-unit-per-minute': 'per minute',
 }
 
@@ -39,6 +39,18 @@ describe('credit pricing UI helpers', () => {
     setAccountFormatLocale('en-GB')
   })
 
+  it('shows MAU rates per 1,000 users without losing small tier prices', () => {
+    expect(formatCreditPricingPrice('mau', 0.003, t)).toBe(`${formatUsd('en-GB', 3)} per 1k users`)
+    expect(formatCreditPricingPrice('mau', 0.00025, t)).toBe(`${formatUsd('en-GB', 0.25)} per 1k users`)
+    expect(formatCreditPricingPrice('bandwidth', 0.06, t)).toBe(`${formatUsd('en-GB', 0.06)} per GiB`)
+    expect(formatCreditPricingPrice('storage', 0.09, t)).toBe(`${formatUsd('en-GB', 0.09)} per GiB`)
+  })
+
+  it('normalizes custom MAU pricing units while keeping actual user thresholds', () => {
+    expect(formatCreditPricingPrice('mau', 3, t, 1000)).toBe(`${formatUsd('en-GB', 3)} per 1k users`)
+    expect(formatCreditPricingTierLabel({ type: 'mau', step_min: 0, step_max: 1000000, unit_factor: 1000 }, t)).toBe('Up to 1m')
+  })
+
   it('formats first build_time tiers with generic translated labels', () => {
     expect(formatCreditPricingTierLabel({
       type: 'build_time',
@@ -54,6 +66,7 @@ describe('credit pricing UI helpers', () => {
     setAccountFormatLocale('fr-FR')
 
     expect(formatCreditPricingPrice('build_time', 0.08, t)).toBe(`${formatUsd('fr-FR', 0.08)} per minute`)
+    expect(formatCreditPricingPrice('mau', 0.003, t)).toBe(`${formatUsd('fr-FR', 3)} per 1k users`)
   })
 
   it('falls back to generic tier copy for custom org-scoped ranges', () => {

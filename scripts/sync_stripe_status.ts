@@ -1,12 +1,11 @@
-// Import statements for Supabase and Stripe
+// Import statements for Postgres and Stripe
 // Ensure these are compatible with your environment.
-import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { connectScriptDb } from './script_db.ts'
 
-// Initialize Supabase client
-const supabaseUrl = 'https://****.supabase.co'
-const supabaseAnonKey = '****'
-const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// Connect to the database
+const databaseUrl = '****'
+const db = await connectScriptDb(databaseUrl)
 
 // Initialize Stripe client
 const stripe = Stripe('****')
@@ -19,14 +18,15 @@ async function getAllStripeInfos() {
   let count = 0
   let total = 0
   do {
-    const { data, error } = await supabase
-      .from('stripe_info')
-      .select('subscription_id, customer_id, status, price_id')
-      .range(offset, offset + limit - 1)
-    if (error) {
+    const { rows: data } = await db.query(
+      'SELECT subscription_id, customer_id, status, price_id FROM public.stripe_info ORDER BY id LIMIT $1 OFFSET $2',
+      [limit, offset],
+    ).catch((error) => {
       console.error('Error fetching data from Supabase:', error)
+      return { rows: null }
+    })
+    if (!data)
       return []
-    }
     stripeInfos = stripeInfos.concat(data)
     total = data.length
     offset += limit
@@ -59,10 +59,8 @@ async function updateStripeStatus() {
       if (subscription.status !== 'active' && stripeInfo.status === 'succeeded') {
         // Update the status in Supabase to canceled
         console.log('this customer is wrong status', stripeInfo.customer_id, subscription.status, stripeInfo.status)
-        const { error: updateError } = await supabase
-          .from('stripe_info')
-          .update({ status: 'canceled' })
-          .match({ customer_id: stripeInfo.customer_id })
+        const updateError = await db.query('UPDATE public.stripe_info SET status = $1 WHERE customer_id = $2', ['canceled', stripeInfo.customer_id])
+          .then(() => null, (error: unknown) => error)
 
         if (updateError)
           console.error('Error updating status in Supabase:', updateError)
@@ -88,4 +86,5 @@ async function updateStripeStatus() {
 }
 
 // Run the function
-updateStripeStatus()
+await updateStripeStatus()
+await db.end()

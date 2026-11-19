@@ -4,6 +4,7 @@ import type { BillingAccount } from '../../utils/stripe_billing.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { z } from 'zod'
 import { resolveNewOrgTrialEnd } from '../../utils/direct_offer.ts'
+import { gotrueAdmin } from '../../utils/gotrue_admin.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
@@ -14,7 +15,6 @@ import { authPrincipal, queryJsonOne, setRequestApikeyHeader, withRlsContext } f
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { getPlanProductId } from '../../utils/stripe.ts'
 import { canChooseUsBillingAccount, resolveNewOrgBillingAccount } from '../../utils/stripe_billing.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
 const MAX_ESTIMATED_MAU = 1_000_000
@@ -83,7 +83,7 @@ async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, pg: P
   const pendingCustomerId = `pending_${orgId}`
   // Direct-offer (paid ads) creators get no trial; everyone else gets the standard trial.
   // A failed lookup aborts org creation rather than granting a trial by mistake.
-  const trialAt = await resolveNewOrgTrialEnd(c, supabaseAdmin(c), creatorId).catch((error: unknown) => {
+  const trialAt = await resolveNewOrgTrialEnd(c, gotrueAdmin(c), creatorId).catch((error: unknown) => {
     throw simpleError('cannot_create_org_plan', 'Cannot create org plan', { error: error instanceof Error ? error.message : String(error) })
   })
 

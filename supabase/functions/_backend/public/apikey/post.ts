@@ -2,13 +2,13 @@ import type { CreateBindingParams } from '../../private/role_bindings.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import type { ClientBindingInput } from './scope.ts'
 import { sql } from 'drizzle-orm'
-import { createRoleBindingForPrincipal, lockRbacOrgs } from '../../private/role_bindings.ts'
+import { createRoleBindingBatchCache, createRoleBindingForPrincipal, lockRbacOrgs, prefetchRolesForBindings } from '../../private/role_bindings.ts'
 import { getErrorStatus } from '../../utils/errors.ts'
 import { honoFactory, parseBody, quickError, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
-import { checkPermissionPg } from '../../utils/rbac.ts'
+import { checkPermissionsBatchPg } from '../../utils/rbac.ts'
 import { assertExpirationMatchesOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
 import { assertApiKeyManagerCanAssignBindings, ensureApiKeyManagementAllowed, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings } from './scope.ts'
@@ -64,26 +64,64 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 // (app.manage_apikeys, granted to app_admin) may still issue keys whose
 // bindings are limited to their own apps or channels.
 async function assertCanManageApiKeyBindingsPg(
-  c: Parameters<typeof checkPermissionPg>[0],
+  c: Parameters<typeof checkPermissionsBatchPg>[0],
   drizzle: ReturnType<typeof getDrizzleClient>,
   userId: string,
   apikeyString: string | null,
   bindings: BindingInput[],
 ): Promise<void> {
-  const canManageOrg = new Map<string, boolean>()
+  // 1) org.manage_apikeys for every distinct org, in one statement.
+  const orgIds = [...new Set(bindings.map(binding => binding.org_id))]
+  const orgAllowed = await checkPermissionsBatchPg(
+    c,
+    orgIds.map(orgId => ({ permission: 'org.manage_apikeys' as const, scope: { orgId } })),
+    drizzle,
+    userId,
+    apikeyString,
+  )
+  const canManageOrg = new Map(orgIds.map((orgId, idx) => [orgId, orgAllowed[idx] === true]))
+
+  // 2) Resolve every app the remaining app/channel bindings point at, in one query.
+  const appFallbackBindings = bindings.filter(binding => !canManageOrg.get(binding.org_id)
+    && binding.scope_type !== 'org'
+    && !!binding.app_id
+    && UUID_REGEX.test(binding.app_id))
+  const appUuids = [...new Set(appFallbackBindings.map(binding => binding.app_id as string))]
+  const appIdByUuidAndOrg = new Map<string, string>()
+  if (appUuids.length > 0) {
+    const apps = await drizzle.execute<{ id: string, app_id: string, owner_org: string }>(sql`
+      SELECT id::text AS id, app_id, owner_org::text AS owner_org
+      FROM public.apps
+      WHERE id = ANY(${`{${appUuids.join(',')}}`}::uuid[])
+    `)
+    for (const app of apps.rows)
+      appIdByUuidAndOrg.set(`${app.id.toLowerCase()}|${app.owner_org.toLowerCase()}`, app.app_id)
+  }
+  const appKey = (binding: BindingInput) => `${(binding.app_id as string).toLowerCase()}|${binding.org_id.toLowerCase()}`
+
+  // 3) app.manage_apikeys for every distinct (org, app) pair, in one statement.
+  const appChecks = [...new Map(appFallbackBindings
+    .map(binding => ({ orgId: binding.org_id, appId: appIdByUuidAndOrg.get(appKey(binding)) }))
+    .filter((check): check is { orgId: string, appId: string } => !!check.appId)
+    .map(check => [`${check.orgId}|${check.appId}`, check] as const)).values()]
+  const appAllowed = await checkPermissionsBatchPg(
+    c,
+    appChecks.map(scope => ({ permission: 'app.manage_apikeys' as const, scope })),
+    drizzle,
+    userId,
+    apikeyString,
+  )
+  const canManageApp = new Map(appChecks.map((check, idx) => [`${check.orgId}|${check.appId}`, appAllowed[idx] === true]))
+
+  // 4) Same decision and error, in binding order, as the per-binding checks.
   for (const binding of bindings) {
     const orgId = binding.org_id
-    if (!canManageOrg.has(orgId))
-      canManageOrg.set(orgId, await checkPermissionPg(c, 'org.manage_apikeys', { orgId }, drizzle, userId, apikeyString))
     if (canManageOrg.get(orgId))
       continue
 
     if (binding.scope_type !== 'org' && binding.app_id && UUID_REGEX.test(binding.app_id)) {
-      const app = await drizzle.execute<{ app_id: string }>(sql`
-        SELECT app_id FROM public.apps WHERE id = ${binding.app_id}::uuid AND owner_org = ${orgId}::uuid LIMIT 1
-      `)
-      const appId = app.rows[0]?.app_id
-      if (appId && await checkPermissionPg(c, 'app.manage_apikeys', { orgId, appId }, drizzle, userId, apikeyString))
+      const appId = appIdByUuidAndOrg.get(appKey(binding))
+      if (appId && canManageApp.get(`${orgId}|${appId}`))
         continue
     }
 
@@ -186,6 +224,10 @@ app.post('/', middlewareAuth(), async (c) => {
         throw new Error('Created API key is missing rbac_id')
       }
 
+      // Resolve every role once for the whole binding set.
+      const batchCache = createRoleBindingBatchCache()
+      await prefetchRolesForBindings(txDrizzle, batchCache, resolvedBindings.map(binding => binding.role_name))
+
       for (const binding of resolvedBindings) {
         const bindingParams: CreateBindingParams = {
           principal_type: 'apikey',
@@ -206,6 +248,7 @@ app.post('/', middlewareAuth(), async (c) => {
           {
             skipOrgLock: true,
             skipPrincipalValidation: true,
+            batchCache,
           },
         )
 

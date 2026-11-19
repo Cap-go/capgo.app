@@ -9,7 +9,7 @@ const {
   emptySupabaseMock,
   getPgClientMock,
   signInMock,
-  supabaseAdminMock,
+  gotrueAdminMock,
 } = vi.hoisted(() => ({
   captureInvitationEventMock: vi.fn(),
   closeClientMock: vi.fn(),
@@ -19,7 +19,7 @@ const {
   emptySupabaseMock: vi.fn(),
   getPgClientMock: vi.fn(),
   signInMock: vi.fn(),
-  supabaseAdminMock: vi.fn(),
+  gotrueAdminMock: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -38,9 +38,12 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: getPgClientMock,
 }))
 
+vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
+  gotrueAdmin: gotrueAdminMock,
+}))
+
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   emptySupabase: emptySupabaseMock,
-  supabaseAdmin: supabaseAdminMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/user_preferences.ts', () => ({
@@ -95,15 +98,11 @@ function buildPgClient(options: {
 }
 
 const adminClient = {
-  auth: {
-    admin: {
-      createUser: createUserMock,
-      deleteUser: deleteUserMock,
-    },
-  },
+  createUser: createUserMock,
+  deleteUser: deleteUserMock,
 }
 
-function acceptRequest(extraBody: Record<string, unknown> = {}) {
+function acceptRequest(extraBody: Record<string, unknown> = {}, country?: string) {
   return app.request(new Request('http://localhost/', {
     body: JSON.stringify({
       magic_invite_string: invitation.invite_magic_string,
@@ -111,7 +110,7 @@ function acceptRequest(extraBody: Record<string, unknown> = {}) {
       password: 'Password1!',
       ...extraBody,
     }),
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(country ? { 'cf-ipcountry': country } : {}) },
     method: 'POST',
   }))
 }
@@ -129,7 +128,7 @@ function signInAsExistingUser() {
 describe('accept invitation logging', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    supabaseAdminMock.mockReturnValue(adminClient)
+    gotrueAdminMock.mockReturnValue(adminClient)
     getPgClientMock.mockResolvedValue(buildPgClient())
     emptySupabaseMock.mockReturnValue({})
     createUserMock.mockResolvedValue({
@@ -159,7 +158,7 @@ describe('magic-link invitation acceptance telemetry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     captureInvitationEventMock.mockResolvedValue(true)
-    supabaseAdminMock.mockReturnValue(adminClient)
+    gotrueAdminMock.mockReturnValue(adminClient)
     emptySupabaseMock.mockReturnValue({ auth: { signInWithPassword: signInMock } })
     signInMock.mockResolvedValue({
       data: {
@@ -171,12 +170,14 @@ describe('magic-link invitation acceptance telemetry', () => {
   })
 
   it('emits created only after a new account membership is finalized', async () => {
-    getPgClientMock.mockResolvedValue(buildPgClient())
+    const pg = buildPgClient()
+    getPgClientMock.mockResolvedValue(pg)
     createUserMock.mockResolvedValue({ data: { user: { id: FUTURE_USER_ID } }, error: null })
 
-    const response = await acceptRequest()
+    const response = await acceptRequest({}, 'BR')
 
     expect(response.status).toBe(200)
+    expect(pg.query).toHaveBeenCalledWith(expect.stringContaining('country'), expect.arrayContaining(['BR']))
     expect(deleteUserMock).not.toHaveBeenCalled()
     expect(captureInvitationEventMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       accountState: 'created',

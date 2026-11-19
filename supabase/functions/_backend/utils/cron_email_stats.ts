@@ -1,169 +1,116 @@
 export interface WeeklyInstallStatsInput {
   all_updates: number | string | null | undefined
   failed_updates: number | string | null | undefined
-  open_app?: number | string | null
+  update_checks: number | string | null | undefined
 }
 
 export interface WeeklyInstallStatsResult {
   successfulInstalls: number
   failedUpdates: number
-  totalUpdates: number
-  successPercentage: number
-  failureRate: number
-  openApp: number
+  updateChecks: number
 }
 
 export interface VersionInstallRow {
   version_name?: string | null
   install?: number | string | null
+  fail?: number | string | null
 }
 
-export interface WeeklyEmailMetadata {
-  [key: string]: unknown
-  app_id: string
-  month_name: string
-  week_number: string
-  weekly_updates: string
-  fun_comparison: string
-  weekly_install: string
-  weekly_install_success: string
-  fun_comparison_2: string
-  weekly_fail: string
-  weekly_open: string
-  fun_comparison_3: string
-}
-
-const thresholds = {
-  updates: [100, 1000, 10000],
-  // Inclusive upper bounds for non-zero fail bands.
-  // 0 < rate <= 0.10 → under/about one in ten
-  // 0.10 < rate <= 0.20 → about one in five
-  // rate > 0.20 → nearly a third / worse
-  failRate: [0.10, 0.20],
-  appOpen: [500, 1500, 5000],
-}
-
-const funComparisons = {
-  updates: [
-    'a cupcake to every student in a small school!',
-    'a pizza to every resident of a small town!',
-    'a burger to everyone in a big city!',
-  ],
-  failRate: [
-    'Flawless streak—no failed updates this week! 🏅',
-    'About one in ten updates failed; looking solid overall.',
-    'About one in five updates failed; let\'s squash those errors.',
-    'Heads up: nearly a third of updates are failing—worth a closer look.',
-  ],
-  appOpen: [
-    'Your app was opened more times than a popular local bakery\'s door!',
-    'Your app was more popular than the latest episode of a hit TV show!',
-    'Your app was opened more times than a blockbuster movie on its opening weekend!',
-  ],
-}
-
-/** Coerce analytics/SQL numeric fields that may arrive as strings. */
+/** Coerce optional analytics fields used outside the weekly report. */
 export function toStatNumber(value: number | string | null | undefined): number {
   const parsed = Number(value ?? 0)
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-/**
- * Weekly email stats.
- * `daily_version.install` and `daily_version.fail` are independent action counters,
- * so success/failure rates must use install / (install + fail), never install - fail.
- * Note: admin/public headline KPIs use device-day app_log outcomes, not this counter formula.
- */
+/** SQL aggregates must be present and valid; missing data is not zero activity. */
+function weeklyCount(value: WeeklyInstallStatsInput['all_updates']): number {
+  if ((typeof value !== 'number' && typeof value !== 'string')
+    || (typeof value === 'string' && !/^\d+$/.test(value)))
+    throw new Error('Missing or malformed weekly event count')
+  const count = Number(value)
+  if (!Number.isSafeInteger(count) || count < 0)
+    throw new Error('Invalid weekly event count')
+  return count
+}
+
+/** Independent event counters, not app opens, unique devices or release outcomes. */
 export function computeWeeklyInstallStats(input: WeeklyInstallStatsInput): WeeklyInstallStatsResult {
-  const successfulInstalls = Math.max(0, Math.round(toStatNumber(input.all_updates)))
-  const failedUpdates = Math.max(0, Math.round(toStatNumber(input.failed_updates)))
-  const totalUpdates = successfulInstalls + failedUpdates
-  const openApp = Math.max(0, Math.round(toStatNumber(input.open_app)))
-
-  if (totalUpdates === 0) {
-    return {
-      successfulInstalls,
-      failedUpdates,
-      totalUpdates,
-      successPercentage: 0,
-      failureRate: 0,
-      openApp,
-    }
-  }
-
-  const successPercentage = Math.round((successfulInstalls / totalUpdates) * 10_000) / 10_000
-  const failureRate = Math.round((failedUpdates / totalUpdates) * 10_000) / 10_000
-
   return {
-    successfulInstalls,
-    failedUpdates,
-    totalUpdates,
-    successPercentage,
-    failureRate,
-    openApp,
+    successfulInstalls: weeklyCount(input.all_updates),
+    failedUpdates: weeklyCount(input.failed_updates),
+    updateChecks: weeklyCount(input.update_checks),
   }
 }
 
-export function getThresholdFunComparison(
-  comparison: 'updates' | 'appOpen',
-  stat: number,
-): string {
-  const bands = thresholds[comparison]
-  let chosenIndex = 0
-  for (let i = bands.length - 1; i >= 0; i -= 1) {
-    if (stat >= bands[i]) {
-      chosenIndex = i
-      break
-    }
-  }
-  const text = funComparisons[comparison][chosenIndex]
-  if (!text)
-    throw new Error(`Cannot find index for fun comparison, ${chosenIndex}`)
-  return text
+/** Seven completed UTC days, excluding today's partial aggregate. */
+export function getWeeklyReportRange(now: Date = new Date()): { start: string, end: string } {
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  const start = new Date(end.getTime() - 7 * 86_400_000)
+  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) }
 }
 
-/**
- * Flawless copy is reserved for zero failures only.
- * Do not use rounded failureRate === 0, or large weeks with 1 fail look "flawless".
- */
-export function getFailRateFunComparison(failedUpdates: number, failureRate: number): string {
-  if (failedUpdates <= 0)
-    return funComparisons.failRate[0]
+// The (app_id, date) index bounds this scan to one app and seven daily buckets.
+// Keep the legacy get_weekly_stats RPC intact for existing callers.
+export const WEEKLY_REPORT_SQL = `SELECT
+  COALESCE(SUM(install), 0) AS all_updates,
+  COALESCE(SUM(fail), 0) AS failed_updates,
+  COALESCE(SUM(get), 0) AS update_checks
+FROM public.daily_version
+WHERE app_id = $1 AND date >= $2::date AND date < $3::date`
 
-  if (failureRate <= thresholds.failRate[0])
-    return funComparisons.failRate[1]
-  if (failureRate <= thresholds.failRate[1])
-    return funComparisons.failRate[2]
-  return funComparisons.failRate[3]
+export interface WeeklyInstallStatsBatchRow extends WeeklyInstallStatsInput {
+  app_id: string
+  owner_org: string
 }
 
-/** ISO-8601 week number (UTC). */
-export function getIsoWeekNumber(now: Date = new Date()): number {
-  const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
-  // ISO weeks start on Monday; the Thursday of this week determines the ISO week year/number.
-  const day = date.getUTCDay() || 7
-  date.setUTCDate(date.getUTCDate() + 4 - day)
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1))
-  return Math.ceil((((date.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7)
+// Same window and sums as WEEKLY_REPORT_SQL for every app of one queue
+// message. Apps that no longer exist return no row (nothing to report).
+export const WEEKLY_REPORT_BATCH_SQL = `SELECT
+  a.app_id,
+  a.owner_org,
+  COALESCE(SUM(dv.install), 0) AS all_updates,
+  COALESCE(SUM(dv.fail), 0) AS failed_updates,
+  COALESCE(SUM(dv.get), 0) AS update_checks
+FROM public.apps a
+LEFT JOIN public.daily_version dv
+  ON dv.app_id = a.app_id AND dv.date >= $2::date AND dv.date < $3::date
+WHERE a.app_id = ANY($1::text[]) AND a.owner_org IS NOT NULL
+GROUP BY a.app_id, a.owner_org`
+
+export interface MonthlyCreateStatsBatchRow {
+  app_id: string
+  owner_org: string
+  bundle_count: number
+  publish_count: number
 }
+
+// Bundles created and channel publishes per app in [$2, $3).
+export const MONTHLY_REPORT_BATCH_SQL = `SELECT
+  a.app_id,
+  a.owner_org,
+  (SELECT count(*)::int FROM public.app_versions av
+    WHERE av.app_id = a.app_id AND av.created_at >= $2 AND av.created_at < $3) AS bundle_count,
+  (SELECT count(*)::int FROM public.deploy_history dh
+    WHERE dh.app_id = a.app_id AND dh.deployed_at >= $2 AND dh.deployed_at < $3) AS publish_count
+FROM public.apps a
+WHERE a.app_id = ANY($1::text[]) AND a.owner_org IS NOT NULL`
 
 export function buildWeeklyEmailMetadata(
   appId: string,
   stats: WeeklyInstallStatsResult,
-  now: Date = new Date(),
-): WeeklyEmailMetadata {
+  range: { start: string, end: string },
+) {
   return {
     app_id: appId,
-    month_name: now.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' }),
-    week_number: getIsoWeekNumber(now).toString(),
-    weekly_updates: stats.totalUpdates.toString(),
-    fun_comparison: getThresholdFunComparison('updates', stats.totalUpdates),
+    report_schema_version: '2',
+    window_start: range.start,
+    window_end: range.end,
     weekly_install: stats.successfulInstalls.toString(),
-    weekly_install_success: (stats.successPercentage * 100).toString(),
-    fun_comparison_2: getFailRateFunComparison(stats.failedUpdates, stats.failureRate),
+    weekly_install_formatted: stats.successfulInstalls.toLocaleString('en-US'),
     weekly_fail: stats.failedUpdates.toString(),
-    weekly_open: stats.openApp.toString(),
-    fun_comparison_3: getThresholdFunComparison('appOpen', stats.openApp),
+    weekly_fail_formatted: stats.failedUpdates.toLocaleString('en-US'),
+    weekly_update_checks: stats.updateChecks.toString(),
+    weekly_update_checks_formatted: stats.updateChecks.toLocaleString('en-US'),
   }
 }
 
@@ -185,8 +132,9 @@ export function isInPreviousMonthRange(isoTimestamp: string, now: Date = new Dat
   return isoTimestamp >= startIso && isoTimestamp < endExclusiveIso
 }
 
-export function sumVersionInstalls(
+function sumVersionEvents(
   versionStats: VersionInstallRow[],
+  metric: 'install' | 'fail',
   versionName?: string | null,
   versionId?: number | null,
 ): number {
@@ -201,7 +149,24 @@ export function sumVersionInstalls(
         return true
       return false
     })
-    .reduce((sum, row) => sum + toStatNumber(row.install), 0)
+    .reduce((sum, row) => {
+      const value = row[metric]
+      if ((typeof value !== 'number' && typeof value !== 'string')
+        || (typeof value === 'string' && !/^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(value.trim())))
+        throw new Error(`Missing or malformed ${metric} count`)
+      const count = Number(value)
+      if (!Number.isSafeInteger(count) || count < 0 || !Number.isSafeInteger(sum + count))
+        throw new Error(`Invalid ${metric} count`)
+      return sum + count
+    }, 0)
+}
+
+export function sumVersionInstalls(rows: VersionInstallRow[], versionName?: string | null, versionId?: number | null): number {
+  return sumVersionEvents(rows, 'install', versionName, versionId)
+}
+
+export function sumVersionFailures(rows: VersionInstallRow[], versionName?: string | null, versionId?: number | null): number {
+  return sumVersionEvents(rows, 'fail', versionName, versionId)
 }
 
 /** Keep retrying 24h deploy emails while analytics may still be catching up. */
@@ -212,8 +177,10 @@ export function shouldRetryDeployInstallStats(deployedAt: Date, now: Date = new 
   return elapsedMs >= 0 && elapsedMs < retryWindowMs
 }
 
-export function shouldSendDeployInstallStatsEmail(installs: number): boolean {
-  return installs > 1
+export function shouldSendDeployInstallStatsEmail(installs: number, failures = 0): boolean {
+  return Number.isSafeInteger(installs) && installs >= 0
+    && Number.isSafeInteger(failures) && failures >= 0
+    && (installs > 1 || failures > 0)
 }
 
 export interface DeviceVersionAdoptionSummary {

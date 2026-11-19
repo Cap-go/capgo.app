@@ -61,9 +61,10 @@ SELECT set_config('request.headers', '', true);
 INSERT INTO public.daily_mau (app_id, date, mau) VALUES
 ('com.test.appmetrics.seed', DATE '2023-03-02', 13),
 ('com.test.appmetrics.seed', DATE '2023-03-03', 31);
-INSERT INTO public.daily_storage (app_id, date, storage) VALUES
-('com.test.appmetrics.seed', DATE '2023-03-02', 17),
-('com.test.appmetrics.seed', DATE '2023-03-03', 37);
+-- storage is the byte-hours of the day, rounded.
+INSERT INTO public.daily_storage_hourly (app_id, owner_org, cycle_start, date, storage_byte_hours) VALUES
+('com.test.appmetrics.seed', '95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b', DATE '2023-03-02', DATE '2023-03-02', 16.6),
+('com.test.appmetrics.seed', '95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b', DATE '2023-03-03', DATE '2023-03-03', 37.4);
 INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES
 ('com.test.appmetrics.seed', DATE '2023-03-02', 19),
 ('com.test.appmetrics.seed', DATE '2023-03-03', 41);

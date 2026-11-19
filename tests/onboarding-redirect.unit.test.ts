@@ -53,6 +53,33 @@ describe('onboarding dashboard redirect', () => {
     await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: '2026-08-03T23:00:00.000Z', organizationCount: 1, path: '/apps', userId: 'user-1' })).resolves.toBeNull()
   })
 
+  it.each([
+    '/settings/organization/plans',
+    '/settings/organization/plans/',
+    '/settings/organization/billing',
+    '/settings/organization/credits',
+  ])('keeps %s reachable before app setup is complete', async (path) => {
+    await expect(getRedirect({
+      appId: 'com.example.app',
+      appCount: 1,
+      createdAt: eligibleUser,
+      organizationCount: 1,
+      path,
+      userId: 'user-billing-onboarding',
+    })).resolves.toBeNull()
+  })
+
+  it('does not exempt a route that only shares a billing prefix', async () => {
+    await expect(getRedirect({
+      appId: 'com.example.app',
+      appCount: 1,
+      createdAt: eligibleUser,
+      organizationCount: 1,
+      path: '/settings/organization/plans-other',
+      userId: 'user-billing-onboarding',
+    })).resolves.toEqual({ path: '/app/com.example.app/getting-started' })
+  })
+
   it('lets an onboarding user open their existing app, devices, and settings without a redirect', async () => {
     await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app', userId: 'user-1' })).resolves.toBeNull()
     await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/device/abc', userId: 'user-1' })).resolves.toBeNull()

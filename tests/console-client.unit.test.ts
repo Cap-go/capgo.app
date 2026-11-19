@@ -5,10 +5,10 @@ import { fakeJwt, memoryStorage } from './console-auth-fixtures'
 
 const fetchMock = vi.fn()
 
-function client(token: string | null = 'session-jwt') {
+function client(token: string | null = fakeJwt({ sub: 'user-1' })) {
   const storage = memoryStorage()
   if (token)
-    storage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ access_token: fakeJwt({ sub: 'user-1' }), refresh_token: 'refresh', expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: 'user-1' } }))
+    storage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ access_token: token, refresh_token: 'refresh', expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: 'user-1' } }))
   vi.stubGlobal('localStorage', storage)
   return createConsoleClient()
 }
@@ -30,12 +30,13 @@ afterEach(() => {
 describe('console client transport', () => {
   it('replays a recorded table query through the Capgo API with the session bearer', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ data: [{ id: 'app-1' }], error: null, count: 1, status: 200 }))
-    const result = await client().from('apps').select('id', { count: 'exact' }).eq('owner_org', 'org-1').order('name').limit(10)
+    const token = fakeJwt({ sub: 'user-1' })
+    const result = await client(token).from('apps').select('id', { count: 'exact' }).eq('owner_org', 'org-1').order('name').limit(10)
 
     expect(result).toEqual({ data: [{ id: 'app-1' }], error: null, count: 1, status: 200 })
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('https://api.example.com/private/console/query')
-    expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer ${fakeJwt({ sub: 'user-1' })}`)
+    expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer ${token}`)
     expect(JSON.parse(init.body)).toEqual({
       kind: 'table',
       name: 'apps',

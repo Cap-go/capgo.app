@@ -1,28 +1,12 @@
 // Backfill app_stats device counts for recently active apps.
-import { createClient } from '@supabase/supabase-js'
+import { connectScriptDb } from './script_db.ts'
 
-const supabaseUrl = 'https://***.supabase.co'
-const supabaseAnonKey = '***'
-export function useSupabase() {
-  const options = {
-    // const options: SupabaseClientOptions = {
-    auth: {
-      autoRefreshToken: true,
-      persistSession: true,
-      detectSessionInUrl: false,
-    },
-  }
-  return createClient(supabaseUrl, supabaseAnonKey, options)
-}
+const databaseUrl = '***'
 
 async function fix_apps() {
-  const supabase = useSupabase()
+  const db = await connectScriptDb(databaseUrl)
 
-  const { data } = await supabase
-    .from('apps')
-    .select()
-    // .eq('app_id', 'com.x_b_e.client')
-    // .eq('deleted', true)
+  const { rows: data } = await db.query('SELECT * FROM public.apps')
 
   // if (!data || !data.length) {
   //   console.error('No apps_versions found')
@@ -34,20 +18,16 @@ async function fix_apps() {
   console.log('today_id', today_id)
   const all = []
   for (const app of data) {
-    all.push(supabase
-      .from('app_stats')
-    // .from('app_versions')
-      .update({ devices_real: 1 })
-      .eq('app_id', app.app_id)
-      .eq('date_id', today_id)
-    // .eq('id', version.id)
-      .then((res) => {
+    all.push(db.query('UPDATE public.app_stats SET devices_real = 1 WHERE app_id = $1 AND date_id = $2', [app.app_id, today_id])
+      .then(() => {
         console.log('app', app.app_id)
-        if (res?.error?.message)
-          console.log('res', res)
+      }, (error) => {
+        console.log('app', app.app_id)
+        console.log('res', error)
       }))
   }
   await Promise.all(all)
+  await db.end()
 }
 
 fix_apps()

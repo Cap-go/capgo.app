@@ -11,7 +11,24 @@ import { deleteVersionManifestBatch } from '../utils/manifest_cleanup.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { queryJsonOne } from '../utils/pg_rls.ts'
 import { getPath, s3 } from '../utils/s3.ts'
+import { purgeUpdatesCache } from '../utils/purgeUpdatesCache.ts'
 import { createStatsMeta } from '../utils/stats.ts'
+import { backgroundTask } from '../utils/utils.ts'
+
+function schedulePurgeUpdatesCache(c: Context, appId: string | null | undefined) {
+  if (!appId)
+    return
+  const task = purgeUpdatesCache(c, appId)
+  if (c.req)
+    void backgroundTask(c, task)
+  else
+    void task
+}
+
+async function respondWithUpdatesPurge(c: Context, appId: string | null | undefined) {
+  schedulePurgeUpdatesCache(c, appId)
+  return c.json(BRES)
+}
 
 /**
  * Resolves `owner_org` for an app version row.
@@ -192,12 +209,30 @@ async function v2PathSize(c: Context, pg: PgClient, record: Database['public']['
     cloudlog({ requestId: c.get('requestId'), message: 'app_versions_meta size upserted', ...versionUpdateLogFields(record), owner_org: ownerOrg, size })
   }
   catch (errorUpdate) {
+    // The deletion path reads this size to record the bundle's removal event: acknowledging the
+    // upload without it would leave the bundle billed in GB-hours after it is deleted.
     cloudlog({ requestId: c.get('requestId'), message: 'errorUpdate', error: errorUpdate, ...versionUpdateLogFields(record), size })
+    throw simpleError('cannot_update_version_meta', 'Cannot record the bundle size', { id: record.id }, errorUpdate)
   }
-  const { error } = await createStatsMeta(c, record.app_id, record.id, size)
-  if (error)
+  // Dated when the upload completed (the object's Last-Modified, from the same HEAD as its size), not
+  // when this job runs: a delayed or retried job would otherwise drop the hours in between.
+  // upsert_version_meta caps it at now and falls back to now when it is unknown.
+  const { error } = await createStatsMeta(c, record.app_id, record.id, size, diagnostics.lastModified ?? null)
+  if (isLostStorageEvent(error)) {
+    // Storage is billed in GB-hours from version_meta: a missing upload event would never bill the
+    // bundle. Fail the job so the queue retries (both writes are idempotent).
     cloudlog({ requestId: c.get('requestId'), message: 'error createStatsMeta', error })
+    throw simpleError('cannot_record_storage_event', 'Cannot record the bundle storage event', { id: record.id }, error)
+  }
   return true
+}
+
+/**
+ * A storage event write that failed, as opposed to the intentional no-ops (`size is 0`, and the
+ * write guard of workers that must not write Supabase stats).
+ */
+function isLostStorageEvent(error: unknown) {
+  return !!error && error !== 'size is 0' && error !== 'supabase_write_forbidden'
 }
 
 /**
@@ -263,14 +298,14 @@ async function updateItWithClient(c: Context, pg: PgClient, record: Database['pu
   if (metadataBranch === 'r2_bundle_size' && v2Path) {
     const shouldContinue = await v2PathSize(c, pg, record, v2Path)
     if (!shouldContinue)
-      return c.json(BRES)
+      return respondWithUpdatesPurge(c, record.app_id)
   }
   else {
     cloudlog({ requestId: c.get('requestId'), message: 'on_version_update zero metadata branch selected', ...versionUpdateLogFields(record), metadataBranch, resolved_r2_path: v2Path })
     const ownerOrg = await resolveOwnerOrg(c, pg, record)
     if (!ownerOrg) {
       cloudlog({ requestId: c.get('requestId'), message: 'missing owner_org for app_versions_meta upsert', id: record.id, app_id: record.app_id })
-      return c.json(BRES)
+      return respondWithUpdatesPurge(c, record.app_id)
     }
     try {
       await upsertVersionMeta(pg, record, ownerOrg, 0)
@@ -281,7 +316,7 @@ async function updateItWithClient(c: Context, pg: PgClient, record: Database['pu
     }
   }
 
-  return c.json(BRES)
+  return respondWithUpdatesPurge(c, record.app_id)
 }
 
 /**
@@ -301,6 +336,56 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
   }
   finally {
     await closeClient(c, pool)
+  }
+}
+
+/**
+ * When the bundle was deleted, as the server saw it: the trigger time of the update that queued
+ * this job (`occurred_at`), not `app_versions.deleted_at`, which a client can write and would
+ * backdate. Null (processing time) for messages queued before `occurred_at` existed.
+ */
+function storageRemovalTime(c: Context): string | null {
+  return c.get('webhookOccurredAt') ?? null
+}
+
+/**
+ * Writes the missing removal event of a bundle from its upload event (idempotent), at the bundle's
+ * deletion (`storageRemovalTime`, never before the upload): a job that runs late does not bill
+ * the hours after the deletion.
+ */
+async function closeVersionStorageLifetime(c: Context, pg: PgClient, record: Database['public']['Tables']['app_versions']['Row']) {
+  try {
+    await pg.query(
+      `INSERT INTO public.version_meta (timestamp, app_id, version_id, size, lifetime)
+       SELECT
+         GREATEST(added.timestamp, pg_catalog.timezone('UTC', LEAST(COALESCE($3::timestamptz, pg_catalog.now()), pg_catalog.now()))),
+         added.app_id, added.version_id, -added.size, added.lifetime
+       FROM public.version_meta added
+       WHERE added.app_id = $1
+         AND added.version_id = $2
+         AND added.size > 0
+         AND NOT EXISTS (
+           SELECT 1 FROM public.version_meta removed
+           WHERE removed.app_id = added.app_id
+             AND removed.version_id = added.version_id
+             AND removed.lifetime = added.lifetime
+             AND removed.size < 0
+         )
+         -- A restored lifetime started after this job's deletion belongs to a later deletion.
+         AND (added.lifetime = 0 OR $3::timestamptz IS NULL OR added.timestamp <= pg_catalog.timezone('UTC', $3::timestamptz))
+         -- A bundle restored before this job ran is stored again: its new lifetime stays open.
+         AND NOT EXISTS (
+           SELECT 1 FROM public.app_versions live
+           WHERE live.id = added.version_id
+             AND NOT live.deleted
+         )
+       ON CONFLICT DO NOTHING`,
+      [record.app_id, record.id, storageRemovalTime(c)],
+    )
+  }
+  catch (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'error closing bundle storage lifetime', error, id: record.id })
+    throw simpleError('cannot_record_storage_event', 'Cannot record the bundle removal storage event', { id: record.id }, error)
   }
 }
 
@@ -328,16 +413,28 @@ async function deleteVersionDatabaseState(c: Context, pg: PgClient, record: Data
   try {
     data = await queryJsonOne<{ size: number }>(pg, 'SELECT size FROM public.app_versions_meta WHERE id = $1', [record.id])
   }
-  catch {
-    data = null
+  catch (error) {
+    // Storage is billed from version_meta: acknowledging the deletion without its removal event
+    // would bill the bundle forever. A read failure fails the job so the queue retries; only a
+    // missing row (no size to remove) is skipped below.
+    cloudlog({ requestId: c.get('requestId'), message: 'error reading version meta', error, id: record.id })
+    throw simpleError('cannot_read_version_meta', 'Cannot read version metadata for deleted version', { id: record.id }, error)
   }
-  if (!data) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find version meta', id: record.id })
+  if (!data || !data.size) {
+    // No size to remove (missing or already zero metadata): still close the bundle's storage
+    // lifetime from its recorded upload event, so GB-hour billing stops at the deletion.
+    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find version meta size, closing lifetime from its upload event', id: record.id })
+    await closeVersionStorageLifetime(c, pg, record)
   }
   else {
-    const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size)
-    if (errorCreateStatsMeta)
+    // Removed at the deletion, not when this job runs.
+    const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size, storageRemovalTime(c))
+    if (isLostStorageEvent(errorCreateStatsMeta)) {
+      // Storage is billed in GB-hours from version_meta: without the removal event the bundle stays
+      // billed forever. Fail before zeroing the size, so the queue retry can still record it.
       cloudlog({ requestId: c.get('requestId'), message: 'error createStatsMeta', error: errorCreateStatsMeta })
+      throw simpleError('cannot_record_storage_event', 'Cannot record the bundle removal storage event', { id: record.id }, errorCreateStatsMeta)
+    }
 
     try {
       await pg.query('UPDATE public.app_versions_meta SET size = 0 WHERE id = $1', [record.id])
@@ -392,7 +489,7 @@ export async function deleteIt(c: Context, record: Database['public']['Tables'][
     cloudlog({ requestId: c.get('requestId'), message: 'No r2 path for deleted version', id: record.id })
   }
 
-  return c.json(BRES)
+  return respondWithUpdatesPurge(c, record.app_id)
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -405,7 +502,7 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 
   if (!record.app_id) {
     cloudlog({ requestId: c.get('requestId'), message: 'no app_id', record })
-    return c.json(BRES)
+    return respondWithUpdatesPurge(c, undefined)
   }
   // Queue payloads omit app_versions.manifest; reload before deleted-version decisions.
   let workRecord = record
@@ -423,6 +520,7 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 
   if (!workRecord.r2_path && !workRecord.manifest) {
     cloudlog({ requestId: c.get('requestId'), message: 'no r2_path and no manifest, skipping update', ...versionUpdateLogFields(workRecord, oldRecord) })
+    schedulePurgeUpdatesCache(c, workRecord.app_id)
     return c.json(BRES)
   }
 
@@ -432,6 +530,7 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 
 export const onVersionUpdateTestUtils = {
   getDeletedVersionAction,
+  v2PathSize,
   deleteManifest,
   unlinkChannelsFromDeletedVersion,
 }

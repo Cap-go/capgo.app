@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getDrizzleClient: vi.fn(),
   getPgClient: vi.fn(() => ({ id: 'primary-client' })),
   checkPermissionPg: vi.fn(),
+  statObject: vi.fn(async (_c: unknown, _key: string) => null as null | { size: number, etag: string | null, lastModified: number | null }),
   versionRows: [] as Array<Record<string, unknown>>,
 }))
 
@@ -49,6 +50,12 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', async (importOriginal) =
   return { ...actual, checkPermissionPg: mocks.checkPermissionPg }
 })
 
+vi.mock('../supabase/functions/_backend/utils/s3.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/s3.ts')>()
+  return { ...actual, s3: { ...actual.s3, statObject: mocks.statObject } }
+})
+
+const { verifyManifestSizeReceipts } = await import('../supabase/functions/_backend/utils/manifest_size_receipt.ts')
 const { default: apiWorker } = await import('../cloudflare_workers/api/index.ts')
 
 function validRequestBody() {
@@ -84,6 +91,8 @@ describe('request_manifest_upload', () => {
     vi.stubEnv('MANIFEST_UPLOAD_CAPABILITY_SECRET', 'dedicated-capability-secret-32-bytes')
     vi.stubEnv('MANIFEST_UPLOAD_CAPABILITY_KEY_ID', '2026-10-a')
     vi.stubEnv('PUBLIC_URL', 'https://api.capgo.app')
+    vi.stubEnv('MANIFEST_SIZE_RECEIPT_SECRET', '')
+    mocks.statObject.mockResolvedValue(null)
     mocks.versionRows = [{
       id: 123,
       appId: 'com.example.app',
@@ -329,5 +338,40 @@ describe('request_manifest_upload', () => {
 
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toMatchObject({ error: 'upload_authorization_unavailable' })
+  })
+
+  it('returns reuse with a verifiable size receipt for objects already in storage', async () => {
+    vi.stubEnv('MANIFEST_SIZE_RECEIPT_SECRET', 'receipt-secret-receipt-secret-32b')
+    vi.stubEnv('S3_ACCESS_KEY_ID', 'test-access-key')
+    vi.stubEnv('S3_SECRET_ACCESS_KEY', 'test-secret-key')
+    vi.stubEnv('S3_BUCKET', 'capgo')
+    vi.stubEnv('ENV_NAME', 'prod')
+    mocks.statObject.mockResolvedValue({ size: 4321, etag: 'd41d8cd98f00b204e9800998ecf8427e', lastModified: Date.now() - 1_000 })
+
+    const response = await postRequest(validRequestBody())
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(mocks.statObject).toHaveBeenCalledTimes(1)
+    expect(body.entries[0]).toMatchObject({ id: 0, action: 'reuse' })
+    expect(body.entries[0]).not.toHaveProperty('upload_token')
+    const path = `${body.default_s3_path_prefix}${body.entries[0].s3_path_suffix}`
+    expect(mocks.statObject.mock.calls[0]![1]).toBe(path)
+    await expect(verifyManifestSizeReceipts('receipt-secret-receipt-secret-32b', [{ path, receipt: body.entries[0].file_size_receipt }])).resolves.toEqual([4321])
+  })
+
+  it('keeps the client-side existence check when storage cannot answer', async () => {
+    vi.stubEnv('MANIFEST_SIZE_RECEIPT_SECRET', 'receipt-secret-receipt-secret-32b')
+    vi.stubEnv('S3_ACCESS_KEY_ID', 'test-access-key')
+    vi.stubEnv('S3_SECRET_ACCESS_KEY', 'test-secret-key')
+    vi.stubEnv('S3_BUCKET', 'capgo')
+    mocks.statObject.mockRejectedValue(new Error('storage unavailable'))
+
+    const response = await postRequest(validRequestBody())
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(body.entries[0].action).toBeUndefined()
+    expect(body.entries[0].upload_token).toMatch(/^[\w-]{43}$/)
   })
 })

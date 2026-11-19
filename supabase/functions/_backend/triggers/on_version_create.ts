@@ -3,6 +3,7 @@ import type { PgClient } from '../utils/pg.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { purgeOnPremCache } from '../utils/cloudflare_cache_purge.ts'
+import { purgeUpdatesCache } from '../utils/purgeUpdatesCache.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
@@ -42,7 +43,10 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'INSERT'), a
       closeClient(c, pg)
   }
 
-  await backgroundTask(c, purgeOnPremCache(c, record.app_id))
+  await backgroundTask(c, Promise.all([
+    purgeOnPremCache(c, record.app_id),
+    purgeUpdatesCache(c, record.app_id),
+  ]))
 
   if (!shouldSkipNotifications) {
     await sendEventToTracking(c, {

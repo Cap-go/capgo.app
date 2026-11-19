@@ -48,11 +48,29 @@ async function prepareSecurityUpdatesEmailPreferences(page: Page, viewport: { wi
   }
 }
 
+async function prepareIncompatibleAlertSection(page: Page, viewport: { width: number, height: number }) {
+  await page.setViewportSize(viewport)
+  await dismissRemindMeLater(page)
+  const target = page.locator('#bundle-incompatible-alert')
+  try {
+    await target.waitFor({ state: 'visible', timeout: process.env.VISUAL_DIFF_PHASE === 'after' ? 120_000 : 15_000 })
+    await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
+  }
+  catch (error) {
+    if (process.env.VISUAL_DIFF_PHASE === 'after' || !(error instanceof Error) || error.name !== 'TimeoutError')
+      throw error
+  }
+}
+
 export interface VisualDiffRoute {
   slug: string
   path: string
   /** When true, logs in as test@capgo.app before visiting the route. */
   auth?: boolean
+  /** Override default visual-diff login credentials. */
+  authCredentials?: { email: string, password: string }
+  /** Install deterministic fixtures before login or route navigation starts. */
+  beforeNavigate?: (page: Page) => Promise<void>
   /** Optional deterministic UI setup before the screenshot is captured. */
   prepare?: (page: Page) => Promise<void>
 }
@@ -375,7 +393,30 @@ function visualTrialPlanOptions() {
   ]
 }
 
+async function prepareServingRegions(page: Page, width: number) {
+  await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
+  await dismissRemindMeLater(page)
+  const controls = page.locator('[data-test="serving-regions"]')
+  const target = process.env.VISUAL_DIFF_PHASE === 'after' || await controls.isVisible()
+    ? controls
+    : page.locator('input[name="block_provider_infra_requests"]')
+  await target.waitFor({ state: 'visible', timeout: 120_000 })
+  await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
+}
+
+async function mockAvailableServingRegions(page: Page) {
+  await page.route('**/serving_policy/**', route => route.fulfill({
+    json: {
+      app_id: 'com.demo.app',
+      active: true,
+      policy: { regions: ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME'], mode: 'route' },
+    },
+  }))
+}
+
 export const visualDiffRoutes: VisualDiffRoute[] = [
+  { slug: 'serving-regions-desktop', path: '/app/com.demo.app/settings', auth: true, beforeNavigate: mockAvailableServingRegions, prepare: page => prepareServingRegions(page, 1280) },
+  { slug: 'serving-regions-mobile', path: '/app/com.demo.app/settings', auth: true, beforeNavigate: mockAvailableServingRegions, prepare: page => prepareServingRegions(page, 390) },
   {
     slug: 'builds-empty',
     path: '/app/com.demo.app/builds',
@@ -630,6 +671,45 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   {
+    slug: 'org-billing-details',
+    path: '/settings/organization/billing',
+    auth: true,
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 1280, height: 1400 })
+      await page.route('**/private/config', route => route.fulfill({ json: { stripeEnabled: true } }))
+      await page.route('**/private/sso/check-enforcement', route => route.fulfill({ json: { allowed: true } }))
+      await page.route('**/private/stripe_past_due', route => route.fulfill({ json: { past_due: false, invoice: null } }))
+      await page.route('**/private/stripe_billing/overview', route => route.fulfill({ json: {
+        publishableKey: '',
+        card: { id: 'pm_visual', brand: 'visa', last4: '4242', expMonth: 12, expYear: 2030 },
+        backupCard: null,
+        subscription: { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: '2030-01-01T00:00:00Z' },
+        invoices: [],
+        openInvoice: null,
+        trialPlan: null,
+      } }))
+      await page.route('**/private/stripe_billing/profile', route => route.fulfill({ json: {
+        name: 'Example Company', email: 'billing@example.com', phone: '',
+        address: { line1: '123 Example Street', line2: '', city: 'Berlin', state: '', postal_code: '10115', country: 'DE' },
+        taxIds: [{ id: 'txi_visual', type: 'eu_vat', value: 'DE123456789', status: 'verified' }],
+      } }))
+      await page.route('**/private/stripe_billing/currency', route => route.fulfill({ json: {
+        currency: 'eur', currencies: ['eur', 'usd'], subscriptionId: 'sub_visual',
+        endsAt: '2030-01-01T00:00:00Z', pendingCurrency: null, regionalDiscountEligible: false,
+      } }))
+      await page.route('**/private/stripe_billing/discounts', route => route.fulfill({ json: {
+        discounts: [{ name: 'Example offer', code: 'EXAMPLE10', percentOff: 10, amountOff: null, currency: null, endsAt: null }],
+      } }))
+      await page.reload()
+      await page.locator('[data-test="billing-subscription"]').waitFor()
+      if (process.env.VISUAL_DIFF_PHASE === 'after') {
+        await page.locator('[data-test="billing-profile-details"]').waitFor()
+        await page.locator('[data-test="billing-subscription"] [data-test="billing-discounts"]').waitFor()
+        await page.locator('[data-test="billing-currency"]').getByText('EUR', { exact: true }).waitFor()
+      }
+    },
+  },
+  {
     slug: 'org-billing-trial-plan-offer',
     path: '/settings/organization/billing',
     auth: true,
@@ -841,7 +921,23 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.getByLabel('Enter the verification code', { exact: true }).waitFor()
     },
   },
-  { slug: 'organization-credits', path: '/settings/organization/credits', auth: true },
+  {
+    slug: 'organization-credits',
+    path: '/settings/organization/credits',
+    auth: true,
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 1280, height: 1400 })
+      await page.route('**/private/config', route => route.fulfill({ json: { stripeEnabled: true } }))
+      await page.route('**/private/credits/quote', route => route.fulfill({ json: { currency: 'eur', unitAmount: 92, unitPrice: 0.92 } }))
+      await page.route('**/private/credits/auto-top-up', route => route.fulfill({ json: {
+        enabled: false, threshold: 10, monthlyLimit: 0, monthlyTotal: 0, hasPaymentMethod: true,
+      } }))
+      await page.reload()
+      if (process.env.VISUAL_DIFF_PHASE === 'after')
+        await page.getByText('Billed in EUR', { exact: false }).waitFor()
+      await page.locator('[data-test="credits-top-up-submit"]').waitFor()
+    },
+  },
   { slug: 'apps', path: '/apps', auth: true },
   {
     slug: 'apps-sidebar-collapsed',
@@ -940,6 +1036,34 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
           return
         throw error
       }
+    },
+  },
+  {
+    slug: 'app-settings-incompatible-alert-desktop',
+    path: '/app/com.demo.app/settings',
+    auth: true,
+    prepare: async (page) => {
+      await prepareIncompatibleAlertSection(page, { width: 1440, height: 900 })
+    },
+  },
+  {
+    slug: 'app-settings-incompatible-alert-mobile',
+    path: '/app/com.demo.app/settings',
+    auth: true,
+    prepare: async (page) => {
+      await prepareIncompatibleAlertSection(page, { width: 390, height: 844 })
+    },
+  },
+  {
+    slug: 'channel-incompatible-alert',
+    path: '/app/com.demo.app/channel/1',
+    auth: true,
+    prepare: async (page) => {
+      await dismissRemindMeLater(page)
+      const target = process.env.VISUAL_DIFF_PHASE === 'after'
+        ? page.getByRole('combobox', { name: 'Incompatible bundle alerts' })
+        : page.getByText('Disable auto downgrade under native', { exact: true })
+      await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
     },
   },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },

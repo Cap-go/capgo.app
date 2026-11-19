@@ -30,7 +30,7 @@
  *   BENCH_SKIP_LOAD, BENCH_SKIP_UPDATES_LOAD, BENCH_SKIP_FRESHNESS,
  *   BENCH_DEBUG (prints top statements and timed-out answers)
  *
- * The script temporarily points the vault `db_url` (used by pg_net triggers)
+ * The script temporarily points the `db_url` setting (used by pg_net triggers)
  * at a mailbox container that relays /functions/v1/triggers/* to API_URL, and
  * restores it on exit.
  */
@@ -379,6 +379,11 @@ Bun.serve({ port: 18785, hostname: '0.0.0.0', async fetch(request) {
   return Response.json({ status: 'queued' })
 } })`
 
+function setSetting(name: string, value: string) {
+  return sql`INSERT INTO private.settings (name, value) VALUES (${name}, ${value})
+    ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`
+}
+
 async function withTriggerRelay<T>(run: () => Promise<T>): Promise<T> {
   const network = process.env.BENCH_DOCKER_NETWORK
   const image = process.env.BENCH_MAILBOX_IMAGE ?? 'oven/bun:1.3.12'
@@ -386,30 +391,30 @@ async function withTriggerRelay<T>(run: () => Promise<T>): Promise<T> {
     throw new Error('BENCH_DOCKER_NETWORK is required (docker network of the local Supabase stack)')
   const name = 'capgo-bench-trigger-mailbox'
   // Look everything up before changing anything that needs restoring.
-  const [secret] = await sql`SELECT id, decrypted_secret FROM vault.decrypted_secrets WHERE name = 'db_url'`
-  if (!secret)
-    throw new Error('vault secret db_url is missing; seed the local database first')
+  const [dbUrl] = await sql`SELECT value FROM private.settings WHERE name = 'db_url'`
+  if (!dbUrl)
+    throw new Error('private.settings db_url is missing; seed the local database first')
   const [fn] = await sql`SELECT 1 FROM pg_proc WHERE proname = 'updates_cache_purge_enabled'`
   if (!fn)
     throw new Error('updates_cache_purge_enabled() is missing; apply the edge cache migration first')
-  // Runtime switch is the CAPGO_UPDATES_CACHE_PURGE_ENABLED Vault secret.
-  const [switchSecret] = await sql`SELECT id, decrypted_secret FROM vault.decrypted_secrets WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'`
+  // Runtime switch is the CAPGO_UPDATES_CACHE_PURGE_ENABLED setting.
+  const [purgeSwitch] = await sql`SELECT value FROM private.settings WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'`
 
   let running = true
   let pump: Promise<void> = Promise.resolve()
   let restored = false
-  // Restores Vault and removes the container whatever happened (errors,
+  // Restores the settings and removes the container whatever happened (errors,
   // Ctrl+C), so local triggers keep reaching the Supabase functions.
   const restore = async () => {
     if (restored)
       return
     restored = true
     running = false
-    await sql`SELECT vault.update_secret(${secret.id}, ${secret.decrypted_secret})`.catch(() => null)
-    if (switchSecret)
-      await sql`SELECT vault.update_secret(${switchSecret.id}, ${switchSecret.decrypted_secret})`.catch(() => null)
+    await setSetting('db_url', dbUrl.value).catch(() => null)
+    if (purgeSwitch)
+      await setSetting('CAPGO_UPDATES_CACHE_PURGE_ENABLED', purgeSwitch.value).catch(() => null)
     else
-      await sql`DELETE FROM vault.secrets WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'`.catch(() => null)
+      await sql`DELETE FROM private.settings WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'`.catch(() => null)
     Bun.spawnSync(['docker', 'rm', '-f', name])
   }
   const onSignal = () => {
@@ -448,11 +453,8 @@ async function withTriggerRelay<T>(run: () => Promise<T>): Promise<T> {
       }
     })()
 
-    await sql`SELECT vault.update_secret(${secret.id}, ${`http://${name}:18785`})`
-    if (switchSecret)
-      await sql`SELECT vault.update_secret(${switchSecret.id}, 'true')`
-    else
-      await sql`SELECT vault.create_secret('true', 'CAPGO_UPDATES_CACHE_PURGE_ENABLED', 'edge cache benchmark')`
+    await setSetting('db_url', `http://${name}:18785`)
+    await setSetting('CAPGO_UPDATES_CACHE_PURGE_ENABLED', 'true')
     return await run()
   }
   finally {
@@ -471,7 +473,7 @@ async function main() {
   if (process.env.BENCH_RELAY_ONLY) {
     // Keeps the trigger relay and the purge switch up (until Ctrl+C) so other
     // suites, e.g. the plugin tests, can run against EDGE_URL with purges.
-    console.log('Trigger relay up, purges reach API_URL. Ctrl+C restores Vault.')
+    console.log('Trigger relay up, purges reach API_URL. Ctrl+C restores the settings.')
     await withTriggerRelay(() => new Promise<never>(() => {}))
     return
   }

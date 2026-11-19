@@ -103,6 +103,9 @@ const state = {
   orgPolicyReads: 0,
   orgReadDenied: params.get('orgReadDenied') === '1',
   cicdRegistrationError: params.get('registrationError') === '1',
+  cicdMethodError: params.get('methodError') === '1',
+  cicdMethodDelayMs: Number(params.get('methodDelay') ?? 0),
+  cicdMethodResponses: 0,
   cicdDismissError: false,
   cicdRestoreError: false,
   cicdReminderDelayMs: 0,
@@ -344,6 +347,9 @@ const fixtureFetch: typeof fetch = async (input, init) => {
     cicdSetupCalls.push(args)
     if (args.p_event === 'key_created' && state.cicdRegistrationError)
       return new Response(JSON.stringify({ message: 'CI registration unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
+    const methodEvent = args.p_event === 'method_selected' || args.p_event === 'ai_prompt_copied'
+    if (methodEvent && state.cicdMethodError)
+      return new Response(JSON.stringify({ message: 'CI setup method unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
     if ((args.p_event === 'dismissed' && state.cicdDismissError) || (args.p_event === 'restored' && state.cicdRestoreError))
       return new Response(JSON.stringify({ message: 'CI reminder unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
     const appId = typeof args.p_app_id === 'string' ? args.p_app_id : previewAppId
@@ -362,8 +368,38 @@ const fixtureFetch: typeof fetch = async (input, init) => {
       delete next.dismissed_at
       sessionStorage.removeItem(`onboarding-fixture:cicd-dismissed:${appId}`)
     }
-    else
-      next = { ...next, keys: [args.p_apikey_rbac_id], key_created_at: at }
+    else if (methodEvent) {
+      const selection = args.p_selection
+      if (!selection || typeof selection !== 'object' || Array.isArray(selection)
+        || !('product' in selection) || (selection.product !== 'ota' && selection.product !== 'builder')
+        || !('setup_method' in selection) || (selection.setup_method !== 'manual' && selection.setup_method !== 'ai')
+        || (args.p_event === 'ai_prompt_copied' && selection.setup_method !== 'ai')) {
+        return new Response(JSON.stringify({ message: 'Invalid CI setup method' }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+      }
+      const methods: Record<string, unknown> = Object.fromEntries(Object.entries(next.setup_methods && typeof next.setup_methods === 'object' && !Array.isArray(next.setup_methods) ? next.setup_methods : {}))
+      const previous = selection.product in methods ? methods[selection.product] : undefined
+      const previousMethod = previous && typeof previous === 'object' && !Array.isArray(previous) ? previous : {}
+      next = {
+        ...next,
+        selection,
+        setup_methods: {
+          ...methods,
+          [selection.product]: {
+            ...previousMethod,
+            method: selection.setup_method,
+            selected_at: at,
+            ...(args.p_event === 'ai_prompt_copied' ? { ai_prompt_copied_at: 'ai_prompt_copied_at' in previousMethod ? previousMethod.ai_prompt_copied_at : at } : {}),
+          },
+        },
+      }
+    }
+    else if (args.p_event === 'key_created') {
+      const keys = Array.isArray(next.keys) ? next.keys : []
+      next = { ...next, keys: [...new Set([...keys, args.p_apikey_rbac_id])], key_created_at: at, selection: args.p_selection }
+    }
+    else {
+      return new Response(JSON.stringify({ message: 'Invalid CI setup event' }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+    }
     if (appId === previewAppId)
       cicdLedger.value = next
     else
@@ -371,6 +407,10 @@ const fixtureFetch: typeof fetch = async (input, init) => {
     const snapshot = appId === previewAppId ? previewOnboarding() : { ...onboarding, cicd: next }
     if (args.p_event === 'key_created' && state.cicdRegistrationDelayMs)
       await new Promise(resolve => setTimeout(resolve, state.cicdRegistrationDelayMs))
+    if (methodEvent && state.cicdMethodDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.cicdMethodDelayMs))
+    if (methodEvent)
+      state.cicdMethodResponses += 1
     if ((args.p_event === 'dismissed' || args.p_event === 'restored') && state.cicdReminderDelayMs)
       await new Promise(resolve => setTimeout(resolve, state.cicdReminderDelayMs))
     if (args.p_event === 'dismissed' || args.p_event === 'restored')

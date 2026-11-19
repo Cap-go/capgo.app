@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
@@ -62,7 +63,7 @@ function createWriteClient(options?: { deleteError?: Error }) {
   }
 }
 function createReadClient(notification: { last_send_at: Date, total_send: number } | null) {
-  const limitMock = vi.fn(async () => notification ? [notification] : [])
+  const limitMock = vi.fn(async () => notification ? [{ ...notification, last_send_at_exact: notification.last_send_at.toISOString() }] : [])
   const whereMock = vi.fn(() => ({ limit: limitMock }))
   const fromMock = vi.fn(() => ({ where: whereMock }))
   const selectMock = vi.fn(() => ({ from: fromMock }))
@@ -285,7 +286,7 @@ describe.sequential('sendNotifOrg', () => {
     expect(sent).toBe(false)
     expect(writeClient.updateMock).toHaveBeenCalledTimes(2)
     expect(writeClient.updateSetMock).toHaveBeenNthCalledWith(2, {
-      last_send_at: previousLastSendAt,
+      last_send_at: sql`${previousLastSendAt.toISOString()}::timestamptz`,
       total_send: 3,
     })
     expect(writeClient.deleteMock).not.toHaveBeenCalled()

@@ -28,6 +28,7 @@ export default defineConfig(({ mode }) => ({
       'tests/hashed-apikey-rls.test.ts',
       'tests/mfa-email-otp-trigger.test.ts',
       'tests/org-invitation-email.test.ts',
+      'tests/plugin-kv-state-sync.test.ts',
       'tests/queue_big_job_archive.test.ts',
       'tests/queue_cron_stat_org_function.test.ts',
       // Hot plugin paths (/updates, /stats, /channel_self) overload workerd under shard

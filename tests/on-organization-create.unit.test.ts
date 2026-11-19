@@ -4,7 +4,7 @@ const {
   createStripeCustomerMock,
   finalizePendingStripeCustomerMock,
   backgroundTaskMock,
-  supabaseAdminMock,
+  gotrueAdminMock,
   syncOrgOnboardingIntentForOrgMock,
   sendEventToTrackingMock,
   resolveSignupAttributionForUserMock,
@@ -19,7 +19,7 @@ const {
   createStripeCustomerMock: vi.fn(async () => 'Solo'),
   finalizePendingStripeCustomerMock: vi.fn(async () => 'Solo'),
   backgroundTaskMock: vi.fn(async (c: unknown, task: unknown) => task),
-  supabaseAdminMock: vi.fn(),
+  gotrueAdminMock: vi.fn(),
   syncOrgOnboardingIntentForOrgMock: vi.fn(async () => undefined),
   sendEventToTrackingMock: vi.fn(async () => undefined),
   resolveSignupAttributionForUserMock: vi.fn(async () => ({})),
@@ -34,8 +34,8 @@ vi.mock('../supabase/functions/_backend/utils/stripe_org.ts', () => ({
   isPendingStripeCustomerId: (customerId: string | null | undefined) => Boolean(customerId?.startsWith('pending_')),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: supabaseAdminMock,
+vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
+  gotrueAdmin: gotrueAdminMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -101,14 +101,10 @@ function createOrg(customerId: string | null) {
 }
 
 function mockOrgReload(customerId: string | null) {
-  supabaseAdminMock.mockImplementation(() => ({
-    auth: {
-      admin: {
-        getUserById: async () => creatorMetadata.value instanceof Error
-          ? { data: { user: null }, error: creatorMetadata.value }
-          : { data: { user: { app_metadata: creatorMetadata.value } }, error: null },
-      },
-    },
+  gotrueAdminMock.mockImplementation(() => ({
+    getUserById: async () => creatorMetadata.value instanceof Error
+      ? { data: { user: null }, error: creatorMetadata.value }
+      : { data: { user: { app_metadata: creatorMetadata.value } }, error: null },
   }))
   pgQueryMock.mockImplementation(async (sql: string, params: unknown[] = []) => {
     if (sql.includes('FROM public.orgs WHERE id = $1'))

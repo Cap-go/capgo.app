@@ -4,8 +4,7 @@
  *
  * Usage: bun scripts/audit_broken_default_downgrade.ts
  */
-import { createClient } from '@supabase/supabase-js'
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import { connectScriptDb, getDatabaseUrl } from './script_db.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
 const OUTPUT_DIR = './tmp/unused_versions'
@@ -65,11 +64,7 @@ function chunkArray<T>(items: T[], size: number) {
 
 async function main() {
   const env = await loadEnv(ENV_FILE)
-  const supabase = createClient<Database>(
-    env.SUPABASE_URL,
-    env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-  )
+  const db = await connectScriptDb(getDatabaseUrl(env))
 
   const brokenDefault = await loadJsonArray<BrokenDefaultRow>(INPUT_BROKEN_DEFAULT)
   if (!brokenDefault || brokenDefault.length === 0) {
@@ -105,15 +100,14 @@ async function main() {
     if (unknown.length === 0) return
     const chunks = chunkArray(unknown, PAGE_SIZE)
     for (const chunk of chunks) {
-      const { data, error } = await supabase
-        .from('app_versions')
-        .select('id, app_id, name, deleted, manifest_count')
-        .in('id', chunk)
-      if (error) {
+      const { rows: data } = await db.query(
+        'SELECT id, app_id, name, deleted, manifest_count FROM public.app_versions WHERE id = ANY($1::bigint[])',
+        [chunk],
+      ).catch((error) => {
         console.error('Error fetching app_versions:', error)
         process.exit(1)
-      }
-      for (const row of data ?? []) {
+      })
+      for (const row of data) {
         versionCache.set(row.id, {
           id: row.id,
           app_id: row.app_id,
@@ -158,18 +152,13 @@ async function main() {
     let found = false
 
     while (true) {
-      const to = from + PAGE_SIZE - 1
-      const { data, error } = await supabase
-        .from('deploy_history')
-        .select('version_id, deployed_at')
-        .eq('channel_id', row.channel_id)
-        .order('deployed_at', { ascending: false })
-        .range(from, to)
-
-      if (error) {
+      const { rows: data } = await db.query(
+        'SELECT version_id, deployed_at FROM public.deploy_history WHERE channel_id = $1 ORDER BY deployed_at DESC LIMIT $2 OFFSET $3',
+        [row.channel_id, PAGE_SIZE, from],
+      ).catch((error) => {
         console.error('Error fetching deploy_history:', error)
         process.exit(1)
-      }
+      })
       if (!data || data.length === 0) break
 
       const versionIds = data.map(d => d.version_id)
@@ -225,19 +214,18 @@ async function main() {
 
   for (const chunk of orgChunks) {
     if (chunk.length === 0) continue
-    const { data, error } = await supabase
-      .from('orgs')
-      .select('id, customer_id, stripe_info(status, trial_at)')
-      .in('id', chunk)
-
-    if (error) {
+    const { rows: data } = await db.query(
+      `SELECT o.id, si.status FROM public.orgs o
+       LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
+       WHERE o.id = ANY($1::uuid[])`,
+      [chunk],
+    ).catch((error) => {
       console.error('Error fetching orgs for paid count:', error)
       process.exit(1)
-    }
-    for (const row of data ?? []) {
+    })
+    for (const row of data) {
       totalNoCandidateOrgs += 1
-      const stripeInfo = Array.isArray(row.stripe_info) ? row.stripe_info[0] : row.stripe_info
-      const status = stripeInfo?.status
+      const status = row.status
       const isPaid = status === 'succeeded'
       if (isPaid) paidNoCandidate += 1
     }
@@ -271,3 +259,4 @@ async function main() {
 }
 
 await main()
+process.exit(0)

@@ -96,7 +96,8 @@ SELECT extensions.is(
     0,
     'disabled moves create no sessions'
 );
-SELECT vault.create_secret('true', 'CAPGO_DELTA_SESSIONS_ENABLED');
+INSERT INTO private.settings (name, value) VALUES ('CAPGO_DELTA_SESSIONS_ENABLED', 'true')
+ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value;
 INSERT INTO public.backfill_progress (
     job_name, scope_key, cutover_at, last_processed_id
 )

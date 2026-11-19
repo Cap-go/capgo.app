@@ -222,7 +222,7 @@ describe('gatherFailureSpikeMetrics checks', () => {
   const c = { get: () => undefined } as unknown as Context
   const now = new Date('2026-11-10T12:00:00.000Z')
 
-  it('counts install, fail, and noNew from insights when channel is omitted', async () => {
+  it('uses version usage for install and fail, noNew from insights when channel is omitted', async () => {
     vi.mocked(readStatsVersion).mockResolvedValueOnce([
       {
         version_name: '2.0.0',
@@ -240,10 +240,7 @@ describe('gatherFailureSpikeMetrics checks', () => {
         return {
           ...emptyStatsInsights(),
           actions: [
-            { action: 'install', total: 10, device_count: 0, version_count: 0, first_seen: null, last_seen: null, latest_version_name: '', latest_device_id: '' },
-            { action: 'fail', total: 4, device_count: 0, version_count: 0, first_seen: null, last_seen: null, latest_version_name: '', latest_device_id: '' },
             { action: 'noNew', total: 80, device_count: 0, version_count: 0, first_seen: null, last_seen: null, latest_version_name: '', latest_device_id: '' },
-            { action: 'get', total: 999, device_count: 0, version_count: 0, first_seen: null, last_seen: null, latest_version_name: '', latest_device_id: '' },
           ],
         }
       }
@@ -251,7 +248,7 @@ describe('gatherFailureSpikeMetrics checks', () => {
     })
 
     const metrics = await gatherFailureSpikeMetrics(c, 'com.demo.app', undefined, 15, now)
-    expect(metrics.checks).toBe(94)
+    expect(metrics.checks).toBe(88)
     expect(metrics.failures).toBe(3)
     expect(metrics.version).toBe('2.0.0')
   })

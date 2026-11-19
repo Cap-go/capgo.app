@@ -218,6 +218,29 @@ export const ALLOWED_NEW_REPLICA_TABLES: Readonly<Record<string, AllowedNewRepli
       ...replicaIdentityKeyCatalog('delta_files', 'bigint'),
     },
   },
+  read_replica_commit_marker: {
+    sql: [
+      'CREATE TABLE public."read_replica_commit_marker" (',
+      '  "id" smallint PRIMARY KEY,',
+      '  "committed_at" timestamp with time zone NOT NULL,',
+      '  CONSTRAINT "read_replica_commit_marker_singleton" CHECK (id = 1)',
+      ')',
+    ].join('\n'),
+    catalog: {
+      columns: [
+        { default: null, generated: '', identity: '', name: 'id', notNull: true, table: 'read_replica_commit_marker', type: 'smallint' },
+        { default: null, generated: '', identity: '', name: 'committed_at', notNull: true, table: 'read_replica_commit_marker', type: 'timestamp with time zone' },
+      ],
+      constraints: [
+        { definition: 'CHECK (id = 1)', name: 'read_replica_commit_marker_singleton', table: 'read_replica_commit_marker', type: 'c', valid: true },
+        { definition: 'PRIMARY KEY (id)', name: 'read_replica_commit_marker_pkey', table: 'read_replica_commit_marker', type: 'p', valid: true },
+      ],
+      indexes: [
+        { constraintOwned: true, definition: 'CREATE UNIQUE INDEX read_replica_commit_marker_pkey ON public.read_replica_commit_marker USING btree (id)', name: 'read_replica_commit_marker_pkey', table: 'read_replica_commit_marker', valid: true },
+      ],
+      sequences: [],
+    },
+  },
   delta_sessions: {
     sql: [
       'CREATE TABLE public."delta_sessions" (',

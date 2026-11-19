@@ -29,7 +29,24 @@ export function isCliTrueTag(value: unknown): boolean {
   return value === true || value === 'true'
 }
 
-export type BundleIncompatibleEmailOutcome = 'skipped_accepted' | 'sent_expected' | 'sent'
+export type BundleIncompatibleEmailOutcome = 'skipped_accepted' | 'skipped_non_default_channel' | 'skipped_protected_promotion' | 'sent_expected' | 'sent'
+
+/** Email the warning only for the app's default download channels. */
+export const BUNDLE_INCOMPATIBLE_ALERT_DEFAULT = 'default'
+/** Email the warning for every channel the incompatible bundle overwrites. */
+export const BUNDLE_INCOMPATIBLE_ALERT_ALL = 'all'
+
+export function isBundleIncompatibleAlert(value: unknown): value is typeof BUNDLE_INCOMPATIBLE_ALERT_DEFAULT | typeof BUNDLE_INCOMPATIBLE_ALERT_ALL {
+  return value === BUNDLE_INCOMPATIBLE_ALERT_DEFAULT || value === BUNDLE_INCOMPATIBLE_ALERT_ALL
+}
+
+export function isBundleIncompatibleAlertForChannel(input: {
+  alert: string | null | undefined
+  isDefaultDownload: boolean
+  override?: boolean | null
+}): boolean {
+  return input.override ?? (input.alert === BUNDLE_INCOMPATIBLE_ALERT_ALL || input.isDefaultDownload)
+}
 
 /** PostHog `Bundle Incompatible Email` outcome recorded by `/private/events`. */
 export function bundleIncompatibleEmailOutcome(
@@ -101,7 +118,7 @@ export interface BundleCompatibilityBentoInput {
   channelOverwritten: boolean | undefined
   /** Channel the bundle was checked against. */
   channel: string | undefined
-  /** Which flow emitted the event (currently always 'upload'). */
+  /** Deployment flow, such as upload or promotion. */
   source: string | undefined
   /** The freshly uploaded bundle (its id is resolved server-side). */
   versionNewId: string | undefined

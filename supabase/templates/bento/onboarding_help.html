@@ -1,0 +1,15 @@
+<p>Hi {{ visitor.first_name | default: "there" | escape }},</p>
+{% if visitor.tags contains 'onboarding_intent:builder' %}
+<p>Did anything get in the way of your first native build with Capgo?</p>
+{% else %}
+<p>Did anything get in the way of your first live update with Capgo?</p>
+{% endif %}
+<p>Reply with whichever fits:</p>
+<ul>
+  <li><strong>1</strong> — I need help with setup</li>
+  <li><strong>2</strong> — I'm not sure Capgo fits my app</li>
+  <li><strong>3</strong> — I haven't had time yet</li>
+  <li><strong>4</strong> — Something else</li>
+</ul>
+<p>A number is enough, or tell me what you're trying to do. I'll help with the next step.</p>
+<p><small><a href="https://console.capgo.app/settings/account/notifications">Email preferences</a> · <a href="{{ visitor.unsubscribe_url }}">Unsubscribe</a></small></p>

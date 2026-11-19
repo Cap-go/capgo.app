@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import StepsBundle from '~/components/dashboard/StepsBundle.vue'
 import { useConsole } from '~/services/console'
+import { organizationAccessKey } from '~/services/organizationWatchKeys'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -66,7 +67,9 @@ async function init() {
   }
 }
 
-watch(currentOrganization, () => init())
+// Only rerun when the organization or its access gates change, not when the
+// store swaps in a refreshed copy of the same organization (logo, settings).
+watch(() => organizationAccessKey(currentOrganization.value), () => init())
 watch(() => appId.value, () => init())
 
 onMounted(() => {

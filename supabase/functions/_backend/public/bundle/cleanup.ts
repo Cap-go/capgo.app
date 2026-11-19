@@ -4,9 +4,9 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { greaterThan, increment, lessThan, tryParse } from '@std/semver'
 import { z } from 'zod'
 import { HTTPException } from 'hono/http-exception'
-import { lockBundleLifecycles, retryOnDeadlock, softDeleteLockedBundles } from '../../utils/bundle_soft_delete.ts'
+import { BUNDLE_DELETE_BATCH_SIZE, retryOnDeadlock, softDeleteBundleBatch } from '../../utils/bundle_soft_delete.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
-import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { integerLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
@@ -46,8 +46,6 @@ export interface CleanupPlan {
 }
 
 const DEFAULT_KEEP = 4
-// Keep each soft-delete transaction (and its lifecycle locks) bounded.
-const DELETE_BATCH_SIZE = 200
 // Placeholder bundles every app owns; never offer them for cleanup.
 const RESERVED_BUNDLE_NAMES = new Set(['builtin', 'unknown'])
 
@@ -121,51 +119,6 @@ async function fetchVersionsAndLinks(c: Context<MiddlewareKeyVariables>, apikey:
   })
 }
 
-/**
- * Soft-deletes one batch in a single transaction. Each bundle's lifecycle lock (taken through
- * `lock_channel_bundle_lifecycle`, like channel promotion) is held while the channel links
- * are checked and the rows updated, so a concurrent promotion either commits first and keeps
- * its bundle, or waits and then sees it deleted. With `ignoreChannel`, linked bundles are
- * deleted too and the unlink_channels_from_deleted_version trigger clears their links.
- */
-async function softDeleteBatch(
-  c: Context<MiddlewareKeyVariables>,
-  pgClient: Awaited<ReturnType<typeof getPgClient>>,
-  effectiveApikey: string,
-  appId: string,
-  ids: number[],
-  ignoreChannel: boolean,
-): Promise<number[]> {
-  let dbClient: Awaited<ReturnType<typeof checkoutPgClient>> | null = null
-  let transactionStarted = false
-  try {
-    dbClient = await checkoutPgClient(pgClient)
-    await beginWriteTransaction(dbClient)
-    transactionStarted = true
-    await lockBundleLifecycles(dbClient, ids)
-    const deleted = await softDeleteLockedBundles(dbClient, effectiveApikey, appId, ids, ignoreChannel)
-    await dbClient.query('COMMIT')
-    return deleted
-  }
-  catch (error) {
-    if (dbClient && transactionStarted) {
-      try {
-        await dbClient.query('ROLLBACK')
-      }
-      catch {
-        // Preserve the original error when rollback itself fails.
-      }
-    }
-    if (error instanceof HTTPException)
-      throw error
-    logPgError(c, 'cleanup_bundles_soft_delete', error)
-    throw error
-  }
-  finally {
-    releasePgClient(pgClient, dbClient)
-  }
-}
-
 export async function cleanupBundles(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   const parsed = safeParseSchema(cleanupBundleBodySchema, bodyRaw)
   if (!parsed.success)
@@ -193,18 +146,18 @@ export async function cleanupBundles(c: Context<MiddlewareKeyVariables>, bodyRaw
   if (!effectiveApikey)
     throw simpleError('cannot_delete_bundle', 'You can\'t access this app', { app_id: body.app_id })
 
-  // Soft-delete in batches, each its own locked transaction (see softDeleteBatch), sharing
+  // Soft-delete in batches, each its own locked transaction (see softDeleteBundleBatch), sharing
   // one connection pool.
   const removedIds = new Set<number>()
   const pgClient = await getPgClient(c)
   try {
-    for (let i = 0; i < plan.removed.length; i += DELETE_BATCH_SIZE) {
-      const ids = plan.removed.slice(i, i + DELETE_BATCH_SIZE).map(row => row.id)
+    for (let i = 0; i < plan.removed.length; i += BUNDLE_DELETE_BATCH_SIZE) {
+      const ids = plan.removed.slice(i, i + BUNDLE_DELETE_BATCH_SIZE).map(row => row.id)
       let deleted: number[]
       try {
         // With ignore_channel, the unlink trigger locks channel rows after the bundle locks and can
         // deadlock with a promotion; a batch is its own transaction, so retrying it is safe.
-        deleted = await retryOnDeadlock(() => softDeleteBatch(c, pgClient, effectiveApikey, body.app_id, ids, ignoreChannel))
+        deleted = await retryOnDeadlock(() => softDeleteBundleBatch(c, pgClient, effectiveApikey, body.app_id, ids, ignoreChannel, 'cleanup_bundles_soft_delete'))
       }
       catch (error) {
         if (error instanceof HTTPException)

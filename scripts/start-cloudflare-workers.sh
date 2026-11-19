@@ -51,6 +51,7 @@ get_supabase_status_var() {
 BASE_ENV_FILE="${ROOT_DIR}/cloudflare_workers/.env.local"
 RUNTIME_ENV_FILE="$(mktemp "${TMPDIR:-/tmp}/capgo-cloudflare-env.XXXXXX")"
 chmod 600 "${RUNTIME_ENV_FILE}"
+trap 'rm -f "${RUNTIME_ENV_FILE}"' EXIT
 if [ -f "${BASE_ENV_FILE}" ]; then
   cp "${BASE_ENV_FILE}" "${RUNTIME_ENV_FILE}"
 else
@@ -119,13 +120,11 @@ S3_ACCESS_KEY_ID_TO_USE="${S3_ACCESS_KEY_ID:-$(get_supabase_status_var 'S3_PROTO
 S3_SECRET_ACCESS_KEY_TO_USE="${S3_SECRET_ACCESS_KEY:-$(get_supabase_status_var 'S3_PROTOCOL_ACCESS_KEY_SECRET')}"
 S3_REGION_TO_USE="${S3_REGION:-$(get_supabase_status_var 'S3_PROTOCOL_REGION')}"
 
-API_PID=''
-PLUGIN_PID=''
-FILES_PID=''
+WORKERS_PID=''
 cleanup() {
   local pid
   echo -e "\n${YELLOW}Stopping workers...${NC}"
-  for pid in "${API_PID}" "${PLUGIN_PID}" "${FILES_PID}"; do
+  for pid in "${WORKERS_PID}"; do
     if [[ -z "${pid}" ]]; then
       continue
     fi
@@ -161,6 +160,13 @@ CAPGO_PREVENT_BACKGROUND_FUNCTIONS=true
 CAPGO_ALLOW_LOCAL_WEBHOOK_URLS=true
 ENV_EOF
 
+# KV plugin state switches (the KV test job sets PLUGIN_STATE_KV=on).
+for plugin_state_var in PLUGIN_STATE_KV PLUGIN_STATE_KV_AUTHORITATIVE PLUGIN_STATE_KV_STRICT PLUGIN_STATE_TIMING; do
+  if [[ -n "${!plugin_state_var:-}" ]]; then
+    printf '%s=%s\n' "${plugin_state_var}" "${!plugin_state_var}" >> "${RUNTIME_ENV_FILE}"
+  fi
+done
+
 for s3_var in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_REGION; do
   s3_value_var="${s3_var}_TO_USE"
   if [[ -n "${!s3_value_var}" ]]; then
@@ -168,35 +174,9 @@ for s3_var in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_REGION; do
   fi
 done
 
-WRANGLER_DEV="${ROOT_DIR}/scripts/wrangler-dev-compat.sh"
-
-# Start API worker on its isolated port.
-echo -e "${GREEN}Starting API worker on port ${CLOUDFLARE_API_PORT}...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/api" && exec bash "${WRANGLER_DEV}" --local -c wrangler.jsonc --port "${CLOUDFLARE_API_PORT}" --inspector-port "${API_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
-API_PID=$!
-
-# Wait a bit for the first worker to start.
-sleep 3
-
-# Start Plugin worker on its isolated port.
-echo -e "${GREEN}Starting Plugin worker on port ${CLOUDFLARE_PLUGIN_PORT}...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/plugin" && exec bash "${WRANGLER_DEV}" --local -c wrangler.jsonc --port "${CLOUDFLARE_PLUGIN_PORT}" --inspector-port "${PLUGIN_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
-PLUGIN_PID=$!
-
-# Wait a bit for the second worker to start.
-sleep 3
-
-# Start Files worker on its isolated port.
-echo -e "${GREEN}Starting Files worker on port ${CLOUDFLARE_FILES_PORT}...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/files" && exec bash "${WRANGLER_DEV}" --local -c wrangler.jsonc --port "${CLOUDFLARE_FILES_PORT}" --inspector-port "${FILES_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
-FILES_PID=$!
-
-echo -e "${GREEN}All workers started!${NC}"
-echo "API Worker PID: ${API_PID} (http://127.0.0.1:${CLOUDFLARE_API_PORT})"
-echo "Plugin Worker PID: ${PLUGIN_PID} (http://127.0.0.1:${CLOUDFLARE_PLUGIN_PORT})"
-echo "Files Worker PID: ${FILES_PID} (http://127.0.0.1:${CLOUDFLARE_FILES_PORT})"
-echo ""
-echo "Press Ctrl+C to stop all workers"
-
-# Wait for all background processes.
-wait
+# One Wrangler multi-config runtime owns the shared local SQLite storage. Two
+# loopback proxies retain the plugin/files ports without opening that storage.
+echo -e "${GREEN}Starting API, Plugin and Files workers in one local runtime...${NC}"
+bun "${ROOT_DIR}/scripts/local-cloudflare-workers.ts" "${ROOT_DIR}" "${RUNTIME_ENV_FILE}" "${PERSIST_DIR}" "${CLOUDFLARE_API_PORT}" "${CLOUDFLARE_PLUGIN_PORT}" "${CLOUDFLARE_FILES_PORT}" "${API_INSPECTOR_PORT}" &
+WORKERS_PID=$!
+wait "${WORKERS_PID}"

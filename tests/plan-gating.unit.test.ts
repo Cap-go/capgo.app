@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { requireEnterprisePlan } from '../supabase/functions/_backend/utils/plan-gating.ts'
+import { requireEnterprisePlan, requirePaidPlan } from '../supabase/functions/_backend/utils/plan-gating.ts'
 
 const mocks = vi.hoisted(() => ({ single: vi.fn(), subscription: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
@@ -73,5 +73,23 @@ describe('paid Enterprise feature gating', () => {
     billing({ paid_at: null })
     await expect(requireEnterprisePlan(context, 'org-id')).resolves.toBeUndefined()
     expect(mocks.subscription).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('paid AI feature gating', () => {
+  it.each(['Solo', 'Maker', 'Team', 'Enterprise'])('allows paid %s plans', async (name) => {
+    billing({}, name)
+    await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).resolves.toBeUndefined()
+  })
+  it.each(['trialing', 'past_due', 'canceled', 'incomplete'])('rejects live %s subscriptions', async (status) => {
+    billing({})
+    mocks.subscription.mockResolvedValueOnce({ ok: true, data: { status, productId: 'enterprise-product' } })
+    await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).rejects.toMatchObject({ status: 403 })
+  })
+  it('fails closed when Stripe cannot verify a paid subscription', async () => {
+    billing({})
+    mocks.subscription.mockResolvedValueOnce({ ok: false, reason: 'unavailable' })
+    await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).rejects.toMatchObject({ status: 403 })
   })
 })

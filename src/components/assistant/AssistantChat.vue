@@ -20,14 +20,14 @@ import IconClose from '~icons/heroicons/x-mark'
 import chatGptLogoWhite from '~/assets/assistant/chatgpt-logo-white.svg'
 import { AssistantKeyError, createAssistantKey, loadAssistantKey, saveAssistantKey } from '~/services/assistant'
 import { AssistantUpstreamError, runAssistant } from '~/services/assistantAgent'
+import { assistantAnalytics } from '~/services/assistantAnalytics'
 import { beginChatGptSignIn, CHATGPT_MANAGE_USAGE_URL, CHATGPT_REDIRECT_URI, ChatGptAuthError, completeChatGptSignIn, getChatGptAccessToken, loadChatGptCredentials, signOutChatGpt } from '~/services/chatgptAuth'
 import { useConsole } from '~/services/console'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
-import { tokenizeAssistantText } from '~/utils/assistantText'
 import { parseChatGptCallback } from '~/utils/chatgptCallback'
-import AssistantSpans from './AssistantSpans.vue'
+import AssistantMarkdown from './AssistantMarkdown.vue'
 
 interface ChatEntry extends AssistantTurn {
   id: number
@@ -63,6 +63,20 @@ const welcomeSeen = useLocalStorage('capgo-assistant-chatgpt-welcome-seen', fals
 const scroller = useTemplateRef<HTMLElement>('scroller')
 const inputEl = useTemplateRef<HTMLTextAreaElement>('inputEl')
 let nextId = 1
+let finishConnection: ReturnType<typeof assistantAnalytics.start> | undefined
+
+function connectionFinished(outcome: 'success' | 'error' | 'cancelled', code = '') {
+  finishConnection?.(outcome, code)
+  finishConnection = undefined
+}
+
+function analyticsErrorCode(error: unknown) {
+  if (error instanceof AssistantUpstreamError)
+    return error.code
+  if (error instanceof ChatGptAuthError || error instanceof AssistantKeyError)
+    return error.message
+  return 'unknown'
+}
 
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
 // Everything the assistant needs stays on this device: the Capgo API key and the ChatGPT tokens.
@@ -167,6 +181,7 @@ async function finishSignIn(callback: ChatGptCallback) {
   signInWindow?.close()
   signInWindow = null
   showWelcome.value = !welcomeSeen.value
+  connectionFinished('success')
 }
 
 function requestConnect() {
@@ -180,6 +195,7 @@ function requestConnect() {
     id: signInDialogId,
     title: t('assistant-chatgpt-sign-in-title'),
     description: t('assistant-chatgpt-sign-in-description'),
+    size: '2xl',
     buttons: [
       { text: t('button-cancel'), role: 'cancel' },
       {
@@ -195,6 +211,8 @@ function requestConnect() {
 async function connect() {
   if (!userId.value)
     return
+  connectionFinished('cancelled')
+  finishConnection = assistantAnalytics.start('Connection', 'connect')
   connecting.value = true
   connectError.value = ''
   // Popups must open inside the click; the address is set once it is built.
@@ -220,8 +238,12 @@ async function connect() {
         pasteStep.value = { redirectUri: CHATGPT_REDIRECT_URI }
       }
     }
+    else {
+      connectionFinished('success')
+    }
   }
   catch (error) {
+    connectionFinished('error', analyticsErrorCode(error))
     console.error('Cannot connect the assistant', error)
     signInWindow?.close()
     signInWindow = null
@@ -233,8 +255,10 @@ async function connect() {
 }
 
 async function submitPaste() {
+  finishConnection ??= assistantAnalytics.start('Connection', 'connect')
   const callback = parseChatGptCallback(pasteValue.value, CHATGPT_REDIRECT_URI)
   if (!callback) {
+    connectionFinished('error', 'invalid_callback')
     connectError.value = t('assistant-chatgpt-paste-invalid')
     return
   }
@@ -244,6 +268,7 @@ async function submitPaste() {
     await finishSignIn(callback)
   }
   catch (error) {
+    connectionFinished('error', analyticsErrorCode(error))
     console.error('Cannot complete ChatGPT sign-in', error)
     connectError.value = signInErrorMessage(error)
   }
@@ -253,6 +278,7 @@ async function submitPaste() {
 }
 
 function cancelPaste() {
+  connectionFinished('cancelled')
   pasteStep.value = null
   pasteValue.value = ''
   connectError.value = ''
@@ -261,19 +287,23 @@ function cancelPaste() {
 }
 
 async function run(confirm?: { tool: string, arguments: Record<string, unknown> }) {
+  const finishTurn = assistantAnalytics.start('Turn', confirm ? 'confirmation' : 'message')
   loading.value = true
   await scrollToBottom()
   try {
     const accessToken = await getChatGptAccessToken(userId.value)
     if (!accessToken) {
+      finishTurn('error', 'chatgpt_reconnect_required')
       reloadLocalState()
       return
     }
     const history = entries.value.filter(entry => !entry.error).map(({ role, content }) => ({ role, content }))
     const response = await runAssistant({ accessToken, apikey: apikey.value, messages: history, context: pageContext.value, confirm })
     entries.value.push({ id: nextId++, role: 'assistant', content: response.reply, cards: response.cards, actions: response.actions })
+    finishTurn('success')
   }
   catch (error) {
+    finishTurn('error', analyticsErrorCode(error))
     if (error instanceof ChatGptAuthError || (error instanceof AssistantUpstreamError && error.code === 'chatgpt_reconnect_required')) {
       // Expired, revoked in ChatGPT settings, or plan usage removed: show "Continue with ChatGPT" again.
       signOutChatGpt(userId.value)
@@ -350,6 +380,7 @@ function clear() {
 }
 
 function disconnect() {
+  assistantAnalytics.disconnected()
   signOutChatGpt(userId.value)
   reloadLocalState()
 }
@@ -363,6 +394,7 @@ watch(open, (value) => {
   if (!value)
     return
   reloadLocalState()
+  assistantAnalytics.opened(!needsConnect.value)
   scrollToBottom()
 })
 </script>
@@ -371,7 +403,7 @@ watch(open, (value) => {
   <div class="pointer-events-none fixed inset-0 z-40 flex items-end justify-end p-3 sm:p-5" data-test="assistant-root">
     <section
       v-if="open"
-      class="pointer-events-auto mb-16 flex h-[min(640px,calc(100dvh-7rem))] w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:w-[420px] dark:border-slate-700 dark:bg-slate-800"
+      class="ph-no-capture pointer-events-auto mb-16 flex h-[min(640px,calc(100dvh-7rem))] w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:w-[420px] dark:border-slate-700 dark:bg-slate-800"
       role="dialog"
       :aria-label="t('assistant-title')"
       data-test="assistant-panel"
@@ -546,23 +578,14 @@ watch(open, (value) => {
             </div>
             <div
               v-if="entry.content"
-              class="max-w-[90%] rounded-2xl px-3 py-2 text-sm leading-relaxed"
+              class="min-w-0 max-w-[90%] overflow-x-auto rounded-2xl px-3 py-2 text-sm leading-relaxed"
               :class="entry.role === 'user'
                 ? 'bg-azure-500 text-white rounded-br-md'
                 : entry.error
                   ? 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-200 rounded-bl-md'
                   : 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-100 rounded-bl-md'"
             >
-              <template v-for="(block, blockIndex) in tokenizeAssistantText(entry.content)" :key="blockIndex">
-                <ul v-if="block.type === 'list'" class="my-1 list-disc space-y-0.5 pl-4">
-                  <li v-for="(item, itemIndex) in block.items" :key="itemIndex">
-                    <AssistantSpans :spans="item" />
-                  </li>
-                </ul>
-                <p v-else class="my-1 whitespace-pre-wrap">
-                  <AssistantSpans :spans="block.spans" />
-                </p>
-              </template>
+              <AssistantMarkdown :content="entry.content" />
             </div>
 
             <template v-for="(card, cardIndex) in entry.cards" :key="cardIndex">
@@ -687,21 +710,50 @@ watch(open, (value) => {
   </div>
 
   <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions.id === signInDialogId" to="#dialog-v2-content" defer>
-    <div class="space-y-4" data-test="assistant-chatgpt-sign-in-instructions">
-      <ol class="list-decimal space-y-3 pl-5 text-sm text-slate-600 dark:text-slate-300">
-        <li>{{ t('assistant-chatgpt-sign-in-step-sign-in') }}</li>
-        <li>{{ t('assistant-chatgpt-sign-in-step-copy') }}</li>
-        <li>{{ t('assistant-chatgpt-sign-in-step-paste') }}</li>
-      </ol>
+    <div class="space-y-5 text-sm leading-relaxed text-slate-600 dark:text-slate-300" data-test="assistant-chatgpt-sign-in-instructions">
+      <section class="rounded-xl border border-azure-500/20 bg-azure-500/5 p-4 dark:bg-azure-500/10" aria-labelledby="assistant-chatgpt-value-title">
+        <h3 id="assistant-chatgpt-value-title" class="mb-1 font-semibold text-slate-900 dark:text-white">
+          {{ t('assistant-chatgpt-sign-in-value-title') }}
+        </h3>
+        <p>{{ t('assistant-chatgpt-sign-in-value') }}</p>
+      </section>
+      <section aria-labelledby="assistant-chatgpt-privacy-title">
+        <h3 id="assistant-chatgpt-privacy-title" class="mb-1 font-semibold text-slate-900 dark:text-white">
+          {{ t('assistant-chatgpt-sign-in-privacy-title') }}
+        </h3>
+        <p>{{ t('assistant-chatgpt-sign-in-privacy-account') }}</p>
+        <p class="mt-2">
+          {{ t('assistant-chatgpt-sign-in-privacy-proxy') }}
+        </p>
+        <p class="mt-2">
+          {{ t('assistant-chatgpt-sign-in-privacy-device') }}
+        </p>
+      </section>
+      <section class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/30" aria-labelledby="assistant-chatgpt-manual-title">
+        <h3 id="assistant-chatgpt-manual-title" class="mb-1 font-semibold text-slate-900 dark:text-white">
+          {{ t('assistant-chatgpt-sign-in-manual-title') }}
+        </h3>
+        <p>{{ t('assistant-chatgpt-sign-in-manual') }}</p>
+      </section>
+      <section aria-labelledby="assistant-chatgpt-steps-title">
+        <h3 id="assistant-chatgpt-steps-title" class="mb-2 font-semibold text-slate-900 dark:text-white">
+          {{ t('assistant-chatgpt-sign-in-steps-title') }}
+        </h3>
+        <ol class="list-decimal space-y-2 pl-5">
+          <li>{{ t('assistant-chatgpt-sign-in-step-sign-in') }}</li>
+          <li>{{ t('assistant-chatgpt-sign-in-step-copy') }}</li>
+          <li>{{ t('assistant-chatgpt-sign-in-step-paste') }}</li>
+        </ol>
+      </section>
       <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
         <p class="mb-1 text-xs font-medium text-slate-700 dark:text-slate-200">
           {{ t('assistant-chatgpt-callback-label') }}
         </p>
         <code class="break-all text-xs text-slate-600 dark:text-slate-300">{{ CHATGPT_REDIRECT_URI }}?code=…&amp;state=…</code>
+        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+          {{ t('assistant-chatgpt-sign-in-private') }}
+        </p>
       </div>
-      <p class="text-xs text-slate-500 dark:text-slate-400">
-        {{ t('assistant-chatgpt-sign-in-private') }}
-      </p>
     </div>
   </Teleport>
 </template>

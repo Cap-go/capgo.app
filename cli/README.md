@@ -135,6 +135,7 @@ Capgo continues to load the root config while writing only the selected source. 
 - 🔑 [Login](#login)
 - 🔹 [Get-qr](#get-qr)
 - 📦 [Bundle](#bundle)
+  - [Recommend](#bundle-recommend)
   - [Upload](#bundle-upload)
   - [Compatibility](#bundle-compatibility)
   - [ReleaseType](#bundle-releaseType)
@@ -220,6 +221,7 @@ Capgo continues to load the root config while writing only the selected source. 
 - 🔹 [Simulator](#simulator)
   - [Start](#simulator-start)
   - [Get](#simulator-get)
+  - [Command](#simulator-command)
   - [Stop](#simulator-stop)
 
 ## <a id="init"></a> 🚀 **Init**
@@ -400,6 +402,28 @@ Examples:
 ## <a id="bundle"></a> 📦 **Bundle**
 
 📦 Manage app bundles for deployment in Capgo Cloud, including upload, compatibility checks, and encryption.
+
+### <a id="bundle-recommend"></a> 🔹 **Recommend**
+
+```bash
+npx @capgo/cli@latest bundle recommend
+```
+
+Suggest the next version using Cloudflare AI (active paid subscription required)
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--base-version** | <code>string</code> | Override the latest Capgo version as the release baseline |
+| **--since** | <code>string</code> | Git ref to compare from (defaults to the latest reachable local tag) |
+| **--ref** | <code>string</code> | Git ref to compare to (defaults to HEAD locally; required for GitHub) |
+| **--repo** | <code>string</code> | Use GitHub comparison history through your authenticated gh CLI |
+| **--changelog** | <code>boolean</code> | Also draft a Markdown changelog |
+| **--json** | <code>boolean</code> | Print the recommendation as JSON |
+| **--dry-run** | <code>boolean</code> | Print local context without sending it to Capgo or AI |
 
 ### <a id="bundle-upload"></a> ⬆️ **Upload**
 
@@ -1618,7 +1642,14 @@ npx @capgo/cli@latest organisation delete
 ## <a id="build"></a> 🔹 **Build**
 
 Build native iOS and Android apps with Capgo Cloud.
-Native cloud builds are currently in limited beta.
+Capgo Build is generally available for production iOS and Android releases.
+Build, sign, and submit Capacitor apps from Windows, Linux, macOS, CI, or an AI coding agent. No local Mac or Xcode required.
+One CLI covers 2 native platforms, guided signing setup, live build logs, and optional App Store Connect and Google Play submission.
+For AI-assisted setup, configure your agent's MCP client to launch npx @capgo/cli@latest mcp, then ask it to call start_capgo_builder_onboarding.
+Client configuration: https://capgo.app/docs/cli/reference/mcp/
+Build minutes are included in Capgo plans; extra minutes use prepaid credits. Current pricing: https://capgo.app/pricing/
+Measured build times and methodology: https://capgo.app/builder-data/
+Setup and requirements: https://capgo.app/docs/builder/
 Quick start:
   npx @capgo/cli@latest build init
   npx @capgo/cli@latest build request <app-id> --platform <ios|android>
@@ -2565,6 +2596,9 @@ Selected tools exposed via MCP:
   - capgo_get_account_id, capgo_get_account, capgo_update_account, capgo_doctor, capgo_get_stats, capgo_observe
   - capgo_request_build, capgo_get_build_status, capgo_get_build_logs, capgo_generate_encryption_keys
   - capgo_search_docs, capgo_set_project_dir
+  - capgo_list_skills, capgo_get_skill
+Hosted account tools all publish outputSchema. Successful HTTP API results are also returned as structuredContent.data; the text content preserves the original API JSON for older clients. Non-HTTP tools return the object described by their own outputSchema. Errors use isError=true with guidance, and oversized results require pagination or narrower filters.
+The CLI bundles the same public skills catalog as the hosted MCP at release time. Use capgo_list_skills to discover workflow guides and capgo_get_skill to read one; resourceUri selects a supporting file from its manifest. These reads work offline without login or a selected project. MCP 2026-07-28 clients can use the skills extension (skills/list and skills/get); both modern and legacy clients can use resources/list and resources/read. Reading a skill does not run it or authorize its actions. Update the CLI to receive newer skill content.
 The project directory follows the client's MCP roots (the agent's workspace), so a global
 install works from any folder. Clients without roots can call capgo_set_project_dir.
 Workspace roots with exactly one Capacitor app automatically select that app, including
@@ -2598,7 +2632,7 @@ npx @capgo/cli@latest mcp
 
 ## <a id="simulator"></a> 🔹 **Simulator**
 
-Start a cloud simulator. A running simulator uses one builder slot and build minutes.
+Start a cloud simulator. A running simulator uses one builder slot and counts as build time. It stops by itself after 5 minutes without input.
 
 ### <a id="simulator-start"></a> 🔹 **Start**
 
@@ -2614,6 +2648,7 @@ Start an iOS or Android simulator and print its session URL.
 | -------------- | ------------- | -------------------- |
 | **-p** | <code>string</code> | ios or android |
 | **-n** | <code>string</code> | Session name |
+| **--build-job** | <code>string</code> | Saved iOS build job to install into the simulator |
 | **--json** | <code>boolean</code> | Print the session JSON |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
@@ -2631,6 +2666,25 @@ Read one simulator session.
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **--json** | <code>boolean</code> | Print the session JSON |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+### <a id="simulator-command"></a> 🔹 **Command**
+
+```bash
+npx @capgo/cli@latest simulator command
+```
+
+Send one agent-device command to a running simulator: devices, screenshot, snapshot, home, lock, tap, or open.
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--x** | <code>string</code> | Tap x. 0 to 1 is a fraction of the screen. Above 1 is a point. |
+| **--y** | <code>string</code> | Tap y. 0 to 1 is a fraction of the screen. Above 1 is a point. |
+| **--bundle-id** | <code>string</code> | Bundle id for open |
+| **--json** | <code>boolean</code> | Print the command JSON |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 

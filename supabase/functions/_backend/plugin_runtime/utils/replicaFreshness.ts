@@ -41,34 +41,70 @@ export const EDGE_CACHE_MAX_REPLICA_LAG_SECONDS = 60
 /** TTL of an edge cache refill from a replica measured lagging. */
 export const EDGE_CACHE_UNVERIFIED_REPLICA_TTL_SECONDS = 30
 
+/** Merge upstream and primary commit marker lag (seconds). */
+export function combineReplicaLagSeconds(
+  upstreamLagSeconds: number | null,
+  primaryCommitLagSeconds: number | null,
+): number | null {
+  if (upstreamLagSeconds === null && primaryCommitLagSeconds === null)
+    return null
+  if (upstreamLagSeconds === null)
+    return primaryCommitLagSeconds
+  if (primaryCommitLagSeconds === null)
+    return upstreamLagSeconds
+  return Math.max(upstreamLagSeconds, primaryCommitLagSeconds)
+}
+
 /**
- * Replica lag SQL. The EU replica is the logical subscriber of the primary
- * (pg_stat_subscription); the regional replicas are physical standbys of that
- * subscriber, where pg_stat_subscription is empty, so their lag is the age of
- * the last replayed transaction. A standby whose WAL receiver runs and that
- * replayed everything it received is current: no writes is not lag. This is
- * lag behind the subscriber, not the primary (the subscriber's own lag is
- * not visible from a standby). Roles
- * without pg_read_all_stats see the receiver pid but a NULL status, which
- * still counts as running.
+ * Replica lag SQL. Upstream lag measures the local database against its WAL
+ * source (physical standby vs subscriber, or logical subscriber message
+ * receipt). That alone reads 0 when a logical subscriber reconnects without
+ * applying commits. primary_commit_lag is age(public.read_replica_commit_marker)
+ * on the replica: the primary cron updates that row and logical replication
+ * copies it, so it reflects true primary staleness on every replica tier.
  */
 export const REPLICA_LAG_QUERY = `
-  SELECT CASE
-    WHEN pg_is_in_recovery() THEN
-      CASE
-        WHEN pg_last_wal_receive_lsn() IS NOT NULL
-          AND pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()
-          AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver WHERE pid IS NOT NULL AND (status IS NULL OR status = 'streaming'))
-          THEN 0
-        ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
-      END
-    ELSE (
-      SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
-      FROM pg_stat_subscription
-      WHERE last_msg_receipt_time IS NOT NULL
-    )
-  END AS lag_seconds
+  WITH upstream_lag AS (
+    SELECT CASE
+      WHEN pg_is_in_recovery() THEN
+        CASE
+          WHEN pg_last_wal_receive_lsn() IS NOT NULL
+            AND pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()
+            AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver WHERE pid IS NOT NULL AND (status IS NULL OR status = 'streaming'))
+            THEN 0::double precision
+          ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
+        END
+      ELSE (
+        SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
+        FROM pg_stat_subscription
+        WHERE last_msg_receipt_time IS NOT NULL
+      )
+    END AS lag_seconds
+  ),
+  primary_commit_lag AS (
+    SELECT EXTRACT(EPOCH FROM (now() - committed_at)) AS lag_seconds
+    FROM public.read_replica_commit_marker
+    WHERE id = 1
+  )
+  SELECT
+    (SELECT lag_seconds FROM upstream_lag) AS upstream_lag_seconds,
+    (SELECT lag_seconds FROM primary_commit_lag) AS primary_commit_lag_seconds
 `
+
+export function replicationLagSecondsFromQueryRow(row: {
+  upstream_lag_seconds?: unknown
+  primary_commit_lag_seconds?: unknown
+} | undefined): number | null {
+  const upstream = row?.upstream_lag_seconds
+  const primaryCommit = row?.primary_commit_lag_seconds
+  const toSeconds = (value: unknown): number | null => {
+    if (value === null || value === undefined)
+      return null
+    const lagSeconds = Number(value)
+    return Number.isFinite(lagSeconds) ? lagSeconds : null
+  }
+  return combineReplicaLagSeconds(toSeconds(upstream), toSeconds(primaryCommit))
+}
 
 const REPLICATION_LAG_CACHE_PATH = '/cache/replication-lag'
 

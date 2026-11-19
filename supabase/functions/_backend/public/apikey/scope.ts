@@ -7,7 +7,7 @@ import { quickError } from '../../utils/hono.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { authPrincipal, queryJson, servicePrincipal, withRlsContext } from '../../utils/pg_rls.ts'
-import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
+import { checkPermission, checkPermissionsBatch, checkPermissionsBatchPg } from '../../utils/rbac.ts'
 
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
 type ApiKeyManagementOrgMap = Map<string, string[]>
@@ -93,14 +93,12 @@ async function getApiKeyManageableOrgIds(
   }
 
   const callerOrgIds = (await loadApiKeyBindingOrgIdsForRbacIds(c, [authApikey.rbac_id])).get(authApikey.rbac_id) ?? []
-  const manageableOrgIds = new Set<string>()
-  for (const orgId of callerOrgIds) {
-    if (await checkPermission(c, 'org.manage_apikeys', { orgId })) {
-      manageableOrgIds.add(orgId)
-    }
-  }
-
-  return manageableOrgIds
+  // One pooled client and one batched statement for every bound org.
+  const allowed = await checkPermissionsBatch(c, callerOrgIds.map(orgId => ({
+    permission: 'org.manage_apikeys' as const,
+    scope: { orgId },
+  })))
+  return new Set(callerOrgIds.filter((_orgId, idx) => allowed[idx]))
 }
 
 function assertTargetOrgIdsAreManageable(
@@ -135,7 +133,20 @@ function parseOptionalChannelId(value: unknown): string | number | null {
   return value
 }
 
+/**
+ * Maximum bindings per API key create/update request. Each binding runs several
+ * sequential queries inside a transaction that holds org advisory locks, so an
+ * unbounded array would hold those locks for an unbounded time.
+ */
+export const MAX_API_KEY_BINDINGS = 100
+
 export function sanitizeClientBindings(bindings: unknown[]): ClientBindingInput[] {
+  if (bindings.length > MAX_API_KEY_BINDINGS) {
+    throw quickError(400, 'too_many_bindings', `An API key accepts at most ${MAX_API_KEY_BINDINGS} bindings per request`, {
+      max: MAX_API_KEY_BINDINGS,
+      received: bindings.length,
+    })
+  }
   return bindings.map((binding) => {
     if (!binding || typeof binding !== 'object') {
       throw quickError(400, 'invalid_bindings', 'Each binding must be an object')
@@ -182,11 +193,12 @@ export async function assertApiKeyManagerCanAssignBindings(
   // caller can assign sensitive roles from RBAC permissions, not auth type.
   const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
   const orgIds = [...new Set(bindings.map(binding => binding.org_id))]
-  for (const orgId of orgIds) {
-    const canUpdateUserRoles = drizzle
-      ? await checkPermissionPg(c, 'org.update_user_roles', { orgId }, drizzle, auth.userId, apikeyString)
-      : await checkPermission(c, 'org.update_user_roles', { orgId })
-    if (canUpdateUserRoles) {
+  const checks = orgIds.map(orgId => ({ permission: 'org.update_user_roles' as const, scope: { orgId } }))
+  const canUpdateUserRolesByOrg = drizzle
+    ? await checkPermissionsBatchPg(c, checks, drizzle, auth.userId, apikeyString)
+    : await checkPermissionsBatch(c, checks)
+  for (const [orgIdx, orgId] of orgIds.entries()) {
+    if (canUpdateUserRolesByOrg[orgIdx]) {
       continue
     }
 

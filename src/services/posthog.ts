@@ -86,6 +86,12 @@ export function posthogLoader(apiHost: string) {
     ui_host: 'https://eu.posthog.com',
     person_profiles: 'identified_only',
     defaults: '2026-05-30',
+    session_recording: {
+      // Assistant requests contain chat content and provider tokens. Do not let
+      // remote replay settings enable capture of network payloads or headers.
+      recordBody: false,
+      recordHeaders: false,
+    },
     before_send: (event) => {
       const sanitizedEvent = sanitizePostHogInvitationEvent(event)
       if (shouldSuppressPostHogExceptionEvent(sanitizedEvent))

@@ -1,0 +1,17 @@
+[
+  {
+    "id": 110589,
+    "file": "post_trial_value.html",
+    "subject": "{% if visitor.tags contains 'onboarding_intent:builder' %}Ready for your next native build?{% else %}Ready for your next live update?{% endif %}"
+  },
+  {
+    "id": 85770,
+    "file": "bundle_uploaded.html",
+    "subject": "Your bundle has been uploaded to Capgo"
+  },
+  {
+    "id": 43121,
+    "file": "onboarding_help.html",
+    "subject": "What got in the way of getting started?"
+  }
+]

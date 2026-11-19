@@ -34,10 +34,34 @@ function createContext() {
 
 afterEach(() => {
   mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
+  delete mockedEnv.STRIPE_SECRET_KEY_US
   vi.restoreAllMocks()
 })
 
 describe('createCustomer idempotency', () => {
+  it.each(['ee', 'us'] as const)('stores the profile country as metadata on the %s account', async (account) => {
+    mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
+    const create = vi.fn().mockResolvedValue({ id: 'cus_country_test' })
+    vi.mocked(Stripe).mockImplementation(function () {
+      return { customers: { create } }
+    } as any)
+    const { createCustomer } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    await createCustomer(createContext(), 'owner@example.com', 'user-1', 'org-1', 'Example Organization', account, 'in')
+
+    expect(Stripe).toHaveBeenLastCalledWith(account === 'us' ? 'sk_test_us' : 'sk_test_123', expect.anything())
+    const params = create.mock.calls[0][0]
+    expect(params.metadata.profile_country).toBe('IN')
+    expect(params).not.toHaveProperty('address')
+    expect(params).not.toHaveProperty('tax')
+  })
+
+  it.each([null, '', 'XX', 'T1', 'India'])('omits unavailable or non-code profile country %j', async (country) => {
+    mockedEnv.STRIPE_SECRET_KEY = ''
+    const { createCustomer } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const customer = await createCustomer(createContext(), 'owner@example.com', 'user-1', 'org-1', 'Example Organization', 'ee', country)
+    expect(customer.metadata).not.toHaveProperty('profile_country')
+  })
+
   it('passes a stable org-scoped Stripe idempotency key', async () => {
     const createCustomerApi = vi.fn().mockResolvedValue({ id: 'cus_idempotent' })
     const updateCustomerApi = vi.fn().mockResolvedValue({ id: 'cus_idempotent' })

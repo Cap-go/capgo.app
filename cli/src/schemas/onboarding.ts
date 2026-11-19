@@ -24,7 +24,7 @@ export const onboardingNextStepSchema = z.object({
   resumeChoice: z.enum(['continue', 'restart']).describe('Answer to the resume prompt shown when an in-progress onboarding for the chosen platform already exists: "continue" picks up from the saved step, "restart" wipes the saved onboarding progress for that platform and begins again').optional(),
   credentialsExistChoice: z.enum(['backup', 'cancel']).describe('Data-safety choice when saved Android credentials already exist: "backup" (back them up, then continue) or "cancel" (stop onboarding), when the step asks').optional(),
   keystoreMethod: z.enum(['existing', 'generate']).describe('Whether you already have an Android keystore ("existing") or want one created ("generate")').optional(),
-  keystorePath: z.string().describe('Absolute path to your existing Android keystore file (.jks/.keystore/.p12), when asked').optional(),
+  keystorePath: z.string().describe('Path to your existing Android keystore inside the project (.jks, .keystore, or .p12), when asked').optional(),
   keystoreStorePassword: z.string().describe('The keystore store password, when asked').optional(),
   keystoreAlias: z.string().describe('The key alias inside the keystore, when asked or when multiple are found').optional(),
   keystoreKeyPassword: z.string().describe('The key password (leave blank to match the store password), when asked').optional(),
@@ -39,7 +39,7 @@ export const onboardingNextStepSchema = z.object({
   ciSecretAction: z.enum(['github', 'gitlab', 'skip', 'yes', 'no', 'replace', 'retry', 'continue', 'confirm', 'cancel']).describe('Answer to the post-build CI-secrets steps — the allowed values per step: ci-secrets-target-select "github"/"gitlab"/"skip"; ask-ci-secrets "yes"/"no"; confirm-ci-secret-overwrite "replace"/"skip"; confirm-secrets-push "confirm"/"cancel"; ci-secrets-setup "retry"/"skip"; ci-secrets-failed "retry"/"continue"').optional(),
   githubActionsSetup: z.enum(['with-workflow', 'secrets-only', 'no']).describe('Answer to ask-github-actions-setup: "with-workflow" pushes the secrets AND writes a workflow file, "secrets-only" pushes only the secrets, "no" declines (offers a local .env export instead)').optional(),
   exportEnvAction: z.enum(['yes', 'no', 'replace', 'skip']).describe('Answer to the .env export steps: ask-export-env "yes" (optionally with envExportPath)/"no"; confirm-env-export-overwrite "replace"/"skip"').optional(),
-  envExportPath: z.string().describe('Custom target path for the exported .env file — only together with exportEnvAction "yes" (defaults to the path shown in the prompt)').optional(),
+  envExportPath: z.string().describe('Custom .env path inside the project directory, only with exportEnvAction "yes" (defaults to the path shown in the prompt)').optional(),
   packageManager: z.enum(['bun', 'npm', 'pnpm', 'yarn']).describe('Answer to pick-package-manager: the package manager the generated workflow should install with').optional(),
   buildScript: z.string().describe('Answer to pick-build-script: a script name from the listed options, "__custom__" to type a custom command, or "__skip__" when the app needs no build step').optional(),
   buildScriptCustom: z.string().describe('Answer to pick-build-script-custom: the exact custom command the workflow runs to build the web assets (e.g. "make web")').optional(),
@@ -50,7 +50,7 @@ export const onboardingNextStepSchema = z.object({
   profileChoice: z.string().describe('Answer to iOS import-pick-profile: the chosen provisioning profile\'s UUID (one of the listed option values), or "__back__" to return to identity selection').optional(),
   importRecoveryAction: z.enum(['create', 'provide-profile-path', 'browser', 'back']).describe('Answer to iOS import-no-match-recovery: "create" makes a fresh App Store profile for the chosen certificate via Apple, "provide-profile-path" supplies a .mobileprovision file path, "browser" explains the manual Apple Developer Portal route, "back" returns to identity selection').optional(),
   portalAction: z.enum(['use-create', 'open-anyway', 'use-file', 'back']).describe('Answer to iOS import-portal-explanation: "use-create" creates the profile automatically (recommended), "use-file" provides a downloaded .mobileprovision path, "open-anyway"/"back" return to the recovery menu (the portal URL is in the result context — the server never opens a browser)').optional(),
-  profilePath: z.string().describe('Absolute path to a .mobileprovision file — answers iOS import-provide-profile-path, when asked').optional(),
+  profilePath: z.string().describe('Path to a .mobileprovision file inside the project, when asked on import-provide-profile-path').optional(),
   exportConfirm: z.enum(['go', 'back', 'exit']).describe('Answer to iOS import-export-warning: "go" exports the certificate from the macOS Keychain now (the user must approve the one Keychain permission dialog — tell them to click "Always Allow"), "back" returns to profile selection, "exit" stops onboarding').optional(),
 })
 

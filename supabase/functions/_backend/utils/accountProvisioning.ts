@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { PgClient } from './pg.ts'
 import { closeClient, getPgClient } from './pg.ts'
+import { getRequestCountry } from './request_country.ts'
 import { getEnv } from './utils.ts'
 
 // Keeps the `{ data, error }` result supabase-js gave callers, so their error branches stay unchanged.
@@ -70,15 +71,15 @@ export interface ProfileInput {
 export function provisionUserProfile(c: Context, profile: ProfileInput) {
   return adminQuery(c, async (pg) => {
     await pg.query(
-      `INSERT INTO public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters)
-       VALUES ($1, $2, $3, $4, true, $5)
+      `INSERT INTO public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters, country)
+       VALUES ($1, $2, $3, $4, true, $5, $6)
        ON CONFLICT (id) DO UPDATE SET
          email = EXCLUDED.email,
          first_name = EXCLUDED.first_name,
          last_name = EXCLUDED.last_name,
          enable_notifications = EXCLUDED.enable_notifications,
          opt_for_newsletters = EXCLUDED.opt_for_newsletters`,
-      [profile.id, profile.email, profile.first_name, profile.last_name, profile.opt_for_newsletters ?? false],
+      [profile.id, profile.email, profile.first_name, profile.last_name, profile.opt_for_newsletters ?? false, getRequestCountry(c)],
     )
   })
 }

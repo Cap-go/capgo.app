@@ -2,33 +2,119 @@ import type { Context } from 'hono'
 import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
-import type { PgQueryClient } from '../../utils/pg.ts'
-import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from '../../utils/pg.ts'
+import type { EmulatorSessionData } from './simulator_host.ts'
 import { recordBuildTime } from '../../utils/supabase.ts'
-import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
-import { reserveSimulatorSlot } from './concurrency.ts'
+import { backgroundTask } from '../../utils/utils.ts'
+import { expireSimulatorSessions, reserveSimulatorSlot } from './concurrency.ts'
 import { savedOutputsForJobs } from './outputs.ts'
 import { ensureBuildPermission, ensureBuildTimePlanAllowed, getBuildOwnerOrg } from './request.ts'
+import { deviceStopTime, postEmulator, queryRead, queryWrite, rememberDeviceStop, SIMULATOR_HOST_TIMEOUT_MS, SIMULATOR_IDLE_MINUTES, SIMULATOR_MAX_MINUTES, SimulatorHostError, simulatorConfig } from './simulator_host.ts'
+
+export { SIMULATOR_IDLE_MINUTES, SIMULATOR_MAX_MINUTES } from './simulator_host.ts'
 
 export interface SimulatorBody {
   app_id?: string
   platform?: string
   name?: string
   build_job_id?: string
+  command?: string
+  x?: number
+  y?: number
+  bundle_id?: string
 }
 
-export interface EmulatorSessionData {
-  id: string
-  url: string
-  status?: string
-  remoteConfig?: unknown
+export const SIMULATOR_DEVICE_COMMANDS = ['devices', 'screenshot', 'snapshot', 'home', 'lock', 'tap', 'open'] as const
+const SIMULATOR_SCREENSHOT_MAX_BYTES = 1_500_000
+
+export function simulatorDeviceUrl(sessionUrl: string, path: string): string {
+  const base = sessionUrl.endsWith('/') ? sessionUrl : `${sessionUrl}/`
+  return new URL(path.replace(/^\//, ''), base).href
 }
 
-const DEFAULT_SIMULATOR_ORIGIN = 'https://ios-emulator.capgo.app'
-const SIMULATOR_HOST_TIMEOUT_MS = 30_000
+async function wakeSimulatorDevice(sessionUrl: string, accessKey: string) {
+  try {
+    const response = await fetch(simulatorDeviceUrl(sessionUrl, 'api/status'), {
+      headers: { Authorization: `Bearer ${accessKey}` },
+      signal: AbortSignal.timeout(120_000),
+    })
+    await response.body?.cancel()
+  }
+  catch {
+    // The container keeps booting after the request that started it.
+  }
+}
+
+export function simulatorCommandRpc(input: { command: string, x?: number, y?: number, bundleId?: string }) {
+  if (!(SIMULATOR_DEVICE_COMMANDS as readonly string[]).includes(input.command))
+    throw simpleError('invalid_request', 'command must be devices, screenshot, snapshot, home, lock, tap, or open.')
+  if (input.command === 'tap' && (!Number.isFinite(input.x) || !Number.isFinite(input.y)))
+    throw simpleError('invalid_request', 'tap requires x and y.')
+  if (input.command === 'open' && !input.bundleId)
+    throw simpleError('invalid_request', 'open requires bundle_id.')
+  const flags: Record<string, unknown> = {}
+  const body: Record<string, unknown> = {}
+  if (input.command === 'tap') {
+    flags.x = input.x
+    flags.y = input.y
+    body.x = input.x
+    body.y = input.y
+  }
+  if (input.command === 'open') {
+    flags.bundleId = input.bundleId
+    body.app = input.bundleId
+  }
+  const positionals: unknown[] = input.command === 'tap' ? [String(input.x), String(input.y)] : []
+  return {
+    jsonrpc: '2.0' as const,
+    id: 1,
+    method: 'agent_device.command' as const,
+    params: { command: input.command, positionals, flags, input: body },
+  }
+}
+
+export async function readCappedBytes(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  let tooLarge = false
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done)
+        break
+      if (!value)
+        continue
+      if (total + value.byteLength > maxBytes) {
+        tooLarge = true
+        break
+      }
+      chunks.push(value)
+      total += value.byteLength
+    }
+    if (tooLarge)
+      await reader.cancel()
+  }
+  finally {
+    reader.releaseLock()
+  }
+  if (tooLarge)
+    throw new Error('too-large')
+  if (total === 0)
+    throw new Error('empty')
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes
+}
+
 const SIMULATOR_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const SAVED_IPA_MAX_BYTES = 512 * 1024 * 1024
 const SAVED_IPA_TRANSFER_MS = 60_000
+// Upload, install and first launch of the app on an emulated device.
+const SAVED_IPA_INSTALL_MS = 180_000
 
 export function savedIpaContentLength(header: string | null): number | undefined {
   if (!header)
@@ -39,21 +125,16 @@ export function savedIpaContentLength(header: string | null): number | undefined
   return length
 }
 
-export function multipartIpaStream(body: ReadableStream<Uint8Array>, boundary: string, maxBytes = SAVED_IPA_MAX_BYTES): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder()
+// The saved IPA as the raw request body, capped at maxBytes. The simulator host's firewall answers
+// large multipart uploads with a challenge page instead of passing them on; a raw body passes.
+export function ipaUploadStream(body: ReadableStream<Uint8Array>, maxBytes = SAVED_IPA_MAX_BYTES): ReadableStream<Uint8Array> {
   let sent = 0
   return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(`--${boundary}\r\nContent-Disposition: form-data; name="ipa"; filename="app.ipa"\r\nContent-Type: application/octet-stream\r\n\r\n`))
-    },
     transform(chunk, controller) {
       sent += chunk.byteLength
       if (sent > maxBytes)
         throw new Error('The saved build is too large to install.')
       controller.enqueue(chunk)
-    },
-    flush(controller) {
-      controller.enqueue(encoder.encode(`\r\n--${boundary}--\r\n`))
     },
   }))
 }
@@ -66,7 +147,10 @@ export function emulatorSessionCreateBody(input: { id?: string, appId: string, p
     orgId: input.orgId,
     name: input.name,
     type: 'agent-device',
-    maxDurationMinutes: 40,
+    maxDurationMinutes: SIMULATOR_MAX_MINUTES,
+    // The host stops the device after this long without input, so an
+    // abandoned simulator does not run (and bill) up to its maximum duration.
+    maxIdleTimeMinutes: SIMULATOR_IDLE_MINUTES,
   }
 }
 
@@ -77,7 +161,7 @@ export function simulatorUsageEnd(deviceStoppedAt: string | Date | null, now = D
   return Number.isFinite(parsed) ? parsed : now
 }
 
-export function simulatorBillingInstant(startedAt: string | null, stoppedAt: number, maxDurationMinutes = 40): number {
+export function simulatorBillingInstant(startedAt: string | null, stoppedAt: number, maxDurationMinutes = SIMULATOR_MAX_MINUTES): number {
   if (!startedAt)
     return stoppedAt
   const started = Date.parse(startedAt)
@@ -86,7 +170,7 @@ export function simulatorBillingInstant(startedAt: string | null, stoppedAt: num
   return Math.min(stoppedAt, started + Math.max(1, maxDurationMinutes) * 60_000)
 }
 
-export function simulatorBillableSeconds(startedAt: string | null, now = Date.now(), maxDurationMinutes = 40): number {
+export function simulatorBillableSeconds(startedAt: string | null, now = Date.now(), maxDurationMinutes = SIMULATOR_MAX_MINUTES): number {
   if (!startedAt)
     return 0
   const started = Date.parse(startedAt)
@@ -133,51 +217,6 @@ export function isSimulatorSessionId(value: string) {
   return SIMULATOR_SESSION_ID.test(value)
 }
 
-async function queryWrite<T extends object>(c: Context, sql: string, params: unknown[]): Promise<T[]> {
-  let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
-  let client: PgQueryClient | null = null
-  try {
-    pgPool = await getPgClient(c)
-    client = await checkoutPgClient(pgPool)
-    await beginWriteTransaction(client)
-    const result = await client.query(sql, params)
-    await client.query('COMMIT')
-    return result.rows as T[]
-  }
-  catch (error) {
-    if (client) {
-      try {
-        await client.query('ROLLBACK')
-      }
-      catch {
-        // Preserve the original error.
-      }
-    }
-    throw error
-  }
-  finally {
-    releasePgClient(pgPool, client)
-    if (pgPool)
-      await closeClient(c, pgPool)
-  }
-}
-
-async function queryRead<T extends object>(c: Context, sql: string, params: unknown[]): Promise<T[]> {
-  let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
-  let client: PgQueryClient | null = null
-  try {
-    pgPool = await getPgClient(c, true)
-    client = await checkoutPgClient(pgPool)
-    const result = await client.query(sql, params)
-    return result.rows as T[]
-  }
-  finally {
-    releasePgClient(pgPool, client)
-    if (pgPool)
-      await closeClient(c, pgPool)
-  }
-}
-
 interface SimulatorRow {
   id: string
   app_id: string
@@ -191,27 +230,20 @@ interface SimulatorRow {
   max_duration_minutes: number
 }
 
-async function markSession(c: Context, id: string, status: 'in-progress' | 'stopped' | 'errored', extra?: { url?: string, emulatorId?: string }) {
+async function markSession(c: Context, id: string, status: 'in-progress' | 'stopped' | 'errored', extra?: { url?: string, emulatorId?: string, finishedAt?: string }) {
   const rows = await queryWrite<{ id: string }>(c, `
     UPDATE public.simulator_sessions
     SET status = $2,
         url = COALESCE($3, url),
         emulator_id = COALESCE($4, emulator_id),
         started_at = CASE WHEN $2 = 'in-progress' AND started_at IS NULL THEN now() ELSE started_at END,
-        finished_at = CASE WHEN $2 IN ('stopped', 'errored') THEN now() ELSE finished_at END,
+        finished_at = CASE WHEN $2 IN ('stopped', 'errored') THEN COALESCE($5::timestamptz, now()) ELSE finished_at END,
         updated_at = now()
     WHERE id = $1::uuid
     RETURNING id
-  `, [id, status, extra?.url ?? null, extra?.emulatorId ?? null])
+  `, [id, status, extra?.url ?? null, extra?.emulatorId ?? null, extra?.finishedAt ?? null])
   if (rows.length !== 1)
     throw simpleError('not_found', 'Simulator session not found.')
-}
-
-class SimulatorHostError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message)
-    this.name = 'SimulatorHostError'
-  }
 }
 
 export function simulatorHostStopIsFinal(status: number): boolean {
@@ -241,22 +273,6 @@ export function canFinishSimulatorStop(input: { remoteStatus: number | null, bil
   return true
 }
 
-async function postEmulator(origin: string, accessKey: string, path: string, method: string, body?: unknown): Promise<{ status: number, data?: EmulatorSessionData }> {
-  const response = await fetch(`${origin}${path}`, {
-    method,
-    headers: {
-      'Authorization': `Bearer ${accessKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(SIMULATOR_HOST_TIMEOUT_MS),
-  })
-  const payload = await response.json().catch(() => undefined) as { data?: EmulatorSessionData, error?: string } | undefined
-  if (!response.ok)
-    throw new SimulatorHostError(payload?.error || `Simulator request failed (${response.status})`, response.status)
-  return { status: response.status, data: payload?.data }
-}
-
 async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string, sessionUrl: string, accessKey: string) {
   const saved = (await savedOutputsForJobs(c, principal, appId, ownerOrg, [jobId]))[jobId]
   if (saved?.kind !== 'ios_ipa')
@@ -271,31 +287,30 @@ async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: strin
     await file.body.cancel()
     throw new Error('The saved build is too large to install.')
   }
-  const boundary = `capgo-${crypto.randomUUID()}`
   const installUrl = new URL('api/install', sessionUrl.endsWith('/') ? sessionUrl : `${sessionUrl}/`)
   const init: RequestInit & { duplex?: 'half' } = {
     method: 'POST',
     headers: {
       'authorization': `Bearer ${accessKey}`,
-      'content-type': `multipart/form-data; boundary=${boundary}`,
+      'content-type': 'application/octet-stream',
     },
-    body: multipartIpaStream(file.body, boundary),
+    body: ipaUploadStream(file.body),
     duplex: 'half',
-    signal: AbortSignal.timeout(SAVED_IPA_TRANSFER_MS),
+    signal: AbortSignal.timeout(SAVED_IPA_INSTALL_MS),
   }
   const response = await fetch(installUrl, init)
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    throw new Error(text.slice(0, 300) || 'The simulator could not install the build.')
+    const reason = (() => {
+      try {
+        return (JSON.parse(text) as { error?: string }).error
+      }
+      catch {
+        return undefined
+      }
+    })()
+    throw new Error((reason || text).slice(0, 300) || 'The simulator could not install the build.')
   }
-}
-
-function simulatorConfig(c: Context) {
-  const accessKey = getEnv(c, 'SIMULATOR_ACCESS_KEY')
-  if (!accessKey)
-    throw quickError(503, 'simulator_not_configured', 'Simulator is not configured.', {}, undefined, { alert: false })
-  const origin = trimTrailingSlashes(getEnv(c, 'SIMULATOR_ORIGIN') || DEFAULT_SIMULATOR_ORIGIN)
-  return { accessKey, origin }
 }
 
 async function ownedSession(c: Context, principal: RlsPrincipal, userId: string, appId: string, sessionId: string) {
@@ -367,6 +382,8 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
       emulatorId = created.data.id
     const device = openedSimulator(created.data)
     await markSession(c, slot.id, 'in-progress', { url: device.url, emulatorId: device.id })
+    if (platform === 'ios')
+      await backgroundTask(c, wakeSimulatorDevice(device.url, accessKey))
     const installError = await savedBuildInstallError({ c, principal, appId, ownerOrg: orgId, jobId: body.build_job_id, platform, sessionUrl: device.url, accessKey })
     return c.json({
       data: {
@@ -413,9 +430,16 @@ async function recordStartupFailure(c: Context, slotId: string, emulatorId: stri
   }
 }
 
+export const SIMULATOR_STOPPED_MESSAGE = `This simulator is not running. A simulator stops after ${SIMULATOR_IDLE_MINUTES} minutes without input, and after ${SIMULATOR_MAX_MINUTES} minutes at most. Start a new one.`
+
 export async function readSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const appId = requireAppId(body.app_id)
-  const { row } = await ownedSession(c, principal, userId, appId, sessionId)
+  const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
+  const device = await runningDevice(c, row)
+  if (await settleIfDeviceStopped(c, orgId, row, device)) {
+    return c.json({ data: { id: row.id, url: row.url, status: 'stopped', platform: row.platform, kind: 'simulator' } })
+  }
+  const remoteConfig = device?.remoteConfig ?? null
   return c.json({
     data: {
       id: row.id,
@@ -423,19 +447,121 @@ export async function readSimulator(c: Context, sessionId: string, body: Simulat
       status: row.status,
       platform: row.platform,
       kind: 'simulator',
+      ...(remoteConfig ? { remoteConfig } : {}),
     },
   })
 }
 
-async function stopRemoteDevice(c: Context, emulatorId: string, sessionId: string, rowId: string): Promise<number> {
+async function runningDevice(c: Context, row: SimulatorRow): Promise<EmulatorSessionData | undefined> {
+  if (row.status !== 'in-progress' || !row.emulator_id)
+    return undefined
+  try {
+    const { accessKey, origin } = simulatorConfig(c)
+    const found = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${encodeURIComponent(row.emulator_id)}`, 'GET')
+    return found.data
+  }
+  catch {
+    return undefined
+  }
+}
+
+// The host stops a device on its own after a few minutes without input. Settle the session
+// as soon as we see that: it frees the builder slot and is billed up to the device stop.
+async function settleIfDeviceStopped(c: Context, orgId: string, row: SimulatorRow, device: EmulatorSessionData | undefined): Promise<boolean> {
+  const stoppedAt = deviceStopTime(device)
+  if (!stoppedAt)
+    return false
+  await rememberDeviceStop(c, row.id, stoppedAt)
+  try {
+    await expireSimulatorSessions(c, orgId)
+  }
+  catch (error) {
+    // The stop time is saved: the next sweep bills the session up to it.
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator settlement failed', sessionId: row.id, error })
+  }
+  return true
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = ''
+  for (let index = 0; index < bytes.length; index += 0x8000)
+    binary += String.fromCodePoint(...bytes.subarray(index, index + 0x8000))
+  return btoa(binary)
+}
+
+export async function commandSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
+  const appId = requireAppId(body.app_id)
+  const rpc = simulatorCommandRpc({
+    command: typeof body.command === 'string' ? body.command : '',
+    x: body.x,
+    y: body.y,
+    bundleId: typeof body.bundle_id === 'string' ? body.bundle_id.trim() : undefined,
+  })
+  const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
+  if (row.status !== 'in-progress' || !row.url)
+    throw simpleError('invalid_request', SIMULATOR_STOPPED_MESSAGE)
+  const { accessKey } = simulatorConfig(c)
+  const response = await fetch(simulatorDeviceUrl(row.url, 'agent-device/rpc'), {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(rpc),
+    signal: AbortSignal.timeout(SIMULATOR_HOST_TIMEOUT_MS),
+  })
+  const payload = await response.json().catch(() => undefined) as { result?: { data?: unknown }, error?: { message?: string } } | undefined
+  // 409: the host already ended this session, most often after a few minutes without input.
+  if (response.status === 409 && await settleIfDeviceStopped(c, orgId, row, await runningDevice(c, row)))
+    throw simpleError('invalid_request', SIMULATOR_STOPPED_MESSAGE)
+  if (!response.ok || !payload || payload.error || !('result' in payload)) {
+    throw quickError(502, 'simulator_unavailable', payload?.error?.message || `Simulator request failed (${response.status})`, { app_id: appId }, undefined, { alert: false })
+  }
+  let image: string | undefined
+  if (rpc.params.command === 'screenshot')
+    image = await simulatorScreenshot(row.url, accessKey, appId)
+  return c.json({
+    data: {
+      id: row.id,
+      command: rpc.params.command,
+      result: payload?.result?.data ?? null,
+      ...(image ? { image_base64: image, image_media_type: 'image/jpeg' } : {}),
+    },
+  })
+}
+
+async function simulatorScreenshot(sessionUrl: string, accessKey: string, appId: string) {
+  const shot = await fetch(simulatorDeviceUrl(sessionUrl, 'agent-device/artifacts/screen.jpg'), {
+    headers: { Authorization: `Bearer ${accessKey}` },
+    signal: AbortSignal.timeout(SIMULATOR_HOST_TIMEOUT_MS),
+  })
+  const length = Number(shot.headers.get('content-length'))
+  if (!shot.ok || !shot.body) {
+    await shot.body?.cancel()
+    throw quickError(502, 'simulator_unavailable', 'The simulator did not return a screenshot.', { app_id: appId }, undefined, { alert: false })
+  }
+  if (Number.isFinite(length) && length > SIMULATOR_SCREENSHOT_MAX_BYTES) {
+    await shot.body.cancel()
+    throw quickError(502, 'simulator_unavailable', 'The screenshot is too large.', { app_id: appId }, undefined, { alert: false })
+  }
+  try {
+    return bytesToBase64(await readCappedBytes(shot.body, SIMULATOR_SCREENSHOT_MAX_BYTES))
+  }
+  catch (error) {
+    const tooLarge = error instanceof Error && error.message === 'too-large'
+    throw quickError(502, 'simulator_unavailable', tooLarge ? 'The screenshot is too large.' : 'The simulator did not return a screenshot.', { app_id: appId }, error, { alert: false })
+  }
+}
+
+async function stopRemoteDevice(c: Context, emulatorId: string, sessionId: string, rowId: string): Promise<{ status: number, stoppedAt?: string }> {
   const { accessKey, origin } = simulatorConfig(c)
   try {
-    const stopped = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${emulatorId}/stop`, 'POST', {})
-    return stopped.status
+    const stopped = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${encodeURIComponent(emulatorId)}/stop`, 'POST', {})
+    return { status: stopped.status, stoppedAt: deviceStopTime(stopped.data) }
   }
   catch (error) {
     if (error instanceof SimulatorHostError && simulatorHostStopIsFinal(error.status))
-      return error.status
+      return { status: error.status }
     cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator stop failed', sessionId, error })
     throw quickError(502, 'simulator_stop_failed', 'The simulator is still running. Retry stop.', { id: rowId }, error, { alert: false })
   }
@@ -444,20 +570,12 @@ async function stopRemoteDevice(c: Context, emulatorId: string, sessionId: strin
 async function confirmDeviceStopped(c: Context, row: SimulatorRow, sessionId: string) {
   if (row.device_stopped_at)
     return { remoteStatus: 200, stoppedAt: row.device_stopped_at }
-  const remoteStatus = row.emulator_id ? await stopRemoteDevice(c, row.emulator_id, sessionId, row.id) : null
-  const stoppedAt = await rememberDeviceStop(c, row.id, new Date().toISOString())
-  return { remoteStatus, stoppedAt }
-}
-
-async function rememberDeviceStop(c: Context, id: string, stoppedAt: string) {
-  const rows = await queryWrite<{ device_stopped_at: string }>(c, `
-    UPDATE public.simulator_sessions
-    SET device_stopped_at = COALESCE(device_stopped_at, $2::timestamptz),
-        updated_at = now()
-    WHERE id = $1::uuid
-    RETURNING device_stopped_at
-  `, [id, stoppedAt])
-  return rows[0]?.device_stopped_at ?? stoppedAt
+  const remote = row.emulator_id ? await stopRemoteDevice(c, row.emulator_id, sessionId, row.id) : null
+  // A device the host already stopped for lack of input is billed up to that stop, not up to now.
+  // A stop answered without a session (404, 409) still leaves the host's record to ask.
+  const hostStop = remote?.stoppedAt ?? (remote ? deviceStopTime(await runningDevice(c, row)) : undefined)
+  const stoppedAt = await rememberDeviceStop(c, row.id, hostStop ?? new Date().toISOString())
+  return { remoteStatus: remote?.status ?? null, stoppedAt }
 }
 
 export async function stopSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
@@ -468,7 +586,7 @@ export async function stopSimulator(c: Context, sessionId: string, body: Simulat
   }
   const { remoteStatus, stoppedAt } = await confirmDeviceStopped(c, row, sessionId)
   const usageEnd = simulatorUsageEnd(stoppedAt)
-  const maxMinutes = Number(row.max_duration_minutes) || 40
+  const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_MINUTES
   const seconds = simulatorBillableSeconds(row.started_at, usageEnd, maxMinutes)
   const billedAt = simulatorBillingInstant(row.started_at, usageEnd, maxMinutes)
   const platform = row.platform === 'android' ? 'android' : 'ios'
@@ -479,6 +597,63 @@ export async function stopSimulator(c: Context, sessionId: string, body: Simulat
   }
   if (!canFinishSimulatorStop({ remoteStatus, billingRecorded, seconds }))
     throw quickError(503, 'simulator_billing_failed', 'Build minutes were not recorded. Retry stop.', { id: row.id }, undefined, { alert: false })
-  await markSession(c, row.id, 'stopped')
+  await markSession(c, row.id, 'stopped', { finishedAt: new Date(usageEnd).toISOString() })
   return c.json({ data: { id: row.id, url: row.url, status: 'stopped', platform, kind: 'simulator', build_time_seconds: seconds } })
+}
+
+interface SimulatorListRow {
+  id: string
+  platform: 'ios' | 'android'
+  status: string
+  url: string | null
+  started_at: string | null
+  finished_at: string | null
+  build_time_unit: number | string | null
+  billable_seconds: number | string | null
+}
+
+export function simulatorListItem(row: SimulatorListRow) {
+  const running = row.status === 'in-progress'
+  const seconds = (value: number | string | null) => value == null ? null : Number(value)
+  return {
+    id: row.id,
+    platform: row.platform,
+    status: row.status,
+    url: running ? row.url : null,
+    started_at: row.started_at,
+    finished_at: running ? null : row.finished_at,
+    // How long the simulator ran, and what that counts against the plan (iOS counts double).
+    build_time_seconds: seconds(row.build_time_unit),
+    billable_seconds: seconds(row.billable_seconds),
+  }
+}
+
+// The app's last ten simulators, newest first, with the build time each one counted.
+export async function listSimulators(c: Context, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
+  const appId = requireAppId(body.app_id)
+  await ensureBuildPermission(c, appId, userId)
+  const orgId = await getBuildOwnerOrg(c, principal, appId)
+  try {
+    // Settles the sessions whose device stopped, so the list shows their real end and cost.
+    await expireSimulatorSessions(c, orgId)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator settlement failed before listing', appId, error })
+  }
+  // A cached read (up to a minute old): the console polls this list, and a row settled just now
+  // shows up stopped on a later poll.
+  const rows = await queryRead<SimulatorListRow>(c, `
+    SELECT s.id, s.platform, s.status, s.url, s.started_at, s.finished_at,
+           l.build_time_unit, l.billable_seconds
+    FROM public.simulator_sessions s
+    LEFT JOIN public.build_logs l ON l.build_id = s.id::varchar AND l.org_id = s.owner_org
+    WHERE s.owner_org = $1 AND s.app_id = $2
+    ORDER BY s.created_at DESC
+    LIMIT 10
+  `, [orgId, appId])
+  return c.json({
+    data: rows.map(simulatorListItem),
+    idle_minutes: SIMULATOR_IDLE_MINUTES,
+    max_minutes: SIMULATOR_MAX_MINUTES,
+  })
 }
