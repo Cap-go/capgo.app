@@ -1,4 +1,4 @@
--- Ordered after 20261118170054_plugin_state_eu_source on main.
+-- Ordered after 20261119180122 and 20261118170054_plugin_state_eu_source.
 -- process_all_cron_tasks extends 20261111225650_cron_task_duration_diagnostics.
 SET LOCAL lock_timeout = '2s';
 
