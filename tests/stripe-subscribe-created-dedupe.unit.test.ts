@@ -100,12 +100,15 @@ describe('subscription subscribe_created Bento dedupe', () => {
     const syncMarker = 'await syncBillingBentoTags(c, org, stripeData.data.customer_id, segment)'
     const purgeMarker = 'purgeOnPremCacheForOrg(c, org.id)'
     const subscribeMarker = 'bento: buildSubscriptionSubscribeBentoPayload(statusName, eventName, plan.name, subscriptionMetadata)'
+    const ledgerMarker = 'await recordProcessedStripeEventLedger('
     const syncIndex = source.indexOf(syncMarker)
     const purgeIndex = source.indexOf(purgeMarker, syncIndex)
     const subscribeIndex = source.indexOf(subscribeMarker, purgeIndex)
+    const ledgerIndex = source.indexOf(ledgerMarker, subscribeIndex)
     expect(syncIndex).toBeGreaterThan(0)
     expect(purgeIndex).toBeGreaterThan(syncIndex)
     expect(subscribeIndex).toBeGreaterThan(purgeIndex)
+    expect(ledgerIndex).toBeGreaterThan(subscribeIndex)
   })
 })
 

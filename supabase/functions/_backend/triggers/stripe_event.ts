@@ -814,6 +814,32 @@ function buildStripeInfoUpdateStatement(customerId: string, updateData: StripeIn
   }
 }
 
+interface PersistStripeInfoOptions {
+  /** Record processed_stripe_events only after post-commit subscribe effects (createdOrUpdated). */
+  deferProcessedStripeEventLedger?: boolean
+}
+
+async function recordProcessedStripeEventLedger(
+  c: Context,
+  customerId: string,
+  stripeEventId: string,
+  eventOccurredAtIso: string,
+) {
+  await withAdminPg(c, pg => pg.query(`
+    INSERT INTO public.processed_stripe_events (
+      event_id,
+      customer_id,
+      date_id
+    )
+    VALUES ($1, $2, $3)
+    ON CONFLICT (event_id) DO NOTHING
+  `, [
+    stripeEventId,
+    customerId,
+    getEventDateId(eventOccurredAtIso),
+  ]))
+}
+
 async function persistStripeInfoAndRevenueMovement(
   c: Context,
   customerId: string,
@@ -821,6 +847,7 @@ async function persistStripeInfoAndRevenueMovement(
   updateData: StripeInfoUpdate,
   eventOccurredAtIso: string,
   movement: RevenueMovement,
+  options: PersistStripeInfoOptions = {},
 ): Promise<PersistRevenueMovementResult> {
   const transactionUpdateData: StripeInfoUpdate = {
     ...updateData,
@@ -879,23 +906,35 @@ async function persistStripeInfoAndRevenueMovement(
     const shouldRecordProcessedEvent = shouldRecordProcessedStripeEvent(updateStatement, movement)
 
     if (shouldRecordProcessedEvent) {
-      const processedEvent = await pgClient.query(`
-        INSERT INTO public.processed_stripe_events (
-          event_id,
-          customer_id,
-          date_id
+      if (options.deferProcessedStripeEventLedger) {
+        const existing = await pgClient.query(
+          'SELECT 1 FROM public.processed_stripe_events WHERE event_id = $1',
+          [stripeEventId],
         )
-        VALUES ($1, $2, $3)
-        ON CONFLICT (event_id) DO NOTHING
-      `, [
-        stripeEventId,
-        customerId,
-        getEventDateId(eventOccurredAtIso),
-      ])
+        if ((existing.rowCount ?? 0) > 0) {
+          await pgClient.query('ROLLBACK')
+          return { status: 'duplicate', firstPaidAt: null }
+        }
+      }
+      else {
+        const processedEvent = await pgClient.query(`
+          INSERT INTO public.processed_stripe_events (
+            event_id,
+            customer_id,
+            date_id
+          )
+          VALUES ($1, $2, $3)
+          ON CONFLICT (event_id) DO NOTHING
+        `, [
+          stripeEventId,
+          customerId,
+          getEventDateId(eventOccurredAtIso),
+        ])
 
-      if ((processedEvent.rowCount ?? 0) === 0) {
-        await pgClient.query('ROLLBACK')
-        return { status: 'duplicate', firstPaidAt: null }
+        if ((processedEvent.rowCount ?? 0) === 0) {
+          await pgClient.query('ROLLBACK')
+          return { status: 'duplicate', firstPaidAt: null }
+        }
       }
     }
 
@@ -1444,6 +1483,7 @@ async function createdOrUpdated(
       updateData,
       eventOccurredAtIso,
       revenueMovement,
+      { deferProcessedStripeEventLedger: true },
     )
     if (!shouldSendSubscriptionSubscribeTrackingAfterPersist(didPersist)) {
       if (didPersist === 'duplicate') {
@@ -1591,6 +1631,13 @@ async function createdOrUpdated(
         ...(isNewSubscription ? {} : await loadSignupAttributionTags()),
       },
     })
+
+    await recordProcessedStripeEventLedger(
+      c,
+      stripeData.data.customer_id,
+      c.get('stripeEvent')!.id,
+      eventOccurredAtIso,
+    )
   }
   else {
     const segment = await customerToSegmentOrg(c, org, stripeData.data.price_id)
@@ -2394,6 +2441,7 @@ export const stripeEventTestUtils = {
   shouldRecordProcessedStripeEvent,
   shouldSendSubscriptionSubscribeTrackingAfterPersist,
   persistStripeInfoAndRevenueMovement,
+  recordProcessedStripeEventLedger,
   getEventDateId,
   getPaidAtUpdate,
   resolveFirstPaidAt,

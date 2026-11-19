@@ -73,6 +73,13 @@ describe('Stripe webhook replay dedupe (same event.id)', () => {
       updateData,
       eventOccurredAt,
       movement,
+      { deferProcessedStripeEventLedger: true },
+    )
+    await stripeEventTestUtils.recordProcessedStripeEventLedger(
+      createContext(),
+      customerId,
+      stripeEventId,
+      eventOccurredAt,
     )
     const replay = await stripeEventTestUtils.persistStripeInfoAndRevenueMovement(
       createContext(),
@@ -81,6 +88,7 @@ describe('Stripe webhook replay dedupe (same event.id)', () => {
       updateData,
       eventOccurredAt,
       movement,
+      { deferProcessedStripeEventLedger: true },
     )
 
     expect(first.status).toBe('applied')
