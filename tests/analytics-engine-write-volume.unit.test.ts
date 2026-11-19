@@ -72,11 +72,11 @@ describe('analytics engine write volume', () => {
     const writeDataPoint = vi.fn()
     const c = createContext({ APP_LOG: { writeDataPoint } })
 
-    mockRandomUint32(1)
+    mockRandomUint32(0xFFFFFFFF)
     await trackLogsCF(c, 'com.example.app', 'device-1', 'noNew', '1.0.0')
     expect(writeDataPoint).not.toHaveBeenCalled()
 
-    mockRandomUint32(APP_LOG_VOLUME_SAMPLE_RATE * 3)
+    mockRandomUint32(0)
     await trackLogsCF(c, 'com.example.app', 'device-1', 'app_moved_to_foreground', '1.0.0', { duration_ms: '15' })
     expect(writeDataPoint).toHaveBeenCalledWith(expect.objectContaining({
       doubles: [15, APP_LOG_VOLUME_SAMPLE_RATE],
@@ -112,6 +112,36 @@ describe('analytics engine write volume', () => {
     expect(bodies.length).toBeGreaterThan(0)
     for (const body of bodies)
       expect(body).toContain('sum(_sample_interval * if(double2 > 0, double2, 1.0))')
+  })
+
+  it('writes device usage and device info once per unchanged device in this isolate', async () => {
+    const { trackDeviceUsageCF, trackDevicesCF } = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
+    const usage = vi.fn()
+    const info = vi.fn()
+    const usageContext = createContext({ DEVICE_USAGE: { writeDataPoint: usage } })
+    const infoContext = createContext({ DEVICE_INFO: { writeDataPoint: info } })
+    const infoDevice = {
+      app_id: 'com.example.repeat',
+      device_id: 'repeat-device',
+      version_name: '1.0.0',
+      platform: 'ios',
+      plugin_version: '8.0.0',
+      os_version: '18.0',
+      version_build: '2.0.0',
+      custom_id: '',
+      is_prod: true,
+      is_emulator: false,
+    }
+
+    await trackDeviceUsageCF(usageContext, 'repeat-device', 'com.example.repeat', 'org-1', 'ios', '2.0.0')
+    await trackDeviceUsageCF(usageContext, 'repeat-device', 'com.example.repeat', 'org-1', 'ios', '2.0.0')
+    await trackDeviceUsageCF(usageContext, 'repeat-device', 'com.example.repeat', 'org-1', 'ios', '2.0.1')
+    expect(usage).toHaveBeenCalledTimes(2)
+
+    await trackDevicesCF(infoContext, infoDevice as any)
+    await trackDevicesCF(infoContext, infoDevice as any)
+    await trackDevicesCF(infoContext, { ...infoDevice, version_name: '1.0.1' } as any)
+    expect(info).toHaveBeenCalledTimes(2)
   })
 
   it('samples APP_LOG_EXTERNAL and stores the sample rate in double2', async () => {

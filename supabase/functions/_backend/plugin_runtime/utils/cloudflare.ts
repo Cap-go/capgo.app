@@ -87,6 +87,42 @@ export type Bindings = {
 const TRACK_DEVICE_USAGE_CACHE_PATH = '/.track-device-usage-cache'
 // Cache per device per day to ensure rolling windows still see active devices.
 const TRACK_DEVICE_USAGE_CACHE_MAX_AGE_SECONDS = 2 * 24 * 60 * 60
+// Colo cache misses (20ms timeout) otherwise rewrite the same device on every
+// request. This isolate remembers the keys it already wrote today.
+const WRITE_MEMORY_MAX = 20_000
+const deviceUsageMemory = new Map<string, string>()
+const deviceInfoMemory = new Map<string, string>()
+
+function rememberWrite(map: Map<string, string>, key: string, value: string) {
+  map.delete(key)
+  map.set(key, value)
+  if (map.size <= WRITE_MEMORY_MAX)
+    return
+  const oldest = map.keys().next().value
+  if (oldest !== undefined)
+    map.delete(oldest)
+}
+
+function deviceUsageMemoryKey(appId: string, deviceId: string, day: string, platform: string, versionBuild: string) {
+  return `${day}\0${appId}\0${deviceId}\0${platform}\0${versionBuild}`
+}
+
+function deviceInfoMemoryValue(signature: string, atMs: number) {
+  return `${atMs}\0${signature}`
+}
+
+function deviceInfoMemoryFresh(stored: string | undefined, signature: string, nowMs: number) {
+  if (!stored)
+    return false
+  const splitAt = stored.indexOf('\0')
+  if (splitAt < 0)
+    return false
+  const atMs = Number(stored.slice(0, splitAt))
+  if (!Number.isFinite(atMs) || stored.slice(splitAt + 1) !== signature)
+    return false
+  const ageMs = nowMs - atMs
+  return ageMs >= 0 && ageMs < DEVICE_INFO_REFRESH_TTL_SECONDS * 1000
+}
 
 function normalizeUsagePlatform(platform?: string | null) {
   return platform?.trim().toLowerCase() || 'unknown'
@@ -128,6 +164,9 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
 
   const normalizedPlatform = normalizeUsagePlatform(platform)
   const normalizedVersionBuild = version_build || 'unknown'
+  const usageMemoryKey = deviceUsageMemoryKey(app_id, device_id, formatLocalYmd(), normalizedPlatform, normalizedVersionBuild)
+  if (deviceUsageMemory.get(usageMemoryKey) === '1')
+    return
 
   try {
     const usageCache = new CacheHelper(c)
@@ -143,6 +182,7 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
     const cachedUsage = await usageCache.matchJson<{ t: number }>(usageCacheRequest)
     if (cachedUsage) {
       // Device/version already tracked for this day, skip write
+      rememberWrite(deviceUsageMemory, usageMemoryKey, '1')
       return
     }
 
@@ -154,6 +194,7 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
       doubles: [platformValue],
       indexes: [app_id],
     })
+    rememberWrite(deviceUsageMemory, usageMemoryKey, '1')
 
     // Cache the write for this native version during the current day (put timed out).
     await usageCache.putJson(usageCacheRequest, { t: Date.now() }, TRACK_DEVICE_USAGE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
@@ -166,6 +207,7 @@ export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: 
       doubles: [platformValue],
       indexes: [app_id],
     })
+    rememberWrite(deviceUsageMemory, usageMemoryKey, '1')
   }
 }
 
@@ -297,7 +339,10 @@ const APP_LOG_EVENT_COUNT_SQL = 'sum(_sample_interval * if(double2 > 0, double2,
 function keepAppLogVolumeSample(action: string) {
   if (!APP_LOG_VOLUME_SAMPLED_ACTION_SET.has(action))
     return true
-  return crypto.getRandomValues(new Uint32Array(1))[0] % APP_LOG_VOLUME_SAMPLE_RATE === 0
+  // Threshold, not modulo: floor(2^32 / rate) / 2^32 is the keep probability,
+  // and there is no remainder bias for CodeQL to flag.
+  const limit = Math.floor((2 ** 32) / APP_LOG_VOLUME_SAMPLE_RATE)
+  return crypto.getRandomValues(new Uint32Array(1))[0]! < limit
 }
 
 export function trackLogsCF(c: Context, app_id: string, device_id: string, action: string, version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
@@ -364,6 +409,12 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
     return
   }
 
+  const comparableDevice = toComparableDevice(device)
+  const infoKey = `${device.app_id}\0${device.device_id}`
+  const infoSignature = JSON.stringify(comparableDevice)
+  if (deviceInfoMemoryFresh(deviceInfoMemory.get(infoKey), infoSignature, Date.now()))
+    return
+
   try {
     const trackDeviceCache = new CacheHelper(c)
     const trackDeviceCacheRequest = trackDeviceCache.buildRequest(TRACK_DEVICE_CACHE_PATH, {
@@ -374,6 +425,8 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
     const cachedDevice = await trackDeviceCache.matchJson<DeviceInfoWriteCachePayload>(trackDeviceCacheRequest)
     if (canSkipDeviceInfoWrite(cachedDevice, device)) {
       outcome = 'cache_hit'
+      const cachedAtMs = Date.parse(cachedDevice?.cached_at ?? '')
+      rememberWrite(deviceInfoMemory, infoKey, deviceInfoMemoryValue(infoSignature, Number.isFinite(cachedAtMs) ? cachedAtMs : Date.now()))
       cloudlog({
         requestId: c.get('requestId'),
         message: 'Cache hit – device unchanged, skipping write',
@@ -384,8 +437,6 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       })
       return
     }
-
-    const comparableDevice = toComparableDevice(device)
 
     // Write to Analytics Engine - this is the primary store now (sync; needs no waitUntil)
     cloudlog({ requestId: c.get('requestId'), message: 'Writing to Analytics Engine DEVICE_INFO' })
@@ -413,11 +464,13 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       indexes: [device.app_id],
     })
 
+    const writtenAtMs = Date.now()
+    rememberWrite(deviceInfoMemory, infoKey, deviceInfoMemoryValue(infoSignature, writtenAtMs))
     const cachePayload: DeviceInfoWriteCachePayload = {
       ...comparableDevice,
       app_id: device.app_id,
       device_id: device.device_id,
-      cached_at: new Date().toISOString(),
+      cached_at: new Date(writtenAtMs).toISOString(),
     }
     await trackDeviceCache.putJson(trackDeviceCacheRequest, cachePayload, TRACK_DEVICE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
   }
