@@ -99,13 +99,16 @@ describe('production read-replica release gate', () => {
       )
 
       const parsed = parse(workflow) as {
-        jobs?: Record<string, { if?: unknown, needs?: string[] | string }>
+        jobs?: Record<string, { if?: unknown, needs?: string[] | string, steps?: Array<{ run?: string }> }>
       }
       const refreshDef = parsed.jobs?.read_replica_subscription
       expect(refreshDef, 'read_replica_subscription must exist in build_and_deploy.yml').toBeDefined()
       expect(refreshDef?.if, 'read_replica_subscription must keep a job-level if').toBeDefined()
       expect(refreshDef?.if, 'read_replica_subscription must not be disabled with if: false').not.toBe(false)
-      expect(refreshJob).toContain('resolve-deploy-tag.ts --assert-current')
+      expect(
+        refreshDef?.steps?.some(step => step.run?.includes('resolve-deploy-tag.ts --assert-current')),
+        'read_replica_subscription must run an executable assert-current step',
+      ).toBe(true)
       for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions', 'deploy_translation_worker']) {
         const jobDef = parsed.jobs?.[job]
         expect(jobDef, `${job} must exist in build_and_deploy.yml`).toBeDefined()
