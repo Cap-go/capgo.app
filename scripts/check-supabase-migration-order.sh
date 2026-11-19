@@ -168,7 +168,7 @@ is_storage_gb_hours_152120_repair() {
   local blob
   blob="$(git hash-object "$file")"
   case "${file}:${blob}" in
-    supabase/migrations/20261118193000_storage_gb_hours_billing.sql:cc5f06246a4304761a52c5aab9630388986a82e8) return 0 ;;
+    supabase/migrations/20261118193000_storage_gb_hours_billing.sql:a2bcd8fc3bb09e516e570675aa75533acfb2f023) return 0 ;;
     *) return 1 ;;
   esac
 }

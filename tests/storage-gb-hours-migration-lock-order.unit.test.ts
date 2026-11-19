@@ -10,7 +10,7 @@ const migration = readFileSync(migrationPath, 'utf8')
 const appsLockMarker = '$capgo_lock_apps_for_storage_triggers$'
 const dshLockMarker = '$capgo_lock_daily_storage_hourly$'
 const versionMetaLockMarker = '$capgo_lock_version_meta$'
-const fkDrop = 'DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey'
+const fkDropMarker = '$capgo_drop_daily_storage_hourly_app_fk$'
 
 function indexAfter(marker: string, from = 0) {
   const at = migration.indexOf(marker, from)
@@ -23,7 +23,7 @@ describe('storage gb-hours billing migration lock order (source positions)', () 
     const begin = migration.indexOf('BEGIN;')
     const commit = migration.lastIndexOf('COMMIT;')
     const appsLock = indexAfter(appsLockMarker, begin)
-    const fkDropIndex = migration.indexOf(fkDrop, appsLock)
+    const fkDropIndex = indexAfter(fkDropMarker, appsLock)
     const dshLock = indexAfter(dshLockMarker, fkDropIndex)
     const versionMetaLock = indexAfter(versionMetaLockMarker, dshLock)
     const firstAppsTrigger = migration.slice(versionMetaLock).search(/DROP TRIGGER IF EXISTS \w+ ON public\.apps/)
@@ -33,6 +33,7 @@ describe('storage gb-hours billing migration lock order (source positions)', () 
     expect(begin).toBeGreaterThan(0)
     expect(commit).toBeGreaterThan(begin)
     expect(fkDropIndex).toBeGreaterThan(appsLock)
+    expect(migration).toContain('DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey')
     expect(dshLock).toBeGreaterThan(fkDropIndex)
     expect(versionMetaLock).toBeGreaterThan(dshLock)
     expect(firstAppsTriggerAbs).toBeGreaterThan(versionMetaLock)
@@ -45,6 +46,12 @@ describe('storage gb-hours billing migration lock order (source positions)', () 
     }
     expect(migration).not.toMatch(/lock_timeout = '5s'/)
     expect(migration).not.toMatch(/lock_timeout = '1s'/)
+  })
+
+  it('wraps the daily_storage_hourly FK drop in a retry DO block', () => {
+    expect(migration).toMatch(
+      /DO \$capgo_drop_daily_storage_hourly_app_fk\$[\s\S]*DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey[\s\S]*\$capgo_drop_daily_storage_hourly_app_fk\$;/,
+    )
   })
 
   it('wraps legacy daily_storage drops in a retry DO block', () => {

@@ -47,8 +47,26 @@ BEGIN
 END;
 $capgo_lock_apps_for_storage_triggers$;
 
-ALTER TABLE public.daily_storage_hourly
-DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
+DO $capgo_drop_daily_storage_hourly_app_fk$
+DECLARE
+  attempt int;
+BEGIN
+  FOR attempt IN 1..60 LOOP
+    BEGIN
+      SET LOCAL lock_timeout = '500ms';
+      ALTER TABLE public.daily_storage_hourly
+        DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
+      RETURN;
+    EXCEPTION
+      WHEN lock_not_available OR deadlock_detected THEN
+        IF attempt >= 60 THEN
+          RAISE;
+        END IF;
+        PERFORM pg_sleep(0.1);
+    END;
+  END LOOP;
+END;
+$capgo_drop_daily_storage_hourly_app_fk$;
 
 -- ---------------------------------------------------------------------------
 -- 1. Byte-hours of deleted apps stay billable until delete_old_deleted_apps
