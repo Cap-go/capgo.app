@@ -102,6 +102,8 @@ function filterSchemaDumpForDisposableDb(sql: string): string {
   return sql
     .split('\n')
     .filter((line) => {
+      if (line.startsWith('\\'))
+        return false
       if (/^\s*CREATE\s+EXTENSION/i.test(line) && /pg_cron/i.test(line))
         return false
       if (/^\s*COMMENT ON EXTENSION pg_cron/i.test(line))
@@ -111,7 +113,7 @@ function filterSchemaDumpForDisposableDb(sql: string): string {
     .join('\n')
 }
 
-async function cloneProvisionedSchema(sourceUrl: string, targetUrl: string) {
+function cloneProvisionedSchema(sourceUrl: string, targetUrl: string) {
   const dump = spawnSync('pg_dump', [
     sourceUrl,
     '--schema-only',
@@ -124,15 +126,13 @@ async function cloneProvisionedSchema(sourceUrl: string, targetUrl: string) {
   })
   if (dump.status !== 0 || dump.error)
     throw new Error(`pg_dump failed: ${dump.error?.message ?? dump.stderr ?? dump.stdout}`)
-  const client = new Client({ connectionString: targetUrl, connectionTimeoutMillis: 10_000 })
-  await client.connect()
-  try {
-    await client.query('SET statement_timeout = 0')
-    await runSqlFile(client, filterSchemaDumpForDisposableDb(dump.stdout ?? ''), 'pg_dump schema clone')
-  }
-  finally {
-    await client.end()
-  }
+  const apply = spawnSync('psql', [targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-X'], {
+    input: filterSchemaDumpForDisposableDb(dump.stdout ?? ''),
+    encoding: 'utf8',
+    maxBuffer: 512 * 1024 * 1024,
+  })
+  if (apply.status !== 0 || apply.error)
+    throw new Error(`psql schema clone failed: ${apply.error?.message ?? apply.stderr ?? apply.stdout}`)
 }
 
 async function provisionBeforeStorageMigration(adminUrl: string, targetUrl: string) {
@@ -146,7 +146,7 @@ async function provisionBeforeStorageMigration(adminUrl: string, targetUrl: stri
       readFileSync(resolve(repoRoot, 'tests/fixtures/local-db-disposable-extensions-stub.sql'), 'utf8'),
       'local-db-disposable-extensions-stub.sql',
     )
-    await cloneProvisionedSchema(adminUrl, targetUrl)
+    cloneProvisionedSchema(adminUrl, targetUrl)
     await runSqlFile(
       client,
       readFileSync(resolve(repoRoot, 'tests/fixtures/storage-gb-hours-revert-migration.sql'), 'utf8'),
