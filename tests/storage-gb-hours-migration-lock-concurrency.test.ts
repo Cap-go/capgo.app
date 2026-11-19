@@ -105,6 +105,12 @@ function filterSchemaDumpForDisposableDb(sql: string): string {
     .filter((line) => {
       if (line.startsWith('\\'))
         return false
+      if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?public(")?\s*;/i.test(line))
+        return false
+      if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?extensions(")?\s*;/i.test(line))
+        return false
+      if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?pgmq(")?\s*;/i.test(line))
+        return false
       if (/^\s*CREATE\s+EXTENSION/i.test(line) && /pg_cron/i.test(line))
         return false
       if (/^\s*COMMENT ON EXTENSION pg_cron/i.test(line))
@@ -153,12 +159,12 @@ async function provisionBeforeStorageMigration(adminUrl: string, targetUrl: stri
   await client.connect()
   try {
     await client.query('SET statement_timeout = 0')
-    cloneProvisionedSchema(adminUrl, targetUrl)
     await runSqlFile(
       client,
       readFileSync(resolve(repoRoot, 'tests/fixtures/local-db-disposable-extensions-stub.sql'), 'utf8'),
       'local-db-disposable-extensions-stub.sql',
     )
+    cloneProvisionedSchema(adminUrl, targetUrl)
     await runSqlFile(
       client,
       readFileSync(resolve(repoRoot, 'tests/fixtures/storage-gb-hours-revert-migration.sql'), 'utf8'),
