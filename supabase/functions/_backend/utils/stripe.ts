@@ -27,7 +27,7 @@ import {
   singleRowOrNull,
   TRIAL_PLAN_SCHEDULE_METADATA_KEY,
 } from './stripe_billing.ts'
-import { isAllowedConsoleWebOrigin } from './console_web_origins.ts'
+import { isAllowedConsoleWebOrigin, stripeRedirectOriginExtras } from './console_web_origins.ts'
 import { getEnv, isStripeConfigured, trimTrailingSlashes } from './utils.ts'
 
 export type { BillingAccount } from './stripe_billing.ts'
@@ -1509,7 +1509,7 @@ function getAllowedRedirectUrl(c: Context, value: string, field: 'return_url' | 
     throw simpleError('invalid_redirect_url', `Invalid ${field}`, { field, value })
   }
 
-  if (!isAllowedConsoleWebOrigin(c, redirectUrl.origin))
+  if (!isAllowedConsoleWebOrigin(c, redirectUrl.origin, stripeRedirectOriginExtras(c)))
     throw simpleError('invalid_redirect_url', `Invalid ${field}`, { field, value, expectedOrigin: baseUrl.origin })
 
   return redirectUrl.toString()

@@ -71,3 +71,26 @@ export function isAllowedConsoleWebOrigin(c: Context, origin: string, extraComma
     return false
   return collectConsoleWebOrigins(c, extraCommaSeparated).has(normalized)
 }
+
+const CAPGO_HOSTED_CONSOLE_HOSTS = new Set([
+  'console.capgo.app',
+  'console.capgo.com.cn',
+  'console.preprod.capgo.app',
+  'console.development.capgo.app',
+])
+
+/** Stripe return URLs: self-host and local test APIs still accept Capgo production console origins. */
+export function stripeRedirectOriginExtras(c: Context): string {
+  const normalized = normalizeOrigin(getEnv(c, 'WEBAPP_URL') ?? '')
+  if (!normalized)
+    return PRODUCTION_CONSOLE_WEB_ORIGINS.join(',')
+  try {
+    const host = new URL(normalized).hostname
+    if (CAPGO_HOSTED_CONSOLE_HOSTS.has(host))
+      return ''
+  }
+  catch {
+    return PRODUCTION_CONSOLE_WEB_ORIGINS.join(',')
+  }
+  return PRODUCTION_CONSOLE_WEB_ORIGINS.join(',')
+}
