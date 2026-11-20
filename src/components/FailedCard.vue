@@ -12,16 +12,17 @@ const route = useRoute()
 const organizationStore = useOrganizationStore()
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
 
-// Password policy takes priority over subscription
-const needsPasswordUpdate = computed(() => {
-  const org = organizationStore.currentOrganization
-  return org?.password_policy_config?.enabled && org?.password_has_access === false
-})
-
-// 2FA enforcement takes priority after password policy
+// 2FA enforcement takes priority over password policy remediation
 const needs2FASetup = computed(() => {
   const org = organizationStore.currentOrganization
   return org?.enforcing_2fa === true && org?.['2fa_has_access'] === false
+})
+
+const needsPasswordUpdate = computed(() => {
+  if (needs2FASetup.value)
+    return false
+  const org = organizationStore.currentOrganization
+  return org?.password_policy_config?.enabled && org?.password_has_access === false
 })
 
 // Show copy org ID button when in organization settings
@@ -58,44 +59,8 @@ async function copyOrgId() {
 </script>
 
 <template>
-  <!-- Password Update Required Card -->
-  <div v-if="needsPasswordUpdate" class="p-8 mx-auto mt-6 mb-6 max-w-2xl bg-amber-50 rounded-xl border border-orange-200 dark:bg-amber-900/20 dark:border-amber-800">
-    <div class="flex items-start">
-      <div class="shrink-0">
-        <svg class="w-8 h-8 text-amber-500 dark:text-amber-400" viewBox="0 0 20 20" fill="currentColor">
-          <path fill-rule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 012 2 1 1 0 102 0 4 4 0 00-4-4z" clip-rule="evenodd" />
-        </svg>
-      </div>
-      <div class="flex-1 ml-4">
-        <h3 class="text-lg font-semibold text-amber-800 dark:text-amber-100">
-          {{ t('password-policy-required') }}
-        </h3>
-        <div class="mt-3 text-base text-amber-700 dark:text-amber-300">
-          <p>{{ t('password-update-org-access') }}</p>
-        </div>
-        <div class="flex flex-wrap gap-3 mt-6">
-          <button
-            type="button"
-            class="d-btn d-btn-warning"
-            @click="goToChangePassword"
-          >
-            {{ t('update-password-now') }}
-          </button>
-          <button
-            v-if="showCopyOrgId"
-            type="button"
-            class="d-btn d-btn-outline d-btn-warning"
-            @click="copyOrgId"
-          >
-            {{ t('copy-organization-id') }}
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- 2FA Setup Required Card -->
-  <div v-else-if="needs2FASetup" class="p-8 mx-auto mt-6 mb-6 max-w-2xl bg-amber-50 rounded-xl border border-orange-200 dark:bg-amber-900/20 dark:border-amber-800">
+  <div v-if="needs2FASetup" class="p-8 mx-auto mt-6 mb-6 max-w-2xl bg-amber-50 rounded-xl border border-orange-200 dark:bg-amber-900/20 dark:border-amber-800">
     <div class="flex items-start">
       <div class="shrink-0">
         <svg class="w-8 h-8 text-amber-500 dark:text-amber-400" viewBox="0 0 20 20" fill="currentColor">
@@ -116,6 +81,42 @@ async function copyOrgId() {
             @click="goToAccountSettings"
           >
             {{ t('setup-2fa-now') }}
+          </button>
+          <button
+            v-if="showCopyOrgId"
+            type="button"
+            class="d-btn d-btn-outline d-btn-warning"
+            @click="copyOrgId"
+          >
+            {{ t('copy-organization-id') }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Password Update Required Card -->
+  <div v-else-if="needsPasswordUpdate" class="p-8 mx-auto mt-6 mb-6 max-w-2xl bg-amber-50 rounded-xl border border-orange-200 dark:bg-amber-900/20 dark:border-amber-800">
+    <div class="flex items-start">
+      <div class="shrink-0">
+        <svg class="w-8 h-8 text-amber-500 dark:text-amber-400" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 012 2 1 1 0 102 0 4 4 0 00-4-4z" clip-rule="evenodd" />
+        </svg>
+      </div>
+      <div class="flex-1 ml-4">
+        <h3 class="text-lg font-semibold text-amber-800 dark:text-amber-100">
+          {{ t('password-policy-required') }}
+        </h3>
+        <div class="mt-3 text-base text-amber-700 dark:text-amber-300">
+          <p>{{ t('password-update-org-access') }}</p>
+        </div>
+        <div class="flex flex-wrap gap-3 mt-6">
+          <button
+            type="button"
+            class="d-btn d-btn-warning"
+            @click="goToChangePassword"
+          >
+            {{ t('update-password-now') }}
           </button>
           <button
             v-if="showCopyOrgId"

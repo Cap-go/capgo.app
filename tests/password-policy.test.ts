@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createClient } from './sql-data-client'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { checkOrgReadAccess } from '../supabase/functions/_backend/private/validate_password_compliance.ts'
+import { checkOrgReadAccess, checkOrgRemediationAccess } from '../supabase/functions/_backend/private/validate_password_compliance.ts'
 import { BASE_URL, executeSQL, getSupabaseClient, headers, TEST_EMAIL, USER_EMAIL, USER_ID, USER_ID_2, USER_PASSWORD, USER_PASSWORD_HASH } from './test-utils.ts'
 
 const ORG_ID = randomUUID()
@@ -438,6 +438,65 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
       body: 'invalid json',
     })
     expect(response.status).toBe(400)
+  })
+
+  it('returns org_requires_2fa for members when the org enforces 2FA and the user has none', async () => {
+    const { error: updateError } = await getSupabaseClient()
+      .from('orgs')
+      .update({ enforcing_2fa: true })
+      .eq('id', ORG_ID)
+    if (updateError)
+      throw updateError
+
+    try {
+      const response = await postCompliance({
+        email: USER_EMAIL,
+        password: USER_PASSWORD,
+        org_id: ORG_ID,
+      })
+      expect(response.status).toBe(403)
+
+      const responseData = await response.json() as { error: string }
+      expect(responseData.error).toBe('org_requires_2fa')
+    }
+    finally {
+      await getSupabaseClient().from('orgs').update({ enforcing_2fa: false }).eq('id', ORG_ID)
+    }
+  })
+})
+
+describe('checkOrgRemediationAccess', () => {
+  it('distinguishes org_requires_2fa from not_member', async () => {
+    const [memberRow] = await executeSQL(`
+      SELECT public.rbac_has_permission(
+        public.rbac_principal_user(),
+        $1::uuid,
+        public.rbac_perm_org_read(),
+        $2::uuid,
+        NULL::character varying,
+        NULL::bigint
+      ) AS is_member
+    `, [USER_ID, ORG_ID])
+
+    expect(memberRow?.is_member).toBe(true)
+
+    const result = await checkOrgRemediationAccess(
+      {
+        query: async () => ({
+          rows: [{
+            is_member: true,
+            enforcing_2fa: true,
+            has_2fa: false,
+          }],
+        }),
+      },
+      USER_ID,
+      ORG_ID,
+      'req-2fa-test',
+    )
+
+    expect(result.status).toBe('org_requires_2fa')
+    expect(result.error).toBeUndefined()
   })
 })
 
