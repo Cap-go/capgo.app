@@ -147,7 +147,7 @@ SELECT ok(
   'process_all_cron_tasks on main is not forked for mcp failure spike'
 );
 
-SELECT tests.clear_authentication();
+RESET ROLE;
 
 SELECT pgmq.purge_queue('cron_mcp_failure_spike');
 
