@@ -3,7 +3,7 @@
   "mcpServers": {
     "capgo": {
       "type": "streamable-http",
-      "url": "https://api.capgo.app/mcp"
+      "url": "https://mcp.capgo.app/"
     }
   }
 }

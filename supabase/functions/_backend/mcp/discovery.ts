@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { html } from 'hono/html'
 import { Hono } from 'hono/tiny'
 import { MCP_SERVER_INFO, SUPPORTED_PROTOCOL_VERSIONS } from './metadata.ts'
-import { getApiOrigin, getResourceUrl, MCP_PATH } from './oauth_shared.ts'
+import { getApiOrigin, getMcpServerCardUrl, getResourceUrl, MCP_PATH } from './oauth_shared.ts'
 import { sha256Hex } from './oauth_utils.ts'
 
 const CARD_TYPE = 'application/mcp-server-card+json'
@@ -55,7 +55,7 @@ export function createMcpDiscoveryApp() {
     entries: [{
       identifier: 'urn:air:capgo.app:mcp:capgo',
       type: CARD_TYPE,
-      url: `${getResourceUrl(c)}/server-card`,
+      url: getMcpServerCardUrl(c),
     }],
   }, 'application/ai-catalog+json'))
   return app
@@ -94,7 +94,7 @@ export function mcpSetupPage(c: Context) {
     <p>To use the local MCP server, run <code>npx @capgo/cli@latest login</code>,
       then configure your client to launch <code>npx @capgo/cli@latest mcp</code>.</p>
     <p><a href="${DOCS_URL}">Full setup documentation</a> ·
-      <a href="${endpoint}/server-card">MCP Server Card</a> ·
+      <a href="${getMcpServerCardUrl(c)}">MCP Server Card</a> ·
       <a href="${getApiOrigin(c)}/.well-known/mcp.json">Registry manifest</a></p>
   </main>
 </body>

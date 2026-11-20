@@ -10,17 +10,53 @@ export type McpContext = Context<MiddlewareKeyVariables>
 
 export const MCP_PATH = '/mcp'
 export const MCP_OAUTH_PATH = '/mcp/oauth'
+export const MCP_ALIAS_HOST = 'mcp.capgo.app'
+export const MCP_PUBLIC_PATH_HEADER = 'x-capgo-mcp-public-path'
+const MCP_API_HOSTS = new Set(['api.capgo.app', 'api.usecapgo.com'])
 
 export function getRequestOrigin(c: Context): string {
   return new URL(c.req.url).origin
 }
 
+export function isMcpAliasHost(hostname: string): boolean {
+  return hostname.toLowerCase() === MCP_ALIAS_HOST
+}
+
+function requestHostname(c: Context): string {
+  return new URL(c.req.url).hostname
+}
+
+/**
+ * On the MCP alias host, the resource URL is the path the client used (`/` or `/mcp`).
+ * The API worker sets MCP_PUBLIC_PATH_HEADER when it rewrites `/` to `/mcp`.
+ */
+
+export function getMcpPublicPath(c: Context): '/' | '/mcp' | null {
+  if (!isMcpAliasHost(requestHostname(c)))
+    return null
+  const header = c.req.header(MCP_PUBLIC_PATH_HEADER)?.trim()
+  if (header === '/' || header === '/mcp')
+    return header
+  const path = new URL(c.req.url).pathname.replace(/\/+$/, '') || '/'
+  if (path === `/.well-known/oauth-protected-resource${MCP_PATH}`)
+    return '/mcp'
+  if (path === '/.well-known/oauth-protected-resource')
+    return '/'
+  if (path === '/mcp' || path.startsWith('/mcp/'))
+    return '/mcp'
+  if (path === '/')
+    return '/'
+  return '/'
+}
+
 /**
  * Canonical origin of the OAuth endpoints and the MCP resource. Production sets MCP_OAUTH_API_ORIGIN=https://api.capgo.app
- * so every hostname routed to this worker advertises the same resource; unset, the request origin is used (local workers).
+ * for the API host; the MCP alias host uses the request origin. Unset, the request origin is used (local workers).
  */
 
 export function getApiOrigin(c: Context): string {
+  if (isMcpAliasHost(requestHostname(c)))
+    return getRequestOrigin(c)
   return getEnv(c, 'MCP_OAUTH_API_ORIGIN').trim().replace(/\/+$/, '') || getRequestOrigin(c)
 }
 
@@ -34,7 +70,76 @@ export function getIssuer(c: Context): string {
 }
 
 export function getResourceUrl(c: Context): string {
+  const aliasPath = getMcpPublicPath(c)
+  if (aliasPath !== null) {
+    const origin = getRequestOrigin(c)
+    return aliasPath === '/' ? `${origin}/` : `${origin}${MCP_PATH}`
+  }
   return `${getApiOrigin(c)}${MCP_PATH}`
+}
+
+/** Stable MCP server card URL (never append paths to getResourceUrl, which may end with `/`). */
+export function getMcpServerCardUrl(c: Context): string {
+  return `${getApiOrigin(c)}${MCP_PATH}/server-card`
+}
+
+type ParsedMcpResource =
+  | { ok: false, reason: 'invalid' | 'fragment' }
+  | { ok: true, role: 'alias' | 'api', query: string }
+
+function parseMcpResourceUrl(url: string): ParsedMcpResource {
+  const trimmed = url.trim()
+  if (!trimmed)
+    return { ok: false, reason: 'invalid' }
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.hash)
+      return { ok: false, reason: 'fragment' }
+    const path = parsed.pathname.replace(/\/+$/, '') || '/'
+    const host = parsed.hostname.toLowerCase()
+    if (isMcpAliasHost(host) && (path === '/' || path === MCP_PATH))
+      return { ok: true, role: 'alias', query: parsed.search }
+    if (MCP_API_HOSTS.has(host) && path === MCP_PATH)
+      return { ok: true, role: 'api', query: parsed.search }
+    return { ok: false, reason: 'invalid' }
+  }
+  catch {
+    return { ok: false, reason: 'invalid' }
+  }
+}
+
+/** OAuth resource parameter: alias root `/` and `/mcp` refer to the same MCP resource; queries are compared. */
+export function canonicalMcpResourceUrl(url: string): string {
+  const parsed = parseMcpResourceUrl(url)
+  if (parsed.ok) {
+    const origin = parsed.role === 'alias' ? `https://${MCP_ALIAS_HOST}` : new URL(url.trim()).origin
+    return `${origin}${MCP_PATH}${parsed.query}`
+  }
+  const trimmed = url.trim()
+  try {
+    const u = new URL(trimmed)
+    if (u.hash)
+      return trimmed
+    const path = u.pathname.replace(/\/+$/, '') || '/'
+    const suffix = path === '/' ? '' : path
+    const base = `${u.origin}${suffix}`.replace(/\/+$/, '') || `${u.origin}${MCP_PATH}`
+    return `${base}${u.search}`
+  }
+  catch {
+    return trimmed.replace(/\/+$/, '')
+  }
+}
+
+export function mcpResourceUrlsMatch(requested: string, expected: string): boolean {
+  const a = parseMcpResourceUrl(requested)
+  const b = parseMcpResourceUrl(expected)
+  if (!a.ok || !b.ok)
+    return false
+  if (a.query !== b.query)
+    return false
+  if (a.role === b.role)
+    return true
+  return (a.role === 'alias' && b.role === 'api') || (a.role === 'api' && b.role === 'alias')
 }
 
 /** RFC 6749 §5.2 / RFC 7591 §3.2.2 error body. These shapes are mandated by the OAuth specs. */

@@ -1,6 +1,6 @@
 # Capgo plugin for ChatGPT and Codex
 
-OpenAI plugin package for the hosted Capgo MCP server (`https://api.capgo.app/mcp`, see `docs/hosted-mcp.md`).
+OpenAI plugin package for the hosted Capgo MCP server (`https://mcp.capgo.app/`, legacy `https://api.capgo.app/mcp`, see `docs/hosted-mcp.md`).
 Submission guide: https://developers.openai.com/plugins/deploy/submission
 
 The plugin files live at the repo root so Open Plugins scanners (https://open-plugins.com) detect them:
