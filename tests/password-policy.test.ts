@@ -469,6 +469,11 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
     if (memberError)
       throw memberError
 
+    await executeSQL(
+      `SELECT public.resync_org_user_role_bindings($1::uuid, $2::uuid)`,
+      [dedicatedUserId, ORG_ID],
+    )
+
     const { error: updateError } = await capgo
       .from('orgs')
       .update({ enforcing_2fa: true })
