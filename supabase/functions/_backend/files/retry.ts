@@ -96,7 +96,7 @@ export class RetryBucket {
   }
 
   async createMultipartUpload(...parameters: Parameters<R2Bucket['createMultipartUpload']>): Promise<RetryMultipartUpload> {
-    return new RetryMultipartUpload(await this.bucket.createMultipartUpload(...parameters), this.params)
+    return new RetryMultipartUpload(await retry(() => this.bucket.createMultipartUpload(...parameters), { params: this.params }), this.params)
   }
 
   resumeMultipartUpload(...parameters: Parameters<R2Bucket['resumeMultipartUpload']>): RetryMultipartUpload {
