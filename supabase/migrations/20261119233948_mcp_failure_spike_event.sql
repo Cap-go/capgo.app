@@ -20,7 +20,7 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
   SELECT COALESCE((
-    SELECT pg_catalog.nullif(pg_catalog.btrim("private"."settings".value), ''::text)::integer
+    SELECT "private"."settings".value::integer
     FROM "private"."settings"
     WHERE "private"."settings".name = 'MCP_FAILURE_SPIKE_GROUP_CURSOR'
   ), 0);
@@ -48,7 +48,7 @@ BEGIN
   ON CONFLICT (name) DO NOTHING;
 
   SELECT COALESCE((
-    SELECT pg_catalog.nullif(pg_catalog.btrim("private"."settings".value), ''::text)::integer
+    SELECT "private"."settings".value::integer
     FROM "private"."settings"
     WHERE "private"."settings".name = 'MCP_FAILURE_SPIKE_GROUP_CURSOR'
   ), 0)
