@@ -1,7 +1,7 @@
 -- Cooldown claim and restore for update.failure_spike MCP subscriptions (matches runner SQL).
 BEGIN;
 
-SELECT plan(11);
+SELECT plan(15);
 
 SELECT tests.authenticate_as_service_role();
 
@@ -111,10 +111,72 @@ SELECT ok(
 );
 
 SELECT ok(
+  (
+    SELECT count(*)::int
+    FROM public.cron_tasks
+    WHERE
+      name = 'mcp_failure_spike'
+      AND enabled = true
+      AND task_type = 'queue'::public.cron_task_type
+      AND target = 'cron_mcp_failure_spike'
+      AND minute_interval = 5
+      AND payload->>'function_name' = 'cron_mcp_failure_spike'
+      AND payload->>'function_type' = 'cloudflare'
+  ) = 1,
+  'cron_tasks registers mcp_failure_spike enqueue every 5 minutes'
+);
+
+SELECT ok(
+  (
+    SELECT count(*)::int
+    FROM public.cron_tasks
+    WHERE
+      name = 'mcp_failure_spike_queue'
+      AND enabled = true
+      AND task_type = 'function_queue'::public.cron_task_type
+      AND target::jsonb = '["cron_mcp_failure_spike"]'::jsonb
+      AND minute_interval = 5
+  ) = 1,
+  'cron_tasks registers mcp_failure_spike_queue drain every 5 minutes'
+);
+
+SELECT ok(
   pg_catalog.pg_get_functiondef(
     'public.process_all_cron_tasks()'::pg_catalog.regprocedure
-  ) LIKE '%cron_mcp_failure_spike%',
-  'process_all_cron_tasks enqueues and drains cron_mcp_failure_spike'
+  ) NOT LIKE '%cron_mcp_failure_spike%',
+  'process_all_cron_tasks on main is not forked for mcp failure spike'
+);
+
+SELECT pgmq.purge_queue('cron_mcp_failure_spike');
+
+SELECT public.enqueue_cron_tick(
+  (
+    SELECT ct.target
+    FROM public.cron_tasks AS ct
+    WHERE ct.name = 'mcp_failure_spike'
+  ),
+  (
+    SELECT ct.payload
+    FROM public.cron_tasks AS ct
+    WHERE ct.name = 'mcp_failure_spike'
+  )
+);
+
+SELECT is(
+  (SELECT count(*)::int FROM pgmq.q_cron_mcp_failure_spike),
+  1,
+  'generic scheduler queue path enqueues cron_mcp_failure_spike tick'
+);
+
+SELECT public.process_function_queue(ARRAY['cron_mcp_failure_spike']);
+
+SELECT ok(
+  (
+    SELECT count(*)::int
+    FROM pgmq.q_cron_mcp_failure_spike
+    WHERE read_ct > 0
+  ) >= 1,
+  'generic scheduler function_queue path drains cron_mcp_failure_spike'
 );
 
 SELECT is(
