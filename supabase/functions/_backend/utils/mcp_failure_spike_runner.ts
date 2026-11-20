@@ -42,26 +42,24 @@ export async function gatherFailureSpikeMetrics(
   let failures = 0
   let version = 'unknown'
   let maxInstall = 0
-  let dominantInstall = 0
-  let dominantFail = 0
+  let maxFail = -1
   for (const row of versionStats) {
     const install = Number(row.install ?? 0)
     const fail = Number(row.fail ?? 0)
-    if (channelName) {
-      checks += install + fail
-      failures += fail
+    checks += install + fail
+    failures += fail
+    if (fail > maxFail) {
+      maxFail = fail
+      version = row.version_name
     }
     if (install > maxInstall) {
       maxInstall = install
-      version = row.version_name
-      dominantInstall = install
-      dominantFail = fail
+      if (maxFail < 0)
+        version = row.version_name
     }
   }
 
   if (!channelName) {
-    failures = dominantFail
-    checks = dominantInstall + dominantFail
     const checkInsights = await readStatsInsights(c, {
       app_id: appId,
       start_date: start,
@@ -75,20 +73,24 @@ export async function gatherFailureSpikeMetrics(
   }
 
   let topFailureActionCodes: FailureSpikeMetrics['topFailureActionCodes'] = []
-  if (version !== 'unknown') {
-    const insights = await readStatsInsights(c, {
-      app_id: appId,
-      start_date: start,
-      end_date: end,
-      actions: [...PUBLIC_FAILURE_ACTIONS],
-      version_name: version,
-    })
-    topFailureActionCodes = insights.actions
-      .filter(entry => (PUBLIC_FAILURE_ACTIONS as readonly string[]).includes(entry.action))
-      .sort((left, right) => right.total - left.total)
-      .slice(0, 5)
-      .map(entry => ({ action: entry.action, count: entry.total }))
+  const insightsParams = {
+    app_id: appId,
+    start_date: start,
+    end_date: end,
+    actions: [...PUBLIC_FAILURE_ACTIONS] as const,
+    ...(channelName
+      ? { channel: { name: channelName } }
+      : {}),
+    ...(channelName && version !== 'unknown'
+      ? { version_name: version }
+      : {}),
   }
+  const insights = await readStatsInsights(c, insightsParams)
+  topFailureActionCodes = insights.actions
+    .filter(entry => (PUBLIC_FAILURE_ACTIONS as readonly string[]).includes(entry.action))
+    .sort((left, right) => right.total - left.total)
+    .slice(0, 5)
+    .map(entry => ({ action: entry.action, count: entry.total }))
 
   return { checks, failures, version, topFailureActionCodes, windowStart: start, windowEnd: end }
 }

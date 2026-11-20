@@ -222,6 +222,61 @@ describe('gatherFailureSpikeMetrics checks', () => {
   const c = { get: () => undefined } as unknown as Context
   const now = new Date('2026-11-10T12:00:00.000Z')
 
+  it('aggregates failures across versions when channel is omitted', async () => {
+    vi.mocked(readStatsVersion).mockResolvedValueOnce([
+      {
+        version_name: '1.0.0',
+        install: 1000,
+        fail: 0,
+        app_id: 'com.demo.app',
+        date: now.toISOString(),
+        get: 0,
+        uninstall: 0,
+      } satisfies VersionUsage,
+      {
+        version_name: '2.0.0',
+        install: 0,
+        fail: 100,
+        app_id: 'com.demo.app',
+        date: now.toISOString(),
+        get: 0,
+        uninstall: 0,
+      } satisfies VersionUsage,
+    ])
+    vi.mocked(readStatsInsights).mockImplementation(async (_c, params) => {
+      const actionFilter = 'actions' in params && params.actions ? params.actions : []
+      if (actionFilter.includes('noNew')) {
+        return {
+          ...emptyStatsInsights(),
+          actions: [
+            { action: 'noNew', total: 0, device_count: 0, version_count: 0, first_seen: null, last_seen: null, latest_version_name: '', latest_device_id: '' },
+          ],
+        }
+      }
+      if (actionFilter.includes('download_fail')) {
+        return {
+          ...emptyStatsInsights(),
+          actions: [
+            { action: 'download_fail', total: 100, device_count: 0, version_count: 0, first_seen: null, last_seen: null, latest_version_name: '', latest_device_id: '' },
+          ],
+        }
+      }
+      return emptyStatsInsights()
+    })
+
+    const metrics = await gatherFailureSpikeMetrics(c, 'com.demo.app', undefined, 15, now)
+    expect(metrics.failures).toBe(100)
+    expect(metrics.checks).toBe(1000)
+    expect(metrics.version).toBe('2.0.0')
+
+    const evaluation = evaluateFailureSpike({
+      failures: metrics.failures,
+      checks: metrics.checks,
+      thresholds: { ...MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS },
+    })
+    expect(evaluation.shouldFire).toBe(true)
+  })
+
   it('uses version usage for install and fail, noNew from insights when channel is omitted', async () => {
     vi.mocked(readStatsVersion).mockResolvedValueOnce([
       {

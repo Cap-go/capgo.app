@@ -10,6 +10,10 @@ import {
   gatherFailureSpikeMetrics,
 } from '../utils/mcp_failure_spike_runner.ts'
 import { mcpFailureSpikeArgumentsSchema, resolveFailureSpikeThresholds } from '../utils/mcp_failure_spike_policy.ts'
+import {
+  advanceMcpFailureSpikeGroupCursor,
+  rotateMcpFailureSpikeGroups,
+} from '../utils/mcp_failure_spike_cron_groups.ts'
 import { version } from '../utils/version.ts'
 
 export const app = createHono('', version)
@@ -131,7 +135,31 @@ function buildMetricsGroups(webhooks: McpFailureSpikeWebhookRow[]): MetricsGroup
       })
   }
 
-  return [...groupMap.values()]
+  return [...groupMap.values()].sort((left, right) =>
+    metricsGroupKey(left.appId, left.channel, left.windowMinutes)
+      .localeCompare(metricsGroupKey(right.appId, right.channel, right.windowMinutes)),
+  )
+}
+
+async function loadMcpFailureSpikeGroupCursor(pg: Awaited<ReturnType<typeof getPgClient>>) {
+  const { rows } = await pg.query<{ cursor: number }>(
+    'SELECT public.mcp_failure_spike_group_cursor_get() AS cursor',
+  )
+  return rows[0]?.cursor ?? 0
+}
+
+async function persistMcpFailureSpikeGroupCursor(
+  pg: Awaited<ReturnType<typeof getPgClient>>,
+  processedGroupCount: number,
+  groupCount: number,
+) {
+  if (groupCount <= 0)
+    return 0
+  const { rows } = await pg.query<{ cursor: number }>(
+    'SELECT public.mcp_failure_spike_group_cursor_advance($1::int, $2::int) AS cursor',
+    [processedGroupCount, groupCount],
+  )
+  return rows[0]?.cursor ?? advanceMcpFailureSpikeGroupCursor(0, processedGroupCount, groupCount)
 }
 
 app.post('/', middlewareAPISecret, async (c) => {
@@ -147,12 +175,10 @@ app.post('/', middlewareAPISecret, async (c) => {
     let checked = 0
     let fired = 0
     let skippedGroups = 0
+    let processedGroups = 0
     const metricsCache = new Map<string, FailureSpikeMetrics>()
-    const tickSeed = Math.floor(now.getTime() / (5 * 60 * 1000))
-    const startOffset = groups.length > 0 ? tickSeed % groups.length : 0
-    const rotatedGroups = groups.length > 0
-      ? [...groups.slice(startOffset), ...groups.slice(0, startOffset)]
-      : []
+    const startOffset = await loadMcpFailureSpikeGroupCursor(pg)
+    const rotatedGroups = rotateMcpFailureSpikeGroups(groups, startOffset)
 
     await runWithDeadline(rotatedGroups, async (group) => {
       if (Date.now() >= deadline) {
@@ -203,7 +229,10 @@ app.post('/', middlewareAPISecret, async (c) => {
           })
         }
       }
+      processedGroups += 1
     }, { concurrency: EVALUATION_CONCURRENCY, deadline })
+
+    const nextOffset = await persistMcpFailureSpikeGroupCursor(pg, processedGroups, groups.length)
 
     cloudlog({
       requestId: c.get('requestId'),
@@ -213,6 +242,8 @@ app.post('/', middlewareAPISecret, async (c) => {
       groups: groups.length,
       skippedGroups,
       startOffset,
+      processedGroups,
+      nextOffset,
     })
     return c.json({ ...BRES, checked, fired, skipped_groups: skippedGroups })
   }
