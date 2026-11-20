@@ -220,11 +220,14 @@ async function runMigrationWithConcurrentWriter(
     writerMode?: 'post-migrate' | 'legacy-during-migration'
     /** Hold apps FOR SHARE before starting migration (inverted-order deadlock probe). */
     writerHoldsAppsShareFirst?: boolean
+    /** When the writer already holds apps FOR SHARE, do not wait for migrator locks (migrator blocks until writer commits). */
+    skipMigratorLockWait?: boolean
   } = {},
 ): Promise<ConcurrentRunResult> {
   const requireWriterLockWait = options.requireWriterLockWait ?? true
   const writerMode = options.writerMode ?? 'post-migrate'
   const writerHoldsAppsShareFirst = options.writerHoldsAppsShareFirst ?? false
+  const skipMigratorLockWait = options.skipMigratorLockWait ?? false
   const migrator = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
   const writer = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
   const observer = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
@@ -256,7 +259,8 @@ async function runMigrationWithConcurrentWriter(
         [DEMO_APP, ORG_ID],
       )
       migrationPromise = migrator.query(migrationSql)
-      await waitForMigratorLocks(observer, migratorPid, waitRelations)
+      if (!skipMigratorLockWait)
+        await waitForMigratorLocks(observer, migratorPid, waitRelations)
       writerPromise = (async () => {
         await writer.query(LEGACY_REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
         await writer.query('COMMIT')
@@ -370,6 +374,7 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
           writerMode: 'legacy-during-migration',
           writerHoldsAppsShareFirst: true,
           requireWriterLockWait: false,
+          skipMigratorLockWait: true,
         },
       )
       if (result.migration.status === 'rejected')
