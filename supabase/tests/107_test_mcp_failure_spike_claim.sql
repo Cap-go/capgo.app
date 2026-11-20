@@ -1,7 +1,7 @@
 -- Cooldown claim and restore for update.failure_spike MCP subscriptions (matches runner SQL).
 BEGIN;
 
-SELECT plan(5);
+SELECT plan(7);
 
 SELECT tests.authenticate_as_service_role();
 
@@ -116,6 +116,17 @@ SELECT ok(
   ) LIKE '%cron_mcp_failure_spike%',
   'process_all_cron_tasks enqueues and drains cron_mcp_failure_spike'
 );
+
+SELECT is(
+  public.mcp_failure_spike_group_cursor_get(),
+  0,
+  'group cursor starts at zero'
+);
+
+WITH advanced AS (
+  SELECT public.mcp_failure_spike_group_cursor_advance(2, 5) AS cursor
+)
+SELECT is((SELECT cursor FROM advanced), 2, 'group cursor advances by processed count');
 
 SELECT tests.clear_authentication();
 
