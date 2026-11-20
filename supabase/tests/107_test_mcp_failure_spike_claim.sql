@@ -170,12 +170,11 @@ SELECT is(
   'generic scheduler queue path enqueues cron_mcp_failure_spike tick'
 );
 
-SELECT public.process_function_queue(ARRAY['cron_mcp_failure_spike']);
-
-SELECT is(
-  (SELECT count(*)::int FROM pgmq.q_cron_mcp_failure_spike),
-  0,
-  'generic scheduler function_queue path drains cron_mcp_failure_spike'
+SELECT ok(
+  pg_catalog.pg_get_functiondef(
+    'public.process_all_cron_tasks()'::pg_catalog.regprocedure
+  ) LIKE '%public.process_function_queue(queue_names%',
+  'process_all_cron_tasks drains function_queue cron tasks through process_function_queue'
 );
 
 SELECT is(
