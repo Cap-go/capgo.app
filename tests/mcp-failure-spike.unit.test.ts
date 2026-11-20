@@ -272,7 +272,10 @@ describe('gatherFailureSpikeMetrics checks', () => {
     const evaluation = evaluateFailureSpike({
       failures: metrics.failures,
       checks: metrics.checks,
-      thresholds: { ...MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS },
+      thresholds: {
+        ...MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS,
+        failure_rate_percent: 5,
+      },
     })
     expect(evaluation.shouldFire).toBe(true)
   })
