@@ -1600,7 +1600,8 @@ const mcpEventTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_subscribe_events,
     title: 'Subscribe to MCP events',
     description: 'Subscribe to Capgo MCP Events over webhook delivery. Generates a whsec_ secret when omitted and returns it once.'
-      + ' Creates or renews a matching subscription and verifies the receiver with an HTTP challenge. Returns id, refreshBefore, a generated secret when applicable and verification failure details if the challenge fails.',
+      + ' Creates or renews a matching subscription and verifies the receiver with an HTTP challenge. Returns id, refreshBefore, a generated secret when applicable and verification failure details if the challenge fails.'
+      + ' For update.failure_spike, optional threshold fields use the Balanced recommended defaults unless you override them (tune min_checks and failure_rate_percent to your device count).',
     inputSchema: z.object({
       name: mcpEventName.describe('Choose the event that should trigger delivery to your receiver. Copy name from capgo_list_event_types and inspect its supported filters.'),
       orgId,
@@ -1608,6 +1609,11 @@ const mcpEventTools: McpTool[] = [
       secret: z.string().optional().describe('Webhook signing secret shared with the receiver; omit to generate one and return it once.'),
       app_id: appId.optional().describe('Restrict delivery to events for this app in orgId, using app_id from capgo_list_apps. Omit to receive matching events across the organization.'),
       channel: z.string().min(1).optional().describe('Restrict delivery to events for this channel. Use a channel name from capgo_list_channels and an event that supports channel filtering according to capgo_list_event_types.'),
+      min_failures: z.number().int().min(1).optional().describe('For update.failure_spike only: minimum install failures in the window before firing.'),
+      failure_rate_percent: z.number().min(1).max(100).optional().describe('For update.failure_spike only: minimum failure rate as a percent of checks.'),
+      min_checks: z.number().int().min(1).optional().describe('For update.failure_spike only: minimum OTA checks (install, fail, noNew) in the window.'),
+      window_minutes: z.number().int().min(5).max(1440).optional().describe('For update.failure_spike only: rolling stats window in minutes.'),
+      cooldown_minutes: z.number().int().min(5).max(1440).optional().describe('For update.failure_spike only: minimum minutes between dispatches for the same subscription.'),
       ttlMs: z.number().int().min(60_000).max(24 * 60 * 60 * 1000).optional().describe('How long this event subscription remains active, in milliseconds. Omit for 24 hours. Renew before the returned refreshBefore time to avoid a delivery gap.'),
     }) as unknown as z.ZodObject<z.ZodRawShape>,
     annotations: { title: 'Subscribe to MCP events', ...EXTERNAL },
@@ -1624,6 +1630,11 @@ const mcpEventTools: McpTool[] = [
         secret?: string
         app_id?: string
         channel?: string
+        min_failures?: number
+        failure_rate_percent?: number
+        min_checks?: number
+        window_minutes?: number
+        cooldown_minutes?: number
         ttlMs?: number
       }
       try {

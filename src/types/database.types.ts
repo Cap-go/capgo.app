@@ -4097,6 +4097,7 @@ export type Database = {
           id: string
           mcp_arguments: Json | null
           mcp_event: string | null
+          mcp_spike_last_fired_at: string | null
           mcp_verified_at: string | null
           name: string
           org_id: string
@@ -4115,6 +4116,7 @@ export type Database = {
           id?: string
           mcp_arguments?: Json | null
           mcp_event?: string | null
+          mcp_spike_last_fired_at?: string | null
           mcp_verified_at?: string | null
           name: string
           org_id: string
@@ -4133,6 +4135,7 @@ export type Database = {
           id?: string
           mcp_arguments?: Json | null
           mcp_event?: string | null
+          mcp_spike_last_fired_at?: string | null
           mcp_verified_at?: string | null
           name?: string
           org_id?: string
