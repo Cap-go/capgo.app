@@ -482,12 +482,12 @@ describe('checkOrgRemediationAccess', () => {
 
     const result = await checkOrgRemediationAccess(
       {
-        query: async () => ({
+        query: async <R extends Record<string, unknown> = Record<string, unknown>>(_text: string, _values?: unknown[]) => ({
           rows: [{
             is_member: true,
             enforcing_2fa: true,
             has_2fa: false,
-          }],
+          }] as unknown as R[],
         }),
       },
       USER_ID,

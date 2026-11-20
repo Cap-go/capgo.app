@@ -49,7 +49,7 @@ let container: HTMLDivElement
 
 beforeEach(() => {
   container = document.createElement('div')
-  document.body.append(container)
+  document.body.appendChild(container)
 })
 
 afterEach(() => {
