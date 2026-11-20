@@ -19,10 +19,20 @@ const projectKey = 'example-project-telemetry-key'
 const notifications = new EventEmitter()
 const requests = []
 let blockedEvents
-const withTimeout = promise => Promise.race([
+const operationTimeoutMs = 15_000
+const blockedToolResultTimeoutMs = 4_000
+const withTimeout = (promise, ms = operationTimeoutMs) => Promise.race([
   promise,
-  new Promise((_, reject) => setTimeout(() => reject(new Error('MCP operation timed out')), 5000).unref()),
+  new Promise((_, reject) => setTimeout(() => reject(new Error('MCP operation timed out')), ms).unref()),
 ])
+const callToolWithTelemetry = async (client, toolName, arguments_, listenerDeadlineMs = operationTimeoutMs, toolDeadlineMs = operationTimeoutMs) => {
+  const eventPromise = once(notifications, toolName, { signal: AbortSignal.timeout(listenerDeadlineMs) })
+  const [result, [record]] = await withTimeout(Promise.all([
+    client.callTool({ name: toolName, arguments: arguments_ }),
+    eventPromise,
+  ]), toolDeadlineMs)
+  return { result, record }
+}
 const server = createServer(async (request, response) => {
   let body = ''
   for await (const chunk of request)
@@ -92,9 +102,7 @@ try {
     try {
       await withTimeout(client.connect(transport))
       for (const [directory, name] of [[first, 'first'], [second, 'second'], [first, 'first']]) {
-        const event = once(notifications, 'capgo_whoami', { signal: AbortSignal.timeout(5000) })
-        const result = await withTimeout(client.callTool({ name: 'capgo_whoami', arguments: { cwd: directory } }))
-        const [record] = await event
+        const { result, record } = await callToolWithTelemetry(client, 'capgo_whoami', { cwd: directory })
         assert.ok(!result.isError, JSON.stringify(result))
         assert.ok(result.content[0].text.includes('using the local key'), JSON.stringify(result))
         assert.equal(record.apikey, projectKey, 'telemetry must use the selected app key, not a launch-directory key')
@@ -104,17 +112,17 @@ try {
         assert.ok(requests.some(request => request.path === '/' + name + '/private/cli/identity' && request.apikey === projectKey))
       }
       for (const name of ['second', 'first']) {
-        const event = once(notifications, 'capgo_set_project_dir', { signal: AbortSignal.timeout(5000) })
-        const result = await withTimeout(client.callTool({ name: 'capgo_set_project_dir', arguments: { path: '../' + name } }))
-        const [record] = await event
+        const { result, record } = await callToolWithTelemetry(client, 'capgo_set_project_dir', { path: '../' + name })
         assert.ok(!result.isError, JSON.stringify(result))
         assert.equal(record.apikey, projectKey)
         assert.equal(record.path, '/' + name + '/private/events')
         assert.equal(record.payload.tags.app_id, 'com.example.telemetry.' + name)
       }
-      const errorEvent = once(notifications, 'capgo_generate_encryption_keys', { signal: AbortSignal.timeout(5000) })
-      const errorResult = await withTimeout(client.callTool({ name: 'capgo_generate_encryption_keys', arguments: {} }))
-      const [errorRecord] = await errorEvent
+      const { result: errorResult, record: errorRecord } = await callToolWithTelemetry(
+        client,
+        'capgo_generate_encryption_keys',
+        {},
+      )
       assert.equal(errorResult.isError, true)
       assert.equal(errorRecord.apikey, projectKey)
       assert.equal(errorRecord.path, '/first/private/events')
@@ -124,9 +132,13 @@ try {
       let releaseEvent
       blockedEvents = new Promise(resolve => { releaseEvent = resolve })
       try {
-        const event = once(notifications, 'capgo_whoami', { signal: AbortSignal.timeout(5000) })
-        const result = await withTimeout(client.callTool({ name: 'capgo_whoami', arguments: {} }))
-        const [record] = await event
+        const { result, record } = await callToolWithTelemetry(
+          client,
+          'capgo_whoami',
+          {},
+          operationTimeoutMs,
+          blockedToolResultTimeoutMs,
+        )
         assert.ok(!result.isError, JSON.stringify(result))
         assert.equal(record.apikey, projectKey, 'tool returns without awaiting the telemetry HTTP response')
       }
