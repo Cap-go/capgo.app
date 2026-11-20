@@ -70,6 +70,10 @@ ALTER FUNCTION public.mcp_failure_spike_group_cursor_get() OWNER TO postgres;
 ALTER FUNCTION public.mcp_failure_spike_group_cursor_advance(integer, integer) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.mcp_failure_spike_group_cursor_get() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.mcp_failure_spike_group_cursor_advance(integer, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.mcp_failure_spike_group_cursor_get() FROM anon;
+REVOKE ALL ON FUNCTION public.mcp_failure_spike_group_cursor_get() FROM authenticated;
+REVOKE ALL ON FUNCTION public.mcp_failure_spike_group_cursor_advance(integer, integer) FROM anon;
+REVOKE ALL ON FUNCTION public.mcp_failure_spike_group_cursor_advance(integer, integer) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.mcp_failure_spike_group_cursor_get() TO service_role;
 GRANT EXECUTE ON FUNCTION public.mcp_failure_spike_group_cursor_advance(integer, integer) TO service_role;
 

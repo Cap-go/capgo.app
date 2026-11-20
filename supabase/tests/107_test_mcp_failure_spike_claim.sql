@@ -1,7 +1,7 @@
 -- Cooldown claim and restore for update.failure_spike MCP subscriptions (matches runner SQL).
 BEGIN;
 
-SELECT plan(7);
+SELECT plan(11);
 
 SELECT tests.authenticate_as_service_role();
 
@@ -127,6 +127,42 @@ WITH advanced AS (
   SELECT public.mcp_failure_spike_group_cursor_advance(2, 5) AS cursor
 )
 SELECT is((SELECT cursor FROM advanced), 2, 'group cursor advances by processed count');
+
+SELECT ok(
+  NOT pg_catalog.has_function_privilege(
+    'anon',
+    'public.mcp_failure_spike_group_cursor_get()',
+    'EXECUTE'
+  ),
+  'anon cannot execute mcp_failure_spike_group_cursor_get'
+);
+
+SELECT ok(
+  NOT pg_catalog.has_function_privilege(
+    'authenticated',
+    'public.mcp_failure_spike_group_cursor_get()',
+    'EXECUTE'
+  ),
+  'authenticated cannot execute mcp_failure_spike_group_cursor_get'
+);
+
+SELECT ok(
+  NOT pg_catalog.has_function_privilege(
+    'anon',
+    'public.mcp_failure_spike_group_cursor_advance(integer, integer)',
+    'EXECUTE'
+  ),
+  'anon cannot execute mcp_failure_spike_group_cursor_advance'
+);
+
+SELECT ok(
+  NOT pg_catalog.has_function_privilege(
+    'authenticated',
+    'public.mcp_failure_spike_group_cursor_advance(integer, integer)',
+    'EXECUTE'
+  ),
+  'authenticated cannot execute mcp_failure_spike_group_cursor_advance'
+);
 
 SELECT tests.clear_authentication();
 
