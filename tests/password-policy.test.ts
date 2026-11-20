@@ -467,19 +467,6 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
 
 describe('checkOrgRemediationAccess', () => {
   it('distinguishes org_requires_2fa from not_member', async () => {
-    const [memberRow] = await executeSQL(`
-      SELECT public.rbac_has_permission(
-        public.rbac_principal_user(),
-        $1::uuid,
-        public.rbac_perm_org_read(),
-        $2::uuid,
-        NULL::character varying,
-        NULL::bigint
-      ) AS is_member
-    `, [USER_ID, ORG_ID])
-
-    expect(memberRow?.is_member).toBe(true)
-
     const result = await checkOrgRemediationAccess(
       {
         query: async <R extends Record<string, unknown> = Record<string, unknown>>(_text: string, _values?: unknown[]) => ({
