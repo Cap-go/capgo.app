@@ -73,19 +73,15 @@ export async function gatherFailureSpikeMetrics(
   }
 
   let topFailureActionCodes: FailureSpikeMetrics['topFailureActionCodes'] = []
-  const insightsParams = {
+  const insights = await readStatsInsights(c, {
     app_id: appId,
     start_date: start,
     end_date: end,
-    actions: [...PUBLIC_FAILURE_ACTIONS] as const,
-    ...(channelName
-      ? { channel: { name: channelName } }
-      : {}),
+    actions: [...PUBLIC_FAILURE_ACTIONS],
     ...(channelName && version !== 'unknown'
       ? { version_name: version }
       : {}),
-  }
-  const insights = await readStatsInsights(c, insightsParams)
+  })
   topFailureActionCodes = insights.actions
     .filter(entry => (PUBLIC_FAILURE_ACTIONS as readonly string[]).includes(entry.action))
     .sort((left, right) => right.total - left.total)
