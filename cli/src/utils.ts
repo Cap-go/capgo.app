@@ -1781,15 +1781,6 @@ export function isAppNotFoundError(error: unknown): boolean {
 
 export async function uploadTUS(apikey: string, data: Buffer, orgId: string, appId: string, name: string, spinner: UploadSpinner, localConfig: CapgoConfig, chunkSize: number): Promise<boolean> {
   return new Promise((resolve, reject) => {
-    sendEvent(apikey, {
-      channel: 'app',
-      event: 'App TUS upload',
-      org_id: orgId,
-      tracking_version: 2,
-      tags: {
-        'app-id': appId,
-      },
-    })
     const upload = new tus.Upload(data as any, {
       endpoint: `${localConfig.hostFilesApi}/files/upload/attachments/`,
       // parallelUploads: multipart,
