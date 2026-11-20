@@ -441,22 +441,25 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
   })
 
   it('returns org_requires_2fa for members when the org enforces 2FA and the user has none', async () => {
-    const dedicatedUserId = randomUUID()
-    const dedicatedEmail = `pwd_2fa_gate_${dedicatedUserId.slice(0, 8)}@capgo.app`
+    const dedicatedEmail = `pwd_2fa_gate_${randomUUID().slice(0, 8)}@capgo.app`
     const capgo = getSupabaseClient()
 
-    await executeSQL(
-      `INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
-       VALUES ($1, $2, $3, NOW(), NOW(), NOW(), '{}'::jsonb)
-       ON CONFLICT (id) DO NOTHING`,
-      [dedicatedUserId, dedicatedEmail, USER_PASSWORD_HASH],
-    )
-    await executeSQL(
-      `INSERT INTO public.users (id, email, created_at, updated_at)
-       VALUES ($1, $2, NOW(), NOW())
-       ON CONFLICT (id) DO NOTHING`,
-      [dedicatedUserId, dedicatedEmail],
-    )
+    const { data: authData, error: authError } = await capgo.auth.admin.createUser({
+      email: dedicatedEmail,
+      password: USER_PASSWORD,
+      email_confirm: true,
+    })
+    if (authError || !authData.user?.id)
+      throw authError ?? new Error('Failed to create dedicated auth user for org_requires_2fa test')
+
+    const dedicatedUserId = authData.user.id
+
+    const { error: userError } = await capgo.from('users').insert({
+      id: dedicatedUserId,
+      email: dedicatedEmail,
+    })
+    if (userError)
+      throw userError
 
     const { error: memberError } = await capgo.from('org_users').insert({
       org_id: ORG_ID,
@@ -487,8 +490,8 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
     finally {
       await capgo.from('orgs').update({ enforcing_2fa: false }).eq('id', ORG_ID)
       await capgo.from('org_users').delete().eq('org_id', ORG_ID).eq('user_id', dedicatedUserId)
-      await executeSQL('DELETE FROM auth.users WHERE id = $1', [dedicatedUserId])
-      await executeSQL('DELETE FROM public.users WHERE id = $1', [dedicatedUserId])
+      await capgo.from('users').delete().eq('id', dedicatedUserId)
+      await capgo.auth.admin.deleteUser(dedicatedUserId)
     }
   })
 })
