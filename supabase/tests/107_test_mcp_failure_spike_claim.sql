@@ -172,12 +172,9 @@ SELECT is(
 
 SELECT public.process_function_queue(ARRAY['cron_mcp_failure_spike']);
 
-SELECT ok(
-  (
-    SELECT count(*)::int
-    FROM pgmq.q_cron_mcp_failure_spike
-    WHERE read_ct > 0
-  ) >= 1,
+SELECT is(
+  (SELECT count(*)::int FROM pgmq.q_cron_mcp_failure_spike),
+  0,
   'generic scheduler function_queue path drains cron_mcp_failure_spike'
 );
 
