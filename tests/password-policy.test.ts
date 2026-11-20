@@ -441,7 +441,32 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
   })
 
   it('returns org_requires_2fa for members when the org enforces 2FA and the user has none', async () => {
-    const { error: updateError } = await getSupabaseClient()
+    const dedicatedUserId = randomUUID()
+    const dedicatedEmail = `pwd_2fa_gate_${dedicatedUserId.slice(0, 8)}@capgo.app`
+    const capgo = getSupabaseClient()
+
+    await executeSQL(
+      `INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
+       VALUES ($1, $2, $3, NOW(), NOW(), NOW(), '{}'::jsonb)
+       ON CONFLICT (id) DO NOTHING`,
+      [dedicatedUserId, dedicatedEmail, USER_PASSWORD_HASH],
+    )
+    await executeSQL(
+      `INSERT INTO public.users (id, email, created_at, updated_at)
+       VALUES ($1, $2, NOW(), NOW())
+       ON CONFLICT (id) DO NOTHING`,
+      [dedicatedUserId, dedicatedEmail],
+    )
+
+    const { error: memberError } = await capgo.from('org_users').insert({
+      org_id: ORG_ID,
+      user_id: dedicatedUserId,
+      rbac_role_name: 'org_super_admin',
+    })
+    if (memberError)
+      throw memberError
+
+    const { error: updateError } = await capgo
       .from('orgs')
       .update({ enforcing_2fa: true })
       .eq('id', ORG_ID)
@@ -450,7 +475,7 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
 
     try {
       const response = await postCompliance({
-        email: USER_EMAIL,
+        email: dedicatedEmail,
         password: USER_PASSWORD,
         org_id: ORG_ID,
       })
@@ -460,7 +485,10 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
       expect(responseData.error).toBe('org_requires_2fa')
     }
     finally {
-      await getSupabaseClient().from('orgs').update({ enforcing_2fa: false }).eq('id', ORG_ID)
+      await capgo.from('orgs').update({ enforcing_2fa: false }).eq('id', ORG_ID)
+      await capgo.from('org_users').delete().eq('org_id', ORG_ID).eq('user_id', dedicatedUserId)
+      await executeSQL('DELETE FROM auth.users WHERE id = $1', [dedicatedUserId])
+      await executeSQL('DELETE FROM public.users WHERE id = $1', [dedicatedUserId])
     }
   })
 })
