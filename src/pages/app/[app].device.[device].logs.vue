@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import EmptyState from '~/components/EmptyState.vue'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDisplayStore } from '~/stores/display'
 
@@ -44,7 +44,7 @@ async function getDevice() {
     const currentJwt = currentSession.session.access_token
 
     try {
-      const response = await fetch(`${defaultApiHost}/private/devices`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/devices`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

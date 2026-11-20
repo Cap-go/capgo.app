@@ -7,7 +7,7 @@ const { fetchMock, getSessionMock } = vi.hoisted(() => ({
 }))
 
 vi.mock('~/services/console', () => ({
-  defaultApiHost: 'https://api.capgo.test',
+  getConsoleApiHost: () => 'https://api.capgo.test',
   useConsole: () => ({
     auth: {
       getSession: getSessionMock,

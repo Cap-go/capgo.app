@@ -11,7 +11,7 @@ import IconEye from '~icons/heroicons/eye'
 import BuilderIntroduction from '~/components/dashboard/BuilderIntroduction.vue'
 import { hasSupportedBuilderTodoList } from '~/services/builderOnboardingChecklist'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { rememberSimulator, simulatorEpoch } from '~/services/simulatorSessions'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -338,7 +338,7 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean) {
     const token = data.session?.access_token
     if (!token)
       return
-    const response = await fetch(`${defaultApiHost}/private/simulator/outputs?app_id=${encodeURIComponent(props.appId)}&job_ids=${encodeURIComponent(jobIds.join(','))}`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/simulator/outputs?app_id=${encodeURIComponent(props.appId)}&job_ids=${encodeURIComponent(jobIds.join(','))}`, {
       headers: { authorization: `Bearer ${token}` },
     })
     if (!response.ok)
@@ -377,7 +377,7 @@ async function openSavedBuild(jobId: string) {
     const token = data.session?.access_token
     if (!token)
       throw new Error(t('simulator-sign-in'))
-    const response = await fetch(`${defaultApiHost}/private/simulator/`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/simulator/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
       body: JSON.stringify({ app_id: appId, platform: 'ios', build_job_id: jobId }),

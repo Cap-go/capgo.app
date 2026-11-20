@@ -62,6 +62,10 @@
           "zone_name": "capgo.app"
         },
         {
+          "pattern": "api.capgo.com.cn/translation*",
+          "zone_name": "capgo.app"
+        },
+        {
           "pattern": "api.usecapgo.com/translation*",
           "zone_name": "usecapgo.com"
         }

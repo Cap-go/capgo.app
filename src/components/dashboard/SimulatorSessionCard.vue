@@ -3,7 +3,7 @@ import type { SimulatorSummary } from '../../services/simulatorSessions'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconSmartphone from '~icons/lucide/smartphone'
-import { defaultApiHost, useConsole } from '../../services/console'
+import { getConsoleApiHost, useConsole } from '../../services/console'
 import { formatLocalDateTime } from '../../services/date'
 import { applySimulatorList, forgetSimulator, formatSimulatorDuration, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorEpoch } from '../../services/simulatorSessions'
 
@@ -47,7 +47,7 @@ async function loadSessions() {
   const epoch = simulatorEpoch()
   const request = ++listRequest
   try {
-    const response = await fetch(`${defaultApiHost}/private/simulator/?app_id=${encodeURIComponent(appId)}`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/simulator/?app_id=${encodeURIComponent(appId)}`, {
       headers: { authorization: `Bearer ${await sessionToken()}` },
     })
     if (!response.ok)
@@ -71,7 +71,7 @@ async function refreshSessions(listed: boolean) {
   const known = runningSimulators(appId).filter(session => !listed || !recent.value.some(item => item.id === session.id))
   await Promise.all(known.map(async (session) => {
     const remains = await sessionRemainsAfterLookup(async () => {
-      const response = await fetch(`${defaultApiHost}/private/simulator/${session.id}?app_id=${encodeURIComponent(appId)}`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/simulator/${session.id}?app_id=${encodeURIComponent(appId)}`, {
         headers: { authorization: `Bearer ${await sessionToken()}` },
       })
       if (!response.ok)
@@ -121,7 +121,7 @@ async function start(platform: 'ios' | 'android') {
   error.value = ''
   pending.value = platform
   try {
-    const response = await fetch(`${defaultApiHost}/private/simulator/`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/simulator/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -149,7 +149,7 @@ async function stop(id: string) {
   error.value = ''
   stoppingId.value = id
   try {
-    const response = await fetch(`${defaultApiHost}/private/simulator/${id}/stop`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/simulator/${id}/stop`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -2,7 +2,8 @@ import type { Locale } from 'vue-i18n'
 import type { UserModule } from '~/types'
 import { createI18n } from 'vue-i18n'
 import sourceMessages from '../../messages/en.json'
-import { defaultApiHost } from '../services/console'
+import zhCnCommittedMessages from '../../messages/zh-cn.json'
+import { getConsoleApiHost } from '../services/console'
 
 const FALLBACK_LOCALE = 'en' as const
 const LANGUAGE_STORAGE_KEY = 'lang'
@@ -53,6 +54,16 @@ export class RemoteLanguageError extends Error {
 }
 
 type MessageCatalog = Record<string, string>
+
+const zhCnCommittedOverrides: MessageCatalog = Object.fromEntries(
+  Object.entries(zhCnCommittedMessages).filter(([key]) => !key.startsWith('$')),
+) as MessageCatalog
+
+export function applyCommittedLocaleOverrides(lang: string, messages: MessageCatalog): MessageCatalog {
+  if (lang === 'zh-cn')
+    return { ...messages, ...zhCnCommittedOverrides }
+  return messages
+}
 
 interface CachedCatalog {
   checksum: string
@@ -167,7 +178,7 @@ async function fetchRemoteMessages(lang: string, knownChecksum?: string): Promis
   if (pending)
     return pending
 
-  const request = fetch(`${defaultApiHost || ''}/translation/messages`, {
+  const request = fetch(`${getConsoleApiHost() || ''}/translation/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -189,7 +200,7 @@ async function fetchRemoteMessages(lang: string, knownChecksum?: string): Promis
       throw new RemoteLanguageError('unavailable')
 
     writeCachedCatalog(lang, payload.checksum, payload.messages)
-    return { ...sourceMessages, ...payload.messages }
+    return applyCommittedLocaleOverrides(lang, { ...sourceMessages, ...payload.messages })
   }).catch((error) => {
     if (error instanceof RemoteLanguageError)
       throw error
@@ -209,11 +220,11 @@ async function ensureLanguageLoaded(lang: Locale) {
   const cached = readCachedCatalog(lang)
   if (cached) {
     // Serve the cached catalog now, revalidate in the background.
-    i18n.global.setLocaleMessage(lang, { ...sourceMessages, ...cached.messages } as any)
+    i18n.global.setLocaleMessage(lang, applyCommittedLocaleOverrides(lang, { ...sourceMessages, ...cached.messages }) as any)
     loadedLanguages.add(lang)
     void fetchRemoteMessages(lang, cached.checksum).then((messages) => {
       if (messages)
-        i18n.global.setLocaleMessage(lang, messages as any)
+        i18n.global.setLocaleMessage(lang, applyCommittedLocaleOverrides(lang, messages) as any)
     }).catch((error) => {
       console.warn('Translation catalog revalidation failed', error)
     })
@@ -223,7 +234,7 @@ async function ensureLanguageLoaded(lang: Locale) {
   const messages = await fetchRemoteMessages(lang)
   if (!messages)
     throw new RemoteLanguageError('unavailable')
-  i18n.global.setLocaleMessage(lang, messages as any)
+  i18n.global.setLocaleMessage(lang, applyCommittedLocaleOverrides(lang, messages) as any)
   loadedLanguages.add(lang)
 }
 

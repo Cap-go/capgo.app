@@ -75,7 +75,7 @@ describe('getAllowedConfirmationHosts', () => {
     vi.stubEnv('VITE_API_HOST', 'https://api.capgo.app')
     try {
       const hosts = getAllowedConfirmationHosts()
-      expect(hosts).toEqual(['console.capgo.app', 'api.capgo.app'])
+      expect(hosts).toEqual(['console.capgo.app', 'api.capgo.app', 'console.capgo.com.cn'])
     }
     finally {
       vi.unstubAllEnvs()
@@ -88,10 +88,18 @@ describe('getAllowedConfirmationHosts', () => {
     try {
       const hosts = getAllowedConfirmationHosts()
       expect(hosts).toContain('console.capgo.app')
+      expect(hosts).toContain('console.capgo.com.cn')
       expect(hosts).toContain('api.capgo.app')
+      expect(hosts).toContain('api.capgo.com.cn')
     }
     finally {
       vi.unstubAllEnvs()
     }
+  })
+
+  it('allows confirmation URLs on console.capgo.com.cn', () => {
+    expect(isAllowedConfirmationUrl('https://console.capgo.com.cn/confirm-signup', {
+      allowedHosts: ['console.capgo.com.cn', 'api.capgo.com.cn'],
+    })).toBe(true)
   })
 })

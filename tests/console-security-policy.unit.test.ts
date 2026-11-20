@@ -22,9 +22,11 @@ describe('console content security policy', () => {
   it.concurrent('includes the production API connect source only, never a database host', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('sb.capgo.app')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('supabase.co')
-    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://api.capgo.app')
-    expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('https://api.preprod.capgo.app')
-    expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('https://api.dev.capgo.app')
+    const connectSrc = CONSOLE_CONTENT_SECURITY_POLICY.match(/connect-src ([^;]+)/)?.[1] ?? ''
+    expect(connectSrc).toContain('https://api.capgo.app')
+    expect(connectSrc).toContain('https://api.capgo.com.cn')
+    expect(connectSrc).not.toContain('https://api.preprod.capgo.app')
+    expect(connectSrc).not.toContain('https://api.dev.capgo.app')
   })
 
   it('includes self-hosted deploy-time connect overrides from env', () => {

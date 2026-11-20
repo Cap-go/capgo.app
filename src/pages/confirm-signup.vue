@@ -5,7 +5,7 @@ import { useRoute } from 'vue-router'
 import IconLoader from '~icons/lucide/loader-2'
 import IconTriangleAlert from '~icons/lucide/triangle-alert'
 import { authGhostButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
-import { defaultApiHost } from '~/services/console'
+import { getConsoleApiHost } from '~/services/console'
 import { resolveConsoleApiBase } from '~/services/consoleAuth'
 import { replaceDocument } from '~/services/documentNavigation'
 import { openSupport } from '~/services/support'
@@ -22,7 +22,7 @@ onMounted(() => {
     const confirmationUrl = resolveConfirmationUrl(route.query, {
       allowedHosts: allowedConfirmationHosts,
       allowLocalDev: import.meta.env.DEV,
-      apiHost: resolveConsoleApiBase(defaultApiHost),
+      apiHost: resolveConsoleApiBase(getConsoleApiHost()),
     })
     if (!confirmationUrl) {
       isRedirecting.value = false

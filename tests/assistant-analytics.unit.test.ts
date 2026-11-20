@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createAssistantAnalytics } from '../src/services/assistantAnalytics'
 
-vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.app' }))
+vi.mock('~/services/console', () => ({ getConsoleApiHost: () => 'https://api.capgo.app' }))
 vi.mock('~/services/posthog', () => ({ pushEvent: vi.fn() }))
 
 describe('assistant analytics privacy and lifecycle', () => {

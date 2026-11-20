@@ -130,6 +130,7 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
     'https://hooks.stripe.com',
     'https://auth.openai.com', // assistant ChatGPT sign-in token exchange
     'https://api.openai.com', // assistant model calls
+    'https://api.capgo.com.cn', // China API mirror (console + reachability probe)
     ...PREVIEW_CONNECT_SOURCES,
     ...getConfiguredConnectSources(dev, options.servingPolicyUrl),
     ...(dev

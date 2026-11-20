@@ -169,6 +169,32 @@ describe('console captcha fallback', () => {
     expect(decodeURIComponent(String(url))).not.toContain('evil.example')
   })
 
+  it('allows console.capgo.com.cn Origin for magic link', async () => {
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://console.capgo.com.cn' },
+      body: JSON.stringify({ email: 'user@example.com', purpose: 'magic_link' }),
+    })
+    expect(response.status).toBe(200)
+    expect(fetchMock).toHaveBeenCalled()
+  })
+
+  it('keeps recover redirect_to when origin is console.capgo.com.cn', async () => {
+    const allowed = 'https://console.capgo.com.cn/forgot_password?step=2'
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://console.capgo.com.cn' },
+      body: JSON.stringify({
+        email: 'user@example.com',
+        purpose: 'recover',
+        redirect_to: allowed,
+      }),
+    })
+    expect(response.status).toBe(200)
+    const [url] = fetchMock.mock.calls[0]
+    expect(decodeURIComponent(String(url))).toContain(allowed)
+  })
+
   it('keeps recover redirect_to when origin matches the console webapp', async () => {
     const allowed = 'https://console.capgo.app/forgot_password?step=2&foo=bar'
     const response = await app.request('http://localhost/', {

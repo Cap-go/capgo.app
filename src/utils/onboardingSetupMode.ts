@@ -195,6 +195,19 @@ export function manualSetupUsesBuilder(onboarding: Json | unknown) {
   return intent === 'builder' || intent === 'publish'
 }
 
+export function buildInitCliCommand(apiKey: string, apiHostArgs = '', platform?: 'ios' | 'android') {
+  const platformArg = platform ? ` --platform ${platform}` : ''
+  return `npx @capgo/cli@latest build init -a ${apiKey}${platformArg}${apiHostArgs}`
+}
+
+export function buildRequestCliCommand(appId: string, platform: 'ios' | 'android', apiHostArgs = '') {
+  return `npx @capgo/cli@latest build request ${appId} --platform ${platform}${apiHostArgs}`
+}
+
+export function buildLoginCliCommand(apiHostArgs = '') {
+  return `npx @capgo/cli@latest login${apiHostArgs}`
+}
+
 /**
  * The single CLI command shown first on the manual setup, so users leaving the AI path
  * still run one command in their project. Same commands as the setup step of the wizard:
@@ -202,6 +215,6 @@ export function manualSetupUsesBuilder(onboarding: Json | unknown) {
  */
 export function manualSetupCliCommand(onboarding: Json | unknown, apiKey: string, apiHostArgs = '') {
   return manualSetupUsesBuilder(onboarding)
-    ? `npx @capgo/cli@latest build init -a ${apiKey}${apiHostArgs}`
+    ? buildInitCliCommand(apiKey, apiHostArgs)
     : `npx @capgo/cli@latest i ${apiKey}${apiHostArgs}`
 }

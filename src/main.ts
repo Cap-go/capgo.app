@@ -17,7 +17,7 @@ import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoise
 import { installConsoleImageFallback } from '~/services/storage'
 import { getAllowedConfirmationHosts, resolveConfirmationUrl } from '~/utils/safeRedirect'
 import App from './App.vue'
-import { defaultApiHost, getRemoteConfig } from './services/console'
+import { getConsoleApiHost, getRemoteConfig } from './services/console'
 import { resolveConsoleApiBase } from './services/consoleAuth'
 import '@fontsource-variable/inter'
 // your custom styles here
@@ -307,7 +307,7 @@ router.beforeEach((to, from, next) => {
       const confirmationUrl = resolveConfirmationUrl(to.query, {
         allowedHosts: getAllowedConfirmationHosts(),
         allowLocalDev: import.meta.env.DEV,
-        apiHost: resolveConsoleApiBase(defaultApiHost),
+        apiHost: resolveConsoleApiBase(getConsoleApiHost()),
       })
       if (confirmationUrl) {
         replaceDocument(confirmationUrl)

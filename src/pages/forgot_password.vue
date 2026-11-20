@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Capacitor } from '@capacitor/core'
 import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -10,6 +11,7 @@ import FormField from '~/components/forms/FormField.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
 import { useConsoleTurnstileCaptcha } from '~/composables/useConsoleTurnstileCaptcha'
 import { useConsole } from '~/services/console'
+import { getConsoleWebOrigin } from '~/services/consoleApiHost'
 import { requestConsoleCaptchaFallbackEmail } from '~/services/consoleCaptchaFallback'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -21,6 +23,13 @@ const router = useRouter()
 const route = useRoute('/forgot_password')
 const capgo = useConsole()
 const dialogStore = useDialogV2Store()
+
+function passwordRecoveryRedirectOrigin() {
+  if (Capacitor.isNativePlatform()) {
+    return (import.meta.env.VITE_APP_URL as string).replace(/\/$/, '')
+  }
+  return getConsoleWebOrigin()
+}
 const step = ref(1)
 const mfaCode = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
@@ -80,7 +89,7 @@ function finishWithError(message: string, error?: unknown) {
 }
 
 async function sendRecoverFallback(email: string) {
-  const redirectTo = `${import.meta.env.VITE_APP_URL}/forgot_password?step=2`
+  const redirectTo = `${passwordRecoveryRedirectOrigin()}/forgot_password?step=2`
   recoverFallbackSending.value = true
   try {
     const { error } = await requestConsoleCaptchaFallbackEmail(email, 'recover', redirectTo)
@@ -97,7 +106,7 @@ async function sendRecoverFallback(email: string) {
 }
 
 async function resetPasswordWithCaptcha(email: string) {
-  const redirectTo = `${import.meta.env.VITE_APP_URL}/forgot_password?step=2`
+  const redirectTo = `${passwordRecoveryRedirectOrigin()}/forgot_password?step=2`
   return await capgo.auth.resetPasswordForEmail(email, { redirectTo, captchaToken: turnstileToken.value })
 }
 

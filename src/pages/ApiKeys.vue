@@ -32,6 +32,7 @@ import {
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { shouldShowCliLoginGuidance } from '~/services/cliLogin'
 import { useConsole } from '~/services/console'
+import { buildChinaConsoleCliApiHostArg } from '~/services/consoleApiHost'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissionsBatch } from '~/services/permissions'
@@ -40,6 +41,7 @@ import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { getRbacRoleI18nKey, useOrganizationStore } from '~/stores/organization'
 import { rules, validateField } from '~/utils/formValidation'
+import { buildLoginCliCommand } from '~/utils/onboardingSetupMode'
 import '@vuepic/vue-datepicker/dist/main.css'
 
 interface Role {
@@ -113,7 +115,11 @@ const capgo = useConsole()
 const keys = ref<ApiKeyRow[]>([])
 const hasLoadedKeys = ref(false)
 const now = useNow({ interval: 60_000 })
-const cliLoginCommand = 'npx @capgo/cli@latest login'
+const localCommand = buildChinaConsoleCliApiHostArg()
+const cliLoginCommand = computed(() => buildLoginCliCommand(localCommand))
+const cliLoginGuidanceDescriptionKey = computed(() => (
+  localCommand ? 'cli-login-guidance-description-china-api' : 'cli-login-guidance-description'
+))
 const showCliLoginGuidance = computed(() =>
   hasLoadedKeys.value && shouldShowCliLoginGuidance(keys.value, now.value),
 )
@@ -962,7 +968,7 @@ async function getKeys(retry = true): Promise<void> {
 
 async function copyCliLoginCommand() {
   try {
-    await navigator.clipboard.writeText(cliLoginCommand)
+    await navigator.clipboard.writeText(cliLoginCommand.value)
     toast.success(t('cli-login-guidance-command-copied'))
   }
   catch (error) {
@@ -1758,8 +1764,11 @@ getKeys()
                       {{ t('cli-login-guidance-title') }}
                     </h2>
                   </div>
-                  <p class="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    {{ t('cli-login-guidance-description') }}
+                  <p
+                    class="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300"
+                    data-test="cli-login-guidance-description"
+                  >
+                    {{ t(cliLoginGuidanceDescriptionKey) }}
                   </p>
                   <RouterLink to="/mcp" data-test="cli-login-guidance-mcp-link" class="mt-2 inline-block text-sm font-medium text-primary-500 hover:underline dark:text-primary-400">
                     {{ t('cli-login-guidance-mcp-link') }}
@@ -1770,6 +1779,7 @@ getKeys()
               <button
                 type="button"
                 class="d-btn flex w-full shrink-0 items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:border-primary-500/40 hover:bg-primary-500/5 focus:ring-2 focus:ring-primary-500/30 focus:ring-offset-2 focus:outline-none lg:w-auto lg:min-w-96 dark:border-slate-600 dark:bg-slate-900 dark:hover:border-primary-500/50 dark:hover:bg-primary-500/10"
+                data-test="cli-login-guidance-copy"
                 :aria-label="t('copy-command')"
                 @click="copyCliLoginCommand"
               >

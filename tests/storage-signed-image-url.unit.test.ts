@@ -7,7 +7,7 @@ const mockGetSession = vi.fn()
 const mockInvoke = vi.fn()
 
 vi.mock('../src/services/console.ts', () => ({
-  defaultApiHost: 'https://api.example.com',
+  getConsoleApiHost: () => 'https://api.example.com',
   useConsole: () => ({
     auth: { getSession: mockGetSession },
     functions: { invoke: mockInvoke },

@@ -19,12 +19,14 @@ import BuildLiveProgress from '~/components/dashboard/BuildLiveProgress.vue'
 import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'
 import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
-import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
+import { useConsole } from '~/services/console'
+import { buildChinaConsoleCliApiHostArg } from '~/services/consoleApiHost'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { buildInitCliCommand } from '~/utils/onboardingSetupMode'
 
 type Platform = 'ios' | 'android'
 
@@ -72,9 +74,8 @@ const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 // The AI agent card comes first unless the user last picked the manual way.
 const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
-const config = getLocalConfig()
 const initialOnboarding = props.onboarding
-const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ''
+const localCommand = buildChinaConsoleCliApiHostArg()
 
 const platformBuildCounts = computed<PlatformBuildCounts>(() => ({
   ios: props.platformBuildCounts?.ios ?? 0,
@@ -105,7 +106,7 @@ const setupStep = computed<Step>(() => {
     return {
       key: 'setup-ios',
       title: t('build-step-ios-setup-title'),
-      command: `npx @capgo/cli@latest build init -a ${apiKey.value} --platform ios`,
+      command: buildInitCliCommand(apiKey.value, localCommand, 'ios'),
       subtitle: t('build-step-ios-setup-subtitle'),
       icon: IconSettings,
     }
@@ -114,7 +115,7 @@ const setupStep = computed<Step>(() => {
   return {
     key: 'setup-android',
     title: t('build-step-android-setup-title'),
-    command: `npx @capgo/cli@latest build init -a ${apiKey.value} --platform android`,
+    command: buildInitCliCommand(apiKey.value, localCommand, 'android'),
     subtitle: t('build-step-android-setup-subtitle'),
     icon: IconSettings,
   }

@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
 import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
+import { buildInitCliCommand } from '../src/utils/onboardingSetupMode'
 
 const runtimeMocks = vi.hoisted(() => {
   const app = {
@@ -13,6 +14,15 @@ const runtimeMocks = vi.hoisted(() => {
     icon_url: null,
     ios_store_url: null,
     android_store_url: null,
+    onboarding: {
+      setup: {
+        todo_list_version: 4,
+        builder_todo_list_version: '1',
+        paths: ['builder'],
+        selected_path: 'builder',
+        selected_builder_platform: 'ios',
+      },
+    },
   }
 
   return {
@@ -34,7 +44,7 @@ const runtimeMocks = vi.hoisted(() => {
       user: { id: 'user-runtime-onboarding', onboarding: {} } as { id: string, onboarding: Record<string, unknown> } | null,
     },
     organizationStore: {
-      getOrgByAppId: vi.fn(),
+      getOrgByAppId: vi.fn(() => ({ gid: 'org-runtime-onboarding', name: 'Runtime organization' })),
       setCurrentOrganization: vi.fn(),
       awaitInitialLoad: vi.fn(async () => undefined),
       currentOrganization: { gid: 'org-runtime-onboarding', name: 'Runtime organization' },
@@ -50,9 +60,13 @@ const runtimeMocks = vi.hoisted(() => {
   }
 })
 
-vi.mock('vue-i18n', () => ({
-  useI18n: () => ({ t: (key: string) => key }),
-}))
+vi.mock('vue-i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vue-i18n')>()
+  return {
+    ...actual,
+    useI18n: () => ({ t: (key: string) => key }),
+  }
+})
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: runtimeMocks.query }),
   useRouter: () => runtimeMocks.router,
@@ -67,13 +81,26 @@ vi.mock('~/services/apikeys', async (importOriginal) => {
   }
 })
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
+function chinaConsoleWebHost() {
+  return typeof window !== 'undefined' && window.location.hostname.endsWith('.capgo.com.cn')
+}
+
 vi.mock('~/services/console', () => ({
-  getLocalConfig: () => ({ apiHost: 'https://api.capgo.app' }),
+  getLocalConfig: () => ({
+    apiHost: chinaConsoleWebHost() ? 'https://api.capgo.com.cn' : 'https://api.capgo.app',
+    host: typeof window !== 'undefined' ? window.location.origin : 'https://console.capgo.app',
+    hostWeb: '',
+    stripeEnabled: true,
+  }),
+  getConsoleApiHost: () => (chinaConsoleWebHost() ? 'https://api.capgo.com.cn' : 'https://api.capgo.app'),
+  PROD_API_URL: 'https://api.capgo.app',
   isLocal: () => false,
   useConsole: () => {
     const query = {
       eq: () => query,
-      maybeSingle: async () => ({ data: null, error: null }),
+      limit: () => Promise.resolve({ data: [], error: null }),
+      maybeSingle: async () => ({ data: runtimeMocks.app, error: null }),
+      order: () => query,
       select: () => query,
       single: async () => ({ data: runtimeMocks.app, error: null }),
     }
@@ -115,7 +142,15 @@ interface MountedFlow {
 
 const mountedFlows: MountedFlow[] = []
 
-async function mountFlow(query: Record<string, string> = {}, props: { setupAppId?: string } = {}) {
+async function mountFlow(
+  query: Record<string, string> = {},
+  props: {
+    onboarding?: boolean
+    setupAppId?: string
+    showChecklist?: boolean
+    initialChecklistPath?: 'ota' | 'builder'
+  } = {},
+) {
   runtimeMocks.query = query
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -181,6 +216,8 @@ afterEach(() => {
     mounted.app.unmount()
     mounted.container.remove()
   }
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 describe('app onboarding API key runtime loading', () => {
@@ -251,6 +288,43 @@ describe('app onboarding API key runtime loading', () => {
     }
     finally {
       consoleError.mockRestore()
+    }
+  })
+
+  it('shows China build init on the builder checklist when hosted on console.capgo.com.cn', async () => {
+    const locationDescriptor = Object.getOwnPropertyDescriptor(window, 'location')
+    try {
+      vi.stubEnv('VITE_API_HOST', 'https://api.capgo.app')
+      vi.stubEnv('VITE_APP_URL', 'https://console.capgo.com.cn')
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: {
+          hostname: 'console.capgo.com.cn',
+          origin: 'https://console.capgo.com.cn',
+          href: 'https://console.capgo.com.cn/',
+          search: '',
+        },
+      })
+      const chinaSuffix = ' --api-host https://api.capgo.com.cn'
+      const expectedBase = buildInitCliCommand('runtime-api-key', chinaSuffix)
+      const { container } = await mountFlow(
+        {},
+        {
+          onboarding: true,
+          setupAppId: runtimeMocks.app.app_id,
+          showChecklist: true,
+          initialChecklistPath: 'builder',
+        },
+      )
+      await vi.waitFor(() => expect(container.querySelector('[data-test="builder-checklist-command"] code')).not.toBeNull())
+      const command = container.querySelector('[data-test="builder-checklist-command"] code')?.textContent ?? ''
+      expect(command).toBe(`${expectedBase} --platform ios`)
+      expect(command).not.toContain('api.capgo.app')
+    }
+    finally {
+      vi.unstubAllEnvs()
+      if (locationDescriptor)
+        Object.defineProperty(window, 'location', locationDescriptor)
     }
   })
 

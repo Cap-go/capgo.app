@@ -13,6 +13,8 @@ import {
   defaultAiOrganizationName,
   initialChecklistOpen,
   initialOnboardingSetupScreen,
+  buildInitCliCommand,
+  buildRequestCliCommand,
   manualSetupCliCommand,
   readAiAgentProgress,
   readAiOnboardingGoal,
@@ -236,6 +238,24 @@ describe('AI onboarding goal', () => {
       expect(prompt).toContain('wait for my confirmation')
     }
     expect(promptFor('both')).toContain('Help me pick the order')
+  })
+})
+
+describe('build request CLI command', () => {
+  it.concurrent('appends --api-host for non-production console API hosts', () => {
+    const chinaSuffix = ' --api-host https://api.capgo.com.cn'
+    expect(buildRequestCliCommand('com.demo.app', 'ios', chinaSuffix)).toBe(
+      'npx @capgo/cli@latest build request com.demo.app --platform ios --api-host https://api.capgo.com.cn',
+    )
+  })
+})
+
+describe('build init CLI command', () => {
+  it.concurrent('appends --api-host for non-production console API hosts', () => {
+    const chinaSuffix = ' --api-host https://api.capgo.com.cn'
+    expect(buildInitCliCommand('key-1', chinaSuffix)).toBe('npx @capgo/cli@latest build init -a key-1 --api-host https://api.capgo.com.cn')
+    expect(buildInitCliCommand('key-1', chinaSuffix, 'ios')).toBe('npx @capgo/cli@latest build init -a key-1 --platform ios --api-host https://api.capgo.com.cn')
+    expect(buildInitCliCommand('key-1', chinaSuffix, 'android')).toBe('npx @capgo/cli@latest build init -a key-1 --platform android --api-host https://api.capgo.com.cn')
   })
 })
 

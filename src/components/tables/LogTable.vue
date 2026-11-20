@@ -7,7 +7,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import LogMetadataPopover from '~/components/tables/LogMetadataPopover.vue'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
@@ -139,7 +139,7 @@ async function getData(options: { append?: boolean } = {}) {
     const currentJwt = currentSession.session.access_token
 
     try {
-      const response = await fetch(`${defaultApiHost}/private/stats`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/stats`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -209,7 +209,7 @@ async function exportCsv() {
     }
     const currentJwt = currentSession.session.access_token
 
-    const response = await fetch(`${defaultApiHost}/private/stats/export`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/stats/export`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

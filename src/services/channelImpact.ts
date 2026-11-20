@@ -1,4 +1,4 @@
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 
 // Mirrors supabase/functions/_backend/private/channel_impact.ts.
 export type ChannelImpactPlatform = 'ios' | 'android' | 'electron' | 'unknown'
@@ -116,7 +116,7 @@ export class ChannelImpactError extends Error {
 }
 
 async function requestChannelImpact(token: string, request: ChannelImpactRequest): Promise<ChannelImpactResponse> {
-  const response = await fetch(`${defaultApiHost}/private/channel_impact`, {
+  const response = await fetch(`${getConsoleApiHost()}/private/channel_impact`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
