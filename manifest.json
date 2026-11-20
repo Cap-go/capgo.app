@@ -4,31 +4,21 @@
   "entries": {
     "supabase": {
       "success": {
-        "tag": "capgo-22.64.4",
-        "sha": "c7724694105004beeb0dfa42bf51247392ec9c02",
-        "runId": "44701328410",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.65.0",
         "sha": "d44677992d114c6f09e7b2dbd8066107a047c496",
         "runId": "44717491351",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "api": {
       "success": {
-        "tag": "capgo-22.64.4",
-        "sha": "c7724694105004beeb0dfa42bf51247392ec9c02",
-        "runId": "44701328410",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.65.0",
         "sha": "d44677992d114c6f09e7b2dbd8066107a047c496",
         "runId": "44717491351",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "files": {
       "success": {
