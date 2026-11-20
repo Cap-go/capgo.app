@@ -9,7 +9,12 @@
         "runId": "44701328410",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.65.0",
+        "sha": "d44677992d114c6f09e7b2dbd8066107a047c496",
+        "runId": "44717491351",
+        "attempt": 1
+      }
     },
     "api": {
       "success": {
@@ -18,7 +23,12 @@
         "runId": "44701328410",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.65.0",
+        "sha": "d44677992d114c6f09e7b2dbd8066107a047c496",
+        "runId": "44717491351",
+        "attempt": 1
+      }
     },
     "files": {
       "success": {
