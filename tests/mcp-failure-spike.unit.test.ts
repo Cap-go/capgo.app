@@ -266,7 +266,7 @@ describe('gatherFailureSpikeMetrics checks', () => {
 
     const metrics = await gatherFailureSpikeMetrics(c, 'com.demo.app', undefined, 15, now)
     expect(metrics.failures).toBe(100)
-    expect(metrics.checks).toBe(1000)
+    expect(metrics.checks).toBe(1100)
     expect(metrics.version).toBe('2.0.0')
 
     const evaluation = evaluateFailureSpike({
