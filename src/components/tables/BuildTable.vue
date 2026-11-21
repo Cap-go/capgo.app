@@ -392,17 +392,20 @@ async function openSavedBuild(jobId: string) {
       rememberSimulator(appId, { id: payload.data.id, url })
     if (payload.data?.install_error) {
       tab?.close()
+      toast.error(payload.data.install_error)
       const id = payload.data.id
       if (id) {
-        const stopped = await fetch(`${defaultApiHost}/private/simulator/${id}/stop`, {
+        void fetch(`${defaultApiHost}/private/simulator/${id}/stop`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
           body: JSON.stringify({ app_id: appId }),
-        }).catch(() => undefined)
-        if (stopped?.ok && epoch === simulatorEpoch())
-          forgetSimulator(appId, id)
+          signal: AbortSignal.timeout(10_000),
+        }).then((response) => {
+          if (response.ok && epoch === simulatorEpoch())
+            forgetSimulator(appId, id)
+        }).catch(() => { /* Keep the session available for a manual stop. */ })
       }
-      throw new Error(payload.data.install_error)
+      return
     }
     if (url && tab)
       tab.location.replace(url)
