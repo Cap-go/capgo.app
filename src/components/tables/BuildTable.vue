@@ -445,7 +445,7 @@ function savedBuildCell(elem: Element) {
         event.stopPropagation()
         void openSavedBuild(jobId)
       },
-    }, [opening ? h('span', { class: 'loading loading-spinner loading-xs' }) : h(IconDevice, { class: 'size-4' })]))
+    }, [opening ? h('span', { class: 'd-loading d-loading-spinner d-loading-xs' }) : h(IconDevice, { class: 'size-4' })]))
   }
   return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
 }
