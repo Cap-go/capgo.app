@@ -395,15 +395,17 @@ async function openSavedBuild(jobId: string) {
       toast.error(payload.data.install_error)
       const id = payload.data.id
       if (id) {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 10_000)
         void fetch(`${defaultApiHost}/private/simulator/${id}/stop`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
           body: JSON.stringify({ app_id: appId }),
-          signal: AbortSignal.timeout(10_000),
+          signal: controller.signal,
         }).then((response) => {
           if (response.ok && epoch === simulatorEpoch())
             forgetSimulator(appId, id)
-        }).catch(() => { /* Keep the session available for a manual stop. */ })
+        }).catch(() => { /* Keep the session available for a manual stop. */ }).finally(() => clearTimeout(timeout))
       }
       return
     }
