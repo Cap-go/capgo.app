@@ -276,8 +276,11 @@ export function canFinishSimulatorStop(input: { remoteStatus: number | null, bil
 export function simulatorArtifactUrl(publicUrl: string, builderUrl: string) {
   const url = new URL(publicUrl)
   // Worker subrequests to the API hostname do not traverse its public builder route.
-  if (/^\/builder_download_direct_artefact\/[^/]+$/.test(url.pathname))
-    return new URL(url.pathname + url.search, builderUrl).href
+  if (/^\/builder_download_direct_artefact\/[^/]+$/.test(url.pathname)) {
+    const direct = new URL(url.pathname + url.search, builderUrl)
+    direct.searchParams.set('target', 'simulator')
+    return direct.href
+  }
   return publicUrl
 }
 

@@ -6,7 +6,7 @@ describe('simulator sessions', () => {
   it('downloads saved IPA tokens from the builder origin and preserves other artifact URLs', () => {
     const builder = 'https://builder.example.com'
     expect(simulatorArtifactUrl('https://api.example.com/builder_download_direct_artefact/test-token', builder))
-      .toBe('https://builder.example.com/builder_download_direct_artefact/test-token')
+      .toBe('https://builder.example.com/builder_download_direct_artefact/test-token?target=simulator')
     const external = 'https://storage.example.com/archive.ipa?signature=test'
     expect(simulatorArtifactUrl(external, builder)).toBe(external)
   })
