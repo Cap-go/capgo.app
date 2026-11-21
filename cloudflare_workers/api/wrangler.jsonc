@@ -117,7 +117,8 @@
             "queue": "capgo-native-notifications-prod"
           },
           { "binding": "POSTHOG_QUEUE", "queue": "capgo-posthog-events-prod" },
-          { "binding": "POSTHOG_DLQ", "queue": "capgo-posthog-events-prod-dlq" }
+          { "binding": "POSTHOG_DLQ", "queue": "capgo-posthog-events-prod-dlq" },
+          { "binding": "PGMQ_RELAY_QUEUE", "queue": "capgo-pgmq-prod" }
         ],
         "consumers": [
           {
@@ -135,6 +136,13 @@
             "max_concurrency": 2,
             "max_retries": 5,
             "dead_letter_queue": "capgo-posthog-events-prod-dlq"
+          },
+          {
+            "queue": "capgo-pgmq-prod",
+            "max_batch_size": 6,
+            "max_batch_timeout": 1,
+            "max_concurrency": 100,
+            "max_retries": 3
           }
         ]
       },

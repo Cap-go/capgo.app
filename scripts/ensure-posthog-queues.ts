@@ -33,6 +33,29 @@ export async function ensurePostHogQueues(api: QueueApi, environment: QueueEnvir
   }
 }
 
+// Only prod runs the QueueDispatcher, which feeds this queue (see
+// cloudflare_workers/api/pgmq_relay.ts). It only holds pgmq ids, which are
+// stale once their relay visibility timeout ends (20 minutes at most), so the
+// default retention is plenty.
+export const PGMQ_RELAY_ENVIRONMENTS: readonly QueueEnvironment[] = ['prod']
+
+export async function ensurePgmqRelayQueue(api: QueueApi, environment: QueueEnvironment, verifyOnly = false) {
+  const name = `capgo-pgmq-${environment}`
+  let queue = await findQueue(api, name)
+  if (!queue && !verifyOnly) {
+    try {
+      await api<QueueInfo>('', 'POST', { queue_name: name })
+    }
+    catch {
+      // Recover an uncertain create or a concurrent deployment's create by discovery.
+    }
+    queue = await findQueue(api, name)
+  }
+  if (!queue)
+    throw new Error(`Queue does not exist: ${name}`)
+  console.log(`Verified queue: ${name}`)
+}
+
 if (import.meta.main) {
   try {
     const args = process.argv.slice(2)
@@ -40,8 +63,11 @@ if (import.meta.main) {
     if (args.slice(1).some(arg => arg !== '--verify-only'))
       throw new Error('Usage: bun scripts/ensure-posthog-queues.ts [alpha|preprod|prod|all] [--verify-only]')
     const api = createQueueApi()
-    for (const environment of env === 'all' ? ['alpha', 'preprod', 'prod'] as const : [queueEnvironment(env)])
+    for (const environment of env === 'all' ? ['alpha', 'preprod', 'prod'] as const : [queueEnvironment(env)]) {
       await ensurePostHogQueues(api, environment, args.includes('--verify-only'))
+      if (PGMQ_RELAY_ENVIRONMENTS.includes(environment))
+        await ensurePgmqRelayQueue(api, environment, args.includes('--verify-only'))
+    }
   }
   catch (error) {
     console.error(error instanceof Error ? error.message : 'Queue provisioning failed')

@@ -209,7 +209,9 @@ few weeks; to speed it up, schedule the `delta_storage_gc` queue task more often
 (runs claim apps with `SKIP LOCKED` and may overlap). The run is an ordinary
 `cron_tasks` queue task, so its wakeup goes through `http_dispatch_post`: pg_net
 by default, or the QueueDispatcher Durable Object once `http_dispatch_targets`
-routes `cron_delta_storage_gc` (or `*`).
+routes `cron_delta_storage_gc` (or `*`). With `runtime = 'cloudflare'` on that
+row, the queue is consumed on the API worker through Cloudflare Queues instead
+of the Supabase queue consumer.
 Pages skipped because the app had an upload in progress are retried by the
 next weekly pass.
 

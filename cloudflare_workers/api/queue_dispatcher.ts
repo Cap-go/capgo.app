@@ -13,6 +13,10 @@ interface Env {
   // Comma-separated origins the outbox URLs may use (get_db_url() can differ
   // from SUPABASE_URL). The API secret is only ever sent to these origins.
   HTTP_DISPATCH_ALLOWED_ORIGINS?: string
+  // Targets routed with runtime 'cloudflare' are sent to the same route on
+  // this worker's public URL: each call is a new top-level request with its
+  // own connection limits, which a service binding call would not be.
+  CLOUDFLARE_FUNCTION_URL?: string
   // Self service binding: claims run as normal Worker requests so the
   // Hyperdrive connection follows the per-request lifecycle instead of living
   // as long as this object.
@@ -49,7 +53,9 @@ function isSlow(request: HttpDispatchRequest) {
 
 /**
  * Replaces pg_net for routed targets: every second, claim the wakeups the
- * database wrote to public.http_dispatch_outbox and send them.
+ * database wrote to public.http_dispatch_outbox and send them. Queue wakeups
+ * routed to Cloudflare never come back from the claim: it relays their pgmq
+ * messages into Cloudflare Queues itself (see triggers/queue_relay.ts).
  *
  * Requests are not awaited by the alarm, matching pg_net's fire-and-forget
  * behavior: one slow consumer (onboarding waits up to 100s) must not hold back
@@ -123,6 +129,7 @@ export class QueueDispatcher {
       rows,
       this.env.API_SECRET!,
       dispatchAllowedOrigins([this.env.SUPABASE_URL, ...(this.env.HTTP_DISPATCH_ALLOWED_ORIGINS ?? '').split(',').map(origin => origin.trim())]),
+      this.env.CLOUDFLARE_FUNCTION_URL,
     )
     for (const row of rejected)
       logError('queue_dispatcher_url_rejected', new Error('dispatch URL origin is not allowed'), { target: row.target, url: row.url })

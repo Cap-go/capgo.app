@@ -15,7 +15,7 @@ import { perMessageManifestSizeLookupBudget } from '../utils/manifest_size_looku
 import { skipLegacyManifestSize, updateDeltaFileSize } from './on_manifest_create.ts'
 
 // Define constants
-const DEFAULT_BATCH_SIZE = 950 // Default batch size for queue reads limit of CF is 1000 fetches so we take a safe margin
+export const DEFAULT_BATCH_SIZE = 950 // Default batch size for queue reads limit of CF is 1000 fetches so we take a safe margin
 const DEFAULT_QUEUE_HTTP_CONCURRENCY = 25
 const VERSION_QUEUE_HTTP_CONCURRENCY = 10
 const VERSION_QUEUE_BATCH_SIZE = 40 // Keep under visibility window at 10-way / 60s HTTP
@@ -31,6 +31,22 @@ const VERSION_QUEUE_HTTP_TIMEOUT_MS = 300_000 // database manifest cleanup and c
 // sweeper/cron (e.g. sweep_deleted_version_manifests), never by burning reads.
 export const MAX_QUEUE_READS = 5
 const DISCORD_IGNORED_ERROR_CODES = new Set(['version_not_found', 'no_channel'])
+// Relayed batches (Cloudflare Queues, see queue_relay.ts) run every message at
+// once: a Worker invocation keeps at most six connections waiting for response
+// headers and queues the rest while their timeouts already run, so the
+// consumer's max_batch_size in wrangler.jsonc must stay at or below this.
+export const RELAYED_QUEUE_CONCURRENCY = 6
+// pgmq names its tables pgmq.q_<name> and limits names to 47 characters. Our
+// queue names are lowercase identifiers, which also makes them safe to put in
+// SQL text.
+export const PGMQ_QUEUE_NAME_PATTERN = /^[a-z][a-z0-9_]{0,46}$/
+// pgmq.read/delete/archive are writes behind a SELECT. On Cloudflare the
+// queries go through Hyperdrive, whose query cache only skips statements it
+// recognizes as writes or as calling a non-immutable function, so an
+// identical pgmq.read could return the previous result without reading. The
+// unused now() CTE makes them uncacheable; PostgreSQL never evaluates it.
+// These are not request-path reads: serving them from cache would lose writes.
+const PGMQ_UNCACHED = 'WITH capgo_pgmq_uncached AS (SELECT now()) '
 
 export const messageSchema = z.object({
   msg_id: integerLikeSchema,
@@ -542,7 +558,7 @@ async function processQueueMessage(c: Context, queueName: string, message: Messa
   }
 }
 
-function getQueueBatchSize(queueName: string, requestedBatchSize: number): number {
+export function getQueueBatchSize(queueName: string, requestedBatchSize: number): number {
   if (queueName === 'cron_onboarding_refresh_apps')
     return Math.min(requestedBatchSize, ONBOARDING_MESSAGES_PER_MINUTE)
   if (isVersionQueueFunction(queueName))
@@ -560,7 +576,7 @@ function getQueueHttpConcurrency(queueName: string): number {
   return DEFAULT_QUEUE_HTTP_CONCURRENCY
 }
 
-function getQueueVisibilityTimeout(queueName: string): number {
+export function getQueueVisibilityTimeout(queueName: string): number {
   if (queueName === 'on_manifest_create')
     return MANIFEST_QUEUE_VISIBILITY_TIMEOUT_SECONDS
   if (isVersionQueueFunction(queueName))
@@ -822,25 +838,42 @@ async function processQueue(c: Context, db: Awaited<ReturnType<typeof getPgClien
       message: `[${queueName}] Queue read failed.`,
       queueName,
     })
-    return {
-      actionableFailureCount: 0,
-      archivedCount: 0,
-      failedCount: 0,
-      processedCount: 0,
-      readSucceeded: false,
-      skippedCount: 0,
-      success: false,
-      successCount: 0,
-    }
+    return emptyQueueProcessResult(false)
   }
 
+  return processQueueMessages(c, db, queueName, messages, getQueueHttpConcurrency(queueName), waitForCompletion)
+}
+
+function emptyQueueProcessResult(readSucceeded: boolean): QueueProcessResult {
+  return {
+    actionableFailureCount: 0,
+    archivedCount: 0,
+    failedCount: 0,
+    processedCount: 0,
+    readSucceeded,
+    skippedCount: 0,
+    success: readSucceeded,
+    successCount: 0,
+  }
+}
+
+// Archives messages past the retry budget, dispatches the rest, deletes the
+// successful ones and reports the failures. Failed messages stay in pgmq and
+// become readable again when their visibility timeout ends.
+async function processQueueMessages(
+  c: Context,
+  db: Awaited<ReturnType<typeof getPgClient>>,
+  queueName: string,
+  messages: Message[],
+  processConcurrency: number,
+  waitForCompletion: boolean,
+): Promise<QueueProcessResult> {
   const retryBudget = getQueueMaxReads(queueName)
   const [messagesToProcess, messagesToSkip] = messages.reduce((acc, message) => {
     acc[message.read_ct <= retryBudget ? 0 : 1].push(message)
     return acc
   }, [[], []] as [typeof messages, typeof messages])
 
-  const processConcurrency = getQueueHttpConcurrency(queueName)
   cloudlog({
     requestId: c.get('requestId'),
     message: `[${queueName}] Processing queue batch.`,
@@ -967,7 +1000,7 @@ async function readQueue(c: Context, db: Awaited<ReturnType<typeof getPgClient>>
     cloudlog(`[${queueKey}] Reading messages from queue: ${queueName}`)
     try {
       const result = await db.query(
-        'SELECT msg_id, message, read_ct FROM pgmq.read($1, $2, $3)',
+        `${PGMQ_UNCACHED}SELECT msg_id, message, read_ct FROM pgmq.read($1, $2, $3)`,
         [queueName, visibilityTimeout, batchSize],
       )
       messages = result.rows
@@ -1060,7 +1093,7 @@ async function delete_queue_message_batch(c: Context, db: Awaited<ReturnType<typ
       return
     // Use pg's array syntax
     await db.query(
-      'SELECT pgmq.delete($1, $2::bigint[])',
+      `${PGMQ_UNCACHED}SELECT pgmq.delete($1, $2::bigint[])`,
       [queueName, msgIds],
     )
   }
@@ -1076,7 +1109,7 @@ async function archive_queue_messages(c: Context, db: Awaited<ReturnType<typeof 
       return
     // Use pg's array syntax
     await db.query(
-      'SELECT pgmq.archive($1, $2::bigint[])',
+      `${PGMQ_UNCACHED}SELECT pgmq.archive($1, $2::bigint[])`,
       [queueName, msgIds],
     )
   }
@@ -1116,7 +1149,7 @@ async function mass_edit_queue_messages_cf_ids(
       return `ROW(${u.msg_id}::bigint, '${escapedCfId}'::varchar, '${escapedQueue}'::varchar)::message_update`
     }).join(',')
 
-    await db.query(`
+    await db.query(`${PGMQ_UNCACHED}
       SELECT mass_edit_queue_messages_cf_ids(
         ARRAY[${rowValues}]
       )
@@ -1124,6 +1157,104 @@ async function mass_edit_queue_messages_cf_ids(
   }
   catch (error) {
     throw simpleError('error_updating_cf_ids', 'Error updating CF IDs', {}, error)
+  }
+}
+
+// --- Relayed messages (Cloudflare Queues) ---
+
+// What the relay (queue_relay.ts) sends to Cloudflare Queues: ids only, so a
+// message never hits the 128 KB Cloudflare Queues limit and its body is read
+// from pgmq once, when processing starts.
+export const relayedQueueMessageSchema = z.object({
+  queue_name: z.string().regex(PGMQ_QUEUE_NAME_PATTERN),
+  msg_id: z.number().int().positive(),
+  read_ct: z.number().int().nonnegative(),
+  wait_for_completion: z.boolean().optional(),
+})
+
+export type RelayedQueueMessage = z.infer<typeof relayedQueueMessageSchema>
+
+/**
+ * Takes the relayed messages and counts the read, like pgmq.read does for the
+ * HTTP consumer. The read_ct must still be the one the message was relayed
+ * with, so each relayed copy is claimed at most once: a Cloudflare Queues
+ * retry or redelivery, or a copy relayed again after its visibility timeout,
+ * matches nothing once one copy was claimed, and every attempt uses one of the
+ * MAX_QUEUE_READS reads. It also restarts the visibility timeout, so time spent
+ * waiting in Cloudflare Queues does not eat into processing time. A top-level
+ * UPDATE is never served from the Hyperdrive query cache.
+ */
+export function relayedQueueClaimSql(queueName: string): string {
+  if (!PGMQ_QUEUE_NAME_PATTERN.test(queueName))
+    throw simpleError('invalid_queue_name', 'Invalid pgmq queue name', { queueName })
+  return `UPDATE pgmq."q_${queueName}" AS m
+SET vt = pg_catalog.clock_timestamp() + pg_catalog.make_interval(secs => $3::double precision), read_ct = m.read_ct + 1
+FROM ROWS FROM (pg_catalog.unnest($1::bigint[]), pg_catalog.unnest($2::integer[])) AS relayed(msg_id, read_ct)
+WHERE m.msg_id = relayed.msg_id AND m.read_ct = relayed.read_ct
+RETURNING m.msg_id, m.message, m.read_ct`
+}
+
+async function claimRelayedQueueMessages(
+  c: Context,
+  db: Awaited<ReturnType<typeof getPgClient>>,
+  queueName: string,
+  relayed: RelayedQueueMessage[],
+): Promise<Message[]> {
+  const result = await db.query(relayedQueueClaimSql(queueName), [
+    relayed.map(message => message.msg_id),
+    relayed.map(message => message.read_ct),
+    getQueueVisibilityTimeout(queueName),
+  ])
+  const claimed = [...result.rows].sort((a, b) => Number(a.msg_id) - Number(b.msg_id))
+  if (claimed.length !== relayed.length) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: `[${queueName}] Skipped relayed messages that another copy already claimed.`,
+      claimedCount: claimed.length,
+      relayedCount: relayed.length,
+    })
+  }
+  const parsed = safeParseSchema(messagesArraySchema, claimed)
+  if (!parsed.success)
+    throw simpleError('invalid_message_format', 'Invalid message format', { parsed: parsed.error, queueName })
+  return parsed.data as Message[]
+}
+
+/**
+ * Cloudflare Queues consumer side: processes one delivered batch exactly like
+ * /sync processes a pgmq read (same archive, ack, Discord and cf_id handling),
+ * only the read is replaced by the claim above. pgmq stays the retry
+ * authority: a failed message is not deleted, so it becomes readable again and
+ * the next wakeup relays it with a higher read_ct.
+ */
+export async function processRelayedQueueMessages(c: Context, relayed: RelayedQueueMessage[]): Promise<Record<string, QueueProcessResult>> {
+  const byQueue = new Map<string, RelayedQueueMessage[]>()
+  for (const message of relayed) {
+    const group = byQueue.get(message.queue_name)
+    if (group)
+      group.push(message)
+    else
+      byQueue.set(message.queue_name, [message])
+  }
+  if (byQueue.size === 0)
+    return {}
+
+  const db = await getPgClient(c)
+  try {
+    // The batch is at most RELAYED_QUEUE_CONCURRENCY messages, so running every
+    // queue of it at once keeps every call inside the connection limit.
+    const results = await Promise.all([...byQueue].map(async ([queueName, group]) => {
+      const messages = await claimRelayedQueueMessages(c, db, queueName, group)
+      const waitForCompletion = group.some(message => message.wait_for_completion === true)
+      const result = messages.length === 0
+        ? emptyQueueProcessResult(true)
+        : await processQueueMessages(c, db, queueName, messages, RELAYED_QUEUE_CONCURRENCY, waitForCompletion)
+      return [queueName, result] as const
+    }))
+    return Object.fromEntries(results)
+  }
+  finally {
+    await closeClient(c, db)
   }
 }
 
@@ -1220,6 +1351,7 @@ app.post('/sync', async (c) => {
 
 export const __queueConsumerTestUtils__ = {
   defaultBatchSize: DEFAULT_BATCH_SIZE,
+  emptyQueueProcessResult,
   extractErrorDetails,
   extractMessageBody,
   getQueueMessageTrace,

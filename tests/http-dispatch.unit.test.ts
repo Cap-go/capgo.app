@@ -6,7 +6,9 @@ import {
   dispatchAllowedOrigins,
   HTTP_DISPATCH_CLAIM_LIMIT,
   HTTP_DISPATCH_MAX_CALLS_PER_ROW,
+  httpDispatchUrl,
   isAllowedDispatchUrl,
+  isCloudflareQueueWakeup,
 } from '../supabase/functions/_backend/utils/http_dispatch.ts'
 
 const { queryMock, closeClientMock } = vi.hoisted(() => ({
@@ -21,6 +23,8 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
 
 const ORIGIN = 'https://project.supabase.co'
 const CONSUMER_URL = `${ORIGIN}/functions/v1/triggers/queue_consumer/sync`
+const CACHE_PURGE_URL = `${ORIGIN}/functions/v1/triggers/updates_cache_purge`
+const CF_URL = 'https://api.capgo.test'
 
 function row(overrides: Partial<HttpDispatchRow> = {}): HttpDispatchRow {
   return {
@@ -88,6 +92,46 @@ describe('http dispatch requests', () => {
     expect(rejected.map(rejectedRow => rejectedRow.id)).toEqual(['2', '3'])
   })
 
+  it.concurrent('sends cloudflare runtime rows to the same route on the API worker', () => {
+    const purge = row({ target: 'updates_cache_purge', url: `${CACHE_PURGE_URL}?source=cron`, body: { wake: true }, runtime: 'cloudflare' })
+
+    expect(httpDispatchUrl(purge, CF_URL)).toBe(`${CF_URL}/triggers/updates_cache_purge?source=cron`)
+    expect(httpDispatchUrl(purge, `${CF_URL}/`)).toBe(`${CF_URL}/triggers/updates_cache_purge?source=cron`)
+    // Supabase runtime, rows written before the column existed, and a worker
+    // without CLOUDFLARE_FUNCTION_URL keep the stored URL.
+    expect(httpDispatchUrl({ ...purge, runtime: 'supabase' }, CF_URL)).toBe(purge.url)
+    expect(httpDispatchUrl({ ...purge, runtime: undefined }, CF_URL)).toBe(purge.url)
+    expect(httpDispatchUrl(purge, undefined)).toBe(purge.url)
+    expect(httpDispatchUrl(purge, 'not a url')).toBe(purge.url)
+    expect(httpDispatchUrl({ ...purge, url: `${ORIGIN}/rest/v1/rpc/x` }, CF_URL)).toBe(`${ORIGIN}/rest/v1/rpc/x`)
+  })
+
+  it.concurrent('still checks the stored URL of cloudflare runtime rows', () => {
+    const foreign = row({ id: '2', url: 'https://attacker.example/functions/v1/triggers/updates_cache_purge', runtime: 'cloudflare' })
+    const purge = row({ target: 'updates_cache_purge', url: CACHE_PURGE_URL, body: { wake: true }, runtime: 'cloudflare' })
+    const { requests, rejected } = buildHttpDispatchRequests([purge, foreign], 'secret', [ORIGIN], CF_URL)
+
+    expect(requests.map(request => request.url)).toEqual([`${CF_URL}/triggers/updates_cache_purge`])
+    expect(rejected.map(rejectedRow => rejectedRow.id)).toEqual(['2'])
+  })
+
+  it.concurrent('does not coalesce the same wakeup across runtimes', () => {
+    const { requests } = buildHttpDispatchRequests([
+      row({ target: 'updates_cache_purge', url: CACHE_PURGE_URL, body: { wake: true } }),
+      row({ id: '2', target: 'updates_cache_purge', url: CACHE_PURGE_URL, body: { wake: true }, runtime: 'cloudflare' }),
+    ], 'secret', [ORIGIN], CF_URL)
+
+    expect(requests.map(request => request.url)).toEqual([CACHE_PURGE_URL, `${CF_URL}/triggers/updates_cache_purge`])
+  })
+
+  it.concurrent('only treats cloudflare queue consumer wakeups as relayed queue work', () => {
+    expect(isCloudflareQueueWakeup(row({ runtime: 'cloudflare' }))).toBe(true)
+    expect(isCloudflareQueueWakeup(row())).toBe(false)
+    expect(isCloudflareQueueWakeup(row({ runtime: 'supabase' }))).toBe(false)
+    expect(isCloudflareQueueWakeup(row({ runtime: 'cloudflare', url: CACHE_PURGE_URL }))).toBe(false)
+    expect(isCloudflareQueueWakeup(row({ runtime: 'cloudflare', url: 'not a url' }))).toBe(false)
+  })
+
   it.concurrent('builds the allowlist from configured origins', () => {
     expect(dispatchAllowedOrigins(['https://sb.capgo.app', undefined, ' ', `${ORIGIN}/rest/v1`, ORIGIN, 'bad'])).toEqual(['https://sb.capgo.app', ORIGIN])
     expect(isAllowedDispatchUrl(`${ORIGIN}.evil.example/x`, [ORIGIN])).toBe(false)
@@ -129,6 +173,20 @@ describe('QueueDispatcher', () => {
     expect(url).toBe(CONSUMER_URL)
     expect((init.headers as Record<string, string>).apisecret).toBe('secret')
     expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('sends cloudflare runtime rows to CLOUDFLARE_FUNCTION_URL', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}'))
+    vi.stubGlobal('fetch', fetchMock)
+    const purge = row({ target: 'updates_cache_purge', url: CACHE_PURGE_URL, body: { wake: true }, runtime: 'cloudflare' })
+    const { dispatcher } = createDispatcher(async () => Response.json({ rows: [purge] }), { CLOUDFLARE_FUNCTION_URL: CF_URL })
+
+    await dispatcher.alarm()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe(`${CF_URL}/triggers/updates_cache_purge`)
+    expect((init.headers as Record<string, string>).apisecret).toBe('secret')
   })
 
   it('does not wait for slow consumer calls before finishing the tick', async () => {
