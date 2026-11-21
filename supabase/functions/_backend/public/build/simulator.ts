@@ -113,8 +113,8 @@ export async function readCappedBytes(stream: ReadableStream<Uint8Array>, maxByt
 const SIMULATOR_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const SAVED_IPA_MAX_BYTES = 512 * 1024 * 1024
 const SAVED_IPA_TRANSFER_MS = 60_000
-// Upload, install and first launch of the app on an emulated device.
-const SAVED_IPA_INSTALL_MS = 180_000
+// Allow a cold device to finish its three-minute boot window before the install and launch window.
+const SAVED_IPA_INSTALL_MS = 360_000
 
 export function savedIpaContentLength(header: string | null): number | undefined {
   if (!header)
