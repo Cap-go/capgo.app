@@ -56,6 +56,12 @@ function readReturning(rows?: { msg_id: number, read_ct: number }[]) {
 
 const context = { get: () => 'request-id' } as never
 
+// Relays the wakeups in their claim order instead of a random one.
+function inClaimOrder() {
+  let next = 0
+  return () => next++
+}
+
 // The read limit of each relay read, in order.
 function readLimits(query: ReturnType<typeof vi.fn>) {
   return query.mock.calls
@@ -152,7 +158,7 @@ describe('pgmq relay wakeups', () => {
     const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, [
       wakeup('on_app_update', { body: { queue_name: 'on_app_update', batch_size: 250 } }),
       wakeup('on_user_update', { id: '2', body: { queue_name: 'on_user_update', batch_size: 250 } }),
-    ])
+    ], Date.now, inClaimOrder())
 
     expect(result).toEqual({ relayed: 100, released: 150, rejected: 0, deferred: 1 })
     expect(query).toHaveBeenCalledTimes(2)
@@ -189,7 +195,7 @@ describe('pgmq relay wakeups', () => {
 
     // 2 x 950 each, more than the cap allows: each queue gets an equal share.
     const cappedQuery = vi.fn(readReturning())
-    const capped = await relayPgmqWakeups(context, { query: cappedQuery } as never, { sendBatch }, rows)
+    const capped = await relayPgmqWakeups(context, { query: cappedQuery } as never, { sendBatch }, rows, Date.now, inClaimOrder())
     expect(capped).toEqual({ relayed: PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM, released: 0, rejected: 0, deferred: 0 })
     expect(readLimits(cappedQuery)).toEqual([['q_a', 834], ['q_b', 834], ['q_c', 833], ['q_d', 833], ['q_e', 833], ['q_f', 833]])
 
@@ -198,7 +204,7 @@ describe('pgmq relay wakeups', () => {
       clock += PGMQ_RELAY_BUDGET_MS / 2
     })
     const query = vi.fn(readReturning([{ msg_id: 1, read_ct: 1 }]))
-    const timed = await relayPgmqWakeups(context, { query } as never, { sendBatch: slowSend }, rows, () => clock)
+    const timed = await relayPgmqWakeups(context, { query } as never, { sendBatch: slowSend }, rows, () => clock, inClaimOrder())
     expect(timed).toEqual({ relayed: 2, released: 0, rejected: 0, deferred: 4 })
   })
 })
@@ -212,21 +218,20 @@ describe('pgmq relay send budget', () => {
       clock += PGMQ_RELAY_BUDGET_MS * 3 / 8
     })
 
-    // The busy queue comes first in the claim, as pg_cron writes it every tick.
+    // The busy queue is relayed first.
     const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, [
       wakeup('on_user_update', { id: '2', calls: 2 }),
       wakeup('on_app_update', { calls: 2, body: { queue_name: 'on_app_update', batch_size: 500 } }),
-    ], () => clock)
+    ], () => clock, inClaimOrder())
 
-    // The smaller request (2 x 500) goes first and gets half the time; the
-    // other queue gets the time left.
+    // It gets half the time, and the other queue gets the time left.
     expect(result).toEqual({ relayed: 300, released: 2600, rejected: 0, deferred: 0 })
     const sent = sendBatch.mock.calls.map(([messages]) => [...messages][0].body.queue_name)
-    expect(sent).toEqual(['on_app_update', 'on_app_update', 'on_user_update'])
+    expect(sent).toEqual(['on_user_update', 'on_user_update', 'on_app_update'])
     const releases = query.mock.calls.filter(([sql]) => !(sql as string).includes('FOR UPDATE SKIP LOCKED')) as unknown as [string, [number[]]][]
     expect(releases.map(([sql, [ids]]) => [sql, ids[0], ids.length])).toEqual([
-      [pgmqRelayReleaseSql('on_app_update'), 201, 800],
-      [pgmqRelayReleaseSql('on_user_update'), 101, 1800],
+      [pgmqRelayReleaseSql('on_user_update'), 201, 1700],
+      [pgmqRelayReleaseSql('on_app_update'), 101, 900],
     ])
   })
 
@@ -246,24 +251,73 @@ describe('pgmq relay send budget', () => {
     // 700 ms is more than a sixth of the budget, but the claim still has time.
     for (let claim = 0; claim < 2; claim++) {
       clock = 0
-      const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, rows, () => clock)
+      const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, rows, () => clock, inClaimOrder())
       // The sixth read ends past the budget, so only it is given back.
       expect(result).toEqual({ relayed: 500, released: 100, rejected: 0, deferred: 0 })
     }
+  })
+
+  it('never gives back the same queue on every claim when the budget keeps running out', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let clock = 0
+    const read = readReturning()
+    const released = new Set<string>()
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      if (sql.includes('FOR UPDATE SKIP LOCKED'))
+        clock += 700
+      else
+        released.add(sql.match(/pgmq\."q_(\w+)"/)![1])
+      return read(sql, params)
+    })
+    const sent = new Map<string, number>()
+    const sendBatch = vi.fn(async (messages: Iterable<{ body: { queue_name: string } }>) => {
+      const [first] = [...messages]
+      sent.set(first.body.queue_name, (sent.get(first.body.queue_name) ?? 0) + 1)
+    })
+    const queues = ['q_a', 'q_b', 'q_c', 'q_d', 'q_e', 'q_f']
+    const rows = queues.map((queue, index) => wakeup(queue, { id: String(index), body: { queue_name: queue, batch_size: 100 } }))
+    let seed = 7
+    const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
+
+    // pg_cron writes the same backlogged wakeups in the same order every tick.
+    for (let claim = 0; claim < 12; claim++) {
+      clock = 0
+      expect(await relayPgmqWakeups(context, { query } as never, { sendBatch }, rows, () => clock, random)).toMatchObject({ relayed: 500, released: 100 })
+    }
+    expect([...sent.keys()].sort()).toEqual(queues)
+    expect(released.size).toBeGreaterThan(1)
   })
 
   it('serves small requests in full and splits the rest of the cap between busy queues', async () => {
     const query = vi.fn(readReturning())
     const sendBatch = vi.fn(async () => {})
 
+    // The quiet queue comes last, after the busy ones.
     const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, [
       wakeup('on_manifest_create', { calls: 10 }),
       wakeup('on_app_update', { id: '2', calls: 10 }),
       wakeup('on_user_update', { id: '3', body: { queue_name: 'on_user_update', batch_size: 100 } }),
-    ])
+    ], Date.now, inClaimOrder())
 
     expect(result).toEqual({ relayed: PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM, released: 0, rejected: 0, deferred: 0 })
-    expect(readLimits(query)).toEqual([['on_user_update', 100], ['on_manifest_create', 2450], ['on_app_update', 2450]])
+    expect(readLimits(query)).toEqual([['on_manifest_create', 2450], ['on_app_update', 2450], ['on_user_update', 100]])
+  })
+
+  it('gives a share a queue does not use to the next one', async () => {
+    const read = readReturning()
+    // The first queue has only 10 readable messages left.
+    const query = vi.fn(async (sql: string, params: unknown[]) => sql.includes('q_on_manifest_create')
+      ? { rows: Array.from({ length: 10 }, (_, index) => ({ msg_id: index + 1, read_ct: 0 })) }
+      : read(sql, params))
+    const sendBatch = vi.fn(async () => {})
+
+    const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, [
+      wakeup('on_manifest_create', { calls: 10 }),
+      wakeup('on_app_update', { id: '2', calls: 10 }),
+    ], Date.now, inClaimOrder())
+
+    expect(result).toEqual({ relayed: 10 + 4990, released: 0, rejected: 0, deferred: 0 })
+    expect(readLimits(query)).toEqual([['on_manifest_create', 2500], ['on_app_update', 4990]])
   })
 
   it('sends nothing when the read itself used up the budget', async () => {

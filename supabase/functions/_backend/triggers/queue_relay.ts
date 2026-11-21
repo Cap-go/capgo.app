@@ -140,17 +140,34 @@ async function releaseUnsent(c: Context, db: PgClient, queueName: string, unsent
 }
 
 /**
+ * Each wakeup's share of the claim's message cap: the smallest requests are
+ * served in full first and the busy queues split the rest equally (max-min
+ * fairness), so a busy queue never takes the messages of a quiet one.
+ */
+function pgmqRelayShares(wakeups: readonly PgmqRelayWakeup[]): number[] {
+  const shares = wakeups.map(() => 0)
+  const bySize = wakeups.map((_, index) => index).sort((a, b) => wakeups[a].maxMessages - wakeups[b].maxMessages)
+  let remaining = PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM
+  for (const [position, index] of bySize.entries()) {
+    shares[index] = Math.min(wakeups[index].maxMessages, Math.ceil(remaining / (bySize.length - position)))
+    remaining -= shares[index]
+  }
+  return shares
+}
+
+/**
  * Relays the claimed queue wakeups. Work it does not get to (budget reached,
  * or a read failed) is not lost: it is still readable in pgmq, so the next
  * pg_cron tick wakes the queue again.
  *
  * pg_cron writes the same wakeups in the same order every tick, and a wakeup
- * the claim does not get to is dropped until the next tick, so relaying them
- * in turn until the cap or the time budget ran out would let a busy queue
- * starve the ones after it indefinitely. Instead the smallest requests go
- * first and each wakeup takes at most an equal share of the messages and of
- * the time still left: small requests are served in full, the busy queues
- * split the rest, and a queue that needs less leaves its share to the next.
+ * the claim does not get to is dropped until the next tick, so a fixed order
+ * would let the queues read first starve the one read last on every claim.
+ * Each wakeup gets its share of the messages (pgmqRelayShares) and an equal
+ * share of the time left once its messages are read, and the wakeups are
+ * relayed in random order, so when the time budget does run out, it is never
+ * the same queue that waits every time. A share a wakeup does not use goes to
+ * the next one.
  */
 export async function relayPgmqWakeups(
   c: Context,
@@ -158,10 +175,10 @@ export async function relayPgmqWakeups(
   queue: RelayQueue,
   rows: readonly HttpDispatchRow[],
   now: () => number = Date.now,
+  random: () => number = Math.random,
 ): Promise<PgmqRelayResult> {
   const result: PgmqRelayResult = { relayed: 0, released: 0, rejected: 0, deferred: 0 }
   const startedAt = now()
-  let remaining = PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM
 
   const wakeups: PgmqRelayWakeup[] = []
   for (const row of coalesceHttpDispatchRows(rows)) {
@@ -173,21 +190,29 @@ export async function relayPgmqWakeups(
     result.rejected++
     cloudlogErr({ requestId: c.get('requestId'), message: 'pgmq_relay_invalid_wakeup', target: row.target })
   }
-  wakeups.sort((a, b) => a.maxMessages - b.maxMessages)
+  const shares = pgmqRelayShares(wakeups)
+  const ordered = wakeups
+    .map((wakeup, index) => ({ wakeup, share: shares[index], position: random() }))
+    .sort((a, b) => a.position - b.position)
 
-  for (const [index, wakeup] of wakeups.entries()) {
-    const wakeupsLeft = wakeups.length - index
-    const timeLeft = PGMQ_RELAY_BUDGET_MS - (now() - startedAt)
-    if (remaining <= 0 || timeLeft <= 0) {
+  let spare = 0
+  for (const [index, { wakeup, share }] of ordered.entries()) {
+    const wakeupsLeft = ordered.length - index
+    if (PGMQ_RELAY_BUDGET_MS - (now() - startedAt) <= 0) {
       result.deferred += wakeupsLeft
       break
+    }
+    const limit = Math.min(wakeup.maxMessages, share + spare)
+    if (limit <= 0) {
+      result.deferred++
+      continue
     }
 
     let messages: RelayedQueueMessage[]
     try {
       const read = await db.query<{ msg_id: string | number, read_ct: number }>(pgmqRelayReadSql(wakeup.queueName), [
         wakeup.visibilityTimeoutSeconds,
-        Math.min(wakeup.maxMessages, Math.ceil(remaining / wakeupsLeft)),
+        limit,
       ])
       messages = read.rows
         .map(message => ({
@@ -200,9 +225,10 @@ export async function relayPgmqWakeups(
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'pgmq_relay_read_failed', queueName: wakeup.queueName, error: serializeError(error) })
+      spare += share
       continue
     }
-    remaining -= messages.length
+    spare += share - messages.length
 
     // The time share starts once the messages are read: a slow read shortens
     // the time left for every wakeup, but never makes this one give back its
