@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -286,6 +287,53 @@ try {
     const reloaded = await loadConfigTarget(configPath)
     assert.equal(reloaded.appId, 'com.example.second')
     assert.equal(reloaded.plugins.CapgoBuilder.capgoBuilderAppId, 'com.example.capgo')
+  })
+
+  await test('reloads an ES module Capacitor config after it is saved', async () => {
+    const root = fixture('javascript-esm-config-reload')
+    writeJson(join(root, 'package.json'), { private: true, type: 'module' })
+    const configPath = join(root, 'capacitor.config.js')
+    writeText(configPath, "export default { appId: 'com.example.first' }\n")
+    assert.equal((await loadConfigTarget(configPath)).appId, 'com.example.first')
+    writeText(configPath, "export default { appId: 'com.example.second', plugins: { CapgoBuilder: { capgoBuilderAppId: 'com.example.capgo' } } }\n")
+    const reloaded = await loadConfigTarget(configPath)
+    assert.equal(reloaded.appId, 'com.example.second')
+    assert.equal(reloaded.plugins.CapgoBuilder.capgoBuilderAppId, 'com.example.capgo')
+  })
+
+  await test('node reloads an ES module config after require cached it', async () => {
+    const node = spawnSync('node', ['-e', 'process.exit(0)'], { encoding: 'utf8' })
+    if (node.error || node.status !== 0)
+      return
+    const root = fixture('javascript-esm-config-node')
+    const script = `
+import { createRequire } from 'node:module'
+import { writeFileSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
+const root = process.argv[1]
+const configPath = root + '/capacitor.config.js'
+writeFileSync(root + '/package.json', JSON.stringify({ private: true, type: 'module' }))
+writeFileSync(configPath, "export default { appId: 'com.example.first' }\\n")
+const targetRequire = createRequire(configPath)
+let resolved
+try {
+  resolved = targetRequire.resolve(configPath)
+  targetRequire(configPath)
+}
+catch {
+  process.exit(0)
+}
+writeFileSync(configPath, "export default { appId: 'com.example.second' }\\n")
+delete targetRequire.cache[resolved]
+const fresh = await import(pathToFileURL(resolved).href + '?capgo-reload=' + Date.now())
+const appId = fresh.default?.appId ?? fresh.appId
+if (appId !== 'com.example.second') {
+  console.error(appId)
+  process.exit(1)
+}
+`
+    const result = spawnSync('node', ['--input-type=module', '-e', script, root], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
   })
 
   await test('reads appId from a JavaScript config without project TypeScript', async () => {

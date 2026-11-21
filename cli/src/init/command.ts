@@ -1889,9 +1889,13 @@ async function markStep(orgId: string, apikey: string, step: string, appId: stri
 /**
  * Save the app ID to the CapacitorUpdater plugin config.
  */
-async function saveAppIdToCapacitorConfig(appId: string) {
+async function saveAppIdToCapacitorConfig(appId: string, projectDir?: string) {
   try {
-    await updateConfigUpdater({ appId })
+    const write = () => updateConfigUpdater({ appId })
+    if (projectDir)
+      await withTemporaryCwd(getInitConfigLoadDir(projectDir), write)
+    else
+      await write()
     pLog.info(`💾 Saved "${appId}" to plugins.CapacitorUpdater.appId. Native bundle ID was not changed.`)
   }
   catch (err) {
@@ -2105,9 +2109,10 @@ async function ensureCapacitorProjectReady(
   apikey: string,
   appId: string,
   pendingApp?: PendingOnboardingApp,
+  projectDir = cwd(),
 ) {
-  const nearestConfig = findNearestCapacitorConfig(cwd())
-  if (nearestConfig?.dir === cwd()) {
+  const nearestConfig = findNearestCapacitorConfig(projectDir)
+  if (nearestConfig?.dir === projectDir) {
     return
   }
 
@@ -2133,7 +2138,7 @@ async function ensureCapacitorProjectReady(
       const spinner = pSpinner()
       spinner.start(`Running: ${pm.runner} cap init "${appName}" "${appId}"`)
       try {
-        const initResult = runPackageRunnerSync(pm.runner, ['cap', 'init', appName, appId], { stdio: 'pipe' as const })
+        const initResult = runPackageRunnerSync(pm.runner, ['cap', 'init', appName, appId], { cwd: projectDir, stdio: 'pipe' as const })
         if (initResult.error)
           throw initResult.error
         if (initResult.status !== 0) {
@@ -2142,7 +2147,7 @@ async function ensureCapacitorProjectReady(
           throw new Error(stderr || stdout || `cap init exited with code ${initResult.status}`)
         }
         spinner.stop('Capacitor init done ✅')
-        await saveAppIdToCapacitorConfig(appId)
+        await saveAppIdToCapacitorConfig(appId, projectDir)
         return
       }
       catch (error) {
@@ -2435,6 +2440,7 @@ async function resolveExistingAppConflict(
   apikey: string,
   appId: string,
   options: SuperOptions,
+  projectDir?: string,
 ): Promise<ExistingAppConflictResolution> {
   const existingApp: ExistingOrganizationApp | null = await findAppInOrganization(apikey, organization.gid, appId, {
     apiHost: options.apiHost,
@@ -2456,7 +2462,7 @@ async function resolveExistingAppConflict(
     if (existingApp.need_onboarding)
       await completeExistingAppPendingOnboarding(client, organization, appId, apikey, options)
 
-    await saveAppIdToCapacitorConfig(appId)
+    await saveAppIdToCapacitorConfig(appId, projectDir)
     return 'use-existing'
   }
 
@@ -2538,7 +2544,7 @@ async function askForReplacementAppId(
   return suggestions[suggestionIndex]
 }
 
-async function addAppStep(organization: Organization, apikey: string, appId: string, options: SuperOptions, nativeBundleId?: string): Promise<string> {
+async function addAppStep(organization: Organization, apikey: string, appId: string, options: SuperOptions, projectDir?: string): Promise<string> {
   const pm = getPMAndCommand()
   let currentAppId = appId
   let confirmedAppId: string | undefined
@@ -2548,7 +2554,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
       const addChoice = await pSelect({
         message: currentAppId === appId
           ? `Add ${currentAppId} to Capgo?`
-          : `Register Capgo app ID ${currentAppId}? ${nativeBundleId ? `Native bundle ID stays ${nativeBundleId}.` : 'Native bundle ID stays unchanged.'}`,
+          : `Register Capgo app ID ${currentAppId}? Native bundle ID stays unchanged.`,
         options: [
           { value: 'yes', label: '✅ Yes, add it' },
           { value: 'change', label: '✏️ Use a different Capgo app ID' },
@@ -2570,7 +2576,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
       s.start(`Running: ${pm.runner} @capgo/cli@latest app add ${currentAppId}`)
       try {
         await addAppInternal(currentAppId, options, organization, true, 'onboarding')
-        await saveAppIdToCapacitorConfig(currentAppId)
+        await saveAppIdToCapacitorConfig(currentAppId, projectDir)
       }
       catch (innerError) {
         s.stop(`App add failed ❌`)
@@ -2584,7 +2590,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
       if (isAppAlreadyExistsError(error)) {
         const client = await createCapgoClient(options.apikey ?? apikey, options.apiHost)
 
-        const conflictResolution = await resolveExistingAppConflict(client, organization, apikey, currentAppId, options)
+        const conflictResolution = await resolveExistingAppConflict(client, organization, apikey, currentAppId, options, projectDir)
         if (conflictResolution === 'use-existing') {
           await markStep(organization.gid, apikey, 'add-app', currentAppId)
           return currentAppId
@@ -2602,9 +2608,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
           apiHost: options.apiHost,
         })
         confirmedAppId = undefined
-        pLog.info(nativeBundleId
-          ? `Registering Capgo app ID "${currentAppId}". Native bundle ID stays ${nativeBundleId}.`
-          : `Registering Capgo app ID "${currentAppId}". Native bundle ID is unchanged.`)
+        pLog.info(`Registering Capgo app ID "${currentAppId}". Native bundle ID is unchanged.`)
         continue
       }
 
@@ -5750,7 +5754,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   activeInitTelemetry?.setScope(appId)
   if (pendingOnboardingSelection.builderOnly && await handoffBuilderOnlySetup(appId, selectedProjectDir, true))
     return
-  await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp)
+  await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp, selectedProjectDir)
   selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   selectedProjectDir = dirname(selectedPackageJsonPath)
 
@@ -5780,8 +5784,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     if (stepToSkip < 1) {
       renderCurrentStep(1)
       await checkPrerequisitesStep(orgId, options.apikey, nativePlatforms)
-      const nativeBundleId = typeof extConfig?.config?.appId === 'string' ? extConfig.config.appId.trim() : ''
-      appId = await addAppStep(organization, options.apikey, appId, options, nativeBundleId || undefined)
+      appId = await addAppStep(organization, options.apikey, appId, options, selectedProjectDir)
       globalAppId = appId
       activeInitTelemetry?.setScope(appId)
       if (await handoffBuilderOnlySetup(appId, selectedProjectDir))

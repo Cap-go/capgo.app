@@ -166,11 +166,19 @@ export async function loadConfigTarget(filePath: string): Promise<CapacitorConfi
   // Mirror Capacitor's own `capacitor.config.js` loader, which simply `require()`s the file.
   const targetRequire = createRequire(filePath)
   if (extension === '.js') {
-    // Node caches require() for the process. A later onboarding read must see
-    // a Capgo app ID the user just saved into this file.
     const resolved = targetRequire.resolve(filePath)
     delete targetRequire.cache[resolved]
-    const configModule = targetRequire(filePath) as Record<string, unknown>
+    // require() of a "type": "module" config uses Node's ESM cache, which
+    // deleting require.cache does not clear. A query string forces a fresh
+    // evaluation of the saved file. CommonJS falls back to require().
+    let configModule: Record<string, unknown>
+    try {
+      configModule = await importSpecifier(`${pathToFileURL(resolved).href}?capgo-reload=${Date.now()}`)
+    }
+    catch {
+      delete targetRequire.cache[resolved]
+      configModule = targetRequire(filePath) as Record<string, unknown>
+    }
     const exportedConfig = configModule.default ?? configModule
     return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
   }
