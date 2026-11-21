@@ -230,6 +230,28 @@ describe('pgmq relay send budget', () => {
     ])
   })
 
+  it('keeps relaying every claim when each read is slower than a wakeup\'s share', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let clock = 0
+    const read = readReturning()
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      if (sql.includes('FOR UPDATE SKIP LOCKED'))
+        clock += 700
+      return read(sql, params)
+    })
+    const sendBatch = vi.fn(async () => {})
+    const queues = ['q_a', 'q_b', 'q_c', 'q_d', 'q_e', 'q_f']
+    const rows = queues.map((queue, index) => wakeup(queue, { id: String(index), body: { queue_name: queue, batch_size: 100 } }))
+
+    // 700 ms is more than a sixth of the budget, but the claim still has time.
+    for (let claim = 0; claim < 2; claim++) {
+      clock = 0
+      const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, rows, () => clock)
+      // The sixth read ends past the budget, so only it is given back.
+      expect(result).toEqual({ relayed: 500, released: 100, rejected: 0, deferred: 0 })
+    }
+  })
+
   it('serves small requests in full and splits the rest of the cap between busy queues', async () => {
     const query = vi.fn(readReturning())
     const sendBatch = vi.fn(async () => {})

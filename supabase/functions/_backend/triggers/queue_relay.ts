@@ -182,7 +182,6 @@ export async function relayPgmqWakeups(
       result.deferred += wakeupsLeft
       break
     }
-    const deadline = now() + timeLeft / wakeupsLeft
 
     let messages: RelayedQueueMessage[]
     try {
@@ -205,6 +204,10 @@ export async function relayPgmqWakeups(
     }
     remaining -= messages.length
 
+    // The time share starts once the messages are read: a slow read shortens
+    // the time left for every wakeup, but never makes this one give back its
+    // messages unsent while the claim still has time.
+    const deadline = now() + (PGMQ_RELAY_BUDGET_MS - (now() - startedAt)) / wakeupsLeft
     const relayedBefore = result.relayed
     for (let start = 0; start < messages.length; start += PGMQ_RELAY_SEND_BATCH_SIZE) {
       if (now() >= deadline) {
