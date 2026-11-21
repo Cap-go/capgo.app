@@ -43,7 +43,7 @@ import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-co
 import { readBuilderOnlyInitAssignment, tryBuilderOnlyInit } from './builder-setup'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
 import { selectOnboardingChannel } from './channel-selection'
-import { assertNoWindowsCommandLineBreaks, createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, spawnCommand as spawn, spawnCommandSync as spawnSync, waitForCommandResult } from './command-execution'
+import { assertNoWindowsCommandLineBreaks, createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, runPackageRunnerSync, spawnCommand as spawn, spawnCommandSync as spawnSync, waitForCommandResult } from './command-execution'
 import { printInitCompletionNotice } from './completion-notice'
 import { reportInitOnboardingStep } from './onboarding-report'
 import { enableInitOtaChecklist } from './ota-checklist'
@@ -3962,10 +3962,7 @@ async function buildProjectStep(orgId: string, apikey: string, appId: string, pl
   return 'completed'
 }
 
-export function runPackageRunnerSync(runner: string, args: string[], options: Parameters<typeof spawnSync>[2]) {
-  const parsedRunner = splitRunnerCommand(runner)
-  return spawnSync(parsedRunner.command, [...parsedRunner.args, ...args], options)
-}
+export { runPackageRunnerSync }
 
 interface InheritedCommandResult {
   error?: Error

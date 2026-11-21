@@ -1,7 +1,8 @@
 import type { PackageManagerRunner, PackageManagerType } from '@capgo/find-package-manager'
-import type { ChildProcess } from 'node:child_process'
+import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { findInstallCommand } from '@capgo/find-package-manager'
 import { spawn as spawnProcess, sync as spawnProcessSync } from 'cross-spawn'
+import { splitRunnerCommand } from '../runner-command'
 
 export type SupportedPackageManager = Exclude<PackageManagerType, 'unknown'>
 
@@ -55,6 +56,16 @@ export const spawnCommandSync = ((...args: Parameters<typeof spawnProcessSync>) 
   assertNoWindowsCommandLineBreaks(args[0], Array.isArray(args[1]) ? args[1] : [])
   return spawnProcessSync(...args)
 }) as typeof spawnProcessSync
+
+export function runPackageRunnerSync(runner: string, args: string[], options: Parameters<typeof spawnProcessSync>[2] = {}) {
+  const parsedRunner = splitRunnerCommand(runner)
+  return spawnCommandSync(parsedRunner.command, [...parsedRunner.args, ...args], options)
+}
+
+export function runPackageRunner(runner: string, args: string[], options: SpawnOptions = {}) {
+  const parsedRunner = splitRunnerCommand(runner)
+  return spawnCommand(parsedRunner.command, [...parsedRunner.args, ...args], options)
+}
 
 export function createMissingExecutableError(command: string, executablePath = process.env.PATH ?? ''): NodeJS.ErrnoException {
   const error = new Error(`Cannot find executable "${command}" in PATH (${executablePath || 'empty'}). Install it or select another package manager.`) as NodeJS.ErrnoException
