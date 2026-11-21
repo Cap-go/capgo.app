@@ -2538,7 +2538,7 @@ async function askForReplacementAppId(
   return suggestions[suggestionIndex]
 }
 
-async function addAppStep(organization: Organization, apikey: string, appId: string, options: SuperOptions): Promise<string> {
+async function addAppStep(organization: Organization, apikey: string, appId: string, options: SuperOptions, nativeBundleId?: string): Promise<string> {
   const pm = getPMAndCommand()
   let currentAppId = appId
   let confirmedAppId: string | undefined
@@ -2548,7 +2548,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
       const addChoice = await pSelect({
         message: currentAppId === appId
           ? `Add ${currentAppId} to Capgo?`
-          : `Register Capgo app ID ${currentAppId}? Native bundle ID stays ${appId}.`,
+          : `Register Capgo app ID ${currentAppId}? ${nativeBundleId ? `Native bundle ID stays ${nativeBundleId}.` : 'Native bundle ID stays unchanged.'}`,
         options: [
           { value: 'yes', label: '✅ Yes, add it' },
           { value: 'change', label: '✏️ Use a different Capgo app ID' },
@@ -2602,7 +2602,9 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
           apiHost: options.apiHost,
         })
         confirmedAppId = undefined
-        pLog.info(`Registering Capgo app ID "${currentAppId}". Native bundle ID is unchanged.`)
+        pLog.info(nativeBundleId
+          ? `Registering Capgo app ID "${currentAppId}". Native bundle ID stays ${nativeBundleId}.`
+          : `Registering Capgo app ID "${currentAppId}". Native bundle ID is unchanged.`)
         continue
       }
 
@@ -5778,7 +5780,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     if (stepToSkip < 1) {
       renderCurrentStep(1)
       await checkPrerequisitesStep(orgId, options.apikey, nativePlatforms)
-      appId = await addAppStep(organization, options.apikey, appId, options)
+      const nativeBundleId = typeof extConfig?.config?.appId === 'string' ? extConfig.config.appId.trim() : ''
+      appId = await addAppStep(organization, options.apikey, appId, options, nativeBundleId || undefined)
       globalAppId = appId
       activeInitTelemetry?.setScope(appId)
       if (await handoffBuilderOnlySetup(appId, selectedProjectDir))

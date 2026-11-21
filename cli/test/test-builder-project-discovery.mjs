@@ -277,6 +277,17 @@ try {
     assert.equal(result.candidates[0].appId, 'com.example.mobile')
   })
 
+  await test('reloads a JavaScript Capacitor config after it is saved', async () => {
+    const root = fixture('javascript-config-reload')
+    const configPath = join(root, 'capacitor.config.js')
+    writeText(configPath, "module.exports = { appId: 'com.example.first' }\n")
+    assert.equal((await loadConfigTarget(configPath)).appId, 'com.example.first')
+    writeText(configPath, "module.exports = { appId: 'com.example.second', plugins: { CapgoBuilder: { capgoBuilderAppId: 'com.example.capgo' } } }\n")
+    const reloaded = await loadConfigTarget(configPath)
+    assert.equal(reloaded.appId, 'com.example.second')
+    assert.equal(reloaded.plugins.CapgoBuilder.capgoBuilderAppId, 'com.example.capgo')
+  })
+
   await test('reads appId from a JavaScript config without project TypeScript', async () => {
     const root = fixture('javascript-config')
     writeJson(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })

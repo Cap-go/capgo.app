@@ -3474,11 +3474,15 @@ export async function gatherFacts(deps: EngineDeps): Promise<PreflightFacts> {
 
 const MAX_AUTO_STEPS = 8
 
-function appConflictResult(appId: string): NextStepResult {
+function appConflictResult(appId: string, nativeAppId?: string): NextStepResult {
   const suggestions = buildAppIdConflictSuggestions(appId).slice(0, 4).join(', ')
+  const nativeBundleId = nativeAppId?.trim()
+  const nativeClause = nativeBundleId
+    ? ` The native bundle ID stays "${nativeBundleId}".`
+    : ' The native bundle ID stays unchanged.'
   return {
     onboarding: 'capgo-builder', phase: 'app', state: 'app-id-conflict', progress: 8, kind: 'human_gate',
-    summary: `Capgo app ID "${appId}" is already used by another organization. The native bundle ID stays "${appId}".`,
+    summary: `Capgo app ID "${appId}" is already used by another organization.${nativeClause}`,
     human: {
       instruction: `Ask the user to approve a different Capgo app ID before changing any file. Suggestions: ${suggestions}. Do not change the native appId. After they approve an ID, set only plugins.CapgoBuilder.capgoBuilderAppId to it in capacitor.config, then continue.`,
     },
@@ -3760,7 +3764,7 @@ async function executeAuto(result: NextStepResult, facts: PreflightFacts, deps: 
     if (reg.ok)
       return null
     if (reg.alreadyExists)
-      return appConflictResult(facts.appId)
+      return appConflictResult(facts.appId, await deps.getNativeAppId?.())
     return {
       onboarding: 'capgo-builder', phase: 'app', state: 'register-app-failed', progress: 8, kind: 'error',
       summary: `Could not register "${facts.appId}" in Capgo: ${reg.error}`,
