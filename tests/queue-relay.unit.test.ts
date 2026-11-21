@@ -180,11 +180,11 @@ describe('pgmq relay wakeups', () => {
     expect(capped).toEqual({ relayed: PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM, released: 0, rejected: 0, deferred: 1 })
 
     let clock = 0
-    const query = vi.fn(async (sql: string, params: unknown[]) => {
+    const slowSend = vi.fn(async () => {
       clock += PGMQ_RELAY_BUDGET_MS / 2
-      return readReturning([{ msg_id: 1, read_ct: 1 }])(sql, params)
     })
-    const timed = await relayPgmqWakeups(context, { query } as never, { sendBatch }, rows, () => clock)
+    const query = vi.fn(readReturning([{ msg_id: 1, read_ct: 1 }]))
+    const timed = await relayPgmqWakeups(context, { query } as never, { sendBatch: slowSend }, rows, () => clock)
     expect(timed).toEqual({ relayed: 2, released: 0, rejected: 0, deferred: 4 })
   })
 })
@@ -210,6 +210,23 @@ describe('pgmq relay send budget', () => {
     const [releaseSql, [releasedIds]] = query.mock.calls[1] as unknown as [string, [number[]]]
     expect(releaseSql).toBe(pgmqRelayReleaseSql('on_app_update'))
     expect(releasedIds).toEqual(Array.from({ length: 700 }, (_, index) => index + 301))
+  })
+
+  it('sends nothing when the read itself used up the budget', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let clock = 0
+    const read = readReturning([{ msg_id: 1, read_ct: 0 }, { msg_id: 2, read_ct: 0 }])
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      clock += PGMQ_RELAY_BUDGET_MS
+      return read(sql, params)
+    })
+    const sendBatch = vi.fn(async () => {})
+
+    const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, [wakeup('on_app_update')], () => clock)
+
+    expect(result).toEqual({ relayed: 0, released: 2, rejected: 0, deferred: 0 })
+    expect(sendBatch).not.toHaveBeenCalled()
+    expect(query.mock.calls[1]).toEqual([pgmqRelayReleaseSql('on_app_update'), [[1, 2], [0, 0]]])
   })
 })
 

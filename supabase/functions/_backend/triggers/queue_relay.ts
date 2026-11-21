@@ -188,9 +188,10 @@ export async function relayPgmqWakeups(
     remaining -= messages.length
 
     for (let start = 0; start < messages.length; start += PGMQ_RELAY_SEND_BATCH_SIZE) {
-      if (start > 0 && now() - startedAt >= PGMQ_RELAY_BUDGET_MS) {
-        // Slow sends: give the rest back now instead of hiding it until the
-        // relay visibility timeout, and leave the other wakeups for the next tick.
+      if (now() - startedAt >= PGMQ_RELAY_BUDGET_MS) {
+        // A slow read or slow sends: give the rest back now instead of hiding
+        // it until the relay visibility timeout, and leave the other wakeups
+        // for the next tick.
         cloudlogErr({ requestId: c.get('requestId'), message: 'pgmq_relay_budget_exhausted', queueName: wakeup.queueName, unsent: messages.length - start })
         result.released += await releaseUnsent(c, db, wakeup.queueName, messages.slice(start))
         return result
