@@ -325,6 +325,8 @@ await test('drive loop: app id taken by another account → human_gate conflict 
   eq(r.kind, 'human_gate')
   eq(r.state, 'app-id-conflict')
   ok(/com\.acme\.app/.test(r.human.instruction), 'should suggest alternates based on the id')
+  ok(/plugins\.CapgoBuilder\.capgoBuilderAppId/.test(r.human.instruction), 'must name the Capgo-only setting')
+  ok(/Do not change the native appId/.test(r.human.instruction), 'must say the native bundle id stays')
 })
 
 await test('drive loop: registration hard-fails → error result', async () => {

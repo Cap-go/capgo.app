@@ -3475,15 +3475,16 @@ export async function gatherFacts(deps: EngineDeps): Promise<PreflightFacts> {
 const MAX_AUTO_STEPS = 8
 
 function appConflictResult(appId: string): NextStepResult {
+  const suggestions = buildAppIdConflictSuggestions(appId).slice(0, 4).join(', ')
   return {
     onboarding: 'capgo-builder', phase: 'app', state: 'app-id-conflict', progress: 8, kind: 'human_gate',
-    summary: `The app id "${appId}" already exists and is not in your account. You will need a different app id.`,
+    summary: `Capgo app ID "${appId}" is already used by another organization. The native bundle ID stays "${appId}".`,
     human: {
-      instruction: `Choose a different app id (it must match your capacitor.config). Suggestions: ${buildAppIdConflictSuggestions(appId).slice(0, 4).join(', ')}. Update capacitor.config, then continue. (Automatic rename lands in a later milestone.)`,
+      instruction: `Ask the user to approve a different Capgo app ID before changing any file. Suggestions: ${suggestions}. Do not change the native appId. After they approve an ID, set only plugins.CapgoBuilder.capgoBuilderAppId to it in capacitor.config, then continue.`,
     },
     next: {
       tool: 'capgo_builder_onboarding_next_step',
-      instruction: 'After the user updates their app id in capacitor.config, call next_step (no arguments).',
+      instruction: 'After the user approves a Capgo app ID and plugins.CapgoBuilder.capgoBuilderAppId is set to it, call next_step (no arguments). Leave the native appId unchanged.',
       call: 'capgo_builder_onboarding_next_step({})',
     },
     rules: ONBOARDING_RULES,

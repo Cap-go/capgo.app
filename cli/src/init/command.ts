@@ -1892,7 +1892,7 @@ async function markStep(orgId: string, apikey: string, step: string, appId: stri
 async function saveAppIdToCapacitorConfig(appId: string) {
   try {
     await updateConfigUpdater({ appId })
-    pLog.info(`💾 Saved new app ID "${appId}" to CapacitorUpdater config`)
+    pLog.info(`💾 Saved "${appId}" to plugins.CapacitorUpdater.appId. Native bundle ID was not changed.`)
   }
   catch (err) {
     pLog.warn(`⚠️  Could not save app ID to capacitor config: ${err}`)
@@ -2496,24 +2496,29 @@ async function askForReplacementAppId(
   const existingResults = await checkAppIdsExist(apikey, rawSuggestions, hostOptions)
   const suggestions = rawSuggestions.filter((_, idx) => !existingResults[idx].exists).slice(0, 4)
 
+  pLog.info(`Capgo app ID "${baseAppId}" is already used.`)
+  pLog.info('Your native bundle ID stays the same. Nothing is written until you pick an option.')
+  pLog.info('The new ID is saved only in plugins.CapacitorUpdater.appId.')
+
   if (suggestions.length === 0) {
-    pLog.warn('No available suggestions found. Please enter a custom app ID.')
-    return askForAppId('Enter your custom app ID (e.g., com.example.myapp):')
+    pLog.warn('No available suggestions found.')
+    return askForAppId('Enter a Capgo app ID (e.g., com.example.myapp). This does not change your native bundle ID:')
   }
 
-  pLog.info('💡 Here are some available suggestions:')
+  pLog.info('Available Capgo app IDs:')
   suggestions.forEach((suggestion, idx) => {
     pLog.info(`   ${idx + 1}. ${suggestion}`)
   })
 
   const choice = await pSelect({
-    message: 'What would you like to do?',
+    message: 'Which Capgo app ID should we register? Native bundle ID stays unchanged.',
     options: [
       ...suggestions.map((suggestion, idx) => ({
         value: `suggest-${idx}`,
-        label: `Use ${suggestion}`,
+        label: suggestion,
+        hint: 'Capgo only. Native bundle ID stays the same.',
       })),
-      { value: 'custom', label: 'Enter a custom app ID' },
+      { value: 'custom', label: 'Enter a Capgo app ID' },
       { value: 'cancel', label: 'Exit onboarding' },
     ],
   })
@@ -2527,7 +2532,7 @@ async function askForReplacementAppId(
   }
 
   if (choice === 'custom')
-    return askForAppId('Enter your custom app ID (e.g., com.example.myapp):')
+    return askForAppId('Enter a Capgo app ID (e.g., com.example.myapp). This does not change your native bundle ID:')
 
   const suggestionIndex = Number.parseInt((choice as string).replace('suggest-', ''), 10)
   return suggestions[suggestionIndex]
@@ -2541,10 +2546,12 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
   while (true) {
     if (confirmedAppId !== currentAppId) {
       const addChoice = await pSelect({
-        message: `Add ${currentAppId} to Capgo?`,
+        message: currentAppId === appId
+          ? `Add ${currentAppId} to Capgo?`
+          : `Register Capgo app ID ${currentAppId}? Native bundle ID stays ${appId}.`,
         options: [
           { value: 'yes', label: '✅ Yes, add it' },
-          { value: 'change', label: '✏️ Use a different app ID' },
+          { value: 'change', label: '✏️ Use a different Capgo app ID' },
         ],
       })
       await cancelCommand(addChoice, organization.gid, apikey)
@@ -2589,13 +2596,13 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
         }
 
         if (conflictResolution === 'not-owned')
-          pLog.error(`❌ App ID "${currentAppId}" is already taken`)
+          pLog.error(`❌ Capgo app ID "${currentAppId}" is already used by another organization`)
 
         currentAppId = await askForReplacementAppId(client, organization, apikey, currentAppId, {
           apiHost: options.apiHost,
         })
         confirmedAppId = undefined
-        pLog.info(`🔄 Trying with new app ID: ${currentAppId}`)
+        pLog.info(`Registering Capgo app ID "${currentAppId}". Native bundle ID is unchanged.`)
         continue
       }
 
