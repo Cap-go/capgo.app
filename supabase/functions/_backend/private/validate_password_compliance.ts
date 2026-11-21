@@ -31,6 +31,13 @@ interface OrgReadAccessResult {
   error?: string
 }
 
+export type OrgRemediationAccessStatus = 'allowed' | 'not_member' | 'org_requires_2fa'
+
+export interface OrgRemediationAccessResult {
+  status: OrgRemediationAccessStatus
+  error?: string
+}
+
 type BackendContext = Context<MiddlewareKeyVariables>
 
 /**
@@ -138,6 +145,54 @@ export async function checkOrgReadAccess(
   return { allowed: data === true }
 }
 
+/**
+ * Resolve org.read for password-compliance remediation after the caller authenticated.
+ * Uses the service connection so RBAC membership is not conflated with 2FA gates.
+ */
+export async function checkOrgRemediationAccess(
+  client: QueryClient,
+  userId: string,
+  orgId: string,
+  requestId: string,
+): Promise<OrgRemediationAccessResult> {
+  try {
+    const { rows } = await client.query<{
+      is_member: boolean | null
+      enforcing_2fa: boolean | null
+      has_2fa: boolean | null
+    }>(
+      `SELECT
+        public.rbac_has_permission(
+          public.rbac_principal_user(),
+          $1::uuid,
+          public.rbac_perm_org_read(),
+          $2::uuid,
+          NULL::character varying,
+          NULL::bigint
+        ) AS is_member,
+        COALESCE((
+          SELECT orgs.enforcing_2fa FROM public.orgs AS orgs WHERE orgs.id = $2::uuid
+        ), false) AS enforcing_2fa,
+        public.has_2fa_enabled($1::uuid) AS has_2fa`,
+      [userId, orgId],
+    )
+
+    const row = rows[0]
+    if (row?.is_member !== true)
+      return { status: 'not_member' }
+
+    if (row.enforcing_2fa === true && row.has_2fa !== true)
+      return { status: 'org_requires_2fa' }
+
+    return { status: 'allowed' }
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    cloudlog({ requestId, context: 'validate_password_compliance - remediation org access failed', error: message })
+    return { status: 'not_member', error: message }
+  }
+}
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('*', validateOrigin)
@@ -206,16 +261,21 @@ app.post('/', async (c) => {
 
   const pg = await getPgClient(c)
   try {
-    // Check org membership/rights first. For non-members (and for non-existent orgs),
-    // this returns the same not_member response to avoid an existence oracle.
-    const orgAccess = userPrincipal
-      ? await withRlsTransaction(pg, userPrincipal, client => checkOrgReadAccess(client, body.org_id, c.get('requestId')))
-      : { allowed: false, error: 'Invalid JWT' }
+    // Membership must not reuse RBAC paths that treat missing 2FA as non-membership.
+    if (!userPrincipal) {
+      return quickError(403, 'not_member', 'You are not a member of this organization')
+    }
+
+    const orgAccess = await checkOrgRemediationAccess(pg, userId, body.org_id, c.get('requestId'))
     if (orgAccess.error) {
       return quickError(500, 'org_membership_lookup_failed', 'Failed to verify organization membership', { error: orgAccess.error })
     }
 
-    if (!orgAccess.allowed) {
+    if (orgAccess.status === 'org_requires_2fa') {
+      return quickError(403, 'org_requires_2fa', 'This organization requires two-factor authentication before you can continue')
+    }
+
+    if (orgAccess.status === 'not_member') {
       return quickError(403, 'not_member', 'You are not a member of this organization')
     }
 
