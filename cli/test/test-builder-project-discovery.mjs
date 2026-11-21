@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { render } from 'ink'
 import React from 'react'
 import * as builderOnboardingCommand from '../src/build/onboarding/command.ts'
@@ -373,6 +374,43 @@ if (appId !== 'com.example.second') {
 `
     const result = spawnSync('node', ['--input-type=module', '-e', script, root], { encoding: 'utf8' })
     assert.equal(result.status, 0, result.stderr || result.stdout)
+  })
+
+  await test('node saves a type module config through writeConfig and reloads it', async () => {
+    const node = spawnSync('node', ['-e', 'process.exit(0)'], { encoding: 'utf8' })
+    if (node.error || node.status !== 0)
+      return
+    const root = fixture('javascript-esm-config-node-write')
+    writeJson(join(root, 'package.json'), { private: true, type: 'module' })
+    const configPath = join(root, 'capacitor.config.js')
+    writeText(configPath, "export default { appId: 'com.example.first', webDir: 'www' }\n")
+    const bundlePath = join(root, 'config-bundle.mjs')
+    const sourcePath = fileURLToPath(new URL('../src/config/index.ts', import.meta.url))
+    const build = spawnSync('bun', ['build', sourcePath, '--outfile', bundlePath, '--target', 'node', '--format=esm'], { encoding: 'utf8' })
+    assert.equal(build.status, 0, build.stderr || build.stdout)
+    const script = `
+import { loadConfigTarget, setConfigWriteTarget, writeConfig } from ${JSON.stringify(pathToFileURL(bundlePath).href)}
+const configPath = process.argv[1]
+setConfigWriteTarget(configPath)
+await writeConfig('CapacitorUpdater', {
+  path: configPath,
+  config: {
+    appId: 'com.example.first',
+    webDir: 'www',
+    plugins: { CapacitorUpdater: { appId: 'com.example.capgo' } },
+  },
+})
+const reloaded = await loadConfigTarget(configPath)
+if (reloaded.appId !== 'com.example.first' || reloaded.plugins?.CapacitorUpdater?.appId !== 'com.example.capgo') {
+  console.error(JSON.stringify({ appId: reloaded.appId, updater: reloaded.plugins?.CapacitorUpdater?.appId }))
+  process.exit(1)
+}
+`
+    const result = spawnSync('node', ['--input-type=module', '-e', script, configPath], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    const source = readFileSync(configPath, 'utf8')
+    assert.match(source, /export default config/)
+    assert.equal(source.includes('module.exports'), false)
   })
 
   await test('reads appId from a JavaScript config without project TypeScript', async () => {
