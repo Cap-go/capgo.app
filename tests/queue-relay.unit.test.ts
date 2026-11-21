@@ -515,3 +515,20 @@ describe('queue message validation', () => {
     expect(messages).toEqual([valid])
   })
 })
+
+describe('queue message workers', () => {
+  it('lets every worker finish before reporting a failure', async () => {
+    const finished: number[] = []
+    const run = __queueConsumerTestUtils__.mapWithConcurrency([0, 1, 2], 2, async (item) => {
+      if (item === 0)
+        throw new Error('boom')
+      await new Promise(resolve => setTimeout(resolve, 5))
+      finished.push(item)
+      return item
+    })
+
+    await expect(run).rejects.toThrow('boom')
+    // The sibling worker went on with the rest before the call failed.
+    expect(finished).toEqual([1, 2])
+  })
+})

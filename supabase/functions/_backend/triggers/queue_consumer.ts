@@ -433,23 +433,29 @@ async function dispatchQueueMessage(
 async function processQueueMessage(c: Context, queueName: string, message: Message, waitForCompletion = false): Promise<ProcessedQueueMessage> {
   const function_name = message.message?.function_name ?? 'unknown'
   const function_type = normalizeQueueFunctionType(message.message?.function_type)
-  const body = extractMessageBody(message)
-  if (message.message?.payload === undefined && Object.keys(body).length > 0) {
-    cloudlog({
-      requestId: c.get('requestId'),
-      message: `[${queueName}] Using legacy queue message body shape for ${function_name}.`,
-      msgId: message.msg_id,
-    })
-  }
-
   const cfId = generateUUID()
-  const dispatchBody = prepareQueueHttpBody(function_name, body)
-  const payloadSize = JSON.stringify(dispatchBody).length
   const start = Date.now()
-  const targetUrl = function_name === 'on_manifest_create' ? 'direct:on_manifest_create' : resolveFunctionUrl(c, function_name, function_type)
-  const trace = getQueueMessageTrace(function_name, body)
+  let payloadSize = 0
+  let targetUrl: string | null = null
+  let trace: ReturnType<typeof getQueueMessageTrace> = null
 
+  // Everything that can fail is inside the try, so a message always ends as a
+  // result (success or failure) and never rejects the batch it is part of.
   try {
+    const body = extractMessageBody(message)
+    if (message.message?.payload === undefined && Object.keys(body).length > 0) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: `[${queueName}] Using legacy queue message body shape for ${function_name}.`,
+        msgId: message.msg_id,
+      })
+    }
+    const dispatchBody = prepareQueueHttpBody(function_name, body)
+    payloadSize = JSON.stringify(dispatchBody).length
+    const resolvedUrl = function_name === 'on_manifest_create' ? 'direct:on_manifest_create' : resolveFunctionUrl(c, function_name, function_type)
+    targetUrl = resolvedUrl
+    trace = getQueueMessageTrace(function_name, body)
+
     cloudlog({
       requestId: c.get('requestId'),
       message: `[${queueName}] Queue message dispatching.`,
@@ -466,7 +472,7 @@ async function processQueueMessage(c: Context, queueName: string, message: Messa
       msgId: message.msg_id,
       queueName,
       readCount: message.read_ct,
-    }, targetUrl, waitForCompletion)
+    }, resolvedUrl, waitForCompletion)
     const errorDetails = await extractErrorDetails(result.response)
     const durationMs = Date.now() - start
 
@@ -629,7 +635,13 @@ async function mapWithConcurrency<T, R>(
   }
 
   const workerCount = Math.min(Math.max(1, concurrency), items.length)
-  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  // Every worker settles before this returns or throws, so a caller that moves
+  // on after a failure (the next queue, closing its client) never leaves
+  // message work running past it and over the connection budget.
+  const settled = await Promise.allSettled(Array.from({ length: workerCount }, () => worker()))
+  const failure = settled.find(result => result.status === 'rejected')
+  if (failure)
+    throw failure.reason
   return results
 }
 
@@ -1438,6 +1450,7 @@ export const __queueConsumerTestUtils__ = {
   getManifestRecordFromQueueBody,
   getQueueBatchSize,
   manifestQueueHttpConcurrency: MANIFEST_QUEUE_HTTP_CONCURRENCY,
+  mapWithConcurrency,
   getQueueAckChunkSize,
   getQueueHttpConcurrency,
   getQueueHttpTimeoutMs,
