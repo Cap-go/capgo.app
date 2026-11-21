@@ -1,28 +1,28 @@
 import type { ExecutionContext, MessageBatch } from '@cloudflare/workers-types'
 import type { HttpDispatchRow } from '../supabase/functions/_backend/utils/http_dispatch.ts'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PGMQ_RELAY_RETRY_DELAY_SECONDS, processPgmqRelayBatch } from '../cloudflare_workers/api/pgmq_relay.ts'
-import { MAX_QUEUE_READS, RELAYED_QUEUE_CONCURRENCY, relayedQueueClaimSql } from '../supabase/functions/_backend/triggers/queue_consumer.ts'
+import { __queueConsumerTestUtils__, getRelayedQueueConcurrency, MAX_QUEUE_READS, RELAYED_QUEUE_CONCURRENCY, relayedQueueClaimSql } from '../supabase/functions/_backend/triggers/queue_consumer.ts'
 import {
   parsePgmqRelayWakeup,
   PGMQ_RELAY_BUDGET_MS,
   PGMQ_RELAY_DELIVERY_GRACE_SECONDS,
   PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM,
-  PGMQ_RELAY_MAX_MESSAGES_PER_WAKEUP,
   PGMQ_RELAY_SEND_BATCH_SIZE,
   pgmqRelayReadSql,
   pgmqRelayReleaseSql,
   relayPgmqWakeups,
 } from '../supabase/functions/_backend/triggers/queue_relay.ts'
 
-const { queryMock, closeClientMock, discordMock } = vi.hoisted(() => ({
+const { queryMock, closeClientMock, discordMock, getPgClientMock } = vi.hoisted(() => ({
   queryMock: vi.fn(),
   closeClientMock: vi.fn(),
   discordMock: vi.fn(),
+  getPgClientMock: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
-  getPgClient: vi.fn(async () => ({ query: queryMock })),
+  getPgClient: getPgClientMock,
   closeClient: closeClientMock,
 }))
 vi.mock('../supabase/functions/_backend/utils/discord.ts', () => ({ sendDiscordAlert: discordMock }))
@@ -56,6 +56,17 @@ function readReturning(rows?: { msg_id: number, read_ct: number }[]) {
 
 const context = { get: () => 'request-id' } as never
 
+// The read limit of each relay read, in order.
+function readLimits(query: ReturnType<typeof vi.fn>) {
+  return query.mock.calls
+    .filter(([sql]) => (sql as string).includes('FOR UPDATE SKIP LOCKED'))
+    .map(([sql, params]) => [(sql as string).match(/pgmq\."q_(\w+)"/)?.[1], (params as number[])[1]])
+}
+
+beforeEach(() => {
+  getPgClientMock.mockImplementation(async () => ({ query: queryMock }))
+})
+
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
@@ -64,14 +75,14 @@ afterEach(() => {
 })
 
 describe('pgmq relay wakeups', () => {
-  it.concurrent('reads what the wakeup asks for, within the per-wakeup cap', () => {
+  it.concurrent('reads what the Supabase consumers it replaces would read', () => {
     expect(parsePgmqRelayWakeup(wakeup('on_app_update', { calls: 3, body: { queue_name: 'on_app_update', batch_size: 100 } }))).toEqual({
       queueName: 'on_app_update',
       maxMessages: 300,
       visibilityTimeoutSeconds: 120 + PGMQ_RELAY_DELIVERY_GRACE_SECONDS,
       waitForCompletion: false,
     })
-    expect(parsePgmqRelayWakeup(wakeup('on_app_update', { calls: 10 }))?.maxMessages).toBe(PGMQ_RELAY_MAX_MESSAGES_PER_WAKEUP)
+    expect(parsePgmqRelayWakeup(wakeup('on_manifest_create', { calls: 10 }))?.maxMessages).toBe(9500)
     expect(parsePgmqRelayWakeup(wakeup('on_app_update', { calls: 50, body: { queue_name: 'on_app_update', batch_size: 50 } }))?.maxMessages).toBe(500)
     expect(parsePgmqRelayWakeup(wakeup('on_app_update', { body: { queue_name: 'on_app_update', wait_for_completion: true } }))).toMatchObject({ maxMessages: 950, waitForCompletion: true })
   })
@@ -143,7 +154,7 @@ describe('pgmq relay wakeups', () => {
       wakeup('on_user_update', { id: '2', body: { queue_name: 'on_user_update', batch_size: 250 } }),
     ])
 
-    expect(result).toEqual({ relayed: 100, released: 150, rejected: 0, deferred: 0 })
+    expect(result).toEqual({ relayed: 100, released: 150, rejected: 0, deferred: 1 })
     expect(query).toHaveBeenCalledTimes(2)
     const [releaseSql, releaseParams] = query.mock.calls[1] as unknown as [string, [number[], number[]]]
     expect(releaseSql).toBe(pgmqRelayReleaseSql('on_app_update'))
@@ -176,8 +187,11 @@ describe('pgmq relay wakeups', () => {
     const queues = ['q_a', 'q_b', 'q_c', 'q_d', 'q_e', 'q_f']
     const rows = queues.map((queue, index) => wakeup(queue, { id: String(index), calls: 2, body: { queue_name: queue } }))
 
-    const capped = await relayPgmqWakeups(context, { query: vi.fn(readReturning()) } as never, { sendBatch }, rows)
-    expect(capped).toEqual({ relayed: PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM, released: 0, rejected: 0, deferred: 1 })
+    // 2 x 950 each, more than the cap allows: each queue gets an equal share.
+    const cappedQuery = vi.fn(readReturning())
+    const capped = await relayPgmqWakeups(context, { query: cappedQuery } as never, { sendBatch }, rows)
+    expect(capped).toEqual({ relayed: PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM, released: 0, rejected: 0, deferred: 0 })
+    expect(readLimits(cappedQuery)).toEqual([['q_a', 834], ['q_b', 834], ['q_c', 833], ['q_d', 833], ['q_e', 833], ['q_f', 833]])
 
     let clock = 0
     const slowSend = vi.fn(async () => {
@@ -190,26 +204,44 @@ describe('pgmq relay wakeups', () => {
 })
 
 describe('pgmq relay send budget', () => {
-  it('gives the unsent rest back when sending outlasts the budget', async () => {
+  it('gives each queue its share of the time when sending is slow, so none starves', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     let clock = 0
     const query = vi.fn(readReturning())
-    const sendBatch = vi.fn(async () => {
+    const sendBatch = vi.fn(async (_messages: Iterable<{ body: { queue_name: string } }>) => {
       clock += PGMQ_RELAY_BUDGET_MS * 3 / 8
     })
 
+    // The busy queue comes first in the claim, as pg_cron writes it every tick.
     const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, [
+      wakeup('on_user_update', { id: '2', calls: 2 }),
       wakeup('on_app_update', { calls: 2, body: { queue_name: 'on_app_update', batch_size: 500 } }),
-      wakeup('on_user_update', { id: '2' }),
     ], () => clock)
 
-    expect(result).toEqual({ relayed: 300, released: 700, rejected: 0, deferred: 0 })
-    expect(sendBatch).toHaveBeenCalledTimes(3)
-    // The release, and no read of the second queue.
-    expect(query).toHaveBeenCalledTimes(2)
-    const [releaseSql, [releasedIds]] = query.mock.calls[1] as unknown as [string, [number[]]]
-    expect(releaseSql).toBe(pgmqRelayReleaseSql('on_app_update'))
-    expect(releasedIds).toEqual(Array.from({ length: 700 }, (_, index) => index + 301))
+    // The smaller request (2 x 500) goes first and gets half the time; the
+    // other queue gets the time left.
+    expect(result).toEqual({ relayed: 300, released: 2600, rejected: 0, deferred: 0 })
+    const sent = sendBatch.mock.calls.map(([messages]) => [...messages][0].body.queue_name)
+    expect(sent).toEqual(['on_app_update', 'on_app_update', 'on_user_update'])
+    const releases = query.mock.calls.filter(([sql]) => !(sql as string).includes('FOR UPDATE SKIP LOCKED')) as unknown as [string, [number[]]][]
+    expect(releases.map(([sql, [ids]]) => [sql, ids[0], ids.length])).toEqual([
+      [pgmqRelayReleaseSql('on_app_update'), 201, 800],
+      [pgmqRelayReleaseSql('on_user_update'), 101, 1800],
+    ])
+  })
+
+  it('serves small requests in full and splits the rest of the cap between busy queues', async () => {
+    const query = vi.fn(readReturning())
+    const sendBatch = vi.fn(async () => {})
+
+    const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, [
+      wakeup('on_manifest_create', { calls: 10 }),
+      wakeup('on_app_update', { id: '2', calls: 10 }),
+      wakeup('on_user_update', { id: '3', body: { queue_name: 'on_user_update', batch_size: 100 } }),
+    ])
+
+    expect(result).toEqual({ relayed: PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM, released: 0, rejected: 0, deferred: 0 })
+    expect(readLimits(query)).toEqual([['on_user_update', 100], ['on_manifest_create', 2450], ['on_app_update', 2450]])
   })
 
   it('sends nothing when the read itself used up the budget', async () => {
@@ -356,11 +388,130 @@ describe('pgmq relay consumer', () => {
     }
   })
 
+  it('retries only the queue whose claim failed, after the other queue finished', async () => {
+    stubRuntime()
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === relayedQueueClaimSql('on_user_update'))
+        throw new Error('statement timeout')
+      if (sql === relayedQueueClaimSql('on_app_update'))
+        return { rows: [pgmqRow(1)] }
+      return { rows: [] }
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ status: 'ok' })))
+    const failing = queueMessage({ queue_name: 'on_user_update', msg_id: 4, read_ct: 0 }, 'a')
+    const healthy = queueMessage({ queue_name: 'on_app_update', msg_id: 1, read_ct: 0 }, 'b')
+
+    await processPgmqRelayBatch(batch([failing, healthy]), {} as never, ctx)
+
+    // The healthy queue still ran to its delete before the invocation ended.
+    expect(queryMock.mock.calls.map(([sql]) => sql)).toEqual([
+      relayedQueueClaimSql('on_user_update'),
+      relayedQueueClaimSql('on_app_update'),
+      'WITH capgo_pgmq_uncached AS (SELECT now()) SELECT pgmq.delete($1, $2::bigint[])',
+    ])
+    expect(failing.retry).toHaveBeenCalledWith({ delaySeconds: PGMQ_RELAY_RETRY_DELAY_SECONDS })
+    expect(failing.ack).not.toHaveBeenCalled()
+    expect(healthy.ack).toHaveBeenCalledTimes(1)
+    expect(healthy.retry).not.toHaveBeenCalled()
+  })
+
+  it('archives a malformed claimed message and still runs the others', async () => {
+    stubRuntime()
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === relayedQueueClaimSql('on_app_update'))
+        return { rows: [pgmqRow(1, MAX_QUEUE_READS), { msg_id: '2', read_ct: 1, message: { payload: {} } }] }
+      return { rows: [] }
+    })
+    const fetchMock = vi.fn(async () => Response.json({ status: 'ok' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const valid = queueMessage({ queue_name: 'on_app_update', msg_id: 1, read_ct: MAX_QUEUE_READS - 1 }, 'a')
+    const malformed = queueMessage({ queue_name: 'on_app_update', msg_id: 2, read_ct: 0 }, 'b')
+
+    await processPgmqRelayBatch(batch([valid, malformed]), {} as never, ctx)
+
+    expect(queryMock).toHaveBeenCalledWith('WITH capgo_pgmq_uncached AS (SELECT now()) SELECT pgmq.archive($1, $2::bigint[])', ['on_app_update', [2]])
+    // The valid message ran on its last read instead of failing with its batch.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(queryMock).toHaveBeenCalledWith('WITH capgo_pgmq_uncached AS (SELECT now()) SELECT pgmq.delete($1, $2::bigint[])', ['on_app_update', [1]])
+    expect(valid.ack).toHaveBeenCalledTimes(1)
+    expect(malformed.ack).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs no more messages of a queue at once than the connections left allow', async () => {
+    stubRuntime()
+    const ids = [1, 2, 3, 4, 5]
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === relayedQueueClaimSql('on_app_update'))
+        return { rows: ids.map(id => pgmqRow(id)) }
+      return { rows: [] }
+    })
+    let inFlight = 0
+    let peak = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      peak = Math.max(peak, ++inFlight)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      inFlight--
+      return Response.json({ status: 'ok' })
+    }))
+
+    await processPgmqRelayBatch(batch(ids.map(id => queueMessage({ queue_name: 'on_app_update', msg_id: id, read_ct: 0 }, String(id)))), {} as never, ctx)
+
+    // One connection is the database client, the rest are the trigger calls.
+    expect(peak).toBe(getRelayedQueueConcurrency('on_app_update'))
+    expect(1 + getRelayedQueueConcurrency('on_app_update')).toBeLessThanOrEqual(6)
+    // A manifest message opens its own database client next to its storage read.
+    expect(1 + 2 * getRelayedQueueConcurrency('on_manifest_create')).toBeLessThanOrEqual(6)
+    expect(getRelayedQueueConcurrency('cron_onboarding_refresh_apps')).toBeLessThanOrEqual(4)
+  })
+
+  it('retries the whole batch when no database client can be opened', async () => {
+    stubRuntime()
+    getPgClientMock.mockRejectedValueOnce(new Error('too many connections'))
+    const message = queueMessage({ queue_name: 'on_app_update', msg_id: 1, read_ct: 0 })
+
+    await processPgmqRelayBatch(batch([message]), {} as never, ctx)
+
+    expect(message.retry).toHaveBeenCalledWith({ delaySeconds: PGMQ_RELAY_RETRY_DELAY_SECONDS })
+    expect(message.ack).not.toHaveBeenCalled()
+  })
+
   it('never takes more messages per batch than it can send at once', async () => {
     const { readFileSync } = await import('node:fs')
     const config = JSON.parse(readFileSync(new URL('../cloudflare_workers/api/wrangler.jsonc', import.meta.url), 'utf8'))
     const consumers = config.env.prod.queues.consumers.filter((consumer: { queue: string }) => consumer.queue === 'capgo-pgmq-prod')
     expect(consumers).toHaveLength(1)
     expect(consumers[0].max_batch_size).toBeLessThanOrEqual(RELAYED_QUEUE_CONCURRENCY)
+  })
+})
+
+describe('queue message validation', () => {
+  const { takeValidQueueMessages } = __queueConsumerTestUtils__
+
+  it('archives only the rows that can never be processed', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const query = vi.fn(async () => ({ rows: [] }))
+    const valid = { msg_id: '1', read_ct: 1, message: { function_name: 'on_app_update', payload: {} } }
+
+    const messages = await takeValidQueueMessages(context, { query } as never, 'on_app_update', [
+      valid,
+      { msg_id: '2', read_ct: 1, message: { payload: {} } },
+      { msg_id: 'x', read_ct: 1, message: {} },
+    ])
+
+    expect(messages).toEqual([{ ...valid, msg_id: 1 }])
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(query).toHaveBeenCalledWith('WITH capgo_pgmq_uncached AS (SELECT now()) SELECT pgmq.archive($1, $2::bigint[])', ['on_app_update', [2]])
+  })
+
+  it('still returns the valid rows when the archive fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const query = vi.fn(async () => {
+      throw new Error('archive failed')
+    })
+    const valid = { msg_id: 3, read_ct: 2, message: { function_name: 'on_app_update' } }
+
+    const messages = await takeValidQueueMessages(context, { query } as never, 'on_app_update', [valid, { msg_id: 4, read_ct: 1, message: null }])
+
+    expect(messages).toEqual([valid])
   })
 })

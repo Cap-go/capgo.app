@@ -139,7 +139,7 @@
           },
           {
             "queue": "capgo-pgmq-prod",
-            "max_batch_size": 6,
+            "max_batch_size": 5,
             "max_batch_timeout": 1,
             "max_concurrency": 100,
             "max_retries": 3

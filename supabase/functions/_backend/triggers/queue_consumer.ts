@@ -31,11 +31,17 @@ const VERSION_QUEUE_HTTP_TIMEOUT_MS = 300_000 // database manifest cleanup and c
 // sweeper/cron (e.g. sweep_deleted_version_manifests), never by burning reads.
 export const MAX_QUEUE_READS = 5
 const DISCORD_IGNORED_ERROR_CODES = new Set(['version_not_found', 'no_channel'])
-// Relayed batches (Cloudflare Queues, see queue_relay.ts) run every message at
-// once: a Worker invocation keeps at most six connections waiting for response
-// headers and queues the rest while their timeouts already run, so the
-// consumer's max_batch_size in wrangler.jsonc must stay at or below this.
-export const RELAYED_QUEUE_CONCURRENCY = 6
+// Relayed batches (Cloudflare Queues, see queue_relay.ts) run every message of
+// a queue at once. A Worker invocation keeps at most six connections open
+// (TCP sockets, fetches, bindings) and queues the rest while their timeouts
+// already run. The consumer's database client stays open for the whole batch,
+// which leaves five, so the consumer's max_batch_size in wrangler.jsonc must
+// stay at or below this.
+const WORKER_OPEN_CONNECTIONS = 6
+export const RELAYED_QUEUE_CONCURRENCY = WORKER_OPEN_CONNECTIONS - 1
+// on_manifest_create runs in this invocation, and each message keeps its own
+// database client open while it reads storage: two connections per message.
+const RELAYED_MANIFEST_QUEUE_CONCURRENCY = Math.floor(RELAYED_QUEUE_CONCURRENCY / 2)
 // pgmq names its tables pgmq.q_<name> and limits names to 47 characters. Our
 // queue names are lowercase identifiers, which also makes them safe to put in
 // SQL text.
@@ -576,6 +582,15 @@ function getQueueHttpConcurrency(queueName: string): number {
   return DEFAULT_QUEUE_HTTP_CONCURRENCY
 }
 
+/** How many messages of one queue a relayed batch runs at once (see RELAYED_QUEUE_CONCURRENCY). */
+export function getRelayedQueueConcurrency(queueName: string): number {
+  if (queueName === 'on_manifest_create')
+    return RELAYED_MANIFEST_QUEUE_CONCURRENCY
+  if (isOnboardingQueue(queueName))
+    return Math.min(ONBOARDING_MESSAGES_PER_MINUTE, RELAYED_QUEUE_CONCURRENCY)
+  return RELAYED_QUEUE_CONCURRENCY
+}
+
 export function getQueueVisibilityTimeout(queueName: string): number {
   if (queueName === 'on_manifest_create')
     return MANIFEST_QUEUE_VISIBILITY_TIMEOUT_SECONDS
@@ -987,6 +1002,52 @@ async function extractErrorDetails(response: Response): Promise<{
   }
 }
 
+/**
+ * Archives the rows that can never be processed (no function_name, bad ids)
+ * and returns the others. Their read is already counted, so failing the whole
+ * batch for one malformed row would use up a read of every other message in
+ * it, and cleanup_queue_messages deletes messages past five reads unprocessed.
+ */
+async function takeValidQueueMessages(
+  c: Context,
+  db: Awaited<ReturnType<typeof getPgClient>>,
+  queueName: string,
+  rows: readonly unknown[],
+): Promise<Message[]> {
+  const valid: Message[] = []
+  const invalidIds: number[] = []
+  let firstError: unknown
+  for (const row of rows) {
+    const parsed = safeParseSchema(messageSchema, row)
+    if (parsed.success) {
+      valid.push(parsed.data as Message)
+      continue
+    }
+    firstError ??= parsed.error
+    const msgId = Number((row as { msg_id?: unknown } | null)?.msg_id)
+    if (Number.isSafeInteger(msgId) && msgId > 0)
+      invalidIds.push(msgId)
+  }
+  if (valid.length === rows.length)
+    return valid
+
+  cloudlogErr({
+    requestId: c.get('requestId'),
+    message: `[${queueName}] Archiving messages with an invalid format.`,
+    queueName,
+    invalidCount: rows.length - valid.length,
+    msgIds: invalidIds.slice(0, 20),
+    error: firstError,
+  })
+  try {
+    await archive_queue_messages(c, db, queueName, invalidIds)
+  }
+  catch {
+    // Already logged; they are read and archived again after their visibility timeout.
+  }
+  return valid
+}
+
 // Reads messages from the queue and logs them
 async function readQueue(c: Context, db: Awaited<ReturnType<typeof getPgClient>>, queueName: string, batchSize: number = DEFAULT_BATCH_SIZE): Promise<Message[] | null> {
   const queueKey = 'readQueue'
@@ -1015,13 +1076,7 @@ async function readQueue(c: Context, db: Awaited<ReturnType<typeof getPgClient>>
     }
 
     cloudlog({ requestId: c.get('requestId'), message: `[${queueKey}] Received ${messages.length} messages from queue ${queueName}.` })
-    const parsed = safeParseSchema(messagesArraySchema, messages)
-    if (parsed.success) {
-      return parsed.data as Message[]
-    }
-    else {
-      throw simpleError('invalid_message_format', 'Invalid message format', { parsed: parsed.error })
-    }
+    return await takeValidQueueMessages(c, db, queueName, messages)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: `[${queueKey}] Error reading queue messages:`, error })
@@ -1214,10 +1269,13 @@ async function claimRelayedQueueMessages(
       relayedCount: relayed.length,
     })
   }
-  const parsed = safeParseSchema(messagesArraySchema, claimed)
-  if (!parsed.success)
-    throw simpleError('invalid_message_format', 'Invalid message format', { parsed: parsed.error, queueName })
-  return parsed.data as Message[]
+  return takeValidQueueMessages(c, db, queueName, claimed)
+}
+
+export interface RelayedQueueBatchResult {
+  results: Record<string, QueueProcessResult>
+  /** Queues whose claim failed: Cloudflare Queues should deliver their messages again. */
+  retryQueues: string[]
 }
 
 /**
@@ -1227,7 +1285,7 @@ async function claimRelayedQueueMessages(
  * authority: a failed message is not deleted, so it becomes readable again and
  * the next wakeup relays it with a higher read_ct.
  */
-export async function processRelayedQueueMessages(c: Context, relayed: RelayedQueueMessage[]): Promise<Record<string, QueueProcessResult>> {
+export async function processRelayedQueueMessages(c: Context, relayed: RelayedQueueMessage[]): Promise<RelayedQueueBatchResult> {
   const byQueue = new Map<string, RelayedQueueMessage[]>()
   for (const message of relayed) {
     const group = byQueue.get(message.queue_name)
@@ -1236,22 +1294,43 @@ export async function processRelayedQueueMessages(c: Context, relayed: RelayedQu
     else
       byQueue.set(message.queue_name, [message])
   }
+  const batch: RelayedQueueBatchResult = { results: {}, retryQueues: [] }
   if (byQueue.size === 0)
-    return {}
+    return batch
 
   const db = await getPgClient(c)
   try {
-    // The batch is at most RELAYED_QUEUE_CONCURRENCY messages, so running every
-    // queue of it at once keeps every call inside the connection limit.
-    const results = await Promise.all([...byQueue].map(async ([queueName, group]) => {
-      const messages = await claimRelayedQueueMessages(c, db, queueName, group)
-      const waitForCompletion = group.some(message => message.wait_for_completion === true)
-      const result = messages.length === 0
-        ? emptyQueueProcessResult(true)
-        : await processQueueMessages(c, db, queueName, messages, RELAYED_QUEUE_CONCURRENCY, waitForCompletion)
-      return [queueName, result] as const
-    }))
-    return Object.fromEntries(results)
+    // One queue at a time, each settled before the next: the connection
+    // budget (getRelayedQueueConcurrency) holds for every queue, and a failure
+    // in one queue never ends the invocation while another queue's claimed
+    // messages are still running.
+    for (const [queueName, group] of byQueue) {
+      let messages: Message[]
+      try {
+        messages = await claimRelayedQueueMessages(c, db, queueName, group)
+      }
+      catch (error) {
+        // The claim either did not commit, so no read was counted, or it did
+        // and a redelivery matches nothing: delivering again is always safe.
+        cloudlogErr({ requestId: c.get('requestId'), message: 'pgmq_relay_claim_failed', queueName, count: group.length, error })
+        batch.retryQueues.push(queueName)
+        continue
+      }
+      if (messages.length === 0) {
+        batch.results[queueName] = emptyQueueProcessResult(true)
+        continue
+      }
+      try {
+        const waitForCompletion = group.some(message => message.wait_for_completion === true)
+        batch.results[queueName] = await processQueueMessages(c, db, queueName, messages, getRelayedQueueConcurrency(queueName), waitForCompletion)
+      }
+      catch (error) {
+        // The reads are counted, so a redelivery would match nothing: pgmq
+        // makes the unfinished messages readable again.
+        cloudlogErr({ requestId: c.get('requestId'), message: 'pgmq_relay_process_failed', queueName, count: messages.length, error })
+      }
+    }
+    return batch
   }
   finally {
     await closeClient(c, db)
@@ -1374,4 +1453,5 @@ export const __queueConsumerTestUtils__ = {
   resolveFunctionUrl,
   sanitizeDiscordResponseBody,
   stripAppVersionManifestFromQueueBody,
+  takeValidQueueMessages,
 }

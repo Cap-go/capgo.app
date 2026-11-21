@@ -1,6 +1,6 @@
 import type { ExecutionContext, Message, MessageBatch } from '@cloudflare/workers-types'
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
-import type { RelayedQueueMessage } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
+import type { RelayedQueueBatchResult, RelayedQueueMessage } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
 import { processRelayedQueueMessages, relayedQueueMessageSchema } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
 import { BRES, createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
@@ -19,8 +19,8 @@ export const PGMQ_RELAY_RETRY_DELAY_SECONDS = 30
 
 appPgmqRelay.post('/process', async (c) => {
   const messages = await c.req.json<RelayedQueueMessage[]>()
-  const results = await processRelayedQueueMessages(c, messages)
-  return c.json({ ...BRES, results })
+  const batch = await processRelayedQueueMessages(c, messages)
+  return c.json({ ...BRES, ...batch })
 })
 createAllCatch(appPgmqRelay, functionName)
 
@@ -50,14 +50,20 @@ export async function processPgmqRelayBatch(batch: MessageBatch<unknown>, env: B
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(valid.map(message => message.body)),
     }), env, ctx)
-    await response.arrayBuffer()
     if (response.ok) {
+      const { retryQueues = [] } = await response.json() as Partial<RelayedQueueBatchResult>
       // Failed queue work is not retried here: it stays in pgmq, which counts
-      // the attempts (at most five) and makes it readable again.
-      for (const { entry } of valid)
-        entry.ack()
+      // the attempts (at most five) and makes it readable again. Only queues
+      // whose claim failed are delivered again.
+      for (const { entry, body } of valid) {
+        if (retryQueues.includes(body.queue_name))
+          entry.retry({ delaySeconds: PGMQ_RELAY_RETRY_DELAY_SECONDS })
+        else
+          entry.ack()
+      }
       return
     }
+    await response.arrayBuffer()
     log('pgmq_relay_batch_failed', { queue: batch.queue, status: response.status, count: valid.length })
   }
   catch (error) {

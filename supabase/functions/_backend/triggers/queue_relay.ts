@@ -33,11 +33,12 @@ type PgClient = Awaited<ReturnType<typeof getPgClient>>
 
 // Cloudflare Queues accepts at most 100 messages per sendBatch call.
 export const PGMQ_RELAY_SEND_BATCH_SIZE = 100
-// One wakeup asks for up to 10 consumers of up to 950 messages. Relaying all
-// of it would put far more work in flight than the consumers finish within a
-// visibility timeout, so the rest stays readable in pgmq for the next wakeup
-// (pg_cron wakes busy queues every 10 seconds).
-export const PGMQ_RELAY_MAX_MESSAGES_PER_WAKEUP = 1000
+// A wakeup asks for what the Supabase consumers it replaces would read (up to
+// 10 consumers of up to 950 messages), so the relay keeps their throughput.
+// One claim relays at most this many across its wakeups. The dispatcher claims
+// at most once a second, so this is also the Cloudflare Queues limit of 5,000
+// messages per second per queue. The rest stays readable in pgmq for the next
+// wakeup.
 export const PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM = 5000
 // The dispatcher waits 10 seconds for the claim; stop relaying well before.
 export const PGMQ_RELAY_BUDGET_MS = 4000
@@ -113,7 +114,7 @@ export function parsePgmqRelayWakeup(row: HttpDispatchRow): PgmqRelayWakeup | nu
   const calls = Math.min(Math.max(Math.trunc(row.calls), 1), HTTP_DISPATCH_MAX_CALLS_PER_ROW)
   return {
     queueName,
-    maxMessages: Math.min(calls * getQueueBatchSize(queueName, requestedBatchSize), PGMQ_RELAY_MAX_MESSAGES_PER_WAKEUP),
+    maxMessages: calls * getQueueBatchSize(queueName, requestedBatchSize),
     visibilityTimeoutSeconds: getQueueVisibilityTimeout(queueName) + PGMQ_RELAY_DELIVERY_GRACE_SECONDS,
     waitForCompletion: body.wait_for_completion === true,
   }
@@ -142,6 +143,14 @@ async function releaseUnsent(c: Context, db: PgClient, queueName: string, unsent
  * Relays the claimed queue wakeups. Work it does not get to (budget reached,
  * or a read failed) is not lost: it is still readable in pgmq, so the next
  * pg_cron tick wakes the queue again.
+ *
+ * pg_cron writes the same wakeups in the same order every tick, and a wakeup
+ * the claim does not get to is dropped until the next tick, so relaying them
+ * in turn until the cap or the time budget ran out would let a busy queue
+ * starve the ones after it indefinitely. Instead the smallest requests go
+ * first and each wakeup takes at most an equal share of the messages and of
+ * the time still left: small requests are served in full, the busy queues
+ * split the rest, and a queue that needs less leaves its share to the next.
  */
 export async function relayPgmqWakeups(
   c: Context,
@@ -154,23 +163,32 @@ export async function relayPgmqWakeups(
   const startedAt = now()
   let remaining = PGMQ_RELAY_MAX_MESSAGES_PER_CLAIM
 
+  const wakeups: PgmqRelayWakeup[] = []
   for (const row of coalesceHttpDispatchRows(rows)) {
     const wakeup = parsePgmqRelayWakeup(row)
-    if (!wakeup) {
-      result.rejected++
-      cloudlogErr({ requestId: c.get('requestId'), message: 'pgmq_relay_invalid_wakeup', target: row.target })
+    if (wakeup) {
+      wakeups.push(wakeup)
       continue
     }
-    if (remaining <= 0 || now() - startedAt >= PGMQ_RELAY_BUDGET_MS) {
-      result.deferred++
-      continue
+    result.rejected++
+    cloudlogErr({ requestId: c.get('requestId'), message: 'pgmq_relay_invalid_wakeup', target: row.target })
+  }
+  wakeups.sort((a, b) => a.maxMessages - b.maxMessages)
+
+  for (const [index, wakeup] of wakeups.entries()) {
+    const wakeupsLeft = wakeups.length - index
+    const timeLeft = PGMQ_RELAY_BUDGET_MS - (now() - startedAt)
+    if (remaining <= 0 || timeLeft <= 0) {
+      result.deferred += wakeupsLeft
+      break
     }
+    const deadline = now() + timeLeft / wakeupsLeft
 
     let messages: RelayedQueueMessage[]
     try {
       const read = await db.query<{ msg_id: string | number, read_ct: number }>(pgmqRelayReadSql(wakeup.queueName), [
         wakeup.visibilityTimeoutSeconds,
-        Math.min(wakeup.maxMessages, remaining),
+        Math.min(wakeup.maxMessages, Math.ceil(remaining / wakeupsLeft)),
       ])
       messages = read.rows
         .map(message => ({
@@ -187,14 +205,15 @@ export async function relayPgmqWakeups(
     }
     remaining -= messages.length
 
+    const relayedBefore = result.relayed
     for (let start = 0; start < messages.length; start += PGMQ_RELAY_SEND_BATCH_SIZE) {
-      if (now() - startedAt >= PGMQ_RELAY_BUDGET_MS) {
+      if (now() >= deadline) {
         // A slow read or slow sends: give the rest back now instead of hiding
-        // it until the relay visibility timeout, and leave the other wakeups
-        // for the next tick.
+        // it until the relay visibility timeout, and leave the time left to
+        // the other wakeups.
         cloudlogErr({ requestId: c.get('requestId'), message: 'pgmq_relay_budget_exhausted', queueName: wakeup.queueName, unsent: messages.length - start })
         result.released += await releaseUnsent(c, db, wakeup.queueName, messages.slice(start))
-        return result
+        break
       }
       const chunk = messages.slice(start, start + PGMQ_RELAY_SEND_BATCH_SIZE)
       try {
@@ -205,11 +224,12 @@ export async function relayPgmqWakeups(
         cloudlogErr({ requestId: c.get('requestId'), message: 'pgmq_relay_send_failed', queueName: wakeup.queueName, unsent: messages.length - start, error: serializeError(error) })
         result.released += await releaseUnsent(c, db, wakeup.queueName, messages.slice(start))
         // Cloudflare Queues is failing: leave the other wakeups unread too.
+        result.deferred += wakeupsLeft - 1
         return result
       }
     }
-    if (messages.length > 0)
-      cloudlog({ requestId: c.get('requestId'), message: 'pgmq_relay_sent', queueName: wakeup.queueName, count: messages.length })
+    if (result.relayed > relayedBefore)
+      cloudlog({ requestId: c.get('requestId'), message: 'pgmq_relay_sent', queueName: wakeup.queueName, count: result.relayed - relayedBefore })
   }
   return result
 }

@@ -288,8 +288,11 @@ backfill code, design for this scale:
   pgmq stays the retry counter: the relay does not count a read, the
   consumer's claim does (`read_ct + 1`, only at the relayed `read_ct`), so a
   Cloudflare Queues retry or duplicate never runs work twice for one read or
-  past the five reads. Keep the consumer's `max_batch_size` at or below
-  `RELAYED_QUEUE_CONCURRENCY`. Other wakeups (cache purge, plugin state) go to
+  past the five reads. The consumer keeps one database client open per batch,
+  so with the six open connections a Worker invocation allows, keep its
+  `max_batch_size` at or below `RELAYED_QUEUE_CONCURRENCY` (five), and count
+  two connections per message for work that opens its own client
+  (`on_manifest_create`). Other wakeups (cache purge, plugin state) go to
   the same route on `CLOUDFLARE_FUNCTION_URL`. Self-host never needs
   Cloudflare Queues: with no target rows it stays on pg_net.
 - Do not assume a `202` HTTP response means queue work finished. If the handler
