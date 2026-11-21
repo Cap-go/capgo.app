@@ -25,6 +25,13 @@ function importSpecifier(specifier: string): Promise<Record<string, unknown>> {
   return dynamicImport(specifier)
 }
 
+let esmReloadCount = 0
+
+function nextEsmReloadToken() {
+  esmReloadCount += 1
+  return String(esmReloadCount)
+}
+
 async function nearestPackageIsModule(filePath: string): Promise<boolean> {
   let dir = dirname(filePath)
   const root = parse(dir).root
@@ -196,7 +203,7 @@ export async function loadConfigTarget(filePath: string): Promise<CapacitorConfi
     // file uses Node's ESM cache, which deleting require.cache does not clear,
     // so a query string forces a fresh evaluation of the saved file.
     const configModule = await nearestPackageIsModule(resolved)
-      ? await importSpecifier(`${pathToFileURL(resolved).href}?capgo-reload=${Date.now()}`)
+      ? await importSpecifier(`${pathToFileURL(resolved).href}?capgo-reload=${nextEsmReloadToken()}`)
       : targetRequire(filePath) as Record<string, unknown>
     const exportedConfig = configModule.default ?? configModule
     return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
@@ -242,10 +249,12 @@ export async function loadConfigTarget(filePath: string): Promise<CapacitorConfi
  */
 async function writeConfigTarget(extConfig: CapacitorConfig, filePath: string): Promise<void> {
   if (extname(filePath) === '.js') {
+    const body = formatJSObject(extConfig)
+    const assignment = await nearestPackageIsModule(filePath) ? 'export default config' : 'module.exports = config'
     const source = `/** @type {import('@capacitor/cli').CapacitorConfig} */
-const config = ${formatJSObject(extConfig)}
+const config = ${body}
 
-module.exports = config
+${assignment}
 `
     await writeFile(filePath, source)
     return

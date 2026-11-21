@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { render } from 'ink'
@@ -18,7 +18,7 @@ import {
   builderProjectNotFoundMessage,
   shouldDiscoverBuilderProject,
 } from '../src/build/onboarding/command.ts'
-import { loadConfigTarget } from '../src/config/index.ts'
+import { loadConfigTarget, setConfigWriteTarget, writeConfig } from '../src/config/index.ts'
 import {
   BuilderProjectDiscoveryApp,
   DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING,
@@ -298,6 +298,33 @@ try {
     assert.equal(reloaded.plugins.CapgoBuilder.capgoBuilderAppId, 'com.example.capgo')
   })
 
+  await test('saves a type module capacitor.config.js as ESM and reloads it', async () => {
+    const root = fixture('javascript-esm-config-write')
+    writeJson(join(root, 'package.json'), { private: true, type: 'module' })
+    const configPath = join(root, 'capacitor.config.js')
+    writeText(configPath, "export default { appId: 'com.example.first', webDir: 'www' }\n")
+    setConfigWriteTarget(configPath)
+    try {
+      await writeConfig('CapacitorUpdater', {
+        path: configPath,
+        config: {
+          appId: 'com.example.first',
+          webDir: 'www',
+          plugins: { CapacitorUpdater: { appId: 'com.example.capgo' } },
+        },
+      })
+    }
+    finally {
+      setConfigWriteTarget(undefined)
+    }
+    const source = readFileSync(configPath, 'utf8')
+    assert.match(source, /export default config/)
+    assert.equal(source.includes('module.exports'), false)
+    const reloaded = await loadConfigTarget(configPath)
+    assert.equal(reloaded.appId, 'com.example.first')
+    assert.equal(reloaded.plugins.CapacitorUpdater.appId, 'com.example.capgo')
+  })
+
   await test('reloads an ES module Capacitor config after it is saved', async () => {
     const root = fixture('javascript-esm-config-reload')
     writeJson(join(root, 'package.json'), { private: true, type: 'module' })
@@ -329,8 +356,11 @@ try {
   resolved = targetRequire.resolve(configPath)
   targetRequire(configPath)
 }
-catch {
-  process.exit(0)
+catch (error) {
+  if (error && error.code === 'ERR_REQUIRE_ESM')
+    process.exit(0)
+  console.error(error)
+  process.exit(1)
 }
 writeFileSync(configPath, "export default { appId: 'com.example.second' }\\n")
 delete targetRequire.cache[resolved]
