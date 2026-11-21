@@ -189,6 +189,21 @@ describe('QueueDispatcher', () => {
     expect((init.headers as Record<string, string>).apisecret).toBe('secret')
   })
 
+  it('keeps the stored URL and warns once when CLOUDFLARE_FUNCTION_URL is missing', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetchMock = vi.fn(async () => new Response('{}'))
+    vi.stubGlobal('fetch', fetchMock)
+    const purge = row({ target: 'updates_cache_purge', url: CACHE_PURGE_URL, body: { wake: true }, runtime: 'cloudflare' })
+    const { dispatcher } = createDispatcher(async () => Response.json({ rows: [purge] }))
+
+    await dispatcher.alarm()
+    await dispatcher.alarm()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe(CACHE_PURGE_URL)
+    expect(consoleError.mock.calls.filter(([line]) => String(line).includes('queue_dispatcher_cloudflare_url_missing'))).toHaveLength(1)
+  })
+
   it('does not wait for slow consumer calls before finishing the tick', async () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
     const { dispatcher } = createDispatcher(async () => Response.json({ rows: [row({ timeout_ms: 100000 })] }))

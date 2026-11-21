@@ -48,8 +48,8 @@ describe('queue configuration and strict dispatch', () => {
     expect(queues.consumers.filter((consumer: { queue: string }) => consumer.queue === 'capgo-pgmq-prod')).toEqual([
       { queue: 'capgo-pgmq-prod', max_batch_size: 6, max_batch_timeout: 1, max_concurrency: 100, max_retries: 3 },
     ])
-    for (const environment of ['alpha', 'preprod', 'local'])
-      expect(JSON.stringify(config.env[environment].queues)).not.toContain('capgo-pgmq')
+    for (const environment of Object.keys(config.env).filter(environment => environment !== 'prod'))
+      expect(JSON.stringify(config.env[environment])).not.toMatch(/capgo-pgmq|PGMQ_RELAY_QUEUE/)
   })
 
   it('routes the pgmq relay queue with its execution context', async () => {

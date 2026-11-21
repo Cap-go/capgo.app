@@ -1,7 +1,7 @@
 import type { QueueApi, QueueInfo } from '../scripts/lib/posthog-queues.ts'
 import { Buffer } from 'node:buffer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ensurePgmqRelayQueue, ensurePostHogQueues, PGMQ_RELAY_ENVIRONMENTS } from '../scripts/ensure-posthog-queues.ts'
+import { ensureApiQueues, ensurePgmqRelayQueue, ensurePostHogQueues, PGMQ_RELAY_ENVIRONMENTS } from '../scripts/ensure-posthog-queues.ts'
 import { createQueueApi, POSTHOG_RETENTION_SECONDS } from '../scripts/lib/posthog-queues.ts'
 import { replayPostHogDlq } from '../scripts/replay-posthog-dlq.ts'
 
@@ -118,6 +118,15 @@ describe('resource provisioning', () => {
     await ensurePgmqRelayQueue(api, 'prod', true)
     await ensurePgmqRelayQueue(api, 'prod')
     expect(request.mock.calls.every(([, method]) => method === undefined || method === 'GET')).toBe(true)
+  })
+
+  it.each(['alpha', 'preprod', 'prod'] as const)('provisions the pgmq relay queue for the %s deploy only in prod', async (environment) => {
+    const { api, queues } = mockApi()
+    await ensureApiQueues(api, environment)
+    const names = [...queues.values()].map(queue => queue.queue_name)
+    expect(names.filter(name => name.startsWith('capgo-pgmq'))).toEqual(environment === 'prod' ? ['capgo-pgmq-prod'] : [])
+    expect(names).toContain(`capgo-posthog-events-${environment}`)
+    await ensureApiQueues(api, environment, true)
   })
 
   it('does not expose API responses or credentials on API failure', async () => {

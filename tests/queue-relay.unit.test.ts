@@ -189,6 +189,30 @@ describe('pgmq relay wakeups', () => {
   })
 })
 
+describe('pgmq relay send budget', () => {
+  it('gives the unsent rest back when sending outlasts the budget', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let clock = 0
+    const query = vi.fn(readReturning())
+    const sendBatch = vi.fn(async () => {
+      clock += PGMQ_RELAY_BUDGET_MS * 3 / 8
+    })
+
+    const result = await relayPgmqWakeups(context, { query } as never, { sendBatch }, [
+      wakeup('on_app_update', { calls: 2, body: { queue_name: 'on_app_update', batch_size: 500 } }),
+      wakeup('on_user_update', { id: '2' }),
+    ], () => clock)
+
+    expect(result).toEqual({ relayed: 300, released: 700, rejected: 0, deferred: 0 })
+    expect(sendBatch).toHaveBeenCalledTimes(3)
+    // The release, and no read of the second queue.
+    expect(query).toHaveBeenCalledTimes(2)
+    const [releaseSql, [releasedIds]] = query.mock.calls[1] as unknown as [string, [number[]]]
+    expect(releaseSql).toBe(pgmqRelayReleaseSql('on_app_update'))
+    expect(releasedIds).toEqual(Array.from({ length: 700 }, (_, index) => index + 301))
+  })
+})
+
 describe('http_dispatch claim relays Cloudflare queue wakeups', () => {
   async function claim(rows: HttpDispatchRow[], env: Record<string, unknown>) {
     const { app } = await import('../supabase/functions/_backend/triggers/http_dispatch.ts')

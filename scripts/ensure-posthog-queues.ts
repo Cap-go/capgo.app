@@ -33,10 +33,11 @@ export async function ensurePostHogQueues(api: QueueApi, environment: QueueEnvir
   }
 }
 
-// Only prod runs the QueueDispatcher, which feeds this queue (see
-// cloudflare_workers/api/pgmq_relay.ts). It only holds pgmq ids, which are
-// stale once their relay visibility timeout ends (20 minutes at most), so the
-// default retention is plenty.
+// Only prod runs the QueueDispatcher, which feeds this queue (sender:
+// supabase/functions/_backend/triggers/queue_relay.ts; consumer:
+// cloudflare_workers/api/pgmq_relay.ts). Messages hold only pgmq ids and read
+// counts, and a late copy is claimed only while its read_ct still matches, so
+// the default retention is enough.
 export const PGMQ_RELAY_ENVIRONMENTS: readonly QueueEnvironment[] = ['prod']
 
 export async function ensurePgmqRelayQueue(api: QueueApi, environment: QueueEnvironment, verifyOnly = false) {
@@ -56,6 +57,13 @@ export async function ensurePgmqRelayQueue(api: QueueApi, environment: QueueEnvi
   console.log(`Verified queue: ${name}`)
 }
 
+/** Every Cloudflare Queue the API worker of this environment needs before it deploys. */
+export async function ensureApiQueues(api: QueueApi, environment: QueueEnvironment, verifyOnly = false) {
+  await ensurePostHogQueues(api, environment, verifyOnly)
+  if (PGMQ_RELAY_ENVIRONMENTS.includes(environment))
+    await ensurePgmqRelayQueue(api, environment, verifyOnly)
+}
+
 if (import.meta.main) {
   try {
     const args = process.argv.slice(2)
@@ -63,11 +71,8 @@ if (import.meta.main) {
     if (args.slice(1).some(arg => arg !== '--verify-only'))
       throw new Error('Usage: bun scripts/ensure-posthog-queues.ts [alpha|preprod|prod|all] [--verify-only]')
     const api = createQueueApi()
-    for (const environment of env === 'all' ? ['alpha', 'preprod', 'prod'] as const : [queueEnvironment(env)]) {
-      await ensurePostHogQueues(api, environment, args.includes('--verify-only'))
-      if (PGMQ_RELAY_ENVIRONMENTS.includes(environment))
-        await ensurePgmqRelayQueue(api, environment, args.includes('--verify-only'))
-    }
+    for (const environment of env === 'all' ? ['alpha', 'preprod', 'prod'] as const : [queueEnvironment(env)])
+      await ensureApiQueues(api, environment, args.includes('--verify-only'))
   }
   catch (error) {
     console.error(error instanceof Error ? error.message : 'Queue provisioning failed')

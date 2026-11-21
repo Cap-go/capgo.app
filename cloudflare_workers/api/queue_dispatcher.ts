@@ -1,6 +1,6 @@
 import type { DurableObjectState } from '@cloudflare/workers-types'
 import type { HttpDispatchRequest, HttpDispatchRow } from '../../supabase/functions/_backend/utils/http_dispatch.ts'
-import { buildHttpDispatchRequests, dispatchAllowedOrigins } from '../../supabase/functions/_backend/utils/http_dispatch.ts'
+import { buildHttpDispatchRequests, dispatchAllowedOrigins, httpDispatchRuntime } from '../../supabase/functions/_backend/utils/http_dispatch.ts'
 
 const TICK_MS = 1000
 const CLAIM_TIMEOUT_MS = 10_000
@@ -11,11 +11,13 @@ interface Env {
   API_SECRET?: string
   SUPABASE_URL?: string
   // Comma-separated origins the outbox URLs may use (get_db_url() can differ
-  // from SUPABASE_URL). The API secret is only ever sent to these origins.
+  // from SUPABASE_URL). A stored URL outside them is never sent, so the API
+  // secret only goes to these origins and to CLOUDFLARE_FUNCTION_URL below.
   HTTP_DISPATCH_ALLOWED_ORIGINS?: string
-  // Targets routed with runtime 'cloudflare' are sent to the same route on
-  // this worker's public URL: each call is a new top-level request with its
-  // own connection limits, which a service binding call would not be.
+  // This worker's own public URL (a secret set on the deployed worker). Rows
+  // routed with runtime 'cloudflare' are sent to the same route there instead
+  // of their stored Supabase URL: each call is a new top-level request with
+  // its own connection limits, which a service binding call would not be.
   CLOUDFLARE_FUNCTION_URL?: string
   // Self service binding: claims run as normal Worker requests so the
   // Hyperdrive connection follows the per-request lifecycle instead of living
@@ -67,6 +69,7 @@ export class QueueDispatcher {
   private readonly pending: HttpDispatchRequest[] = []
   private active = 0
   private activeSlow = 0
+  private warnedMissingCloudflareUrl = false
 
   constructor(private readonly ctx: DurableObjectState, private readonly env: Env) {}
 
@@ -125,6 +128,12 @@ export class QueueDispatcher {
   }
 
   private dispatch(rows: HttpDispatchRow[]) {
+    if (!this.warnedMissingCloudflareUrl && !this.env.CLOUDFLARE_FUNCTION_URL && rows.some(row => httpDispatchRuntime(row) === 'cloudflare')) {
+      // They still work through their stored Supabase URL, which forwards to
+      // Cloudflare, but the Supabase hop this runtime removes is back.
+      this.warnedMissingCloudflareUrl = true
+      logError('queue_dispatcher_cloudflare_url_missing', new Error('CLOUDFLARE_FUNCTION_URL is not set'))
+    }
     const { requests, rejected } = buildHttpDispatchRequests(
       rows,
       this.env.API_SECRET!,

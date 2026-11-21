@@ -11,9 +11,10 @@
 -- runtime = 'cloudflare' removes the Supabase hop:
 --   * queue wakeups (process_function_queue) are not returned by the claim:
 --     it reads the readable pgmq messages and sends their ids to Cloudflare
---     Queues, whose consumer runs the same queue processing on the API worker
---     (supabase/functions/_backend/triggers/queue_relay.ts). pgmq stays the
---     queue and the retry counter.
+--     Queues (sender: supabase/functions/_backend/triggers/queue_relay.ts),
+--     whose consumer runs the same queue processing on the API worker
+--     (cloudflare_workers/api/pgmq_relay.ts). pgmq stays the queue and the
+--     retry counter.
 --   * other wakeups (updates_cache_purge, plugin_state_sync) are sent to the
 --     same route on the API worker (CLOUDFLARE_FUNCTION_URL).
 --
