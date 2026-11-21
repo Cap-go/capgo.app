@@ -1,7 +1,7 @@
 import type { QueueApi, QueueInfo } from '../scripts/lib/posthog-queues.ts'
 import { Buffer } from 'node:buffer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ensurePostHogQueues } from '../scripts/ensure-posthog-queues.ts'
+import { ensureApiQueues, ensurePgmqRelayQueue, ensurePostHogQueues, PGMQ_RELAY_ENVIRONMENTS } from '../scripts/ensure-posthog-queues.ts'
 import { createQueueApi, POSTHOG_RETENTION_SECONDS } from '../scripts/lib/posthog-queues.ts'
 import { replayPostHogDlq } from '../scripts/replay-posthog-dlq.ts'
 
@@ -105,6 +105,28 @@ describe('resource provisioning', () => {
       fixtures[1].consumers = [consumer]
       await expect(ensurePostHogQueues(mockApi(fixtures).api, 'alpha')).rejects.toThrow(/unexpected|exactly five/)
     }
+  })
+
+  it('creates the pgmq relay queue for prod only and verifies it without creating', async () => {
+    expect(PGMQ_RELAY_ENVIRONMENTS).toEqual(['prod'])
+    const { api, request } = mockApi()
+    await expect(ensurePgmqRelayQueue(api, 'prod', true)).rejects.toThrow('does not exist: capgo-pgmq-prod')
+    expect(request.mock.calls.every(([, method]) => method !== 'POST')).toBe(true)
+    await ensurePgmqRelayQueue(api, 'prod')
+    expect(request.mock.calls.filter(([path, method]) => !path && method === 'POST').map(([, , body]) => body)).toEqual([{ queue_name: 'capgo-pgmq-prod' }])
+    request.mockClear()
+    await ensurePgmqRelayQueue(api, 'prod', true)
+    await ensurePgmqRelayQueue(api, 'prod')
+    expect(request.mock.calls.every(([, method]) => method === undefined || method === 'GET')).toBe(true)
+  })
+
+  it.each(['alpha', 'preprod', 'prod'] as const)('provisions the pgmq relay queue for the %s deploy only in prod', async (environment) => {
+    const { api, queues } = mockApi()
+    await ensureApiQueues(api, environment)
+    const names = [...queues.values()].map(queue => queue.queue_name)
+    expect(names.filter(name => name.startsWith('capgo-pgmq'))).toEqual(environment === 'prod' ? ['capgo-pgmq-prod'] : [])
+    expect(names).toContain(`capgo-posthog-events-${environment}`)
+    await ensureApiQueues(api, environment, true)
   })
 
   it('does not expose API responses or credentials on API failure', async () => {

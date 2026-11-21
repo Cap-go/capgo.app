@@ -1,12 +1,13 @@
-import type { MessageBatch } from '@cloudflare/workers-types'
+import type { ExecutionContext, MessageBatch } from '@cloudflare/workers-types'
 import type { Bindings } from '../supabase/functions/_backend/utils/cloudflare.ts'
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { processApiQueueBatch } from '../cloudflare_workers/api/queue.ts'
 
-const { native, posthog } = vi.hoisted(() => ({ native: vi.fn(), posthog: vi.fn() }))
+const { native, posthog, pgmqRelay } = vi.hoisted(() => ({ native: vi.fn(), posthog: vi.fn(), pgmqRelay: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/nativeNotificationSender.ts', () => ({ processNativeNotificationQueueBatch: native }))
 vi.mock('../supabase/functions/_backend/utils/posthog_queue.ts', () => ({ processPostHogQueueBatch: posthog }))
+vi.mock('../cloudflare_workers/api/pgmq_relay.ts', () => ({ processPgmqRelayBatch: pgmqRelay }))
 afterEach(() => vi.clearAllMocks())
 
 const config = JSON.parse(readFileSync(new URL('../cloudflare_workers/api/wrangler.jsonc', import.meta.url), 'utf8'))
@@ -39,6 +40,27 @@ describe('queue configuration and strict dispatch', () => {
     const nativeBatch = { ...posthogBatch, queue: `capgo-native-notifications-${environment}` }
     await processApiQueueBatch(nativeBatch, env)
     expect(native).toHaveBeenCalledWith(nativeBatch, env)
+  })
+
+  it('configures the pgmq relay queue in prod only', () => {
+    const queues = config.env.prod.queues
+    expect(queues.producers).toContainEqual({ binding: 'PGMQ_RELAY_QUEUE', queue: 'capgo-pgmq-prod' })
+    expect(queues.consumers.filter((consumer: { queue: string }) => consumer.queue === 'capgo-pgmq-prod')).toEqual([
+      { queue: 'capgo-pgmq-prod', max_batch_size: 6, max_batch_timeout: 1, max_concurrency: 100, max_retries: 3 },
+    ])
+    for (const environment of Object.keys(config.env).filter(environment => environment !== 'prod'))
+      expect(JSON.stringify(config.env[environment])).not.toMatch(/capgo-pgmq|PGMQ_RELAY_QUEUE/)
+  })
+
+  it('routes the pgmq relay queue with its execution context', async () => {
+    const env = { ENV_NAME: 'capgo_api-prod' } as Bindings
+    const ctx = { waitUntil: vi.fn() } as unknown as ExecutionContext
+    const batch = { queue: 'capgo-pgmq-prod', messages: [] } as unknown as MessageBatch<unknown>
+    await processApiQueueBatch(batch, env, ctx)
+    expect(pgmqRelay).toHaveBeenCalledWith(batch, env, ctx)
+    await expect(processApiQueueBatch(batch, env)).rejects.toThrow('Unknown API queue')
+    await expect(processApiQueueBatch({ ...batch, queue: 'capgo-pgmq-alpha' }, env, ctx)).rejects.toThrow('Unknown API queue')
+    expect(pgmqRelay).toHaveBeenCalledTimes(1)
   })
 
   it.each(['unknown', 'capgo-posthog-events-prod-dlq', 'capgo-posthog-events-alpha'])('does not acknowledge an unknown or mismatched queue %s', async (queue) => {

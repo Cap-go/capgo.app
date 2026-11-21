@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(10);
+SELECT plan(13);
 
 SELECT pgmq.create('test_http_dispatch');
 
@@ -119,6 +119,36 @@ SELECT results_eq(
   $$SELECT calls, timeout_ms, body FROM public.http_dispatch_outbox WHERE target = 'updates_cache_purge'$$,
   $$VALUES (1, 5000, '{"wake":true}'::jsonb)$$,
   'the wildcard target routes the updates cache purge wake'
+);
+
+-- runtime: an exact target overrides '*', and the outbox row carries the
+-- runtime of the target that routed it.
+INSERT INTO public.http_dispatch_targets (target, runtime)
+VALUES ('test_http_dispatch', 'cloudflare');
+DELETE FROM public.http_dispatch_outbox
+WHERE target IN ('test_http_dispatch', 'updates_cache_purge');
+
+SELECT public.process_function_queue('test_http_dispatch', 100);
+SELECT public.wake_updates_cache_purge();
+
+SELECT results_eq(
+  $$SELECT target, runtime FROM public.http_dispatch_outbox
+    WHERE target IN ('test_http_dispatch', 'updates_cache_purge') ORDER BY target$$,
+  $$VALUES ('test_http_dispatch'::text, 'cloudflare'::text), ('updates_cache_purge'::text, 'supabase'::text)$$,
+  'an exact target sets the runtime over the wildcard'
+);
+
+SELECT ok(
+  (SELECT url FROM public.http_dispatch_outbox WHERE target = 'test_http_dispatch')
+  LIKE '%/functions/v1/triggers/queue_consumer/sync',
+  'cloudflare runtime rows keep the stored URL for the dispatcher to map'
+);
+
+SELECT throws_ok(
+  $$UPDATE public.http_dispatch_targets SET runtime = 'elsewhere' WHERE target = 'test_http_dispatch'$$,
+  '23514',
+  NULL,
+  'only supabase and cloudflare runtimes are accepted'
 );
 
 SELECT ok(

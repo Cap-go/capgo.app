@@ -1,4 +1,4 @@
-import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types'
+import type { ExecutionContext, MessageBatch, ScheduledController } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
 import { app as register } from '../../supabase/functions/_backend/auth/register.ts'
@@ -322,7 +322,9 @@ export { ConsoleEvents } from './console_events.ts'
 export { QueueDispatcher } from './queue_dispatcher.ts'
 export default {
   fetch: app.fetch,
-  queue: processApiQueueBatch,
+  queue(batch: MessageBatch<unknown>, env: Bindings, ctx: ExecutionContext) {
+    return processApiQueueBatch(batch, env, ctx)
+  },
   scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
     ctx.waitUntil(runScheduledPluginNotificationFlush(env, ctx))
     ctx.waitUntil(ensureQueueDispatcher(env).catch((error) => {

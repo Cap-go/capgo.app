@@ -78,6 +78,8 @@ export type Bindings = {
   // Self-hosted GoTrue (cloudflare_workers/gotrue); bound only in the local_gotrue API env.
   GOTRUE?: Fetcher
   QUEUE_DISPATCHER?: DurableObjectNamespace
+  // pgmq ids relayed for queues routed to Cloudflare (triggers/queue_relay.ts); prod only.
+  PGMQ_RELAY_QUEUE?: Queue
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace
   PLUGIN_NOTIFICATION_QUEUE?: KVNamespace

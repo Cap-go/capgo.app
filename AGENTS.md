@@ -278,7 +278,20 @@ backfill code, design for this scale:
   Durable Object (`cloudflare_workers/api/queue_dispatcher.ts`) claims every
   second via `POST /triggers/http_dispatch/claim` and sends. Roll a target
   back by deleting its row. The dispatcher only sends to origins in
-  `SUPABASE_URL` / `HTTP_DISPATCH_ALLOWED_ORIGINS`.
+  `SUPABASE_URL` / `HTTP_DISPATCH_ALLOWED_ORIGINS`. A target row's `runtime`
+  (`supabase` by default, or `cloudflare`; an exact target overrides `*`)
+  picks where it runs. With `cloudflare`, the claim does not return queue
+  wakeups: it reads the readable pgmq ids and sends them to the prod-only
+  Cloudflare Queue `capgo-pgmq-prod`
+  (`supabase/functions/_backend/triggers/queue_relay.ts`), whose consumer
+  (`cloudflare_workers/api/pgmq_relay.ts`) runs the usual queue processing.
+  pgmq stays the retry counter: the relay does not count a read, the
+  consumer's claim does (`read_ct + 1`, only at the relayed `read_ct`), so a
+  Cloudflare Queues retry or duplicate never runs work twice for one read or
+  past the five reads. Keep the consumer's `max_batch_size` at or below
+  `RELAYED_QUEUE_CONCURRENCY`. Other wakeups (cache purge, plugin state) go to
+  the same route on `CLOUDFLARE_FUNCTION_URL`. Self-host never needs
+  Cloudflare Queues: with no target rows it stays on pg_net.
 - Do not assume a `202` HTTP response means queue work finished. If the handler
   uses background work, prove the work can finish inside the runtime limits and
   that successful queue messages are deleted before visibility timeout expires.
