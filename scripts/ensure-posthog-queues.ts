@@ -57,7 +57,10 @@ export async function ensurePgmqRelayQueue(api: QueueApi, environment: QueueEnvi
   console.log(`Verified queue: ${name}`)
 }
 
-/** Every Cloudflare Queue the API worker of this environment needs before it deploys. */
+/**
+ * The PostHog event queues and, for prod, the pgmq relay queue. The native
+ * notification queues come from scripts/ensure-native-notification-queues.ts.
+ */
 export async function ensureApiQueues(api: QueueApi, environment: QueueEnvironment, verifyOnly = false) {
   await ensurePostHogQueues(api, environment, verifyOnly)
   if (PGMQ_RELAY_ENVIRONMENTS.includes(environment))
