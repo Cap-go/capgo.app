@@ -278,6 +278,15 @@ try {
     assert.equal(result.candidates[0].appId, 'com.example.mobile')
   })
 
+  await test('unwraps a CommonJS default export from capacitor.config.js', async () => {
+    const root = fixture('javascript-cjs-default')
+    const configPath = join(root, 'capacitor.config.js')
+    writeText(configPath, "exports.default = { appId: 'com.example.cjs-default' }\n")
+    assert.equal((await loadConfigTarget(configPath)).appId, 'com.example.cjs-default')
+    writeText(configPath, "exports.default = { appId: 'com.example.cjs-next' }\n")
+    assert.equal((await loadConfigTarget(configPath)).appId, 'com.example.cjs-next')
+  })
+
   await test('reloads a JavaScript Capacitor config after it is saved', async () => {
     const root = fixture('javascript-config-reload')
     const configPath = join(root, 'capacitor.config.js')

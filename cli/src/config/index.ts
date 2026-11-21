@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { cwd } from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { log } from '@clack/prompts'
@@ -23,6 +23,29 @@ import { CliUserError } from '../shared/cli-user-error'
 function importSpecifier(specifier: string): Promise<Record<string, unknown>> {
   const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<Record<string, unknown>>
   return dynamicImport(specifier)
+}
+
+async function nearestPackageIsModule(filePath: string): Promise<boolean> {
+  let dir = dirname(filePath)
+  const root = parse(dir).root
+  while (true) {
+    const packagePath = join(dir, 'package.json')
+    if (existsSync(packagePath)) {
+      try {
+        const parsed = JSON.parse(await readFile(packagePath, 'utf8')) as { type?: unknown }
+        return parsed.type === 'module'
+      }
+      catch {
+        return false
+      }
+    }
+    if (dir === root)
+      return false
+    const parent = dirname(dir)
+    if (parent === dir)
+      return false
+    dir = parent
+  }
 }
 
 export type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
@@ -168,17 +191,13 @@ export async function loadConfigTarget(filePath: string): Promise<CapacitorConfi
   if (extension === '.js') {
     const resolved = targetRequire.resolve(filePath)
     delete targetRequire.cache[resolved]
-    // require() of a "type": "module" config uses Node's ESM cache, which
-    // deleting require.cache does not clear. A query string forces a fresh
-    // evaluation of the saved file. CommonJS falls back to require().
-    let configModule: Record<string, unknown>
-    try {
-      configModule = await importSpecifier(`${pathToFileURL(resolved).href}?capgo-reload=${Date.now()}`)
-    }
-    catch {
-      delete targetRequire.cache[resolved]
-      configModule = targetRequire(filePath) as Record<string, unknown>
-    }
+    // CommonJS keeps require() so `exports.default = config` unwraps once.
+    // import() would wrap that object again and hide appId. A "type": "module"
+    // file uses Node's ESM cache, which deleting require.cache does not clear,
+    // so a query string forces a fresh evaluation of the saved file.
+    const configModule = await nearestPackageIsModule(resolved)
+      ? await importSpecifier(`${pathToFileURL(resolved).href}?capgo-reload=${Date.now()}`)
+      : targetRequire(filePath) as Record<string, unknown>
     const exportedConfig = configModule.default ?? configModule
     return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
   }
