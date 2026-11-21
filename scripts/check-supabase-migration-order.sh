@@ -163,6 +163,36 @@ is_failed_migration_hotfix() {
   esac
 }
 
+# capgo-22.63.1: 20261117152120 never applied in prod; atomic replacement at
+# 20261120001201 after #4193/#4057 on main (R085 rename of 152120 on this branch).
+is_storage_gb_hours_152120_repair() {
+  local file="$1"
+  local blob
+  blob="$(git hash-object "$file")"
+  case "${file}:${blob}" in
+    supabase/migrations/20261120001201_storage_gb_hours_billing.sql:a2bcd8fc3bb09e516e570675aa75533acfb2f023) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Branch-only split of failed 152120; never applied in prod (capgo-22.63.1).
+is_storage_gb_hours_split_delete() {
+  case "$1" in
+    supabase/migrations/20261117152410_storage_gb_hours_billing_data.sql) return 0 ;;
+    supabase/migrations/20261117152411_storage_gb_hours_billing_apps_locks.sql) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Branch-only restamp deletes for storage gb-hours billing (capgo.app#4190).
+is_storage_gb_hours_restamp_delete() {
+  case "$1" in
+    supabase/migrations/20261118193000_storage_gb_hours_billing.sql) return 0 ;;
+    supabase/migrations/20261119233941_storage_gb_hours_billing.sql) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Prod-applied migrations restored from remote schema_migrations.statements.
 # Exact blob hashes keep this allowlist from accepting later edits.
 is_prod_history_restore() {
@@ -203,6 +233,21 @@ if [[ -n "$modified_files" ]]; then
 
     if is_failed_migration_hotfix "$file"; then
       echo "⚠️  Allowing audited repair to failed unapplied migration: $file"
+      continue
+    fi
+
+    if is_storage_gb_hours_152120_repair "$file"; then
+      echo "⚠️  Allowing audited repair of failed unapplied 20261117152120: $file"
+      continue
+    fi
+
+    if is_storage_gb_hours_split_delete "$file"; then
+      echo "⚠️  Allowing replacement of unapplied storage gb-hours split migration: $file"
+      continue
+    fi
+
+    if is_storage_gb_hours_restamp_delete "$file"; then
+      echo "⚠️  Allowing restamp deletion of unapplied storage gb-hours migration: $file"
       continue
     fi
 
@@ -248,13 +293,29 @@ if [[ "$baseline_added_count" -eq 1 && "$deleted_count" -ge 50 ]]; then
 fi
 
 if [[ -n "$deleted_files" && "$allow_migration_squash" -ne 1 ]]; then
-  echo '❌ Existing Supabase migrations were deleted in this change.'
-  echo '  Supabase migrations must remain append-only.'
+  disallowed_deleted_files=''
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
-    echo "  - $file"
+    if is_storage_gb_hours_split_delete "$file"; then
+      echo "⚠️  Allowing removal of unapplied storage gb-hours split migration: $file"
+      continue
+    fi
+    if is_storage_gb_hours_restamp_delete "$file"; then
+      echo "⚠️  Allowing removal of unapplied storage gb-hours restamp: $file"
+      continue
+    fi
+    disallowed_deleted_files+="${file}"$'\n'
   done <<< "$deleted_files"
-  status=1
+
+  if [[ -n "$disallowed_deleted_files" ]]; then
+    echo '❌ Existing Supabase migrations were deleted in this change.'
+    echo '  Supabase migrations must remain append-only.'
+    while IFS= read -r file; do
+      [[ -z "$file" ]] && continue
+      echo "  - $file"
+    done <<< "$disallowed_deleted_files"
+    status=1
+  fi
 fi
 if [[ -n "$added_files" ]]; then
   : > "${added_timestamps_file}"

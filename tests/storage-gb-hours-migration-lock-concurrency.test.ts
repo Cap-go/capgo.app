@@ -1,0 +1,420 @@
+import { spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { Client } from 'pg'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  invertStorageMigrationLockOrder,
+  readStorageGbHoursMigrationSql,
+} from './storage-gb-hours-migration-lock-helpers.ts'
+import { ORG_ID, POSTGRES_URL } from './test-utils.ts'
+
+const DEMO_APP = 'com.demo.app'
+
+/** Pre-deploy cron path used only for the inverted-lock mutation case. */
+const LEGACY_REPLACE_HOURLY_SQL = `SELECT public.replace_app_storage_hourly(
+  $1::varchar,
+  $2::uuid,
+  CURRENT_DATE,
+  CURRENT_DATE + 1,
+  CURRENT_DATE + 2,
+  '-infinity'::timestamptz,
+  '[]'::jsonb,
+  pg_catalog.clock_timestamp(),
+  true)`
+
+const REPLACE_HOURLY_SQL = `SELECT public.replace_app_storage_hourly(
+  $1::varchar,
+  $2::uuid,
+  $3::date,
+  ($3::date + 1),
+  ($3::date + 2),
+  '-infinity'::timestamptz,
+  $4::jsonb,
+  pg_catalog.clock_timestamp(),
+  true)`
+
+function databaseUrl(baseUrl: string, database: string) {
+  const url = new URL(baseUrl)
+  url.pathname = `/${database}`
+  return url.toString()
+}
+
+async function terminateDatabaseConnections(admin: Client, database: string) {
+  await admin.query(
+    `SELECT pg_terminate_backend(activity.pid)
+     FROM pg_catalog.pg_stat_activity activity
+     WHERE activity.datname = $1
+       AND activity.pid <> pg_catalog.pg_backend_pid()`,
+    [database],
+  )
+}
+
+async function dropDatabase(admin: Client, database: string) {
+  await terminateDatabaseConnections(admin, database)
+  await admin.query(`DROP DATABASE IF EXISTS ${database}`)
+}
+
+async function runSqlFile(client: Client, sql: string, label: string) {
+  try {
+    await client.query(sql)
+  }
+  catch (error) {
+    throw new Error(`${label} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+  }
+}
+
+function filterSchemaDumpForDisposableDb(sql: string): string {
+  return sql
+    .split('\n')
+    .filter((line) => {
+      if (line.startsWith('\\'))
+        return false
+      if (/^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?(")?(public|extensions|pgmq|vault)(")?\b/i.test(line))
+        return false
+      if (/^\s*CREATE\s+EXTENSION/i.test(line))
+        return false
+      if (/^\s*COMMENT ON EXTENSION/i.test(line))
+        return false
+      return true
+    })
+    .join('\n')
+}
+
+const EXCLUDED_DUMP_SCHEMAS = new Set(['cron', 'information_schema', 'pg_catalog', 'pg_toast'])
+
+async function listCloneableSchemas(sourceUrl: string): Promise<string[]> {
+  const client = new Client({ connectionString: sourceUrl, connectionTimeoutMillis: 10_000 })
+  await client.connect()
+  try {
+    const { rows } = await client.query<{ nspname: string }>(
+      `SELECT nspname
+       FROM pg_catalog.pg_namespace
+       WHERE nspname !~ '^pg_temp_'
+         AND nspname !~ '^pg_toast_temp_'
+       ORDER BY nspname`,
+    )
+    return rows.map(row => row.nspname).filter(name => !EXCLUDED_DUMP_SCHEMAS.has(name))
+  }
+  finally {
+    await client.end()
+  }
+}
+
+async function cloneProvisionedSchema(sourceUrl: string, targetUrl: string) {
+  const schemas = await listCloneableSchemas(sourceUrl)
+  const dump = spawnSync('pg_dump', [
+    sourceUrl,
+    '--schema-only',
+    '--no-owner',
+    '--no-privileges',
+    ...schemas.flatMap(schema => ['--schema', schema]),
+  ], {
+    encoding: 'utf8',
+    maxBuffer: 512 * 1024 * 1024,
+  })
+  if (dump.status !== 0 || dump.error)
+    throw new Error(`pg_dump failed: ${dump.error?.message ?? dump.stderr ?? dump.stdout}`)
+  const scratchDir = mkdtempSync(resolve(tmpdir(), 'capgo-schema-clone-'))
+  const schemaFile = resolve(scratchDir, 'schema.sql')
+  try {
+    writeFileSync(schemaFile, filterSchemaDumpForDisposableDb(dump.stdout ?? ''), 'utf8')
+    const apply = spawnSync('psql', [targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-X', '-f', schemaFile], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    if (apply.status !== 0 || apply.error)
+      throw new Error(`psql schema clone failed: ${apply.error?.message ?? apply.stderr ?? apply.stdout}`)
+  }
+  finally {
+    rmSync(scratchDir, { recursive: true, force: true })
+  }
+}
+
+async function provisionBeforeStorageMigration(adminUrl: string, targetUrl: string) {
+  const repoRoot = resolve(fileURLToPath(new URL('../', import.meta.url)))
+  const client = new Client({ connectionString: targetUrl, connectionTimeoutMillis: 10_000 })
+  await client.connect()
+  try {
+    await client.query('SET statement_timeout = 0')
+    await runSqlFile(
+      client,
+      readFileSync(resolve(repoRoot, 'tests/fixtures/local-db-disposable-extensions-stub.sql'), 'utf8'),
+      'local-db-disposable-extensions-stub.sql',
+    )
+    await cloneProvisionedSchema(adminUrl, targetUrl)
+    await runSqlFile(
+      client,
+      readFileSync(resolve(repoRoot, 'tests/fixtures/storage-gb-hours-revert-migration.sql'), 'utf8'),
+      'storage-gb-hours-revert-migration.sql',
+    )
+  }
+  finally {
+    await client.end()
+  }
+}
+
+async function waitForMigratorLocks(
+  observer: Client,
+  migratorPid: number,
+  relationNames: string[],
+  deadlineMs = 120_000,
+) {
+  const deadline = Date.now() + deadlineMs
+  while (Date.now() < deadline) {
+    const locks = await observer.query<{ relname: string }>(
+      `SELECT c.relname
+       FROM pg_catalog.pg_locks locks
+       INNER JOIN pg_catalog.pg_class c ON c.oid = locks.relation
+       INNER JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+       WHERE locks.pid = $1
+         AND locks.granted
+         AND locks.locktype = 'relation'
+         AND n.nspname = 'public'
+         AND c.relname = ANY($2::text[])`,
+      [migratorPid, relationNames],
+    )
+    if (relationNames.every(name => locks.rows.some(row => row.relname === name)))
+      return locks.rows.map(row => row.relname)
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  throw new Error(`migrator pid ${migratorPid} did not grant locks on ${relationNames.join(', ')}`)
+}
+
+async function waitForRelationLockWait(observer: Client, pid: number, deadlineMs = 30_000) {
+  const deadline = Date.now() + deadlineMs
+  while (Date.now() < deadline) {
+    const blocked = await observer.query(
+      `SELECT 1
+       FROM pg_catalog.pg_locks waiting
+       INNER JOIN pg_catalog.pg_stat_activity blocked
+         ON blocked.pid = waiting.pid
+       WHERE waiting.pid = $1
+         AND waiting.locktype = 'relation'
+         AND waiting.granted = false
+         AND blocked.wait_event_type = 'Lock'
+       LIMIT 1`,
+      [pid],
+    )
+    if (blocked.rowCount === 1)
+      return
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  throw new Error(`pid ${pid} did not enter a relation lock wait`)
+}
+
+interface ConcurrentRunResult {
+  migration: PromiseSettledResult<unknown>
+  writer: PromiseSettledResult<unknown>
+}
+
+async function runMigrationWithConcurrentWriter(
+  dbUrl: string,
+  migrationSql: string,
+  waitRelations: string[],
+  options: {
+    requireWriterLockWait?: boolean
+    writerMode?: 'post-migrate' | 'legacy-during-migration'
+    /** Hold apps FOR SHARE before starting migration (inverted-order deadlock probe). */
+    writerHoldsAppsShareFirst?: boolean
+    /** When the writer already holds apps FOR SHARE, do not wait for migrator locks (migrator blocks until writer commits). */
+    skipMigratorLockWait?: boolean
+  } = {},
+): Promise<ConcurrentRunResult> {
+  const requireWriterLockWait = options.requireWriterLockWait ?? true
+  const writerMode = options.writerMode ?? 'post-migrate'
+  const writerHoldsAppsShareFirst = options.writerHoldsAppsShareFirst ?? false
+  const skipMigratorLockWait = options.skipMigratorLockWait ?? false
+  const migrator = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
+  const writer = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
+  const observer = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 10_000 })
+  await Promise.all([migrator.connect(), writer.connect(), observer.connect()])
+
+  try {
+    const migratorPid = (await migrator.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid
+    const writerPid = (await writer.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid
+
+    const cycleDay = (await observer.query<{ day: string }>(
+      `SELECT CURRENT_DATE::text AS day`,
+    )).rows[0].day
+    const hourlyRows = JSON.stringify([
+      { cycle_start: cycleDay, date: cycleDay, storage_byte_hours: 1 },
+    ])
+
+    let migrationPromise: Promise<unknown>
+    let writerPromise: Promise<unknown>
+
+    if (writerHoldsAppsShareFirst) {
+      await writer.query('BEGIN')
+      await writer.query(`SET LOCAL lock_timeout = '0'`)
+      await writer.query(
+        `SELECT 1
+         FROM public.apps
+         WHERE app_id = $1
+           AND owner_org = $2
+         FOR SHARE`,
+        [DEMO_APP, ORG_ID],
+      )
+      migrationPromise = migrator.query(migrationSql)
+      if (!skipMigratorLockWait)
+        await waitForMigratorLocks(observer, migratorPid, waitRelations)
+      writerPromise = (async () => {
+        await writer.query(LEGACY_REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
+        await writer.query('COMMIT')
+      })()
+    }
+    else {
+      migrationPromise = migrator.query(migrationSql)
+      await waitForMigratorLocks(observer, migratorPid, waitRelations)
+      await writer.query('BEGIN')
+      await writer.query(`SET LOCAL lock_timeout = '0'`)
+      if (writerMode === 'legacy-during-migration') {
+        writerPromise = (async () => {
+          await writer.query(LEGACY_REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
+          await writer.query('COMMIT')
+        })()
+        if (requireWriterLockWait)
+          await waitForRelationLockWait(observer, writerPid)
+      }
+      else {
+        // Contend on apps until the migrator's ACCESS EXCLUSIVE lock is released at COMMIT.
+        await writer.query(
+          `SELECT 1
+           FROM public.apps
+           WHERE app_id = $1
+             AND owner_org = $2
+           FOR SHARE`,
+          [DEMO_APP, ORG_ID],
+        )
+        writerPromise = (async () => {
+          await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID, cycleDay, hourlyRows])
+          await writer.query('COMMIT')
+        })()
+      }
+    }
+
+    const [migration, writerResult] = await Promise.allSettled([migrationPromise, writerPromise])
+    return { migration, writer: writerResult }
+  }
+  finally {
+    await migrator.query('ROLLBACK').catch(() => undefined)
+    await writer.query('ROLLBACK').catch(() => undefined)
+    await Promise.all([migrator.end(), writer.end(), observer.end()])
+  }
+}
+
+describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
+  const templateDb = `stor_gb_lock_tpl_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+  const adminUrl = POSTGRES_URL
+
+  beforeAll(async () => {
+    const admin = new Client({ connectionString: adminUrl })
+    await admin.connect()
+    try {
+      await admin.query(`CREATE DATABASE ${templateDb}`)
+      await provisionBeforeStorageMigration(adminUrl, databaseUrl(adminUrl, templateDb))
+    }
+    finally {
+      await admin.end()
+    }
+  }, 900_000)
+
+  afterAll(async () => {
+    const admin = new Client({ connectionString: adminUrl })
+    await admin.connect()
+    try {
+      await dropDatabase(admin, templateDb)
+    }
+    finally {
+      await admin.end()
+    }
+  })
+
+  async function withFreshDatabase<T>(run: (dbUrl: string) => Promise<T>) {
+    const runDb = `stor_gb_lock_run_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const admin = new Client({ connectionString: adminUrl })
+    await admin.connect()
+    try {
+      await admin.query(`CREATE DATABASE ${runDb} TEMPLATE ${templateDb}`)
+      return await run(databaseUrl(adminUrl, runDb))
+    }
+    finally {
+      await dropDatabase(admin, runDb)
+      await admin.end()
+    }
+  }
+
+  it('applies the real migration SQL with a concurrent cron writer and does not deadlock', async () => {
+    await withFreshDatabase(async (dbUrl) => {
+      const result = await runMigrationWithConcurrentWriter(
+        dbUrl,
+        readStorageGbHoursMigrationSql(),
+        ['apps'],
+        { requireWriterLockWait: false },
+      )
+      if (result.migration.status === 'rejected')
+        throw result.migration.reason
+      expect(result.migration.status).toBe('fulfilled')
+      if (result.writer.status === 'rejected')
+        throw result.writer.reason
+      expect(result.writer.status).toBe('fulfilled')
+    })
+  }, 300_000)
+
+  it('control: real migration succeeds with legacy cron writer holding apps FOR SHARE during migration', async () => {
+    await withFreshDatabase(async (dbUrl) => {
+      const result = await runMigrationWithConcurrentWriter(
+        dbUrl,
+        readStorageGbHoursMigrationSql(),
+        ['apps'],
+        {
+          writerMode: 'legacy-during-migration',
+          writerHoldsAppsShareFirst: true,
+          requireWriterLockWait: false,
+          skipMigratorLockWait: true,
+        },
+      )
+      if (result.migration.status === 'rejected')
+        throw result.migration.reason
+      expect(result.migration.status).toBe('fulfilled')
+      if (result.writer.status === 'rejected')
+        throw result.writer.reason
+      expect(result.writer.status).toBe('fulfilled')
+    })
+  }, 300_000)
+
+  it('mutation: inverted lock order in migration SQL fails under the same writer', async () => {
+    await withFreshDatabase(async (dbUrl) => {
+      const inverted = invertStorageMigrationLockOrder(readStorageGbHoursMigrationSql())
+      expect(inverted).not.toEqual(readStorageGbHoursMigrationSql())
+
+      const result = await runMigrationWithConcurrentWriter(
+        dbUrl,
+        inverted,
+        ['daily_storage_hourly'],
+        {
+          writerMode: 'legacy-during-migration',
+          writerHoldsAppsShareFirst: true,
+          requireWriterLockWait: false,
+        },
+      )
+
+      const migrationFailed = result.migration.status === 'rejected'
+      const writerFailed = result.writer.status === 'rejected'
+      expect(migrationFailed || writerFailed).toBe(true)
+      const rejection = migrationFailed
+        ? result.migration
+        : writerFailed
+          ? result.writer
+          : null
+      expect(rejection?.status).toBe('rejected')
+      if (rejection?.status === 'rejected') {
+        const code = (rejection.reason as { code?: string })?.code
+        expect(['40P01', '55P03']).toContain(code)
+      }
+    })
+  }, 300_000)
+})
