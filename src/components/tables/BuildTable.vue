@@ -7,13 +7,15 @@ import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch }
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import IconDownload from '~icons/heroicons/arrow-down-tray'
+import IconDevice from '~icons/heroicons/device-phone-mobile'
 import IconEye from '~icons/heroicons/eye'
 import BuilderIntroduction from '~/components/dashboard/BuilderIntroduction.vue'
 import { hasSupportedBuilderTodoList } from '~/services/builderOnboardingChecklist'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { rememberSimulator, simulatorEpoch } from '~/services/simulatorSessions'
+import { forgetSimulator, rememberSimulator, simulatorEpoch } from '~/services/simulatorSessions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -388,12 +390,24 @@ async function openSavedBuild(jobId: string) {
     const url = payload.data?.url || ''
     if (payload.data?.id && epoch === simulatorEpoch())
       rememberSimulator(appId, { id: payload.data.id, url })
+    if (payload.data?.install_error) {
+      tab?.close()
+      const id = payload.data.id
+      if (id) {
+        const stopped = await fetch(`${defaultApiHost}/private/simulator/${id}/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
+          body: JSON.stringify({ app_id: appId }),
+        }).catch(() => undefined)
+        if (stopped?.ok && epoch === simulatorEpoch())
+          forgetSimulator(appId, id)
+      }
+      throw new Error(payload.data.install_error)
+    }
     if (url && tab)
       tab.location.replace(url)
     else
       tab?.close()
-    if (payload.data?.install_error)
-      toast.error(payload.data.install_error)
   }
   catch (error) {
     tab?.close()
@@ -412,24 +426,28 @@ function savedBuildCell(elem: Element) {
   const opening = openingJobs.value.includes(jobId)
   const children = [
     h('a', {
-      href: output?.url,
-      target: '_blank',
-      rel: 'noopener',
-      class: 'text-sm font-semibold text-blue-600 dark:text-blue-400',
-    }, t('download-saved-build')),
+      'href': output?.url,
+      'target': '_blank',
+      'rel': 'noopener',
+      'title': t('download-saved-build'),
+      'aria-label': t('download-saved-build'),
+      'class': 'd-btn d-btn-ghost d-btn-sm d-btn-square',
+    }, [h(IconDownload, { class: 'size-4' })]),
   ]
   if (output?.kind === 'ios_ipa') {
     children.push(h('button', {
-      type: 'button',
-      class: 'px-2 py-1 text-xs font-semibold rounded-md d-btn d-btn-xs shrink-0',
-      disabled: opening,
-      onClick: (event: Event) => {
+      'type': 'button',
+      'title': t('open-in-simulator'),
+      'aria-label': opening ? t('simulator-starting') : t('open-in-simulator'),
+      'class': 'd-btn d-btn-ghost d-btn-sm d-btn-square',
+      'disabled': opening,
+      'onClick': (event: Event) => {
         event.stopPropagation()
         void openSavedBuild(jobId)
       },
-    }, opening ? t('simulator-starting') : t('open-in-simulator')))
+    }, [opening ? h('span', { class: 'loading loading-spinner loading-xs' }) : h(IconDevice, { class: 'size-4' })]))
   }
-  return h('div', { class: 'flex items-center gap-2' }, children)
+  return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
 }
 
 function formatDuration(seconds: number | null | undefined): string {
