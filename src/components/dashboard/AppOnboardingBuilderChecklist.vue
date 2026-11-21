@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { BuilderPlatform, BuilderStepStatus } from '~/services/builderOnboardingChecklist'
+import type { BuilderPlatform, BuilderSetupMethod, BuilderStepStatus } from '~/services/builderOnboardingChecklist'
 import type { ChecklistTaskListMode } from '~/utils/onboardingSetupMode'
 import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -10,14 +10,19 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
 import IconChevronDown from '~icons/lucide/chevron-down'
 import IconCircle from '~icons/lucide/circle'
+import IconEye from '~icons/lucide/eye'
+import IconEyeOff from '~icons/lucide/eye-off'
 import IconFileText from '~icons/lucide/file-text'
 import IconInfo from '~icons/lucide/info'
 import IconLoader from '~icons/lucide/loader-2'
 import IconMinus from '~icons/lucide/minus'
+import IconSparkles from '~icons/lucide/sparkles'
+import IconTerminal from '~icons/lucide/terminal'
 import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
+import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { isOpenOnboardingStepStatus } from '~/services/appOnboarding'
-import { BUILDER_STEP_IDS, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
+import { BUILDER_STEP_IDS, maskBuilderCommand, parseBuilderOnboarding, startedBuilderPlatforms } from '~/services/builderOnboardingChecklist'
 import { resolveBuildOutcome } from '~/services/buildLiveStream'
 import { useConsole } from '~/services/console'
 import { resolveDualChecklistResume } from '~/utils/dualOnboardingChecklists'
@@ -43,7 +48,8 @@ const props = withDefaults(defineProps<{
 }>(), { active: true, taskList: 'default' })
 
 const emit = defineEmits<{
-  copyCommand: [platform: BuilderPlatform]
+  copyCommand: []
+  methodSelected: [method: BuilderSetupMethod]
   copyAi: [placement: 'checklist']
   hide: []
   explore: []
@@ -54,6 +60,13 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const capgo = useConsole()
+const setupMethod = useSetupMethodPreference()
+// The AI assistant is recommended unless the user last picked the manual way; a pick here wins.
+const pickedMethod = ref<BuilderSetupMethod | null>(null)
+const method = computed<BuilderSetupMethod>(() => pickedMethod.value ?? (setupMethod.manualFirst.value ? 'terminal' : 'ai'))
+const showApiKey = ref(false)
+// Once a platform has started, the setup folds away so the build progress stays above the fold.
+const setupOpen = ref(false)
 const panelId = useId()
 const onboarding = ref(parseBuilderOnboarding(props.initialOnboarding))
 const viewedPlatform = ref<BuilderPlatform | null>(props.initialPlatform ?? onboarding.value.selectedPlatform)
@@ -112,7 +125,6 @@ const steps = computed(() => {
 const doneCount = computed(() => steps.value.filter(step => step.status === 'done' || step.status === 'skipped').length)
 const currentStep = computed(() => steps.value.find(step => step.status !== 'done' && step.status !== 'skipped'))
 const selectedStep = computed(() => steps.value.find(step => step.id === selectedId.value) ?? currentStep.value ?? steps.value.at(-1))
-const isFirstStep = computed(() => selectedStep.value?.index === 0)
 const canSkipSelected = computed(() => !!selectedStep.value && isOpenOnboardingStepStatus(selectedStep.value.status))
 // Every step is shown by default on wide screens; new manual signups only see their next step.
 const checklistOpen = ref(initialChecklistOpen(props.taskList, typeof window === 'undefined' || window.matchMedia('(min-width: 1024px)').matches))
@@ -128,7 +140,13 @@ const liveBuildId = computed(() => {
   const id = buildDemo ? 'demo' : liveBuildIds.value[platform]
   return id && !dismissedBuildIds.value.includes(id) ? id : null
 })
-const platformCommand = computed(() => viewedPlatform.value && props.command ? `${props.command} --platform ${viewedPlatform.value}` : '')
+const startedPlatforms = computed(() => startedBuilderPlatforms(onboarding.value))
+// Steps show up once the CLI or the assistant reports a platform; the dev build demo opens on one.
+const showProgress = computed(() => !!viewedPlatform.value && (startedPlatforms.value.includes(viewedPlatform.value) || !!buildDemo))
+const progressPlatforms = computed(() => buildDemo && viewedPlatform.value && !startedPlatforms.value.includes(viewedPlatform.value)
+  ? [...startedPlatforms.value, viewedPlatform.value]
+  : startedPlatforms.value)
+const displayedCommand = computed(() => showApiKey.value ? props.command : maskBuilderCommand(props.command))
 const cicdGuidePath = computed(() => {
   const query = new URLSearchParams({ product: 'builder', ...(viewedPlatform.value ? { platform: viewedPlatform.value } : {}) })
   return `/app/${encodeURIComponent(props.appId)}/ci-cd?${query}`
@@ -138,6 +156,16 @@ const guideHref = computed(() => {
     return 'https://capgo.app/docs/cli/reference/build/'
   return viewedPlatform.value ? `https://capgo.app/docs/cli/cloud-build/${viewedPlatform.value}/` : ''
 })
+
+// Follow the platform the CLI or the assistant started, keeping the user's pick when both started.
+watch([startedPlatforms, viewedPlatform], ([started, platform]) => {
+  if (buildDemo || !started.length || (platform && started.includes(platform)))
+    return
+  const preferred = onboarding.value.selectedPlatform
+  const next = preferred && started.includes(preferred) ? preferred : started[0]
+  viewedPlatform.value = next
+  emit('platformChanged', next)
+}, { immediate: true })
 
 watch(() => props.initialPlatform, (platform) => {
   if (platform)
@@ -203,10 +231,12 @@ onMounted(() => {
   void refreshOnboarding()
   void refreshLatestBuild()
   refreshTimer = setInterval(() => {
-    if (document.visibilityState !== 'visible' || props.active === false || completed.value)
+    if (document.visibilityState !== 'visible' || props.active === false)
       return
+    // Keep reading progress after one platform completes so the other platform can still appear.
     void refreshOnboarding()
-    void refreshLatestBuild()
+    if (!completed.value)
+      void refreshLatestBuild()
   }, 5000)
 })
 
@@ -234,6 +264,16 @@ function selectPlatform(platform: BuilderPlatform) {
   if (!props.preserveSelection)
     selectedId.value = null
   emit('platformChanged', platform)
+}
+
+function selectMethod(next: BuilderSetupMethod) {
+  const previous = method.value
+  // Record every click so a preference loaded later cannot override it.
+  pickedMethod.value = next
+  if (previous === next)
+    return
+  emit('methodSelected', next)
+  void setupMethod.rememberSetupMethod(next === 'terminal' ? 'manual' : 'ai')
 }
 
 function selectStep(id: string) {
@@ -298,232 +338,264 @@ function statusLabel(status: BuilderStepStatus) {
       </p>
     </header>
 
-    <section aria-labelledby="builder-platform-title" class="space-y-3">
-      <div class="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 id="builder-platform-title" class="text-lg font-semibold text-slate-950 dark:text-white">
-          {{ t('builder-checklist-platform-title') }}
-        </h2>
-        <p class="text-sm text-slate-500 dark:text-slate-400">
-          {{ t('builder-checklist-platform-helper') }}
+    <template v-if="!completed">
+      <div v-if="showProgress" class="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 shadow-sm dark:border-white/15 dark:bg-slate-900" data-test="builder-checklist-setup-summary">
+        <!-- The card pick is not what started the setup (the CLI or another assistant may have), so no method is named. -->
+        <IconCheck class="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+        <p class="min-w-0 flex-1 text-sm font-semibold text-slate-950 dark:text-white">
+          {{ t('builder-checklist-setup-started') }}
         </p>
-      </div>
-      <div class="grid gap-3 sm:grid-cols-2" data-test="builder-checklist-platforms">
-        <button
-          v-for="platform in (['ios', 'android'] as const)"
-          :key="platform"
-          type="button"
-          class="flex min-h-20 items-center gap-4 rounded-2xl border bg-white px-5 py-4 text-left shadow-sm transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:bg-slate-900"
-          :class="viewedPlatform === platform ? 'border-azure-500 ring-1 ring-azure-500/30 dark:border-azure-400' : 'border-slate-200 hover:border-slate-400 dark:border-white/15 dark:hover:border-white/35'"
-          :aria-pressed="viewedPlatform === platform"
-          :data-test="`builder-platform-${platform}`"
-          @click="selectPlatform(platform)"
-        >
-          <IconApple v-if="platform === 'ios'" class="h-7 w-7 shrink-0 text-slate-800 dark:text-slate-200" aria-hidden="true" />
-          <IconAndroid v-else class="h-7 w-7 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
-          <span class="min-w-0 flex-1">
-            <span class="block text-base font-semibold text-slate-950 dark:text-white">{{ t(`builder-checklist-platform-${platform}`) }}</span>
-            <span class="mt-0.5 block text-sm text-slate-500 dark:text-slate-400">{{ t(`builder-checklist-platform-${platform}-description`) }}</span>
-          </span>
-          <IconCheck v-if="viewedPlatform === platform" class="h-5 w-5 shrink-0 text-azure-500" aria-hidden="true" />
+        <button type="button" class="d-btn d-btn-ghost min-h-11 px-2 text-sky-700 dark:text-azure-300" :aria-expanded="setupOpen" :aria-controls="setupOpen ? `${panelId}-setup` : undefined" data-test="builder-checklist-setup-toggle" @click="setupOpen = !setupOpen">
+          {{ setupOpen ? t('builder-checklist-hide-setup') : t('builder-checklist-show-setup') }}
+          <IconChevronDown class="h-4 w-4 shrink-0" :class="{ 'rotate-180': setupOpen }" aria-hidden="true" />
         </button>
       </div>
-    </section>
 
-    <template v-if="viewedPlatform && selectedStep">
-      <div v-if="showTaskList" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6" data-test="builder-checklist-progress">
-        <p class="shrink-0 text-sm font-medium text-slate-800 dark:text-slate-200" aria-live="polite" aria-atomic="true">
-          {{ t('setup-checklist-progress', { done: doneCount, total: steps.length }) }}
-        </p>
-        <progress class="d-progress h-2.5 w-full text-primary-500" :value="doneCount" :max="steps.length" :aria-label="t('setup-checklist-progress', { done: doneCount, total: steps.length })" />
-      </div>
+      <div v-if="!showProgress || setupOpen" :id="`${panelId}-setup`" class="space-y-6">
+        <div class="grid gap-3 sm:grid-cols-2" role="group" :aria-label="t('builder-checklist-method-title')" data-test="builder-checklist-methods">
+          <button
+            v-for="option in (['ai', 'terminal'] as const)"
+            :key="option"
+            type="button"
+            class="flex min-h-20 items-center gap-4 rounded-2xl border bg-white px-5 py-4 text-left shadow-sm transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:bg-slate-900"
+            :class="method === option ? 'border-azure-500 ring-1 ring-azure-500/30 dark:border-azure-400' : 'border-slate-200 hover:border-slate-400 dark:border-white/15 dark:hover:border-white/35'"
+            :aria-pressed="method === option"
+            :data-test="`builder-method-${option}`"
+            @click="selectMethod(option)"
+          >
+            <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-azure-500/10 text-sky-700 dark:text-azure-300" aria-hidden="true">
+              <IconSparkles v-if="option === 'ai'" class="h-5 w-5" />
+              <IconTerminal v-else class="h-5 w-5" />
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="block text-base font-semibold text-slate-950 dark:text-white">{{ t(`builder-checklist-method-${option}`) }}</span>
+              <span class="mt-0.5 block text-sm text-slate-500 dark:text-slate-400">{{ t(`builder-checklist-method-${option}-description`) }}</span>
+            </span>
+            <span v-if="option === 'ai'" class="shrink-0 rounded-md bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">{{ t('builder-checklist-method-recommended') }}</span>
+          </button>
+        </div>
 
-      <div class="grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-white/15 dark:bg-slate-900" :class="{ 'lg:grid-cols-[minmax(0,0.38fr)_minmax(0,0.62fr)]': checklistOpen && showTaskList }">
-        <nav v-if="showTaskList" class="border-b border-slate-200 px-4 py-3 sm:px-6 dark:border-white/15" :class="{ 'sm:py-6 lg:border-b-0 lg:border-r': checklistOpen }" :aria-label="t('builder-checklist-tasks-title')">
-          <!-- Show every step by default; users can hide the list. -->
-          <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-            <h2 class="text-lg font-semibold text-slate-950 dark:text-white">
-              {{ t('builder-checklist-tasks-title') }}
-            </h2>
-            <button
-              type="button"
-              class="d-btn d-btn-ghost min-h-11 px-2 text-sky-700 dark:text-azure-300"
-              :aria-expanded="checklistOpen"
-              :aria-controls="`${panelId}-list`"
-              data-test="builder-checklist-toggle"
-              @click="checklistOpen = !checklistOpen"
-            >
-              {{ checklistOpen ? t('setup-checklist-hide-steps') : t('setup-checklist-show-steps', { total: steps.length }) }}
-              <IconChevronDown class="h-4 w-4 shrink-0" :class="{ 'rotate-180': checklistOpen }" aria-hidden="true" />
+        <AppOnboardingBuilderAiSetup v-if="method === 'ai'" @copy="emit('copyAi', 'checklist')" />
+
+        <section v-else class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/15 dark:bg-slate-900" :aria-labelledby="`${panelId}-terminal-title`" data-test="builder-checklist-terminal">
+          <h2 :id="`${panelId}-terminal-title`" class="flex items-center gap-3 text-base font-semibold text-slate-950 dark:text-white">
+            <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-azure-500/30 text-sm text-sky-700 dark:text-azure-300" aria-hidden="true">1</span>
+            {{ t('builder-checklist-terminal-title') }}
+          </h2>
+          <div v-if="command" class="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-slate-950 py-2 pl-4 pr-2">
+            <code class="min-w-0 flex-1 whitespace-pre-wrap break-all py-2 text-sm leading-6 text-sky-200" data-test="builder-checklist-command">{{ displayedCommand }}</code>
+            <button type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 px-3 py-2 text-xs text-slate-200 hover:bg-white/10" :aria-pressed="showApiKey" data-test="builder-checklist-command-reveal" @click="showApiKey = !showApiKey">
+              <IconEyeOff v-if="showApiKey" class="h-4 w-4 shrink-0" aria-hidden="true" />
+              <IconEye v-else class="h-4 w-4 shrink-0" aria-hidden="true" />
+              {{ showApiKey ? t('builder-checklist-hide-key') : t('builder-checklist-show-key') }}
+            </button>
+            <button type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 px-3 py-2 text-xs text-slate-200 hover:bg-white/10" data-test="builder-checklist-command-copy" @click="emit('copyCommand')">
+              <IconCopy class="h-4 w-4 shrink-0" aria-hidden="true" />
+              {{ t('builder-checklist-copy-command') }}
             </button>
           </div>
-          <p v-if="checklistOpen" class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-            {{ t('builder-checklist-tasks-subtitle') }}
+          <output v-else class="mt-4 block rounded-xl bg-slate-950 p-4 text-sm text-slate-300">{{ t('app-onboarding-command-apikey-loading') }}</output>
+          <p class="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
+            {{ t('builder-checklist-command-location') }}
           </p>
-          <ol :id="`${panelId}-list`" class="mt-4" :class="checklistOpen ? 'block' : 'hidden'">
-            <li v-for="step in steps" :key="step.id" class="border-b border-slate-100 last:border-b-0 dark:border-white/10" :data-test="`builder-step-${step.id}`" :data-status="step.status">
-              <button
-                type="button"
-                class="flex min-h-14 w-full items-start gap-3 rounded-xl px-3 py-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-inset"
-                :class="selectedStep.id === step.id ? 'bg-azure-500/5 text-primary-500 dark:bg-azure-500/10 dark:text-azure-300' : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-white/5'"
-                :aria-current="currentStep?.id === step.id ? 'step' : undefined"
-                :aria-label="t('setup-checklist-view-task', { task: step.title, status: statusLabel(step.status) })"
-                @click="selectStep(step.id)"
-              >
-                <IconCheck v-if="step.status === 'done'" class="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" :aria-label="statusLabel(step.status)" />
-                <IconMinus v-else-if="step.status === 'skipped'" class="mt-0.5 h-5 w-5 shrink-0 text-slate-400 dark:text-slate-500" :aria-label="statusLabel(step.status)" />
-                <IconCircle v-else class="mt-0.5 h-5 w-5 shrink-0" :class="currentStep?.id === step.id ? 'text-azure-500' : 'text-slate-400'" :aria-label="statusLabel(step.status)" />
-                <span class="mt-0.5 shrink-0 text-xs text-slate-400" aria-hidden="true">{{ step.index + 1 }}.</span>
-                <span class="min-w-0 flex-1 text-base leading-6" :class="{ 'font-medium': selectedStep.id === step.id }">
-                  {{ step.title }}
-                  <span v-if="currentStep?.id === step.id" class="mt-2 block w-fit rounded-md bg-azure-500/10 px-2 py-0.5 text-xs font-medium text-sky-700 dark:text-azure-300">{{ t('setup-checklist-current-task') }}</span>
-                </span>
-              </button>
-            </li>
-          </ol>
-          <div v-if="checklistOpen" class="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-slate-100 px-3 pt-3 dark:border-white/10" data-test="builder-checklist-cicd-step">
-            <p class="min-w-0 text-sm leading-5 text-slate-600 dark:text-slate-300">
-              <span class="font-medium text-slate-500 dark:text-slate-400">{{ t('setup-checklist-optional-next-step') }}</span>
-              <span class="mx-1 text-slate-300 dark:text-slate-600" aria-hidden="true">·</span>
-              <span class="font-medium text-slate-800 dark:text-slate-200">{{ t('builder-checklist-cicd-title') }}</span>
-            </p>
-            <RouterLink :to="cicdGuidePath" class="inline-flex min-h-11 shrink-0 items-center gap-1.5 text-sm font-medium text-sky-700 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:text-azure-300" data-test="builder-checklist-cicd-link">
-              <span>{{ t('setup-checklist-cicd-start') }}</span>
-              <IconArrowRight class="h-4 w-4 shrink-0" aria-hidden="true" />
-            </RouterLink>
-          </div>
-        </nav>
-
-        <div class="flex min-w-0 flex-col px-5 py-6 sm:p-8" data-test="builder-checklist-instructions">
-          <template v-if="completed">
-            <BuildLiveProgress
-              v-if="liveBuildId && viewedPlatform"
-              :key="liveBuildId"
-              class="mb-8"
-              embedded
-              :app-id="appId"
-              :build-id="liveBuildId"
-              :platform="viewedPlatform"
-              :demo="buildDemo"
-              @retry="dismissedBuildIds.push(liveBuildId)"
-            />
-            <IconCheck class="mb-4 h-8 w-8 text-emerald-600" aria-hidden="true" />
-            <h2 class="text-2xl font-semibold text-slate-950 dark:text-white">
-              {{ t('builder-checklist-complete-title') }}
-            </h2>
-            <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {{ t('builder-checklist-complete-description') }}
-            </p>
-            <div class="mt-6 flex flex-wrap items-center gap-2">
-              <button type="button" class="d-btn min-h-12 d-btn-primary" :disabled="hiding || leaving" @click="emit('complete')">
-                {{ completionAction || t('setup-checklist-open-app') }}
-                <IconArrowRight class="h-4 w-4" aria-hidden="true" />
-              </button>
-              <RouterLink :to="cicdGuidePath" class="d-btn min-h-12 border-slate-300 bg-white px-4 text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-white/20 dark:bg-slate-900 dark:text-slate-200" data-test="builder-checklist-complete-cicd">
-                {{ t('setup-checklist-cicd-complete-action') }}
-              </RouterLink>
-            </div>
-          </template>
-          <template v-else>
-            <p class="text-sm font-medium text-sky-700 dark:text-azure-400">
-              {{ showTaskList ? t(selectedStep.id === currentStep?.id ? 'setup-checklist-current-task-number' : 'setup-checklist-task-number', { number: selectedStep.index + 1, total: steps.length }) : t('setup-checklist-next-step') }}
-            </p>
-            <h2 class="mt-2 text-2xl font-semibold leading-tight text-slate-950 dark:text-white">
-              {{ selectedStep.title }}
-            </h2>
-            <p class="mt-4 max-w-prose text-base leading-7 text-slate-600 dark:text-slate-300">
-              {{ selectedStep.description }}
-            </p>
-
-            <template v-if="isFirstStep">
-              <h3 class="mt-7 text-base font-semibold text-slate-950 dark:text-white">
-                {{ t('builder-checklist-terminal-title') }}
-              </h3>
-              <p class="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ t('builder-checklist-command-location') }}
-              </p>
-              <button
-                v-if="platformCommand"
-                type="button"
-                class="d-btn group relative mt-5 h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal hover:bg-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500"
-                data-test="builder-checklist-command"
-                :aria-label="t('builder-checklist-copy-command')"
-                @click="emit('copyCommand', viewedPlatform)"
-              >
-                <code class="block whitespace-pre-wrap break-all text-sm leading-6 text-sky-200">{{ platformCommand }}</code>
-                <IconCopy class="absolute right-4 top-5 h-5 w-5 text-slate-400 group-hover:text-white" aria-hidden="true" />
-              </button>
-              <output v-else class="mt-5 block rounded-2xl bg-slate-950 p-5 text-sm text-slate-300">{{ t('app-onboarding-command-apikey-loading') }}</output>
-              <button type="button" class="d-btn mt-4 min-h-12 self-start d-btn-primary px-5" :disabled="!platformCommand" @click="emit('copyCommand', viewedPlatform)">
-                <IconCopy class="h-4 w-4" aria-hidden="true" />
-                {{ t('builder-checklist-copy-command') }}
-              </button>
-            </template>
-
-            <p v-else class="mt-5 flex items-start gap-3 rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-600 dark:bg-slate-950/60 dark:text-slate-300">
-              <IconInfo class="mt-0.5 h-4 w-4 shrink-0 text-azure-500" aria-hidden="true" />
-              {{ t('builder-checklist-follow-terminal') }}
-            </p>
-
-            <BuildLiveProgress
-              v-if="liveBuildId"
-              :key="liveBuildId"
-              class="mt-7"
-              embedded
-              :app-id="appId"
-              :build-id="liveBuildId"
-              :platform="viewedPlatform"
-              :demo="buildDemo"
-              @retry="dismissedBuildIds.push(liveBuildId)"
-            />
-            <output v-else class="mt-7 block border-t border-slate-200 py-5 text-sm dark:border-white/15" aria-live="polite" aria-atomic="true">
-              <span class="flex items-center gap-3 font-medium text-slate-800 dark:text-slate-200">
-                <IconInfo v-if="refreshError" class="h-5 w-5 text-amber-600" aria-hidden="true" />
-                <IconCheck v-else-if="selectedStep.status === 'done'" class="h-5 w-5 text-emerald-600" aria-hidden="true" />
-                <IconMinus v-else-if="selectedStep.status === 'skipped'" class="h-5 w-5 text-slate-400" aria-hidden="true" />
-                <IconLoader v-else-if="selectedStep.id === currentStep?.id" class="h-5 w-5 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
-                <IconCircle v-else class="h-5 w-5 text-slate-300 dark:text-slate-600" aria-hidden="true" />
-                {{ refreshError ? t('setup-checklist-refresh-error') : statusLabel(selectedStep.status) }}
-              </span>
-              <span class="mt-2 block pl-8 leading-6 text-slate-500 dark:text-slate-400">{{ t('builder-checklist-auto-progress') }}</span>
-              <button v-if="refreshError" type="button" class="d-btn d-btn-ghost mt-2 min-h-11 text-sky-700 dark:text-azure-300" @click="refreshOnboarding">{{ t('setup-checklist-retry') }}</button>
-            </output>
-
-            <AppOnboardingSkipStep v-if="canSkipSelected && !liveBuildId" :key="`${viewedPlatform}-${selectedStep.id}`" test-id="builder-checklist" :skipping="skipping" @skip="skipSelectedStep" />
-
-            <div class="mt-auto flex flex-wrap items-stretch gap-2 pt-4" data-test="builder-checklist-task-actions">
-              <button v-if="currentStep && currentStep.id !== selectedStep.id" type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg border-slate-200 bg-transparent px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-white/15 dark:text-slate-300 dark:hover:border-white/25 dark:hover:bg-white/5 dark:hover:text-white dark:focus-visible:ring-offset-slate-900 min-w-0 max-w-full shrink whitespace-normal" @click="selectStep(currentStep.id)">
-                {{ t('setup-checklist-return-current') }}
-              </button>
-              <a :href="guideHref" target="_blank" rel="noopener noreferrer" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg border-slate-200 bg-transparent px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-white/15 dark:text-slate-300 dark:hover:border-white/25 dark:hover:bg-white/5 dark:hover:text-white dark:focus-visible:ring-offset-slate-900 min-w-0 max-w-full text-left whitespace-normal" data-test="builder-checklist-guide">
-                <IconFileText class="h-4 w-4 shrink-0" aria-hidden="true" />
-                <span>{{ t('builder-checklist-guide', { platform: t(`builder-checklist-platform-${viewedPlatform}`) }) }}</span>
-              </a>
-            </div>
-          </template>
-        </div>
+        </section>
       </div>
     </template>
 
-    <div v-else class="rounded-2xl border border-dashed border-slate-300 px-6 py-5 text-center dark:border-white/15" data-test="builder-checklist-choose-platform">
-      <h2 class="text-base font-medium text-slate-700 dark:text-slate-200">
-        {{ t('builder-checklist-choose-platform-title') }}
-      </h2>
-      <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-        {{ t('builder-checklist-choose-platform-description') }}
+    <section class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900" :aria-labelledby="`${panelId}-build-title`" data-test="builder-checklist-build">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <h2 :id="`${panelId}-build-title`" class="text-lg font-semibold text-slate-950 dark:text-white">
+          {{ t('builder-checklist-build-title') }}
+        </h2>
+        <div v-if="showProgress" class="flex flex-wrap gap-2" data-test="builder-checklist-platforms">
+          <button
+            v-for="platform in progressPlatforms"
+            :key="platform"
+            type="button"
+            class="d-btn h-auto min-h-11 gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold shadow-none focus-visible:ring-2 focus-visible:ring-azure-500"
+            :class="viewedPlatform === platform ? 'border-azure-500 bg-azure-500/10 text-sky-800 dark:text-azure-200' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-400 dark:border-white/15 dark:bg-slate-900 dark:text-slate-300'"
+            :aria-pressed="viewedPlatform === platform"
+            :data-test="`builder-platform-${platform}`"
+            @click="selectPlatform(platform)"
+          >
+            <IconApple v-if="platform === 'ios'" class="h-4 w-4 shrink-0" aria-hidden="true" />
+            <IconAndroid v-else class="h-4 w-4 shrink-0" aria-hidden="true" />
+            {{ t('builder-checklist-platform-detected', { platform: t(`builder-checklist-platform-${platform}`) }) }}
+          </button>
+        </div>
+      </div>
+
+      <template v-if="showProgress && viewedPlatform && selectedStep">
+        <div v-if="showTaskList" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6" data-test="builder-checklist-progress">
+          <p class="shrink-0 text-sm font-medium text-slate-800 dark:text-slate-200" aria-live="polite" aria-atomic="true">
+            {{ t('setup-checklist-progress', { done: doneCount, total: steps.length }) }}
+          </p>
+          <progress class="d-progress h-2.5 w-full text-primary-500" :value="doneCount" :max="steps.length" :aria-label="t('setup-checklist-progress', { done: doneCount, total: steps.length })" />
+        </div>
+
+        <div class="grid overflow-hidden rounded-xl border border-slate-200 dark:border-white/15" :class="{ 'lg:grid-cols-[minmax(0,0.38fr)_minmax(0,0.62fr)]': checklistOpen && showTaskList }">
+          <nav v-if="showTaskList" class="border-b border-slate-200 px-4 py-3 sm:px-6 dark:border-white/15" :class="{ 'sm:py-6 lg:border-b-0 lg:border-r': checklistOpen }" :aria-label="t('builder-checklist-tasks-title')">
+            <!-- Show every step by default; users can hide the list. -->
+            <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+              <h2 class="text-lg font-semibold text-slate-950 dark:text-white">
+                {{ t('builder-checklist-tasks-title') }}
+              </h2>
+              <button
+                type="button"
+                class="d-btn d-btn-ghost min-h-11 px-2 text-sky-700 dark:text-azure-300"
+                :aria-expanded="checklistOpen"
+                :aria-controls="`${panelId}-list`"
+                data-test="builder-checklist-toggle"
+                @click="checklistOpen = !checklistOpen"
+              >
+                {{ checklistOpen ? t('setup-checklist-hide-steps') : t('setup-checklist-show-steps', { total: steps.length }) }}
+                <IconChevronDown class="h-4 w-4 shrink-0" :class="{ 'rotate-180': checklistOpen }" aria-hidden="true" />
+              </button>
+            </div>
+            <p v-if="checklistOpen" class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              {{ t('builder-checklist-tasks-subtitle') }}
+            </p>
+            <ol :id="`${panelId}-list`" class="mt-4" :class="checklistOpen ? 'block' : 'hidden'">
+              <li v-for="step in steps" :key="step.id" class="border-b border-slate-100 last:border-b-0 dark:border-white/10" :data-test="`builder-step-${step.id}`" :data-status="step.status">
+                <button
+                  type="button"
+                  class="flex min-h-14 w-full items-start gap-3 rounded-xl px-3 py-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-inset"
+                  :class="selectedStep.id === step.id ? 'bg-azure-500/5 text-primary-500 dark:bg-azure-500/10 dark:text-azure-300' : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-white/5'"
+                  :aria-current="currentStep?.id === step.id ? 'step' : undefined"
+                  :aria-label="t('setup-checklist-view-task', { task: step.title, status: statusLabel(step.status) })"
+                  @click="selectStep(step.id)"
+                >
+                  <IconCheck v-if="step.status === 'done'" class="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" :aria-label="statusLabel(step.status)" />
+                  <IconMinus v-else-if="step.status === 'skipped'" class="mt-0.5 h-5 w-5 shrink-0 text-slate-400 dark:text-slate-500" :aria-label="statusLabel(step.status)" />
+                  <IconCircle v-else class="mt-0.5 h-5 w-5 shrink-0" :class="currentStep?.id === step.id ? 'text-azure-500' : 'text-slate-400'" :aria-label="statusLabel(step.status)" />
+                  <span class="mt-0.5 shrink-0 text-xs text-slate-400" aria-hidden="true">{{ step.index + 1 }}.</span>
+                  <span class="min-w-0 flex-1 text-base leading-6" :class="{ 'font-medium': selectedStep.id === step.id }">
+                    {{ step.title }}
+                    <span v-if="currentStep?.id === step.id" class="mt-2 block w-fit rounded-md bg-azure-500/10 px-2 py-0.5 text-xs font-medium text-sky-700 dark:text-azure-300">{{ t('setup-checklist-current-task') }}</span>
+                  </span>
+                </button>
+              </li>
+            </ol>
+            <div v-if="checklistOpen && hideFooter" class="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-slate-100 px-3 pt-3 dark:border-white/10" data-test="builder-checklist-cicd-step">
+              <p class="min-w-0 text-sm leading-5 text-slate-600 dark:text-slate-300">
+                <span class="font-medium text-slate-500 dark:text-slate-400">{{ t('setup-checklist-optional-next-step') }}</span>
+                <span class="mx-1 text-slate-300 dark:text-slate-600" aria-hidden="true">·</span>
+                <span class="font-medium text-slate-800 dark:text-slate-200">{{ t('builder-checklist-cicd-title') }}</span>
+              </p>
+              <RouterLink :to="cicdGuidePath" class="inline-flex min-h-11 shrink-0 items-center gap-1.5 text-sm font-medium text-sky-700 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:text-azure-300" data-test="builder-checklist-cicd-link">
+                <span>{{ t('setup-checklist-cicd-start') }}</span>
+                <IconArrowRight class="h-4 w-4 shrink-0" aria-hidden="true" />
+              </RouterLink>
+            </div>
+          </nav>
+
+          <div class="flex min-w-0 flex-col px-5 py-6 sm:p-8" data-test="builder-checklist-instructions">
+            <template v-if="completed">
+              <BuildLiveProgress
+                v-if="liveBuildId && viewedPlatform"
+                :key="liveBuildId"
+                class="mb-8"
+                embedded
+                :app-id="appId"
+                :build-id="liveBuildId"
+                :platform="viewedPlatform"
+                :demo="buildDemo"
+                @retry="dismissedBuildIds.push(liveBuildId)"
+              />
+              <IconCheck class="mb-4 h-8 w-8 text-emerald-600" aria-hidden="true" />
+              <h2 class="text-2xl font-semibold text-slate-950 dark:text-white">
+                {{ t('builder-checklist-complete-title') }}
+              </h2>
+              <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ t('builder-checklist-complete-description') }}
+              </p>
+              <div class="mt-6 flex flex-wrap items-center gap-2">
+                <button type="button" class="d-btn min-h-12 d-btn-primary" :disabled="hiding || leaving" @click="emit('complete')">
+                  {{ completionAction || t('setup-checklist-open-app') }}
+                  <IconArrowRight class="h-4 w-4" aria-hidden="true" />
+                </button>
+                <RouterLink :to="cicdGuidePath" class="d-btn min-h-12 border-slate-300 bg-white px-4 text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-white/20 dark:bg-slate-900 dark:text-slate-200" data-test="builder-checklist-complete-cicd">
+                  {{ t('setup-checklist-cicd-complete-action') }}
+                </RouterLink>
+              </div>
+            </template>
+            <template v-else>
+              <p class="text-sm font-medium text-sky-700 dark:text-azure-400">
+                {{ showTaskList ? t(selectedStep.id === currentStep?.id ? 'setup-checklist-current-task-number' : 'setup-checklist-task-number', { number: selectedStep.index + 1, total: steps.length }) : t('setup-checklist-next-step') }}
+              </p>
+              <h2 class="mt-2 text-2xl font-semibold leading-tight text-slate-950 dark:text-white">
+                {{ selectedStep.title }}
+              </h2>
+              <p class="mt-4 max-w-prose text-base leading-7 text-slate-600 dark:text-slate-300">
+                {{ selectedStep.description }}
+              </p>
+
+              <p class="mt-5 flex items-start gap-3 rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-600 dark:bg-slate-950/60 dark:text-slate-300">
+                <IconInfo class="mt-0.5 h-4 w-4 shrink-0 text-azure-500" aria-hidden="true" />
+                {{ t(method === 'ai' ? 'builder-checklist-follow-assistant' : 'builder-checklist-follow-terminal') }}
+              </p>
+
+              <BuildLiveProgress
+                v-if="liveBuildId"
+                :key="liveBuildId"
+                class="mt-7"
+                embedded
+                :app-id="appId"
+                :build-id="liveBuildId"
+                :platform="viewedPlatform"
+                :demo="buildDemo"
+                @retry="dismissedBuildIds.push(liveBuildId)"
+              />
+              <output v-else class="mt-7 block border-t border-slate-200 py-5 text-sm dark:border-white/15" aria-live="polite" aria-atomic="true">
+                <span class="flex items-center gap-3 font-medium text-slate-800 dark:text-slate-200">
+                  <IconInfo v-if="refreshError" class="h-5 w-5 text-amber-600" aria-hidden="true" />
+                  <IconCheck v-else-if="selectedStep.status === 'done'" class="h-5 w-5 text-emerald-600" aria-hidden="true" />
+                  <IconMinus v-else-if="selectedStep.status === 'skipped'" class="h-5 w-5 text-slate-400" aria-hidden="true" />
+                  <IconLoader v-else-if="selectedStep.id === currentStep?.id" class="h-5 w-5 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
+                  <IconCircle v-else class="h-5 w-5 text-slate-300 dark:text-slate-600" aria-hidden="true" />
+                  {{ refreshError ? t('setup-checklist-refresh-error') : statusLabel(selectedStep.status) }}
+                </span>
+                <span class="mt-2 block pl-8 leading-6 text-slate-500 dark:text-slate-400">{{ t('builder-checklist-auto-progress') }}</span>
+                <button v-if="refreshError" type="button" class="d-btn d-btn-ghost mt-2 min-h-11 text-sky-700 dark:text-azure-300" @click="refreshOnboarding">{{ t('setup-checklist-retry') }}</button>
+              </output>
+
+              <AppOnboardingSkipStep v-if="canSkipSelected && !liveBuildId" :key="`${viewedPlatform}-${selectedStep.id}`" test-id="builder-checklist" :skipping="skipping" @skip="skipSelectedStep" />
+
+              <div class="mt-auto flex flex-wrap items-stretch gap-2 pt-4" data-test="builder-checklist-task-actions">
+                <button v-if="currentStep && currentStep.id !== selectedStep.id" type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg border-slate-200 bg-transparent px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-white/15 dark:text-slate-300 dark:hover:border-white/25 dark:hover:bg-white/5 dark:hover:text-white dark:focus-visible:ring-offset-slate-900 min-w-0 max-w-full shrink whitespace-normal" @click="selectStep(currentStep.id)">
+                  {{ t('setup-checklist-return-current') }}
+                </button>
+                <a :href="guideHref" target="_blank" rel="noopener noreferrer" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg border-slate-200 bg-transparent px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-white/15 dark:text-slate-300 dark:hover:border-white/25 dark:hover:bg-white/5 dark:hover:text-white dark:focus-visible:ring-offset-slate-900 min-w-0 max-w-full text-left whitespace-normal" data-test="builder-checklist-guide">
+                  <IconFileText class="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>{{ t('builder-checklist-guide', { platform: t(`builder-checklist-platform-${viewedPlatform}`) }) }}</span>
+                </a>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <output v-else class="flex items-start gap-3 rounded-xl border border-dashed border-slate-300 px-5 py-4 dark:border-white/15" aria-live="polite" data-test="builder-checklist-waiting">
+        <span class="mt-2 h-2 w-2 shrink-0 rounded-full bg-azure-500 motion-safe:animate-pulse" aria-hidden="true" />
+        <span>
+          <span class="block text-sm font-semibold text-slate-800 dark:text-slate-200">{{ t(method === 'ai' ? 'builder-checklist-waiting-ai' : 'builder-checklist-waiting-terminal') }}</span>
+          <span class="mt-0.5 block text-sm leading-6 text-slate-500 dark:text-slate-400">{{ t('builder-checklist-waiting-description') }}</span>
+        </span>
+      </output>
+    </section>
+
+    <footer v-if="!hideFooter" class="flex flex-wrap items-center gap-x-5 gap-y-1" data-test="builder-checklist-footer">
+      <p v-if="!completed" class="text-sm text-slate-500 dark:text-slate-400">
+        {{ t('builder-checklist-cicd-prompt') }}
+        <RouterLink :to="cicdGuidePath" class="inline-flex min-h-11 items-center gap-1.5 rounded-sm text-sm font-medium text-sky-700 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-azure-500 dark:text-azure-300" data-test="builder-checklist-cicd-link">
+          {{ t('setup-checklist-cicd-start') }}
+        </RouterLink>
       </p>
-    </div>
-
-    <AppOnboardingBuilderAiSetup v-if="!completed" @copy="emit('copyAi', 'checklist')" />
-
-    <footer v-if="!hideFooter" class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-5">
-      <button type="button" class="d-btn min-h-12 shrink-0 border-slate-300 bg-white px-4 text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-white/20 dark:bg-slate-900 dark:text-slate-200" :disabled="hiding || leaving" @click="emit('hide')">
+      <button type="button" class="inline-flex min-h-11 items-center gap-1.5 rounded-sm text-sm font-medium text-sky-700 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-azure-500 dark:text-azure-300" :disabled="hiding || leaving" data-test="builder-checklist-hide" @click="emit('hide')">
         <IconLoader v-if="hiding" class="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
         {{ t('app-onboarding-dont-show-again') }}
       </button>
-      <p class="max-w-prose text-sm leading-6 text-slate-500 sm:border-l sm:border-slate-200 sm:pl-5 dark:text-slate-400 dark:sm:border-white/15">
-        {{ t('setup-checklist-hide-description') }}
-      </p>
-      <button v-if="!completed" type="button" class="inline-flex min-h-11 items-center gap-1.5 rounded-sm text-sm font-medium text-slate-600 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-azure-500 sm:ml-auto dark:text-slate-300" :disabled="hiding || leaving" @click="emit('explore')">
+      <button v-if="!completed" type="button" class="inline-flex min-h-11 items-center gap-1.5 rounded-sm text-sm font-medium text-sky-700 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-azure-500 dark:text-azure-300 sm:ml-auto" :disabled="hiding || leaving" @click="emit('explore')">
         {{ t('setup-checklist-explore-dashboard') }}
         <IconArrowRight class="h-4 w-4" aria-hidden="true" />
       </button>

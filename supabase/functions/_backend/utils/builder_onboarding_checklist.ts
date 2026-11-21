@@ -128,7 +128,7 @@ function profileUpdate(tags: Record<string, string | number | boolean>): Builder
 function startSetupUpdate(tags: Record<string, string | number | boolean>): BuilderChecklistUpdate | null {
   const platform = tags.platform
   if (tags.action !== 'start_setup'
-    || tags.source !== 'cli'
+    || (tags.source !== 'cli' && tags.source !== 'mcp')
     || typeof tags.app_id !== 'string' || !tags.app_id
     || typeof tags.journey_id !== 'string' || !tags.journey_id
     || typeof tags.step !== 'string' || !tags.step
