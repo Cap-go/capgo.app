@@ -4,7 +4,7 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
 import type { EmulatorSessionData } from './simulator_host.ts'
 import { recordBuildTime } from '../../utils/supabase.ts'
-import { backgroundTask } from '../../utils/utils.ts'
+import { backgroundTask, getEnv } from '../../utils/utils.ts'
 import { expireSimulatorSessions, reserveSimulatorSlot } from './concurrency.ts'
 import { savedOutputsForJobs } from './outputs.ts'
 import { ensureBuildPermission, ensureBuildTimePlanAllowed, getBuildOwnerOrg } from './request.ts'
@@ -655,5 +655,7 @@ export async function listSimulators(c: Context, body: SimulatorBody, userId: st
     data: rows.map(simulatorListItem),
     idle_minutes: SIMULATOR_IDLE_MINUTES,
     max_minutes: SIMULATOR_MAX_MINUTES,
+    // The console hides start buttons that would only answer simulator_not_configured.
+    configured: !!getEnv(c, 'SIMULATOR_ACCESS_KEY'),
   })
 }

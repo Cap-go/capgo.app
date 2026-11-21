@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from 'vue'
 import SimulatorSessionCard from '../src/components/dashboard/SimulatorSessionCard.vue'
-import { clearSimulatorSessions, rememberSimulator, runningSimulators } from '../src/services/simulatorSessions'
+import { clearSimulatorSessions, rememberSimulator, runningSimulators, simulatorConfigured } from '../src/services/simulatorSessions'
 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('~icons/lucide/smartphone', () => ({ default: { name: 'IconSmartphone', setup: () => () => null } }))
@@ -75,6 +75,19 @@ describe('simulator card refresh', () => {
     expect(container.textContent).toContain('simulator-auto-stop')
     expect(fetchMock).toHaveBeenCalledTimes(1)
     app.unmount()
+  })
+
+  it('explains instead of offering start buttons when the server has no simulator host', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [], idle_minutes: 5, max_minutes: 40, configured: false }), { status: 200 })))
+    const container = document.createElement('div')
+    const app = createApp(SimulatorSessionCard, { appId })
+    app.mount(container)
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-test="simulator-not-configured"]')).not.toBeNull()
+    })
+    expect(container.textContent).not.toContain('start-ios-simulator')
+    app.unmount()
+    simulatorConfigured.value = null
   })
 
   it('keeps checking after the last stop until the list shows its build time', async () => {
