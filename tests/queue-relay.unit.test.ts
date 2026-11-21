@@ -98,6 +98,14 @@ describe('pgmq relay wakeups', () => {
     }
   })
 
+  it.concurrent('bounds the relay read by an indexable cutoff in vt order', () => {
+    const sql = pgmqRelayReadSql('on_app_update')
+    expect(sql).toContain('readable.vt <= pg_catalog.now()')
+    expect(sql).not.toMatch(/vt <= pg_catalog\.clock_timestamp/)
+    expect(sql).toContain('ORDER BY readable.vt')
+    expect(sql).toContain('m.msg_id = ANY (ARRAY(')
+  })
+
   it.concurrent('counts a read when the consumer claims a message, never when relaying it', () => {
     expect(pgmqRelayReadSql('on_app_update')).not.toContain('read_ct =')
     expect(pgmqRelayReleaseSql('on_app_update')).not.toMatch(/SET[^]*read_ct[^]*FROM/)

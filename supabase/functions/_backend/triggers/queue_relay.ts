@@ -57,19 +57,28 @@ function pgmqTable(queueName: string): string {
  * $2 = limit): the read is counted when the consumer claims the message. Only
  * ids and read counts leave the database. A top-level UPDATE is never served
  * from the Hyperdrive query cache.
+ *
+ * Queues often hold many hidden messages (relayed, retrying or delayed), so
+ * the read must not scan past them: the cutoff is now() (the statement start,
+ * as each query runs in its own transaction) rather than the volatile
+ * clock_timestamp(), so it bounds a range scan of pgmq's vt index, and the
+ * rows are taken in vt order (oldest visible first) so that scan returns them
+ * directly instead of filtering the queue in msg_id order. ANY(ARRAY(...))
+ * keeps the update itself on the primary key. Same reason as
+ * process_function_queue's bound cutoff.
  */
 export function pgmqRelayReadSql(queueName: string): string {
   const table = pgmqTable(queueName)
   return `UPDATE ${table} AS m
 SET vt = pg_catalog.clock_timestamp() + pg_catalog.make_interval(secs => $1::double precision)
-WHERE m.msg_id IN (
+WHERE m.msg_id = ANY (ARRAY(
   SELECT readable.msg_id
   FROM ${table} AS readable
-  WHERE readable.vt <= pg_catalog.clock_timestamp()
-  ORDER BY readable.msg_id
+  WHERE readable.vt <= pg_catalog.now()
+  ORDER BY readable.vt
   LIMIT $2
   FOR UPDATE SKIP LOCKED
-)
+))
 RETURNING m.msg_id, m.read_ct`
 }
 
