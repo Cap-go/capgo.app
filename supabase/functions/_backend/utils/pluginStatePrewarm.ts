@@ -116,11 +116,6 @@ async function prewarmRegion(region: PluginRegion, secret: string, appIds: strin
   }
 }
 
-/**
- * Warm the given apps in every region; returns one entry per batch and region,
- * in that order. Calls run through a pool sized to the connection limit, and a
- * call that could not finish inside the total budget is reported, not sent.
- */
 /** Thrown when regions are configured but the API secret the regional route requires is not. */
 export class PrewarmNotConfigured extends Error {
   constructor() {
@@ -129,6 +124,11 @@ export class PrewarmNotConfigured extends Error {
   }
 }
 
+/**
+ * Warm the given apps in every region; returns one entry per batch and region,
+ * in that order. Calls run through a pool sized to the connection limit, and a
+ * call that could not finish inside the total budget is reported, not sent.
+ */
 export async function prewarmPluginStateRegions(c: Context, appIds: string[]): Promise<RegionPrewarmResult[]> {
   const targets = pluginStatePrewarmTargets(c)
   const unique = [...new Set(appIds)]
