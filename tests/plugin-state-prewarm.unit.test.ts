@@ -1,0 +1,335 @@
+import { Hono } from 'hono'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { app as prewarmRoute } from '../supabase/functions/_backend/plugin_runtime/private/plugin_state_prewarm.ts'
+import { resetPluginStateMemory, startPluginStateRequest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginState.ts'
+import { pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
+import { prewarmBundles, prewarmPluginStateApp } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
+import { drainUpdatesCachePurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
+import { PLUGIN_REGIONS } from '../supabase/functions/_backend/utils/pluginRegionTargets.ts'
+import { pluginStatePrewarmTargets, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
+
+const APP_ID = 'com.example.prewarm'
+const OWNER = '00000000-0000-4000-8000-000000000001'
+
+afterEach(() => {
+  resetPluginStateMemory()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+  vi.useRealTimers()
+})
+
+function channelRow(id: number, bundle: { id: number, name: string }, rollout: { id: number | null, name?: string } = { id: null }) {
+  return {
+    channels: { id, name: `channel-${id}`, allow_dev: true, allow_prod: true, allow_emulator: true, allow_device: true, ios: true, android: true, electron: true, public: id === 1, allow_device_self_set: false },
+    version: { id: bundle.id, name: bundle.name },
+    rolloutVersion: rollout,
+    version_ref: bundle.id,
+    owner_org: OWNER,
+  }
+}
+
+function appDoc(channels = [channelRow(1, { id: 11, name: '1.0.0' }, { id: 12, name: '1.1.0' })], manifestIds = [11]) {
+  return {
+    f: 1,
+    app_id: APP_ID,
+    built_at: 1,
+    exists: true,
+    owner: { owner_org: OWNER, block_provider_infra_requests: false },
+    plan: { has_credits: false, customer_id: null, stripe: null },
+    channels,
+    overrides: {},
+    manifest_ids: manifestIds,
+  }
+}
+
+/** R2 pointers and immutable KV values, published like the writer does. */
+function providers() {
+  const pointers = new Map<string, unknown>()
+  const values = new Map<string, unknown>()
+  const env = {
+    PLUGIN_STATE: { get: vi.fn(async (key: string) => values.get(key) ?? null) },
+    PLUGIN_STATE_POINTERS: { get: vi.fn(async (key: string) => pointers.has(key) ? { json: async () => pointers.get(key) } : null) },
+  }
+  async function publish(logicalKey: string, generation: string, value: unknown) {
+    const kvKey = await pluginStateImmutableKey(logicalKey, generation)
+    pointers.set(logicalKey, { f: 1, generation, kvKey })
+    values.set(kvKey, value)
+  }
+  return { env, publish }
+}
+
+/** Cache API stand-in keyed by URL, keeping the stored headers. */
+function memoryCache() {
+  const entries = new Map<string, { body: string, headers: Headers }>()
+  const cache = {
+    match: vi.fn(async (request: Request) => {
+      const entry = entries.get(request.url)
+      return entry ? new Response(entry.body, { headers: entry.headers }) : undefined
+    }),
+    put: vi.fn(async (request: Request, response: Response) => { entries.set(request.url, { body: await response.text(), headers: new Headers(response.headers) }) }),
+  }
+  vi.stubGlobal('caches', { open: async () => cache, default: cache })
+  return { cache, entries }
+}
+
+async function publishApp(publish: (key: string, generation: string, value: unknown) => Promise<void>, doc = appDoc()) {
+  await publish(await pluginStateAppKey(APP_ID), '5', doc)
+  await publish(await pluginStateVersionKey(APP_ID, '1.0.0'), '5', { id: 11, owner_org: OWNER, deleted: false })
+  await publish(await pluginStateVersionKey(APP_ID, '1.1.0'), '5', { id: 12, owner_org: OWNER, deleted: false })
+  await publish(pluginStateManifestKey(11), '5', { f: 1, built_at: 1, version_id: 11, app_id: APP_ID, deleted: false, entries: [], sizes: [] })
+}
+
+async function onRegionalHost<T>(env: Record<string, unknown>, run: (c: any) => Promise<T>) {
+  const app = new Hono()
+  let result: T | undefined
+  app.all('*', async (c) => {
+    result = await run(c)
+    return c.json({ ok: true })
+  })
+  await app.request('https://plugin.na.capgo.app/updates', { method: 'POST' }, env)
+  return result as T
+}
+
+describe('plugin state prewarm (regional worker)', () => {
+  it('writes the app, bundle-name and manifest documents device requests read, then serves them without provider reads', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', '1%')
+    const { env, publish } = providers()
+    const { cache } = memoryCache()
+    await publishApp(publish)
+
+    const result = await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))
+    expect(result).toEqual({ app_id: APP_ID, revision: '5', cached: 4, error: undefined })
+    expect(cache.put).toHaveBeenCalledTimes(4)
+
+    // A device of this region, in the KV cohort, now reads only the cache.
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    env.PLUGIN_STATE_POINTERS.get.mockClear()
+    env.PLUGIN_STATE.get.mockClear()
+    const session = await onRegionalHost(env, c => startPluginStateRequest(c, APP_ID, 'device'))
+    expect(session?.doc.app_id).toBe(APP_ID)
+    expect(await session?.appVersion('1.1.0', false)).toMatchObject({ id: 12 })
+    expect(await session?.manifestEntries(11)).toEqual([])
+    expect(env.PLUGIN_STATE_POINTERS.get).not.toHaveBeenCalled()
+    expect(env.PLUGIN_STATE.get).not.toHaveBeenCalled()
+  })
+
+  it('keeps entries that already hold the published generation', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    const { env, publish } = providers()
+    const { cache } = memoryCache()
+    await publishApp(publish)
+    await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))
+    cache.put.mockClear()
+
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ revision: '5', cached: 0 })
+    expect(cache.put).not.toHaveBeenCalled()
+
+    // A new publication replaces only what changed.
+    await publish(await pluginStateAppKey(APP_ID), '6', { ...appDoc(), built_at: 2 })
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ revision: '6', cached: 1 })
+  })
+
+  it('does nothing while KV reads are off in the region', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'off')
+    const { env, publish } = providers()
+    const { cache } = memoryCache()
+    await publishApp(publish)
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toEqual({ app_id: APP_ID, revision: null, cached: 0, skipped: 'disabled' })
+    expect(env.PLUGIN_STATE_POINTERS.get).not.toHaveBeenCalled()
+    expect(cache.put).not.toHaveBeenCalled()
+  })
+
+  it('caches the miss of an unpublished app like a device request would', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    const { env } = providers()
+    const { cache } = memoryCache()
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toEqual({ app_id: APP_ID, revision: null, cached: 1, skipped: 'unpublished' })
+    expect(cache.put).toHaveBeenCalledOnce()
+  })
+
+  it('reports a provider read that misses the prewarm budget instead of throwing', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    memoryCache()
+    const env = { PLUGIN_STATE: { get: vi.fn() }, PLUGIN_STATE_POINTERS: { get: vi.fn(() => new Promise<never>(() => {})) } }
+    const pending = onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))
+    await vi.advanceTimersByTimeAsync(2001)
+    expect(await pending).toMatchObject({ app_id: APP_ID, revision: null, cached: 0, error: expect.stringContaining('timed out') })
+  })
+
+  it('lists each served bundle once, skipping builtin and missing bundles, within the cap', () => {
+    const rows: Record<string, unknown>[] = [
+      channelRow(1, { id: 11, name: '1.0.0' }, { id: 11, name: '1.0.0' }),
+      channelRow(2, { id: 12, name: 'builtin' }),
+      { ...channelRow(3, { id: 13, name: '1.3.0' }), version: { id: null } },
+      ...Array.from({ length: 12 }, (_, index) => channelRow(10 + index, { id: 100 + index, name: `2.${index}.0` })),
+    ]
+    const bundles = prewarmBundles(appDoc(rows as ReturnType<typeof channelRow>[]) as any)
+    expect(bundles[0]).toEqual({ id: 11, name: '1.0.0' })
+    expect(bundles.map(bundle => bundle.name)).not.toContain('builtin')
+    expect(bundles).toHaveLength(8)
+  })
+})
+
+describe('plugin state prewarm route', () => {
+  async function call(body: unknown, secret?: string, extraEnv: Record<string, unknown> = {}) {
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    const app = new Hono()
+    app.route('/plugin_state/prewarm', prewarmRoute)
+    return app.request('https://plugin.na.capgo.app/plugin_state/prewarm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(secret ? { apisecret: secret } : {}), 'cf-placement': 'remote-CMH' },
+      body: JSON.stringify(body),
+    }, extraEnv)
+  }
+
+  it('requires the API secret', async () => {
+    expect((await call({ app_ids: [APP_ID] })).status).toBe(401)
+    expect((await call({ app_ids: [APP_ID] }, 'wrong')).status).toBe(401)
+  })
+
+  it('rejects an empty, oversized or invalid app list', async () => {
+    for (const app_ids of [[], 'com.example.app', ['not an app id'], Array.from({ length: 101 }, (_, i) => `com.example.app${i}`)])
+      expect((await call({ app_ids }, 'prewarm-secret')).status).toBe(400)
+  })
+
+  it('warms each listed app and reports the data center it ran in', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    const { env, publish } = providers()
+    memoryCache()
+    await publishApp(publish)
+    const response = await call({ app_ids: [APP_ID, APP_ID, 'com.example.other'] }, 'prewarm-secret', env)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      status: 'ok',
+      placement: 'remote-CMH',
+      colo: null,
+      results: [
+        { app_id: APP_ID, revision: '5', cached: 4 },
+        { app_id: 'com.example.other', revision: null, cached: 1, skipped: 'unpublished' },
+      ],
+    })
+  })
+})
+
+describe('plugin state prewarm fan-out (API worker)', () => {
+  function context() {
+    const raw = new Request('https://api.capgo.app/triggers/updates_cache_purge', { method: 'POST' })
+    return { env: {}, req: { url: raw.url, raw, header: () => undefined }, get: () => 'req-prewarm', set: () => {}, executionCtx: undefined } as any
+  }
+
+  it('only targets production regions in production, unless targets are configured', () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-local')
+    expect(pluginStatePrewarmTargets(context())).toEqual([])
+    vi.stubEnv('ENV_NAME', 'capgo_api-preprod')
+    expect(pluginStatePrewarmTargets(context())).toEqual([])
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    expect(pluginStatePrewarmTargets(context())).toEqual(PLUGIN_REGIONS)
+    vi.stubEnv('ENV_NAME', 'capgo_api-local')
+    vi.stubEnv('PLUGIN_REGION_TARGETS', JSON.stringify([{ name: 'local', envName: 'capgo_plugin-local', url: 'http://localhost:8788/ok' }]))
+    expect(pluginStatePrewarmTargets(context()).map(region => region.url)).toEqual(['http://localhost:8788/ok'])
+  })
+
+  it('posts every batch of app ids to each regional hostname with the API secret', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      const appIds = JSON.parse(String(init.body)).app_ids as string[]
+      if (url.includes('plugin.jp.'))
+        return new Response('{}', { status: 503 })
+      return Response.json({ placement: `remote-${new URL(url).hostname.split('.')[1]}`, results: appIds.map(app_id => ({ app_id, revision: '1', cached: 1 })) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const appIds = Array.from({ length: 150 }, (_, index) => `com.example.app${index}`)
+    const results = await prewarmPluginStateRegions(context(), [...appIds, appIds[0]])
+
+    expect(fetchMock).toHaveBeenCalledTimes(PLUGIN_REGIONS.length * 2)
+    const urls = new Set(fetchMock.mock.calls.map(([url]) => url))
+    expect([...urls].sort()).toEqual(PLUGIN_REGIONS.map(region => `${new URL(region.url).origin}/plugin_state/prewarm`).sort())
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(new Headers(init.headers).get('apisecret')).toBe('prewarm-secret')
+      expect(JSON.parse(String(init.body)).app_ids.length).toBeLessThanOrEqual(100)
+    }
+    expect(results.filter(region => region.region === 'jp')).toEqual([
+      { region: 'jp', status: 503, placement: null, results: [], error: 'http_error' },
+      { region: 'jp', status: 503, placement: null, results: [], error: 'http_error' },
+    ])
+    expect(results.find(region => region.region === 'na')).toMatchObject({ status: 200, placement: 'remote-na', error: null })
+  })
+
+  it('calls nothing without targets or an API secret', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubEnv('ENV_NAME', 'capgo_api-local')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    expect(await prewarmPluginStateRegions(context(), [APP_ID])).toEqual([])
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', '')
+    expect(await prewarmPluginStateRegions(context(), [APP_ID])).toEqual([])
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('prewarms the plugin_state apps of a successful purge batch after the purge', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-local')
+    vi.stubEnv('PLUGIN_REGION_TARGETS', JSON.stringify([{ name: 'local', envName: 'capgo_plugin-local', url: 'http://localhost:8788/ok' }]))
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    const order: string[] = []
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.includes('/plugin_state/prewarm')) {
+        order.push(`prewarm:${JSON.parse(String(init.body)).app_ids.join(',')}`)
+        return Response.json({ placement: null, results: [] })
+      }
+      order.push('purge')
+      return Response.json({ success: true })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const claims: unknown[] = [{
+      status: 'ok',
+      lease_token: 'lease-1',
+      apps: [
+        { app_id: 'com.example.snapshot', scope: 'plugin_state', initial: true },
+        { app_id: 'com.example.db', scope: 'app', initial: true },
+      ],
+      has_more: false,
+    }]
+    const rpc = vi.fn(async (fn: string) => ({ data: fn === 'claim_updates_cache_purge' ? claims.shift() ?? { status: 'empty' } : null, error: null }))
+
+    await drainUpdatesCachePurge(context(), rpc)
+    await vi.waitFor(() => expect(order).toContain('prewarm:com.example.snapshot'), { timeout: 3000 })
+    expect(order.indexOf('purge')).toBeLessThan(order.indexOf('prewarm:com.example.snapshot'))
+    expect(order.filter(entry => entry.startsWith('prewarm'))).toEqual(['prewarm:com.example.snapshot'])
+  })
+
+  it('does not prewarm after a failed purge', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    const fetchMock = vi.fn(async (_url: string) => new Response('{}', { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const claims: unknown[] = [{ status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.example.snapshot', scope: 'plugin_state', initial: true }], has_more: false }]
+    const rpc = vi.fn(async (fn: string) => ({ data: fn === 'claim_updates_cache_purge' ? claims.shift() ?? { status: 'empty' } : null, error: null }))
+    await drainUpdatesCachePurge(context(), rpc)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/plugin_state/prewarm'))).toBe(false)
+  })
+
+  it('waits for the purge to propagate before refilling', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const fetchMock = vi.fn(async () => Response.json({ placement: null, results: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    schedulePluginStatePrewarm(context(), [APP_ID], 1000)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetchMock).toHaveBeenCalledTimes(PLUGIN_REGIONS.length)
+  })
+})

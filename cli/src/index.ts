@@ -18,6 +18,7 @@ import { debugApp } from './app/debug'
 import { deleteApp } from './app/delete'
 import { getInfo } from './app/info'
 import { listApp } from './app/list'
+import { prewarmApp } from './app/prewarm'
 import { setApp } from './app/set'
 import { setSetting } from './app/setting'
 import { appTodo } from './app/todo'
@@ -585,6 +586,18 @@ Example: npx @capgo/cli@latest app debug com.example.app --device DEVICE_ID`)
   .option('-d, --device <device>', `The specific device ID to debug`)
   .option('--api-host <apiHost>', optionDescriptions.apiHost)
   .option('--files-host <filesHost>', optionDescriptions.filesHost)
+
+app
+  .command('prewarm [appId]')
+  .alias('warm')
+  .description(`🔥 Load your app's live update state into every Capgo plugin region now.
+
+Each region keeps a cache of your app's channels and bundles; the first device requests after a change read the database until it fills. Uploads and channel changes already prewarm automatically; use this to warm regions on demand, for example right before a release reaches users.
+
+Example: npx @capgo/cli@latest app prewarm com.example.app`)
+  .action(prewarmApp)
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
 
 app
   .command('setting [path]')

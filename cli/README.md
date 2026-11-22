@@ -151,6 +151,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [List](#app-list)
   - [Todo](#app-todo)
   - [Debug](#app-debug)
+  - [Prewarm](#app-prewarm)
   - [Setting](#app-setting)
   - [Set](#app-set)
 - 📢 [Channel](#channel)
@@ -862,6 +863,30 @@ npx @capgo/cli@latest app debug com.example.app --device DEVICE_ID
 | **-d** | <code>string</code> | The specific device ID to debug |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
+
+### <a id="app-prewarm"></a> 🔹 **Prewarm**
+
+**Alias:** `warm`
+
+```bash
+npx @capgo/cli@latest app prewarm
+```
+
+🔥 Load your app's live update state into every Capgo plugin region now.
+Each region keeps a cache of your app's channels and bundles; the first device requests after a change read the database until it fills. Uploads and channel changes already prewarm automatically; use this to warm regions on demand, for example right before a release reaches users.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest app prewarm com.example.app
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 
 ### <a id="app-setting"></a> ⚙️ **Setting**
 

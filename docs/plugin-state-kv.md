@@ -96,6 +96,32 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 [KV consistency](https://developers.cloudflare.com/kv/concepts/how-kv-works/),
 [KV limits](https://developers.cloudflare.com/kv/platform/limits/).
 
+## Prewarm
+
+Every regional plugin worker has a placement hint, so it runs in one data
+center (check the `cf-placement` response header, for example `remote-CMH` for
+`plugin.na.capgo.app`). The Cache API is local to the data center a worker runs
+in, so each region has a single plugin-state cache, keyed by the regional
+hostname the snippet forwards devices to.
+
+After the purge queue (`triggers/updates_cache_purge.ts`) purges a
+`plugin_state` batch, the API worker waits one second for the purge to reach
+every data center. It then posts the batch's app ids to
+`https://plugin.<region>.capgo.app/plugin_state/prewarm` with the API secret.
+Each regional worker reads the app document, plus the bundle-name and manifest
+documents of the bundles its channels serve (at most 8 bundles). It waits up to
+2 seconds per provider read and writes the same Cache API entries a device
+request would. An entry that already holds the published generation is kept.
+Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
+Failures are only logged (`plugin state prewarmed`); devices then fill the
+cache as usual.
+
+Production uses the region list in `utils/pluginRegionTargets.ts`. Other
+environments prewarm only when `PLUGIN_REGION_TARGETS` is set, so local and CI
+runs never call production hostnames. `npx @capgo/cli@latest app prewarm <appId>`
+(`POST /app/:id/prewarm`, `app.upload_bundle` permission) runs the same fan-out
+on demand and prints each region's data center and result.
+
 ## Controls
 
 | Setting | Scope | Default and purpose |
