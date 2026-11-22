@@ -11,32 +11,47 @@ import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getConfiguredPluginRegions, PLUGIN_REGIONS } from './pluginRegionTargets.ts'
 import { backgroundTask, existInEnv, getEnv } from './utils.ts'
 
-/** Workers allow 6 simultaneous outbound connections; more would queue and eat their timeout. */
-const PREWARM_CONNECTIONS = 6
+/**
+ * Prewarm calls in flight per invocation. Workers allow 6 simultaneous open
+ * connections per invocation, and the purge drain that schedules prewarms
+ * also holds its database socket and sends Cloudflare purge calls: prewarm
+ * takes half, so a call never queues behind the drain after its timeout started.
+ */
+export const PREWARM_CONNECTIONS = 3
+
+interface PrewarmSlots {
+  open: number
+  waiting: (() => void)[]
+}
 
 /**
- * Connection slots shared by every prewarm run of this isolate, so overlapping
- * runs (one per purge batch) never exceed the limit together. A call's
- * timeout only starts once it holds a slot.
+ * Slots per invocation (keyed by its request): overlapping runs of one drain
+ * share them, and an invocation that is cancelled cannot hold slots another
+ * invocation waits for. A call's timeout only starts once it holds a slot.
  */
-let openPrewarmCalls = 0
-const waitingPrewarmCalls: (() => void)[] = []
+const prewarmSlots = new WeakMap<object, PrewarmSlots>()
 
-async function withPrewarmConnection<T>(run: () => Promise<T>): Promise<T> {
-  if (openPrewarmCalls < PREWARM_CONNECTIONS)
-    openPrewarmCalls++
+async function withPrewarmConnection<T>(c: Context, run: () => Promise<T>): Promise<T> {
+  const key = c.req.raw
+  let slots = prewarmSlots.get(key)
+  if (!slots) {
+    slots = { open: 0, waiting: [] }
+    prewarmSlots.set(key, slots)
+  }
+  if (slots.open < PREWARM_CONNECTIONS)
+    slots.open++
   else
-    await new Promise<void>(resolve => waitingPrewarmCalls.push(resolve))
+    await new Promise<void>(resolve => slots.waiting.push(resolve))
   try {
     return await run()
   }
   finally {
     // Hand the slot straight to the next waiting call, or free it.
-    const next = waitingPrewarmCalls.shift()
+    const next = slots.waiting.shift()
     if (next)
       next()
     else
-      openPrewarmCalls--
+      slots.open--
   }
 }
 /** Stay inside the 30 s waitUntil window that runs the background prewarm. */
@@ -115,7 +130,7 @@ export async function prewarmPluginStateRegions(c: Context, appIds: string[]): P
       calls.push({ region, batch })
   }
   const lastStart = Date.now() + PREWARM_TOTAL_BUDGET_MS - PREWARM_CALL_TIMEOUT_MS
-  return Promise.all(calls.map(({ region, batch }) => withPrewarmConnection(async (): Promise<RegionPrewarmResult> => Date.now() <= lastStart
+  return Promise.all(calls.map(({ region, batch }) => withPrewarmConnection(c, async (): Promise<RegionPrewarmResult> => Date.now() <= lastStart
     ? prewarmRegion(region, secret, batch)
     : { region: region.name, status: null, placement: null, results: [], error: 'budget_exhausted' })))
 }

@@ -124,10 +124,12 @@ After the purge queue (`triggers/updates_cache_purge.ts`) purges a
 every data center. It then posts the batch's app ids, 10 per call, to
 `https://plugin.<region>.capgo.app/plugin_state/prewarm` with the API secret
 and `redirect: 'manual'`, so a redirect never carries the secret elsewhere.
-All prewarm calls of an isolate share six connection slots (the Workers limit),
-even when several purge batches overlap; a call's 8-second timeout starts only
-once it holds a slot, and calls that cannot start within 20 seconds of their
-run are reported instead of sent. A region that answers HTTP 200 without an
+Workers allow six open connections per invocation, and the drain also holds
+its database socket and sends Cloudflare purge calls, so prewarm calls take at
+most three slots per invocation. Overlapping prewarm runs of one drain share
+them; another invocation has its own, so a cancelled invocation cannot stall
+it. A call's 8-second timeout starts only once it holds a slot, and calls that
+cannot start within 20 seconds of their run are reported instead of sent. A region that answers HTTP 200 without an
 app's outcome is reported as `missing_result`.
 
 ### Regional call

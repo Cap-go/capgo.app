@@ -646,7 +646,7 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     expect(pluginStatePrewarmTargets(context()).map(region => region.url)).toEqual(['http://localhost:8788/ok'])
   })
 
-  it('posts batches of at most 10 app ids to each regional hostname, six connections at a time', async () => {
+  it('posts batches of at most 10 app ids to each regional hostname, three connections at a time', async () => {
     vi.stubEnv('ENV_NAME', 'capgo_api-prod')
     vi.stubEnv('API_SECRET', 'prewarm-secret')
     let open = 0
@@ -666,7 +666,8 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     const results = await prewarmPluginStateRegions(context(), [...appIds, appIds[0]])
 
     expect(fetchMock).toHaveBeenCalledTimes(PLUGIN_REGIONS.length * 3)
-    expect(maxOpen).toBe(6)
+    // Half of the six per-invocation connections: the drain keeps the rest.
+    expect(maxOpen).toBe(3)
     const urls = new Set(fetchMock.mock.calls.map(([url]) => url))
     expect([...urls].sort()).toEqual(PLUGIN_REGIONS.map(region => `${new URL(region.url).origin}/plugin_state/prewarm`).sort())
     const sentByHost = new Map<string, string[]>()
@@ -701,7 +702,7 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     expect(results.find(region => region.region === 'jp')?.placement).toBeNull()
   })
 
-  it('shares six connections across overlapping prewarm runs', async () => {
+  it('shares three connections across overlapping prewarm runs of one invocation', async () => {
     vi.stubEnv('ENV_NAME', 'capgo_api-prod')
     vi.stubEnv('API_SECRET', 'prewarm-secret')
     let open = 0
@@ -713,16 +714,32 @@ describe('plugin state prewarm fan-out (API worker)', () => {
       open--
       return Response.json({ placement: null, results: [] })
     }))
-    // Two purge batches of one drain, prewarmed at the same time.
-    await Promise.all([prewarmPluginStateRegions(context(), ['com.example.a']), prewarmPluginStateRegions(context(), ['com.example.b'])])
-    expect(maxOpen).toBe(6)
+    // Two purge batches of one drain (one invocation), prewarmed at the same time.
+    const drain = context()
+    await Promise.all([prewarmPluginStateRegions(drain, ['com.example.a']), prewarmPluginStateRegions(drain, ['com.example.b'])])
+    expect(maxOpen).toBe(3)
+  })
+
+  it('keeps slots per invocation, so one stuck invocation cannot stall another', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    // Invocation A's calls never answer (as if it was cancelled mid-flight).
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      if (JSON.parse(String(init.body)).app_ids[0] === 'com.example.stuck')
+        return new Promise<never>(() => {})
+      return Response.json({ placement: null, results: [] })
+    }))
+    void prewarmPluginStateRegions(context(), ['com.example.stuck'])
+    const other = await prewarmPluginStateRegions(context(), ['com.example.free'])
+    expect(other).toHaveLength(PLUGIN_REGIONS.length)
+    expect(other.every(region => region.status === 200)).toBe(true)
   })
 
   it('reports calls it could not start inside the total budget instead of sending them late', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     vi.stubEnv('ENV_NAME', 'capgo_api-prod')
     vi.stubEnv('API_SECRET', 'prewarm-secret')
-    // Every call takes 7 s: two rounds of six fit before the 12 s last start.
+    // Every call takes 7 s: two rounds of three fit before the 12 s last start.
     const fetchMock = vi.fn(async () => {
       await new Promise(resolve => setTimeout(resolve, 7000))
       return Response.json({ placement: null, results: [] })
@@ -733,8 +750,8 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     await vi.advanceTimersByTimeAsync(30_000)
     const results = await pending
     expect(results).toHaveLength(PLUGIN_REGIONS.length * 2)
-    expect(fetchMock).toHaveBeenCalledTimes(12)
-    expect(results.filter(region => region.error === 'budget_exhausted')).toHaveLength(PLUGIN_REGIONS.length * 2 - 12)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+    expect(results.filter(region => region.error === 'budget_exhausted')).toHaveLength(PLUGIN_REGIONS.length * 2 - 6)
   })
 
   it('calls nothing without targets or an API secret', async () => {
