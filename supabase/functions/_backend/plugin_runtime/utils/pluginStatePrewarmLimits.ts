@@ -15,5 +15,12 @@ export const PREWARM_CALL_TIMEOUT_MS = PREWARM_CALL_BUDGET_MS + 2000
  * retries: below the 1,000 operations a Worker invocation may make.
  */
 export const PREWARM_MAX_OPERATIONS = 900
+/**
+ * Manifest documents loaded at once per call, across all its apps. A manifest
+ * can approach 4 MiB (the sync's MANIFEST_MEMORY_LIMIT_BYTES), and a load holds
+ * its parsed value plus serialization and cache-write buffers, so this keeps a
+ * call far below the Worker's 128 MiB memory limit.
+ */
+export const PREWARM_MANIFEST_CONCURRENCY = 2
 /** Kept free at the end of each budget so a cleanup delete still fits. */
 export const PREWARM_CLEANUP_RESERVE_MS = 300

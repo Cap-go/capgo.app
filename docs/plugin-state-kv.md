@@ -138,7 +138,10 @@ Each regional worker reads the app document, plus the bundle-name and manifest
 documents of the bundles its channels serve (at most 8 bundles). Each provider
 read waits up to 2 seconds. The whole call has a 6-second budget and at most
 900 provider and cache operations, shared by every app and retry, below the
-1,000 operations a Worker invocation may make. Reads and writes stop 300 ms
+1,000 operations a Worker invocation may make. Manifests, which can approach
+4 MiB each, load at most two at a time per call across all its apps, and
+bundle documents are dropped as soon as they are cached, so a call stays far
+below the Worker's 128 MiB memory limit. Reads and writes stop 300 ms
 before the budget ends, leaving that time for cleanup deletes; apps that cannot
 start before then are reported as `budget`, and no write starts once the budget
 is spent. It writes the shared app, bundle-name and manifest Cache API entries

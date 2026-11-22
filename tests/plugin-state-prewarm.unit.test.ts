@@ -609,6 +609,45 @@ describe('plugin state prewarm route', () => {
     ])
   })
 
+  it('loads at most two manifests at once across every app of a call', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    memoryCache()
+    const { env, publish } = providers()
+    const appIds = Array.from({ length: 4 }, (_, i) => `com.example.manifests${i}`)
+    let bundleId = 1000
+    for (const appId of appIds) {
+      const rows = Array.from({ length: 8 }, (_, i) => channelRow(i + 1, { id: ++bundleId, name: `1.${i}.0` }))
+      const ids = rows.map(row => row.version.id)
+      await publish(await pluginStateAppKey(appId), '1', { ...appDoc(rows, ids), app_id: appId })
+      for (const row of rows) {
+        await publish(await pluginStateVersionKey(appId, row.version.name), '1', { id: row.version.id, owner_org: OWNER, deleted: false })
+        await publish(pluginStateManifestKey(row.version.id), '1', { f: 1, built_at: 1, version_id: row.version.id, app_id: appId, deleted: false, entries: [], sizes: [] })
+      }
+    }
+    // Track manifest KV reads in flight (their immutable keys carry the manifest logical key).
+    const manifestKeys = new Set<string>()
+    for (let id = 1001; id <= bundleId; id++)
+      manifestKeys.add(await pluginStateImmutableKey(pluginStateManifestKey(id), '1'))
+    const get = env.PLUGIN_STATE.get.getMockImplementation()!
+    let open = 0
+    let maxOpen = 0
+    env.PLUGIN_STATE.get.mockImplementation(async (key: string) => {
+      if (!manifestKeys.has(key))
+        return get(key)
+      open++
+      maxOpen = Math.max(maxOpen, open)
+      await new Promise(resolve => setTimeout(resolve, 2))
+      open--
+      return get(key)
+    })
+    const response = await call({ app_ids: appIds }, 'prewarm-secret', env)
+    const body = await response.json() as { results: { cached: number, error?: string }[] }
+    expect(body.results.every(result => !result.error)).toBe(true)
+    // 1 app document + 8 bundle names + 8 manifests per app.
+    expect(body.results.map(result => result.cached)).toEqual([17, 17, 17, 17])
+    expect(maxOpen).toBe(2)
+  })
+
   it('warms each listed app and reports the data center it ran in', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     const { env, publish } = providers()

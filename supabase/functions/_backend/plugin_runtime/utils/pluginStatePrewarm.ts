@@ -15,7 +15,7 @@ import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
 import { PLUGIN_STATE_CACHE } from './pluginState.ts'
 import { isPluginStateGeneration, pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
-import { PREWARM_CLEANUP_RESERVE_MS, PREWARM_MAX_OPERATIONS } from './pluginStatePrewarmLimits.ts'
+import { PREWARM_CLEANUP_RESERVE_MS, PREWARM_MANIFEST_CONCURRENCY, PREWARM_MAX_OPERATIONS } from './pluginStatePrewarmLimits.ts'
 import { PluginStateMiss } from './pluginStateRegistry.ts'
 import { parsePluginStateShareBps } from './pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateManifestStorage, parsePluginStatePointer, parsePluginStateVersion } from './pluginStateValidation.ts'
@@ -51,17 +51,38 @@ interface Publication {
 }
 
 /**
- * Provider and cache operations a prewarm call may still start. One counter is
- * shared by every app and retry of a call, so even a publication that keeps
- * moving cannot push the call past the per-invocation operation limits.
+ * Budget of one prewarm call, shared by every app and retry in it: the
+ * provider and cache operations it may still start (so even a publication that
+ * keeps moving cannot push the call past the per-invocation operation limits),
+ * and its manifest load slots (so large manifests cannot exhaust memory).
  */
 export interface PrewarmOperations {
   used: number
   max: number
+  manifests: { open: number, waiting: (() => void)[] }
 }
 
 export function prewarmOperations(max = PREWARM_MAX_OPERATIONS): PrewarmOperations {
-  return { used: 0, max }
+  return { used: 0, max, manifests: { open: 0, waiting: [] } }
+}
+
+/** Run one manifest load once the call has a free manifest slot. */
+async function withManifestSlot<T>(ops: PrewarmOperations, run: () => Promise<T>): Promise<T> {
+  const slots = ops.manifests
+  if (slots.open < PREWARM_MANIFEST_CONCURRENCY)
+    slots.open++
+  else
+    await new Promise<void>(resolve => slots.waiting.push(resolve))
+  try {
+    return await run()
+  }
+  finally {
+    const next = slots.waiting.shift()
+    if (next)
+      next()
+    else
+      slots.open--
+  }
 }
 
 function spend(ops: PrewarmOperations) {
@@ -308,10 +329,15 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
       return { app_id: appId, revision: app.revision, cached: warmed.size, skipped: app.value ? undefined : 'unpublished' }
     const manifestIds = new Set(app.value.manifest_ids ?? [])
     const bundles = prewarmBundles(app.value)
+    // Bundle documents are only written, never used here: drop each value as
+    // soon as it is cached, and load manifests through the call's slots.
     const results = await Promise.allSettled(bundles.flatMap(bundle => [
-      pluginStateVersionKey(appId, bundle.name).then(kvKey => warmTarget({ layout: PLUGIN_STATE_CACHE.version, params: { app_id: appId, name: bundle.name }, kvKey, parse: parsePluginStateVersion })),
+      pluginStateVersionKey(appId, bundle.name)
+        .then(kvKey => warmTarget({ layout: PLUGIN_STATE_CACHE.version, params: { app_id: appId, name: bundle.name }, kvKey, parse: parsePluginStateVersion }))
+        .then(() => undefined),
       ...(manifestIds.has(bundle.id)
-        ? [warmTarget({ layout: PLUGIN_STATE_CACHE.manifest, params: { app_id: appId, version_id: String(bundle.id) }, kvKey: pluginStateManifestKey(bundle.id), parse: parsePluginStateManifestStorage })]
+        ? [withManifestSlot(ops, () => warmTarget({ layout: PLUGIN_STATE_CACHE.manifest, params: { app_id: appId, version_id: String(bundle.id) }, kvKey: pluginStateManifestKey(bundle.id), parse: parsePluginStateManifestStorage }))
+            .then(() => undefined)]
         : []),
     ]))
     const failed = results.find(result => result.status === 'rejected')
