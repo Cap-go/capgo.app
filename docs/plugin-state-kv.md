@@ -123,16 +123,17 @@ bundle-name and manifest documents of the bundles its channels serve (at most
 after 6 seconds, reporting the apps it could not start as `budget`. It writes
 the shared app, bundle-name and manifest Cache API entries device requests
 read; per-device override entries are not prewarmed. Only confirmed cache
-writes count as `cached`. An entry that already holds the published generation,
-or a newer one, is kept, so a slow prewarm never moves a cache back to older
-state. When the cache lookup fails or times out (500 ms), the document is
+writes count as `cached`. The lookup before a write keeps any entry that already
+holds the published generation or a newer one; the pointer check after the write
+covers a newer entry stored in between (below). When the cache lookup fails or times out (500 ms), the document is
 reported as an error rather than written blind. A prewarmed miss gets the
 30-second document TTL, like a late refill, because it can land after a purge.
 The Cache API has no conditional put, so after each write the prewarm reads
 the R2 pointer again. A newer entry that the put could have replaced comes from
 a publication that is already visible there; when the pointer has moved past
 the written generation, the prewarm deletes its entry and writes the newer one
-(at most two retries, then it reports an error with the entry deleted). When
+(at most two retries, then it reports an error; the entry is deleted unless that
+delete also fails, the limit described below). When
 that pointer read fails, the entry is deleted too: a cold miss is safe, a stale
 entry is not. A write still pending after 500 ms is reported as timed out, and
 the same check runs in the background once it lands, writing the newer
