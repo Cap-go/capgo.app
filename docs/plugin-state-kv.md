@@ -22,8 +22,13 @@ Cache lookup and cached-body streaming each have their own 50 ms deadline.
 A stalled body is cancelled without waiting for cancellation to finish, and
 the reader tries the current publication instead. Pointer lookup and JSON
 decoding share a 50 ms deadline; the subsequent KV
-value read has its own 50 ms deadline. A timeout discards the late result and
-falls back to the existing replica path. Each request may load at most 16
+value read has its own 50 ms deadline. A timeout falls back to the existing
+replica path for that request, but the late read keeps going in the background
+(at most 2 seconds per provider read) and stores its result in the Cache API
+exactly like an on-time read. Without this refill, a location where R2 always
+answers after 50 ms would never warm up. Each isolate runs at most one refill
+per document; while it runs, other requests for that document skip the
+provider reads and use the replica immediately. Each request may load at most 16
 distinct document keys, with at most four concurrent document loads. Oversized
 stats or manifest-key fanout uses the existing batched replica query instead.
 Build timestamps are not cache identities: two publications can have the same
@@ -461,15 +466,21 @@ Timing logs have `message=plugin_state_request_timing`, the path, method,
 response source, status, Cloudflare colo, duration in milliseconds, and sampling
 basis points. Sampled requests also record `r2_pointer_reads`,
 `r2_pointer_ms`, `r2_pointer_timeouts`, `kv_value_reads`, `kv_value_ms`, and
-`kv_value_timeouts`.
+`kv_value_timeouts`. A sampled request whose read finishes in the background
+also logs `message=plugin_state_refill` with the document path, `outcome`
+(`cached` or `failed`), colo, and the full provider read time in `duration_ms`.
+Use it to size the request deadlines: the request metrics stop at the deadline.
 The durations and operation counts are per-request totals for each provider;
 cache hits contribute zero provider operations. Gate rollout on R2 time,
 timeout rate, and Class B operation counts separately from KV latency and reads,
 including cold documents and replica fallbacks. Keep the KV value `cacheTtl`
 at 30 seconds until negative-lookup caching and propagation are verified.
 These logs measure Worker wall time, not network RTT. `X-Plugin-State`
-identifies KV, misses, errors, and fallbacks; requests rejected before state
-selection need not carry it.
+identifies KV, misses, errors, and fallbacks; `cold` marks an app document
+that was not cached at this location and is being refilled in the background.
+Compare warm `kv` requests against the database cohort, and track the
+`cold` share separately; requests rejected before state selection need not
+carry it.
 
 ## Verification and benchmark
 

@@ -3,6 +3,7 @@ import type { KVNamespace } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { PluginStateAppDoc, PluginStateDeviceDoc, PluginStateManifestDoc, PluginStateManifestFallbackDoc, PluginStateVersionDoc } from './pluginStateFormat.ts'
 import type { PluginStateQueries } from './pluginStateRegistry.ts'
+import type { PluginStatePublication } from './pluginStateStore.ts'
 import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
 import { createLazyPgClient, getDrizzleClient } from './pg.ts'
@@ -27,7 +28,7 @@ import {
 } from './pluginStateEval.ts'
 import { PLUGIN_STATE_FORMAT, pluginStateAppKey, pluginStateDeviceKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
 import { withPluginStateDocument } from './pluginStateReadBudget.ts'
-import { bindPluginStateQueries, PluginStateMiss } from './pluginStateRegistry.ts'
+import { bindPluginStateQueries, PluginStateColdMiss, PluginStateMiss } from './pluginStateRegistry.ts'
 import { readPublishedPluginState } from './pluginStateStore.ts'
 import { isPluginStateStrict, markPluginStateServed, parsePluginStateShareBps, pluginStateBucket, unmarkPluginStateServed } from './pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateDevice, parsePluginStateManifestStorage, parsePluginStateVersion } from './pluginStateValidation.ts'
@@ -43,7 +44,9 @@ import { backgroundTask, getEnv } from './utils.ts'
  *
  * Reads: Cache API (per data center, reusing parsed isolate memory for the
  * same publication) -> R2 pointer -> immutable Workers KV value. Missing
- * independent dependencies fall back to the replica.
+ * independent dependencies fall back to the replica. A provider read that
+ * misses its request deadline finishes in the background and refills the
+ * Cache API, so later requests at that location are served from the cache.
  *
  * Rollout: worker secret `PLUGIN_STATE_KV` (off | on | N% of devices), one
  * stable decision per device. Unpublished apps always use the replica.
@@ -124,6 +127,8 @@ interface CachedDoc<T> {
 
 const memory = new Map<string, CachedDoc<unknown> & { estimatedBytes: number }>()
 let memoryBytes = 0
+/** Background refills by Cache API URL: one provider read per document and isolate. */
+const refills = new Map<string, Promise<void>>()
 
 function rememberDoc(url: string, entry: CachedDoc<unknown>) {
   const previous = memory.get(url)
@@ -148,6 +153,7 @@ function rememberDoc(url: string, entry: CachedDoc<unknown>) {
 export function resetPluginStateMemory() {
   memory.clear()
   memoryBytes = 0
+  refills.clear()
 }
 
 interface DocLoadOptions<T> {
@@ -237,24 +243,77 @@ async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLo
     }
   }
 
+  // A concurrent request is already finishing this document's late read.
+  if (refills.has(request.url))
+    throw new PluginStateColdMiss('document refill in progress')
+  // Assigned by the store callback; the cast keeps TypeScript from narrowing it to undefined.
+  let late = undefined as { publication: Promise<PluginStatePublication>, sampledSince: number | null } | undefined
   let value: T | null
   let revision: string | null
   try {
-    const published = await readPublishedPluginState(c, store, options.kvKey)
+    const published = await readPublishedPluginState(c, store, options.kvKey, (publication, sampledSince) => { late = { publication, sampledSince } })
     value = published.value === null ? null : options.parse(published.value)
     revision = published.revision
   }
   catch {
+    if (late) {
+      refillDocument(c, helper, request, options, late.publication, late.sampledSince)
+      throw new PluginStateColdMiss('document still loading')
+    }
     throw new PluginStateMiss('document unavailable or invalid')
   }
   if (options.reuseParsed && revision)
     rememberDoc(request.url, { revision, value })
-  await backgroundTask(c, helper.putJson(request, { v: value }, value === null ? NEGATIVE_CACHE_TTL_SECONDS : options.ttlSeconds, {
+  await backgroundTask(c, putDocument(helper, request, options, value, revision))
+  return { revision, value }
+}
+
+function putDocument<T>(helper: CacheHelper, request: Request, options: DocLoadOptions<T>, value: T | null, revision: string | null) {
+  return helper.putJson(request, { v: value }, value === null ? NEGATIVE_CACHE_TTL_SECONDS : options.ttlSeconds, {
     tags: options.tags,
     timeoutMs: CACHE_PUT_TIMEOUT_MS,
     headers: revision ? { [REVISION_HEADER]: revision } : undefined,
-  }))
-  return { revision, value }
+  })
+}
+
+/**
+ * Finish a read that missed the request deadline and cache it like an
+ * on-time read. The request has already fallen back; this never delays it.
+ */
+function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request, options: DocLoadOptions<T>, publication: Promise<PluginStatePublication>, sampledSince: number | null) {
+  // Another request of this isolate registered a refill during this read.
+  if (refills.has(request.url)) {
+    void publication.catch(() => undefined)
+    return
+  }
+  // Timing-sampled requests log how long the full provider read took.
+  const log = (outcome: 'cached' | 'failed') => {
+    if (sampledSince === null)
+      return
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'plugin_state_refill',
+      document: options.cachePath,
+      outcome,
+      duration_ms: Math.round((performance.now() - sampledSince) * 100) / 100,
+      colo: c.req.raw.cf?.colo ?? null,
+    })
+  }
+  const refill = publication
+    .then(async (published) => {
+      const value = published.value === null ? null : options.parse(published.value)
+      if (options.reuseParsed && published.revision)
+        rememberDoc(request.url, { revision: published.revision, value })
+      await putDocument(helper, request, options, value, published.revision)
+      log('cached')
+    })
+    .catch(() => log('failed'))
+    .finally(() => {
+      if (refills.get(request.url) === refill)
+        refills.delete(request.url)
+    })
+  refills.set(request.url, refill)
+  void backgroundTask(c, refill)
 }
 
 function loadAppDoc(c: AnyContext, store: KVNamespace, appId: string, kvKey: string) {
@@ -291,8 +350,13 @@ export async function startPluginStateRequest(c: AnyContext, appId: string, devi
     published = await loadAppDoc(c, store, appId, await pluginStateAppKey(appId))
   }
   catch (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'plugin state read failed, using the database', app_id: appId, error })
     sessions.set(c.req.raw, null)
+    // Expected until the background refill lands; the timing sample measures it.
+    if (error instanceof PluginStateColdMiss) {
+      setStateHeader(c, 'cold')
+      return null
+    }
+    cloudlog({ requestId: c.get('requestId'), message: 'plugin state read failed, using the database', app_id: appId, error })
     setStateHeader(c, 'error')
     return null
   }
