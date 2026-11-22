@@ -15,6 +15,7 @@ import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
 import { PLUGIN_STATE_CACHE } from './pluginState.ts'
 import { isPluginStateGeneration, pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
+import { PREWARM_CLEANUP_RESERVE_MS, PREWARM_MAX_OPERATIONS } from './pluginStatePrewarmLimits.ts'
 import { PluginStateMiss } from './pluginStateRegistry.ts'
 import { parsePluginStateShareBps } from './pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateManifestStorage, parsePluginStatePointer, parsePluginStateVersion } from './pluginStateValidation.ts'
@@ -49,11 +50,37 @@ interface Publication {
   revision: string | null
 }
 
+/**
+ * Provider and cache operations a prewarm call may still start. One counter is
+ * shared by every app and retry of a call, so even a publication that keeps
+ * moving cannot push the call past the per-invocation operation limits.
+ */
+export interface PrewarmOperations {
+  used: number
+  max: number
+}
+
+export function prewarmOperations(max = PREWARM_MAX_OPERATIONS): PrewarmOperations {
+  return { used: 0, max }
+}
+
+function spend(ops: PrewarmOperations) {
+  if (ops.used >= ops.max)
+    throw new PluginStateMiss('prewarm operation budget exhausted')
+  ops.used++
+}
+
 /** One provider read, bounded by PREWARM_READ_TIMEOUT_MS and by what is left of `budgetEndsAt`. */
-function deadline<T>(read: () => Promise<T>, what: string, budgetEndsAt: number): Promise<T> {
+function deadline<T>(read: () => Promise<T>, what: string, budgetEndsAt: number, ops: PrewarmOperations): Promise<T> {
   const remaining = Math.min(PREWARM_READ_TIMEOUT_MS, budgetEndsAt - Date.now())
   if (remaining <= 0)
     return Promise.reject(new PluginStateMiss('prewarm budget exhausted'))
+  try {
+    spend(ops)
+  }
+  catch (error) {
+    return Promise.reject(error)
+  }
   let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
     read(),
@@ -64,25 +91,25 @@ function deadline<T>(read: () => Promise<T>, what: string, budgetEndsAt: number)
 }
 
 /** Generation the R2 pointer publishes now (null: no pointer). */
-async function readPublishedGeneration(pointers: R2Bucket, logicalKey: string, budgetEndsAt: number): Promise<string | null> {
-  const object = await deadline(() => pointers.get(logicalKey), 'publication index', budgetEndsAt)
+async function readPublishedGeneration(pointers: R2Bucket, logicalKey: string, budgetEndsAt: number, ops: PrewarmOperations): Promise<string | null> {
+  const object = await deadline(() => pointers.get(logicalKey), 'publication index', budgetEndsAt, ops)
   if (!object)
     return null
-  return parsePluginStatePointer(await deadline(() => object.json<unknown>(), 'publication index body', budgetEndsAt)).generation
+  return parsePluginStatePointer(await deadline(() => object.json<unknown>(), 'publication index body', budgetEndsAt, ops)).generation
 }
 
 /** The strongly consistent R2 pointer, then the immutable KV value it names. */
-async function readPublication(pointers: R2Bucket, store: KVNamespace, logicalKey: string, budgetEndsAt: number): Promise<Publication> {
-  const object = await deadline(() => pointers.get(logicalKey), 'publication index', budgetEndsAt)
+async function readPublication(pointers: R2Bucket, store: KVNamespace, logicalKey: string, budgetEndsAt: number, ops: PrewarmOperations): Promise<Publication> {
+  const object = await deadline(() => pointers.get(logicalKey), 'publication index', budgetEndsAt, ops)
   if (!object)
     return { value: null, revision: null }
-  const pointer = parsePluginStatePointer(await deadline(() => object.json<unknown>(), 'publication index body', budgetEndsAt))
+  const pointer = parsePluginStatePointer(await deadline(() => object.json<unknown>(), 'publication index body', budgetEndsAt, ops))
   if (pointer.kvKey === null)
     return { value: null, revision: pointer.generation }
   if (pointer.kvKey !== await pluginStateImmutableKey(logicalKey, pointer.generation))
     throw new PluginStateMiss('publication pointer identity mismatch')
   const kvKey = pointer.kvKey
-  const value = await deadline(() => store.get<unknown>(kvKey, { type: 'json', cacheTtl: 30 }), 'published value', budgetEndsAt)
+  const value = await deadline(() => store.get<unknown>(kvKey, { type: 'json', cacheTtl: 30 }), 'published value', budgetEndsAt, ops)
   if (value === null)
     throw new PluginStateMiss('published value not propagated')
   return { value, revision: pointer.generation }
@@ -134,7 +161,7 @@ export function prewarmBundles(doc: PluginStateAppDoc): { id: number, name: stri
  * already holds the published generation is left untouched. Every provider
  * read stops at `budgetEndsAt` (epoch ms), so the caller's timeout holds.
  */
-export async function prewarmPluginStateApp(c: Context, appId: string, budgetEndsAt = Date.now() + PREWARM_APP_BUDGET_MS): Promise<PluginStatePrewarmResult> {
+export async function prewarmPluginStateApp(c: Context, appId: string, budgetEndsAt = Date.now() + PREWARM_APP_BUDGET_MS, ops = prewarmOperations()): Promise<PluginStatePrewarmResult> {
   const store = (c.env as { PLUGIN_STATE?: KVNamespace } | undefined)?.PLUGIN_STATE
   const pointers = (c.env as { PLUGIN_STATE_POINTERS?: R2Bucket } | undefined)?.PLUGIN_STATE_POINTERS
   if (!store || !pointers)
@@ -145,12 +172,25 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
 
   const helper = new CacheHelper(c)
   const tags = [pluginStateAppCacheTag(appId)]
-  let cached = 0
-  const warm = async <T>(target: WarmTarget<T>, attempt = 0, endsAt = budgetEndsAt): Promise<{ value: T | null, revision: string | null }> => {
+  /** Cache keys this call left holding the published generation (each counted once). */
+  const warmed = new Set<string>()
+  const notRemoved = '; entry not removed, it expires with its TTL'
+  const removalPending = '; entry removal still pending'
+
+  /**
+   * Reads and writes stop PREWARM_CLEANUP_RESERVE_MS before `endsAt`, so a
+   * cleanup delete always has time left inside the call budget.
+   */
+  const warm = async <T>(target: WarmTarget<T>, attempt: number, endsAt: number): Promise<{ value: T | null, revision: string | null }> => {
+    const workEndsAt = endsAt - PREWARM_CLEANUP_RESERVE_MS
     const request = helper.buildRequest(target.layout.path, target.params)
-    const published = await readPublication(pointers, store, target.kvKey, endsAt)
+    const published = await readPublication(pointers, store, target.kvKey, workEndsAt, ops)
     const value = published.value === null ? null : target.parse(published.value)
-    const current = await helper.probeResponse(request, PREWARM_CACHE_LOOKUP_TIMEOUT_MS)
+    const lookupMs = Math.min(PREWARM_CACHE_LOOKUP_TIMEOUT_MS, workEndsAt - Date.now())
+    if (lookupMs <= 0)
+      throw new PluginStateMiss('prewarm budget exhausted')
+    spend(ops)
+    const current = await helper.probeResponse(request, lookupMs)
     // Unknown cache state: an existing newer entry must not be overwritten blindly.
     if (current === undefined)
       throw new PluginStateMiss('cache lookup unavailable')
@@ -158,6 +198,11 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     void current?.body?.cancel().catch(() => undefined)
     if (!shouldReplaceCachedGeneration(currentRevision, published.revision))
       return { value, revision: published.revision }
+    // No write starts once the budget is spent: it could only end as a timeout.
+    const putMs = Math.min(PREWARM_CACHE_PUT_TIMEOUT_MS, workEndsAt - Date.now())
+    if (putMs <= 0)
+      throw new PluginStateMiss('prewarm budget exhausted')
+    spend(ops)
     // Like a late refill, a prewarm can land after a purge: a miss gets the
     // document TTL, never the longer negative TTL of an on-time miss.
     // Unbounded here: the race below keeps hold of a write that finishes late.
@@ -165,7 +210,7 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
       tags,
       headers: published.revision ? { [PLUGIN_STATE_CACHE.revisionHeader]: published.revision } : undefined,
     })
-    const stored = await raceTimeout(put, Math.min(PREWARM_CACHE_PUT_TIMEOUT_MS, endsAt - Date.now()))
+    const stored = await raceTimeout(put, putMs)
     if (stored === 'timeout') {
       // The write may still land, after this call returns. Check it then, and
       // when the pointer moved, overwrite it with the newer generation.
@@ -182,25 +227,29 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     }
     if (!stored)
       throw new PluginStateMiss('cache write failed')
-    cached++
     // The Cache API has no conditional put, so a newer entry stored between the
     // lookup and this put could have been replaced. Such an entry comes from a
     // publication that is already visible in the strongly consistent pointer:
     // if the pointer moved past what was written, warm again with the newer one.
     const check = await reconcile(request, target.kvKey, published.revision, endsAt)
-    if (check !== 'current')
+    if (check !== 'current') {
+      warmed.delete(request.url)
       return repair(target, attempt + 1, endsAt, check)
+    }
+    warmed.add(request.url)
     return { value, revision: published.revision }
   }
 
   /**
    * The pointer moved past a written entry. Writing the newer generation repairs
-   * it even when its delete failed ('kept'); if that write cannot happen either
-   * (retries spent, KV not propagated yet, budget gone), the error says whether
-   * the stale entry was removed.
+   * it even when its delete failed ('kept'). A delete still pending could remove
+   * that newer write later, so no repair starts then. When the repair cannot
+   * happen (retries spent, KV not propagated yet, budget gone), the error says
+   * whether the stale entry was removed.
    */
-  const repair = async <T>(target: WarmTarget<T>, attempt: number, endsAt: number, check: 'removed' | 'kept'): Promise<{ value: T | null, revision: string | null }> => {
-    const notRemoved = '; entry not removed, it expires with its TTL'
+  const repair = async <T>(target: WarmTarget<T>, attempt: number, endsAt: number, check: 'removed' | 'kept' | 'pending'): Promise<{ value: T | null, revision: string | null }> => {
+    if (check === 'pending')
+      throw new PluginStateMiss(`publication moved during the prewarm${removalPending}`)
     if (attempt > 2)
       throw new PluginStateMiss(`publication kept moving during the prewarm${check === 'kept' ? notRemoved : ''}`)
     try {
@@ -213,47 +262,63 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     }
   }
 
+  /** Delete an entry, waiting no longer than `endsAt` allows. */
+  const remove = async (request: Request, endsAt: number): Promise<'removed' | 'kept' | 'pending'> => {
+    try {
+      spend(ops)
+    }
+    catch {
+      return 'kept'
+    }
+    const removed = await raceTimeout(helper.delete(request), endsAt - Date.now())
+    if (removed === 'timeout')
+      return 'pending'
+    return removed ? 'removed' : 'kept'
+  }
+
   /**
    * After a write of `written`: 'current' when the pointer still publishes it.
-   * When the pointer moved past it, the entry is deleted ('removed', or 'kept'
-   * if the delete failed) so nothing stale is left even without a retry. When
-   * the pointer cannot be read, the entry is deleted (a cold miss is safe, a
-   * stale entry is not) and this throws.
+   * When the pointer moved past it, the entry is deleted ('removed'; 'kept' if
+   * the delete failed; 'pending' if it did not finish by `endsAt`) so nothing
+   * stale is left even without a retry. When the pointer cannot be read, the
+   * entry is deleted (a cold miss is safe, a stale entry is not) and this throws.
    */
-  const reconcile = async (request: Request, logicalKey: string, written: string | null, endsAt: number): Promise<'current' | 'removed' | 'kept'> => {
+  const reconcile = async (request: Request, logicalKey: string, written: string | null, endsAt: number): Promise<'current' | 'removed' | 'kept' | 'pending'> => {
     let latest: string | null
     try {
-      latest = await readPublishedGeneration(pointers, logicalKey, endsAt)
+      latest = await readPublishedGeneration(pointers, logicalKey, endsAt - PREWARM_CLEANUP_RESERVE_MS, ops)
     }
     catch {
       // Neither the pointer nor the cache can be trusted: nothing else can
       // repair the entry, so it lives until its TTL (30 s) at most.
-      if (!await helper.delete(request))
-        throw new PluginStateMiss('publication check after write unavailable; entry not removed, it expires with its TTL')
-      throw new PluginStateMiss('publication check after write unavailable')
+      warmed.delete(request.url)
+      const removal = await remove(request, endsAt)
+      const suffix = removal === 'removed' ? '' : removal === 'pending' ? removalPending : notRemoved
+      throw new PluginStateMiss(`publication check after write unavailable${suffix}`)
     }
     if (latest === null || (written !== null && BigInt(latest) <= BigInt(written)))
       return 'current'
-    return await helper.delete(request) ? 'removed' : 'kept'
+    return remove(request, endsAt)
   }
 
+  const warmTarget = <T>(target: WarmTarget<T>) => warm(target, 0, budgetEndsAt)
   try {
-    const app = await warm({ layout: PLUGIN_STATE_CACHE.app, params: { app_id: appId }, kvKey: await pluginStateAppKey(appId), parse: parsePluginStateApp })
+    const app = await warmTarget({ layout: PLUGIN_STATE_CACHE.app, params: { app_id: appId }, kvKey: await pluginStateAppKey(appId), parse: parsePluginStateApp })
     if (!app.value || app.value.app_id !== appId || !app.value.exists)
-      return { app_id: appId, revision: app.revision, cached, skipped: app.value ? undefined : 'unpublished' }
+      return { app_id: appId, revision: app.revision, cached: warmed.size, skipped: app.value ? undefined : 'unpublished' }
     const manifestIds = new Set(app.value.manifest_ids ?? [])
     const bundles = prewarmBundles(app.value)
     const results = await Promise.allSettled(bundles.flatMap(bundle => [
-      pluginStateVersionKey(appId, bundle.name).then(kvKey => warm({ layout: PLUGIN_STATE_CACHE.version, params: { app_id: appId, name: bundle.name }, kvKey, parse: parsePluginStateVersion })),
+      pluginStateVersionKey(appId, bundle.name).then(kvKey => warmTarget({ layout: PLUGIN_STATE_CACHE.version, params: { app_id: appId, name: bundle.name }, kvKey, parse: parsePluginStateVersion })),
       ...(manifestIds.has(bundle.id)
-        ? [warm({ layout: PLUGIN_STATE_CACHE.manifest, params: { app_id: appId, version_id: String(bundle.id) }, kvKey: pluginStateManifestKey(bundle.id), parse: parsePluginStateManifestStorage })]
+        ? [warmTarget({ layout: PLUGIN_STATE_CACHE.manifest, params: { app_id: appId, version_id: String(bundle.id) }, kvKey: pluginStateManifestKey(bundle.id), parse: parsePluginStateManifestStorage })]
         : []),
     ]))
     const failed = results.find(result => result.status === 'rejected')
-    return { app_id: appId, revision: app.revision, cached, error: failed ? errorMessage(failed.reason) : undefined }
+    return { app_id: appId, revision: app.revision, cached: warmed.size, error: failed ? errorMessage(failed.reason) : undefined }
   }
   catch (error) {
-    return { app_id: appId, revision: null, cached, error: errorMessage(error) }
+    return { app_id: appId, revision: null, cached: warmed.size, error: errorMessage(error) }
   }
 }
 

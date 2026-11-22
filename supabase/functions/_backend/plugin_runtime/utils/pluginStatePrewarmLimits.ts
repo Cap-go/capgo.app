@@ -10,3 +10,10 @@ export const PREWARM_MAX_APPS = 10
 export const PREWARM_CALL_BUDGET_MS = 6000
 /** API worker timeout per call: the route budget plus room for the round trip. */
 export const PREWARM_CALL_TIMEOUT_MS = PREWARM_CALL_BUDGET_MS + 2000
+/**
+ * Provider and cache operations one call may start, across all its apps and
+ * retries: below the 1,000 operations a Worker invocation may make.
+ */
+export const PREWARM_MAX_OPERATIONS = 900
+/** Kept free at the end of each budget so a cleanup delete still fits. */
+export const PREWARM_CLEANUP_RESERVE_MS = 300

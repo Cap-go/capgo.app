@@ -13,6 +13,32 @@ import { backgroundTask, existInEnv, getEnv } from './utils.ts'
 
 /** Workers allow 6 simultaneous outbound connections; more would queue and eat their timeout. */
 const PREWARM_CONNECTIONS = 6
+
+/**
+ * Connection slots shared by every prewarm run of this isolate, so overlapping
+ * runs (one per purge batch) never exceed the limit together. A call's
+ * timeout only starts once it holds a slot.
+ */
+let openPrewarmCalls = 0
+const waitingPrewarmCalls: (() => void)[] = []
+
+async function withPrewarmConnection<T>(run: () => Promise<T>): Promise<T> {
+  if (openPrewarmCalls < PREWARM_CONNECTIONS)
+    openPrewarmCalls++
+  else
+    await new Promise<void>(resolve => waitingPrewarmCalls.push(resolve))
+  try {
+    return await run()
+  }
+  finally {
+    // Hand the slot straight to the next waiting call, or free it.
+    const next = waitingPrewarmCalls.shift()
+    if (next)
+      next()
+    else
+      openPrewarmCalls--
+  }
+}
 /** Stay inside the 30 s waitUntil window that runs the background prewarm. */
 const PREWARM_TOTAL_BUDGET_MS = 20_000
 /** Let the zone purge reach every data center before refilling it. */
@@ -53,6 +79,8 @@ async function prewarmRegion(region: PluginRegion, secret: string, appIds: strin
       headers: { 'apisecret': secret, 'content-type': 'application/json' },
       body: JSON.stringify({ app_ids: appIds }),
       signal: AbortSignal.timeout(PREWARM_CALL_TIMEOUT_MS),
+      // Never follow a redirect: it would carry the API secret to another origin.
+      redirect: 'manual',
     })
     if (!response.ok) {
       void response.body?.cancel().catch(() => undefined)
@@ -87,18 +115,9 @@ export async function prewarmPluginStateRegions(c: Context, appIds: string[]): P
       calls.push({ region, batch })
   }
   const lastStart = Date.now() + PREWARM_TOTAL_BUDGET_MS - PREWARM_CALL_TIMEOUT_MS
-  const results: RegionPrewarmResult[] = Array.from({ length: calls.length })
-  let next = 0
-  await Promise.all(Array.from({ length: Math.min(PREWARM_CONNECTIONS, calls.length) }, async () => {
-    while (next < calls.length) {
-      const index = next++
-      const { region, batch } = calls[index]
-      results[index] = Date.now() <= lastStart
-        ? await prewarmRegion(region, secret, batch)
-        : { region: region.name, status: null, placement: null, results: [], error: 'budget_exhausted' }
-    }
-  }))
-  return results
+  return Promise.all(calls.map(({ region, batch }) => withPrewarmConnection(async (): Promise<RegionPrewarmResult> => Date.now() <= lastStart
+    ? prewarmRegion(region, secret, batch)
+    : { region: region.name, status: null, placement: null, results: [], error: 'budget_exhausted' })))
 }
 
 /**

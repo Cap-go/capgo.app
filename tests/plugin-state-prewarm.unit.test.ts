@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app as prewarmRoute } from '../supabase/functions/_backend/plugin_runtime/private/plugin_state_prewarm.ts'
 import { resetPluginStateMemory, startPluginStateRequest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginState.ts'
 import { pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
-import { prewarmBundles, prewarmPluginStateApp, shouldReplaceCachedGeneration } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
+import { prewarmBundles, prewarmOperations, prewarmPluginStateApp, shouldReplaceCachedGeneration } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
 import { drainUpdatesCachePurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { PLUGIN_REGIONS } from '../supabase/functions/_backend/utils/pluginRegionTargets.ts'
 import { pluginStatePrewarmTargets, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
@@ -210,7 +210,8 @@ describe('plugin state prewarm (regional worker)', () => {
       return found
     })
 
-    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ revision: '6', error: undefined })
+    // Four distinct keys (app, two bundle names, one manifest): the repaired app key counts once.
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ revision: '6', cached: 4, error: undefined })
     // The stale generation 5 put replaced 6 for a moment; the pointer check wrote 6 back.
     const appPuts = cache.put.mock.calls.filter(([request]) => request.url === appRequestUrl)
     expect(appPuts).toHaveLength(2)
@@ -250,7 +251,8 @@ describe('plugin state prewarm (regional worker)', () => {
         throw new Error('R2 unavailable')
       return get(key)
     })
-    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ cached: 1, error: 'plugin state missing: publication check after write unavailable' })
+    // The written entry was removed, so nothing counts as warmed.
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ cached: 0, error: 'plugin state missing: publication check after write unavailable' })
     expect(entries.has(APP_URL)).toBe(false)
   })
 
@@ -436,6 +438,54 @@ describe('plugin state prewarm (regional worker)', () => {
     expect(line!.join(' ')).toContain('entry not removed, it expires with its TTL')
   })
 
+  it('stops at the operation budget shared by every app and retry of a call', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    const { env, publish } = providers()
+    const { cache } = memoryCache()
+    await publishApp(publish)
+    // Pointer, pointer body, KV value, cache lookup, then no budget left for the write.
+    const ops = prewarmOperations(4)
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID, Date.now() + 6000, ops))).toMatchObject({ cached: 0, error: 'plugin state missing: prewarm operation budget exhausted' })
+    expect(ops.used).toBe(4)
+    expect(cache.put).not.toHaveBeenCalled()
+  })
+
+  it('does not repair while a cleanup delete is still pending, and stays inside its budget', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const { env, publish } = providers()
+    const { cache, entries } = memoryCache()
+    await publishApp(publish)
+    cache.delete.mockImplementation(() => new Promise<never>(() => {}))
+    const appKey = await pluginStateAppKey(APP_ID)
+    const match = cache.match.getMockImplementation()!
+    let raced = false
+    cache.match.mockImplementation(async (request: Request) => {
+      const found = await match(request)
+      if (request.url === APP_URL && !raced) {
+        raced = true
+        await publish(appKey, '6', { ...appDoc(), built_at: 6 })
+        entries.set(APP_URL, { body: JSON.stringify({ v: { ...appDoc(), built_at: 6 } }), headers: new Headers({ 'X-Plugin-State-Revision': '6' }) })
+      }
+      return found
+    })
+    const startedAt = Date.now()
+    let settledAt = Number.NaN
+    const pending = onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID, startedAt + 6000)).then((result) => {
+      settledAt = Date.now()
+      return result
+    })
+    for (let step = 0; step < 80; step++) {
+      await new Promise(resolve => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    expect(await pending).toMatchObject({ cached: 0, error: 'plugin state missing: publication moved during the prewarm; entry removal still pending' })
+    // The stalled delete is abandoned at the call budget, not waited on.
+    expect(settledAt - startedAt).toBeLessThanOrEqual(6000)
+    // One app put only: no repair write that the pending delete could later remove.
+    expect(cache.put.mock.calls.filter(([request]) => request.url === APP_URL)).toHaveLength(1)
+  })
+
   it('does nothing while KV reads are off in the region', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'off')
     const { env, publish } = providers()
@@ -550,7 +600,8 @@ describe('plugin state prewarm route', () => {
     }
     const body = await (await response).json() as { results: { app_id: string, skipped?: string, error?: string }[] }
     expect(Date.now() - startedAt).toBeLessThanOrEqual(6100)
-    // Waves of four: 0-3.9 s, then 3.9-6 s with the KV read cut to the 0.2 s left, then out of budget.
+    // Waves of four: 0-3.9 s, then 3.9-5.7 s with the KV read cut to what is left
+    // before the 300 ms cleanup reserve; the last two apps never start.
     expect(body.results.slice(0, 8).every(result => result.error?.includes('timed out'))).toBe(true)
     expect(body.results.slice(8)).toEqual([
       { app_id: 'com.example.slow8', revision: null, cached: 0, skipped: 'budget' },
@@ -618,14 +669,19 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     expect(maxOpen).toBe(6)
     const urls = new Set(fetchMock.mock.calls.map(([url]) => url))
     expect([...urls].sort()).toEqual(PLUGIN_REGIONS.map(region => `${new URL(region.url).origin}/plugin_state/prewarm`).sort())
-    const sent = new Set<string>()
-    for (const [, init] of fetchMock.mock.calls) {
+    const sentByHost = new Map<string, string[]>()
+    for (const [url, init] of fetchMock.mock.calls) {
       expect(new Headers(init.headers).get('apisecret')).toBe('prewarm-secret')
+      expect(init.redirect).toBe('manual')
       const batch = JSON.parse(String(init.body)).app_ids as string[]
       expect(batch.length).toBeLessThanOrEqual(10)
-      batch.forEach(appId => sent.add(appId))
+      const host = new URL(url).hostname
+      sentByHost.set(host, [...(sentByHost.get(host) ?? []), ...batch])
     }
-    expect(sent.size).toBe(25)
+    // Every region receives each app exactly once.
+    expect(sentByHost.size).toBe(PLUGIN_REGIONS.length)
+    for (const ids of sentByHost.values())
+      expect([...ids].sort()).toEqual([...appIds].sort())
     // One entry per batch and region, regions in configured order within each batch.
     expect(results.map(region => region.region)).toEqual([0, 1, 2].flatMap(() => PLUGIN_REGIONS.map(region => region.name)))
     expect(results.filter(region => region.region === 'jp')).toHaveLength(3)
@@ -643,6 +699,23 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     const results = await prewarmPluginStateRegions(context(), [APP_ID])
     expect(results.find(region => region.region === 'na')?.placement).toBe('remote-CMH')
     expect(results.find(region => region.region === 'jp')?.placement).toBeNull()
+  })
+
+  it('shares six connections across overlapping prewarm runs', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    let open = 0
+    let maxOpen = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      open++
+      maxOpen = Math.max(maxOpen, open)
+      await new Promise(resolve => setTimeout(resolve, 2))
+      open--
+      return Response.json({ placement: null, results: [] })
+    }))
+    // Two purge batches of one drain, prewarmed at the same time.
+    await Promise.all([prewarmPluginStateRegions(context(), ['com.example.a']), prewarmPluginStateRegions(context(), ['com.example.b'])])
+    expect(maxOpen).toBe(6)
   })
 
   it('reports calls it could not start inside the total budget instead of sending them late', async () => {

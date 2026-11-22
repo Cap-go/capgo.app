@@ -52,6 +52,8 @@ describe('POST /app/:id/prewarm', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.includes('plugin.sa.'))
         throw new Error('network down')
+      if (url.includes('plugin.oc.'))
+        return Response.json({ placement: 'remote-SYD', results: [] })
       if (url.includes('plugin.af.'))
         return Response.json({ placement: 'remote-JNB', results: [{ app_id: APP_ID, revision: null, cached: 0, skipped: 'disabled' }] })
       return Response.json({ placement: 'remote-XXX', results: [{ app_id: APP_ID, revision: '7', cached: 3 }] })
@@ -63,5 +65,7 @@ describe('POST /app/:id/prewarm', () => {
     expect(body.regions.find(region => region.region === 'na')).toEqual({ region: 'na', status: 200, placement: 'remote-XXX', revision: '7', cached: 3, skipped: null, error: null })
     expect(body.regions.find(region => region.region === 'af')).toMatchObject({ skipped: 'disabled', cached: 0 })
     expect(body.regions.find(region => region.region === 'sa')).toMatchObject({ status: null, error: 'network down', cached: 0 })
+    // HTTP 200 without this app's outcome is a failure, not an "already warm" result.
+    expect(body.regions.find(region => region.region === 'oc')).toMatchObject({ status: 200, cached: 0, error: 'missing_result' })
   })
 })

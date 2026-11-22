@@ -7,8 +7,8 @@ import type { PluginStatePrewarmResult } from '../utils/pluginStatePrewarm.ts'
 import { Hono } from 'hono/tiny'
 import { timingSafeEqual } from 'hono/utils/buffer'
 import { BRES, quickError } from '../utils/hono.ts'
-import { prewarmPluginStateApp } from '../utils/pluginStatePrewarm.ts'
-import { PREWARM_CALL_BUDGET_MS, PREWARM_MAX_APPS } from '../utils/pluginStatePrewarmLimits.ts'
+import { prewarmOperations, prewarmPluginStateApp } from '../utils/pluginStatePrewarm.ts'
+import { PREWARM_CALL_BUDGET_MS, PREWARM_CLEANUP_RESERVE_MS, PREWARM_MAX_APPS } from '../utils/pluginStatePrewarmLimits.ts'
 import { getEnv, isValidAppId } from '../utils/utils.ts'
 
 const PREWARM_CONCURRENCY = 4
@@ -27,10 +27,13 @@ app.post('/', async (c) => {
     throw quickError(400, 'invalid_app_ids', `app_ids must list 1 to ${PREWARM_MAX_APPS} valid app ids`)
   const appIds = [...new Set(raw as string[])]
   const budgetEndsAt = Date.now() + PREWARM_CALL_BUDGET_MS
+  // One operation budget for the whole call: every app and retry draws from it.
+  const ops = prewarmOperations()
   const results: PluginStatePrewarmResult[] = []
   for (let i = 0; i < appIds.length; i += PREWARM_CONCURRENCY) {
-    results.push(...await Promise.all(appIds.slice(i, i + PREWARM_CONCURRENCY).map(appId => Date.now() < budgetEndsAt
-      ? prewarmPluginStateApp(c, appId, budgetEndsAt)
+    // The last PREWARM_CLEANUP_RESERVE_MS only finish cleanups: no app starts then.
+    results.push(...await Promise.all(appIds.slice(i, i + PREWARM_CONCURRENCY).map(appId => Date.now() < budgetEndsAt - PREWARM_CLEANUP_RESERVE_MS
+      ? prewarmPluginStateApp(c, appId, budgetEndsAt, ops)
       : { app_id: appId, revision: null, cached: 0, skipped: 'budget' as const })))
   }
   // cf-placement names the data center a placed worker ran in (its cache).

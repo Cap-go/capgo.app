@@ -20,6 +20,8 @@ export async function prewarm(c: Context<MiddlewareKeyVariables>, appId: string)
     app_id: appId,
     regions: regions.map((region) => {
       const result = region.results.find(entry => entry.app_id === appId)
+      // A region that answered without this app's outcome did not prewarm it.
+      const missing = region.error === null && !result
       return {
         region: region.region,
         status: region.status,
@@ -27,7 +29,7 @@ export async function prewarm(c: Context<MiddlewareKeyVariables>, appId: string)
         revision: result?.revision ?? null,
         cached: result?.cached ?? 0,
         skipped: result?.skipped ?? null,
-        error: region.error ?? result?.error ?? null,
+        error: region.error ?? (missing ? 'missing_result' : result?.error ?? null),
       }
     }),
   })
