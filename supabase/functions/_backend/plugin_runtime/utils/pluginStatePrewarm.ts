@@ -149,14 +149,8 @@ async function startOperation<T>(ops: PrewarmOperations, endsAt: number, operati
   spend(ops)
   if (!await acquire(ops.connections, PREWARM_CONNECTIONS, endsAt))
     throw new PluginStateMiss('prewarm budget exhausted')
-  let running: Promise<T>
-  try {
-    running = operation()
-  }
-  catch (error) {
-    release(ops.connections)
-    throw error
-  }
+  // Through then(): a synchronous throw becomes a rejection, which still frees the slot.
+  const running = Promise.resolve().then(operation)
   running.then(() => release(ops.connections), () => release(ops.connections))
   // Wrapped: an async function returning the promise itself would wait for it.
   return { running }

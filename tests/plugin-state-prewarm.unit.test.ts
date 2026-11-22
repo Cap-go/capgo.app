@@ -486,6 +486,15 @@ describe('plugin state prewarm (regional worker)', () => {
     expect(cache.put.mock.calls.filter(([request]) => request.url === APP_URL)).toHaveLength(1)
   })
 
+  it('frees a connection slot when a binding call throws synchronously', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    memoryCache()
+    const env = { PLUGIN_STATE: { get: vi.fn() }, PLUGIN_STATE_POINTERS: { get: vi.fn(() => { throw new Error('binding unavailable') }) } }
+    const ops = prewarmOperations()
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID, Date.now() + 6000, ops))).toMatchObject({ cached: 0, error: 'binding unavailable' })
+    expect(ops.connections.open).toBe(0)
+  })
+
   it('does nothing while KV reads are off in the region', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'off')
     const { env, publish } = providers()
