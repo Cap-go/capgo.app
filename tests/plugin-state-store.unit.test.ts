@@ -433,6 +433,45 @@ describe('published plugin state reader', () => {
     expect(refillLogs(log)[0]).toMatchObject({ outcome: 'not_cached', duration_ms: 100 })
   })
 
+  it.each([
+    { putMs: 600, outcome: 'cached', stored: true },
+    { putMs: Number.POSITIVE_INFINITY, outcome: 'write_pending', stored: false },
+  ])('waits for a slow refill write instead of the request write timeout ($outcome)', async ({ putMs, outcome, stored }) => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const cache = memoryCache()
+    const put = cache.put.getMockImplementation()!
+    // Slower than the 200 ms request write timeout.
+    cache.put.mockImplementation(async (request: Request, response: Response) => {
+      await new Promise(resolve => Number.isFinite(putMs) && setTimeout(resolve, putMs))
+      await put(request, response)
+    })
+    vi.stubGlobal('caches', { open: async () => cache })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const appId = `com.example.slow-write-${outcome}`
+    const key = await pluginStateImmutableKey(await pluginStateAppKey(appId), '8')
+    const app = new Hono()
+    app.get('/', async (c) => {
+      startPluginStateReadMetrics(c)
+      const session = await startPluginStateRequest(c, appId, 'device')
+      return c.json({ source: session ? 'kv' : 'db' })
+    })
+    const request = app.request('/', undefined, {
+      PLUGIN_STATE: { get: async () => ({ f: 1, app_id: appId, exists: false, built_at: 8 }) },
+      PLUGIN_STATE_POINTERS: { get: async () => {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        return { json: async () => ({ f: 1, generation: '8', kvKey: key }) }
+      } },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    expect((await request).headers.get('X-Plugin-State')).toBe('cold')
+    await vi.advanceTimersByTimeAsync(LATE_READ_TIMEOUT_MS + 100)
+    await vi.waitFor(() => expect(refillLogs(log)).toHaveLength(1))
+    expect(refillLogs(log)[0]).toMatchObject({ outcome })
+    expect(cache.revisions().length).toBe(stored ? 1 : 0)
+  })
+
   it('records R2 and KV operations separately for sampled requests', async () => {
     const current = await pluginStateImmutableKey(KEY, '2')
     const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()

@@ -29,7 +29,7 @@ import {
 import { PLUGIN_STATE_FORMAT, pluginStateAppKey, pluginStateDeviceKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
 import { withPluginStateDocument } from './pluginStateReadBudget.ts'
 import { bindPluginStateQueries, PluginStateColdMiss, PluginStateMiss } from './pluginStateRegistry.ts'
-import { readPublishedPluginState } from './pluginStateStore.ts'
+import { LATE_READ_TIMEOUT_MS, readPublishedPluginState } from './pluginStateStore.ts'
 import { isPluginStateStrict, markPluginStateServed, parsePluginStateShareBps, pluginStateBucket, unmarkPluginStateServed } from './pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateDevice, parsePluginStateManifestStorage, parsePluginStateVersion } from './pluginStateValidation.ts'
 import { pluginStateAppCacheTag } from './updatesCacheTag.ts'
@@ -277,7 +277,9 @@ function putDocument<T>(helper: CacheHelper, request: Request, options: DocLoadO
   const ttlSeconds = value === null && !late ? NEGATIVE_CACHE_TTL_SECONDS : options.ttlSeconds
   return helper.putJson(request, { v: value }, ttlSeconds, {
     tags: options.tags,
-    timeoutMs: CACHE_PUT_TIMEOUT_MS,
+    // A late refill already runs in the background: it waits for the write
+    // itself (refillDocument) rather than dropping it at the request timeout.
+    timeoutMs: late ? undefined : CACHE_PUT_TIMEOUT_MS,
     headers: revision ? { [REVISION_HEADER]: revision } : undefined,
   })
 }
@@ -295,8 +297,9 @@ function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request,
   // Timing-sampled requests log how long the full provider read took, excluding the cache write.
   let readEndedAt: number | null = null
   const now = () => sampledSince === null ? 0 : performance.now()
-  // not_cached: the read finished, but the best-effort cache write did not land.
-  const log = (outcome: 'cached' | 'not_cached' | 'failed') => {
+  // not_cached: the read finished, but the best-effort cache write failed.
+  // write_pending: the write was still unconfirmed after LATE_READ_TIMEOUT_MS.
+  const log = (outcome: 'cached' | 'not_cached' | 'write_pending' | 'failed') => {
     if (sampledSince === null)
       return
     cloudlog({
@@ -314,7 +317,15 @@ function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request,
       const value = published.value === null ? null : options.parse(published.value)
       if (options.reuseParsed && published.revision)
         rememberDoc(request.url, { revision: published.revision, value })
-      log(await putDocument(helper, request, options, value, published.revision, true) ? 'cached' : 'not_cached')
+      const write = putDocument(helper, request, options, value, published.revision, true)
+      // Keep the write alive past this wait: it may still land after it.
+      void backgroundTask(c, write)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const stored = await Promise.race([
+        write,
+        new Promise<'pending'>((resolve) => { timer = setTimeout(() => resolve('pending'), LATE_READ_TIMEOUT_MS) }),
+      ]).finally(() => clearTimeout(timer))
+      log(stored === 'pending' ? 'write_pending' : stored ? 'cached' : 'not_cached')
     })
     .catch(() => log('failed'))
     .finally(() => {
