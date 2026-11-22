@@ -107,15 +107,30 @@ function release(slots: Slots) {
     slots.open--
 }
 
-/** Run one manifest load once the call has a free manifest slot. */
-async function withManifestSlot<T>(ops: PrewarmOperations, endsAt: number, run: () => Promise<T>): Promise<T> {
+/**
+ * Run one manifest load once the call has a free manifest slot. `hold` keeps
+ * the slot past `run` until a still-pending write (and any late check or
+ * repair it triggers) settles: a timed-out write keeps its payload in memory,
+ * so it must keep counting against the manifest limit.
+ */
+async function withManifestSlot<T>(ops: PrewarmOperations, endsAt: number, run: (hold: (pending: Promise<unknown>) => void) => Promise<T>): Promise<T> {
   if (!await acquire(ops.manifests, PREWARM_MANIFEST_CONCURRENCY, endsAt))
     throw new PluginStateMiss('prewarm budget exhausted')
+  let holders = 1
+  const done = () => {
+    holders--
+    if (holders === 0)
+      release(ops.manifests)
+  }
+  const hold = (pending: Promise<unknown>) => {
+    holders++
+    pending.then(done, done)
+  }
   try {
-    return await run()
+    return await run(hold)
   }
   finally {
-    release(ops.manifests)
+    done()
   }
 }
 
@@ -200,6 +215,8 @@ interface WarmTarget<T> {
   params: Record<string, string>
   kvKey: string
   parse: (value: unknown) => T
+  /** Keeps the target's manifest slot until a pending write settles (manifests only). */
+  hold?: (pending: Promise<unknown>) => void
 }
 
 /**
@@ -284,13 +301,14 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
       tags,
       headers: published.revision ? { [PLUGIN_STATE_CACHE.revisionHeader]: published.revision } : undefined,
     }))
+    target.hold?.(put)
     // No write may run past the budget's work window: it could only end as a timeout.
     const putMs = Math.min(PREWARM_CACHE_PUT_TIMEOUT_MS, workEndsAt - Date.now())
     const stored = putMs > 0 ? await raceTimeout(put, putMs) : 'timeout'
     if (stored === 'timeout') {
       // The write may still land, after this call returns. Check it then, and
       // when the pointer moved, overwrite it with the newer generation.
-      void backgroundTask(c, put.then(async (landed) => {
+      const late = put.then(async (landed) => {
         const lateEndsAt = Date.now() + PREWARM_LATE_WRITE_CHECK_MS
         const check = landed ? await reconcile(request, target.kvKey, published.revision, lateEndsAt) : 'current'
         if (check !== 'current')
@@ -298,7 +316,10 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
       }).catch((error: unknown) => {
         // The response already reported the timeout: this log is the only trace.
         cloudlog({ requestId: c.get('requestId'), message: 'plugin state prewarm late write not reconciled', app_id: appId, document: target.layout.path, error: errorMessage(error) })
-      }))
+      })
+      // A manifest keeps its slot through the late check and repair as well.
+      target.hold?.(late)
+      void backgroundTask(c, late)
       throw new PluginStateMiss('cache write timed out')
     }
     if (!stored)
@@ -393,7 +414,7 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
         .then(kvKey => warmTarget({ layout: PLUGIN_STATE_CACHE.version, params: { app_id: appId, name: bundle.name }, kvKey, parse: parsePluginStateVersion }))
         .then(() => undefined),
       ...(manifestIds.has(bundle.id)
-        ? [withManifestSlot(ops, budgetEndsAt, () => warmTarget({ layout: PLUGIN_STATE_CACHE.manifest, params: { app_id: appId, version_id: String(bundle.id) }, kvKey: pluginStateManifestKey(bundle.id), parse: parsePluginStateManifestStorage }))
+        ? [withManifestSlot(ops, budgetEndsAt, hold => warmTarget({ layout: PLUGIN_STATE_CACHE.manifest, params: { app_id: appId, version_id: String(bundle.id) }, kvKey: pluginStateManifestKey(bundle.id), parse: parsePluginStateManifestStorage, hold }))
             .then(() => undefined)]
         : []),
     ]))

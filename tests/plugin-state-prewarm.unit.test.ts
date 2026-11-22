@@ -690,6 +690,48 @@ describe('plugin state prewarm route', () => {
     expect(maxOpen).toBeLessThanOrEqual(5)
   })
 
+  it('keeps a manifest slot until a timed-out manifest write settles', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const { cache } = memoryCache()
+    const { env, publish } = providers()
+    const appId = 'com.example.slow-manifests'
+    const rows = Array.from({ length: 6 }, (_, i) => channelRow(i + 1, { id: 3001 + i, name: `4.${i}.0` }))
+    await publish(await pluginStateAppKey(appId), '1', { ...appDoc(rows, rows.map(row => row.version.id)), app_id: appId })
+    for (const row of rows) {
+      await publish(await pluginStateVersionKey(appId, row.version.name), '1', { id: row.version.id, owner_org: OWNER, deleted: false })
+      await publish(pluginStateManifestKey(row.version.id), '1', { f: 1, built_at: 1, version_id: row.version.id, app_id: appId, deleted: false, entries: [], sizes: [] })
+    }
+    // Manifest writes take 800 ms, past the prewarm's 500 ms write timeout.
+    const put = cache.put.getMockImplementation()!
+    let open = 0
+    let maxOpen = 0
+    cache.put.mockImplementation(async (request: Request, response: Response) => {
+      if (!request.url.includes('.plugin-state-manifest-'))
+        return put(request, response)
+      open++
+      maxOpen = Math.max(maxOpen, open)
+      try {
+        await new Promise(resolve => setTimeout(resolve, 800))
+        return await put(request, response)
+      }
+      finally {
+        open--
+      }
+    })
+    const response = call({ app_ids: [appId] }, 'prewarm-secret', env)
+    for (let step = 0; step < 80; step++) {
+      await new Promise(resolve => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    const body = await (await response).json() as { results: { error?: string }[] }
+    expect(body.results[0].error).toContain('cache write timed out')
+    // A timed-out write keeps its payload in memory, so it keeps its slot too.
+    expect(maxOpen).toBeLessThanOrEqual(2)
+  })
+
   it('warms each listed app and reports the data center it ran in', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     const { env, publish } = providers()

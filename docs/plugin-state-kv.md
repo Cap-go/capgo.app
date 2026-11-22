@@ -143,7 +143,9 @@ read waits up to 2 seconds. The whole call has a 6-second budget and at most
 toward the six simultaneous connections of an invocation, so a call runs at
 most five at once; each read's 2-second timer starts once it holds a slot, and
 waiting for one still ends at the call budget. Manifests, which can approach
-4 MiB each, load at most two at a time per call across all its apps, and
+4 MiB each, load at most two at a time per call across all its apps (a
+manifest keeps its slot until its cache write, and any late check or repair of
+that write, settles, since a pending write still holds its payload), and
 bundle documents are dropped as soon as they are cached, so a call stays far
 below the Worker's 128 MiB memory limit. Reads and writes stop 300 ms
 before the budget ends, leaving that time for cleanup deletes; apps that cannot
