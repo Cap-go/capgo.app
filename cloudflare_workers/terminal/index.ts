@@ -11,14 +11,17 @@ import {
   buildSessionKey,
   terminalDurableObjectName,
 } from './lib/security.ts'
+import { handleTerminalMcpRequest } from './lib/mcp_serve.ts'
 import {
   consumeTerminalWsToken,
   finishTerminalSession,
+  isTerminalSessionActive,
   reserveTerminalSession,
   setTerminalWsToken,
   sha256Hex,
   validateApiKeyForApp,
 } from './lib/apikey.ts'
+import { stripClientMcpHeaders, wsConnectAuth } from './lib/ws.ts'
 import { TerminalSession, type TerminalEnv } from './terminal_session.ts'
 
 const WS_TOKEN_TTL_SECONDS = 300
@@ -209,30 +212,24 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
     if (!parts)
       return new Response('not_found', { status: 404 })
 
-    const apiKey = extractApiKey(request)
-    const wsToken = url.searchParams.get('ws_token')?.trim()
-    if (apiKey) {
-      try {
-        await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
-      }
-      catch {
-        return new Response('forbidden', { status: 403 })
-      }
-    }
-    else if (wsToken) {
-      const tokenHash = await sha256Hex(wsToken)
-      const ok = await consumeTerminalWsToken(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, tokenHash)
-      if (!ok)
-        return new Response('unauthorized', { status: 401 })
-    }
-    else {
+    const wsAuth = wsConnectAuth(request, url)
+    if (wsAuth.kind === 'reject_apikey')
+      return new Response('forbidden', { status: 403 })
+    if (wsAuth.kind === 'unauthorized')
       return new Response('unauthorized', { status: 401 })
-    }
+
+    if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey))
+      return new Response('gone', { status: 410 })
+
+    const tokenHash = await sha256Hex(wsAuth.wsToken)
+    const ok = await consumeTerminalWsToken(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, tokenHash)
+    if (!ok)
+      return new Response('unauthorized', { status: 401 })
 
     const agent = await getAgentByName(env.TERMINAL_SESSION, await terminalDurableObjectName(sessionKey), {
       props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
     })
-    return agent.fetch(request)
+    return agent.fetch(stripClientMcpHeaders(request))
   }
 
   if (path.startsWith('/terminal/mcp')) {
@@ -258,14 +255,17 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       })
       if (reserved instanceof Response)
         return reserved
+      if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey))
+        throw new Error('session_not_active')
     }
     catch (error) {
       return authErrorResponse(error)
     }
-    const agent = await getAgentByName(env.TERMINAL_SESSION, await terminalDurableObjectName(sessionKey), {
-      props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
+    return handleTerminalMcpRequest(request, env, {
+      sessionKey,
+      orgId: parts.orgId,
+      appId: parts.appId,
     })
-    return agent.fetch(request)
   }
 
   if (path === '/terminal/health')

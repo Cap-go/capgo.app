@@ -22,6 +22,11 @@ export function assertTerminalApiKeyPolicy(allowedModes: boolean, appScoped: boo
     throw new Error('apikey_not_app_scoped')
 }
 
+export function assertApiKeyScopeExclusive(appScoped: boolean, orgScoped: boolean): void {
+  if (appScoped && orgScoped)
+    throw new Error('apikey_ambiguous_scope')
+}
+
 export async function validateApiKeyForApp(
   hyperdrive: PostgresHyperdrive,
   apiKey: string,
@@ -51,23 +56,32 @@ export async function validateApiKeyForApp(
       [apiKey, [...TERMINAL_APIKEY_MODES], appId],
     )
 
-    const scoped = await client.query<{ ok: boolean }>(
-      `SELECT EXISTS (
-        SELECT 1
-        FROM public.role_bindings AS rb
-        INNER JOIN public.apps AS a ON a.id = rb.app_id
-        WHERE rb.principal_type = public.rbac_principal_apikey()
-          AND rb.principal_id = $1::uuid
-          AND rb.scope_type = public.rbac_scope_app()
-          AND a.app_id = $2::varchar
-          AND (rb.expires_at IS NULL OR rb.expires_at > pg_catalog.now())
-      ) AS ok`,
+    const scoped = await client.query<{ app_ok: boolean, org_ok: boolean }>(
+      `SELECT
+        EXISTS (
+          SELECT 1
+          FROM public.role_bindings AS rb
+          INNER JOIN public.apps AS a ON a.id = rb.app_id
+          WHERE rb.principal_type = public.rbac_principal_apikey()
+            AND rb.principal_id = $1::uuid
+            AND rb.scope_type = public.rbac_scope_app()
+            AND a.app_id = $2::varchar
+            AND (rb.expires_at IS NULL OR rb.expires_at > pg_catalog.now())
+        ) AS app_ok,
+        EXISTS (
+          SELECT 1
+          FROM public.role_bindings AS rb
+          WHERE rb.principal_type = public.rbac_principal_apikey()
+            AND rb.principal_id = $1::uuid
+            AND rb.scope_type = public.rbac_scope_org()
+            AND (rb.expires_at IS NULL OR rb.expires_at > pg_catalog.now())
+        ) AS org_ok`,
       [row.rbac_id, appId],
     )
-    assertTerminalApiKeyPolicy(
-      Boolean(allowed.rows[0]?.ok),
-      Boolean(scoped.rows[0]?.ok),
-    )
+    const appScoped = Boolean(scoped.rows[0]?.app_ok)
+    const orgScoped = Boolean(scoped.rows[0]?.org_ok)
+    assertTerminalApiKeyPolicy(Boolean(allowed.rows[0]?.ok), appScoped)
+    assertApiKeyScopeExclusive(appScoped, orgScoped)
 
     const orgRow = await client.query<{ owner_org: string }>(
       'SELECT owner_org FROM public.apps WHERE app_id = $1',
@@ -157,6 +171,29 @@ export async function consumeTerminalWsToken(
       [sessionKey, tokenHash],
     )
     return Boolean(result.rows[0]?.ok)
+  }
+  finally {
+    await client.end().catch(() => {})
+  }
+}
+
+export async function isTerminalSessionActive(
+  hyperdrive: PostgresHyperdrive,
+  sessionKey: string,
+): Promise<boolean> {
+  const client = new Client({ connectionString: hyperdrive.connectionString })
+  await client.connect()
+  try {
+    const result = await client.query<{ active: boolean }>(
+      `SELECT EXISTS (
+        SELECT 1 FROM public.terminal_sessions t
+        WHERE t.session_key = $1::text
+          AND t.status = 'active'
+          AND t.started_at + make_interval(mins => t.max_duration_minutes) > pg_catalog.now()
+      ) AS active`,
+      [sessionKey],
+    )
+    return Boolean(result.rows[0]?.active)
   }
   finally {
     await client.end().catch(() => {})

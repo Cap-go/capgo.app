@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assertTerminalApiKeyPolicy } from '../cloudflare_workers/terminal/lib/apikey.ts'
+import { assertApiKeyScopeExclusive, assertTerminalApiKeyPolicy } from '../cloudflare_workers/terminal/lib/apikey.ts'
 import { authErrorResponse } from '../cloudflare_workers/terminal/lib/errors.ts'
 import { TERMINAL_EGRESS_ALLOWLIST, TERMINAL_IDLE_MS, TERMINAL_MAX_SESSION_MINUTES } from '../cloudflare_workers/terminal/lib/constants.ts'
 import { isEgressHostAllowed } from '../cloudflare_workers/terminal/lib/egress.ts'
@@ -20,6 +20,12 @@ import {
   shouldTeardownByAlarm,
   teardownReasonAtAlarm,
 } from '../cloudflare_workers/terminal/lib/security.ts'
+import {
+  requestHasClientMcpHeaders,
+  stripClientMcpHeaders,
+  wsConnectAuth,
+} from '../cloudflare_workers/terminal/lib/ws.ts'
+import { terminalMcpSessionHeaderId } from '../cloudflare_workers/terminal/lib/security.ts'
 
 describe('terminal security', () => {
   it('builds stable session keys', () => {
@@ -35,6 +41,8 @@ describe('terminal security', () => {
   it('locks paths to workspace', () => {
     expect(resolveWorkspacePath('src/main.ts')).toBe('/workspace/project/src/main.ts')
     expect(() => resolveWorkspacePath('../etc/passwd')).toThrow('path_outside_workspace')
+    expect(resolveWorkspacePath('src/foo..bar.ts')).toBe('/workspace/project/src/foo..bar.ts')
+    expect(() => resolveWorkspacePath('src/../etc/passwd')).toThrow('path_outside_workspace')
   })
 
   it('caps streamed output', () => {
@@ -136,5 +144,38 @@ describe('terminal security', () => {
     expect(() => assertTerminalApiKeyPolicy(true, true)).not.toThrow()
     expect(() => assertTerminalApiKeyPolicy(false, true)).toThrow('apikey_app_forbidden')
     expect(() => assertTerminalApiKeyPolicy(true, false)).toThrow('apikey_not_app_scoped')
+  })
+
+  it('rejects api keys bound to org and app', () => {
+    expect(() => assertApiKeyScopeExclusive(true, true)).toThrow('apikey_ambiguous_scope')
+    expect(() => assertApiKeyScopeExclusive(true, false)).not.toThrow()
+  })
+
+  it('ws auth accepts only ws_token', () => {
+    const url = new URL('https://api.capgo.app/terminal/ws/org%3Aapp%3As?ws_token=tok')
+    expect(wsConnectAuth(new Request(url), url).kind).toBe('ok')
+    expect(wsConnectAuth(new Request(url, { headers: { authorization: 'Bearer k' } }), url).kind).toBe('reject_apikey')
+    expect(wsConnectAuth(new Request('https://api.capgo.app/terminal/ws/x'), new URL('https://api.capgo.app/terminal/ws/x')).kind).toBe('unauthorized')
+  })
+
+  it('strips client-forged cf-mcp headers before ws upgrade', () => {
+    const req = new Request('https://api.capgo.app/terminal/ws/k', {
+      headers: {
+        'cf-mcp-method': 'POST',
+        'cf-mcp-message': 'e30=',
+      },
+    })
+    expect(requestHasClientMcpHeaders(req)).toBe(true)
+    const stripped = stripClientMcpHeaders(req)
+    expect(stripped.headers.has('cf-mcp-method')).toBe(false)
+    expect(stripped.headers.has('cf-mcp-message')).toBe(false)
+  })
+
+  it('maps session_key to stable mcp-session-id', async () => {
+    const key = buildSessionKey('org', 'com.app', 'sess')
+    const a = await terminalMcpSessionHeaderId(key)
+    const b = await terminalMcpSessionHeaderId(key)
+    expect(a).toBe(b)
+    expect(a).toMatch(/^[a-f0-9]{64}$/)
   })
 })

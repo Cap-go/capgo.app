@@ -1,5 +1,11 @@
 const UNAUTH_ERRORS = new Set(['invalid_apikey', 'apikey_expired'])
-const FORBIDDEN_ERRORS = new Set(['apikey_app_forbidden', 'apikey_not_app_scoped', 'app_org_mismatch'])
+const FORBIDDEN_ERRORS = new Set([
+  'apikey_app_forbidden',
+  'apikey_not_app_scoped',
+  'apikey_ambiguous_scope',
+  'app_org_mismatch',
+  'session_not_active',
+])
 
 export function authErrorResponse(error: unknown): Response {
   const message = error instanceof Error ? error.message : 'auth_failed'

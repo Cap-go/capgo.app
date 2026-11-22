@@ -8,7 +8,7 @@ import {
   TERMINAL_MAX_SESSION_MINUTES,
   TERMINAL_WORKSPACE_ROOT,
 } from './lib/constants.ts'
-import { finishTerminalSession } from './lib/apikey.ts'
+import { finishTerminalSession, isTerminalSessionActive } from './lib/apikey.ts'
 import {
   assertSafeCommand,
   capOutputBytes,
@@ -17,6 +17,7 @@ import {
   resolveWorkspacePath,
   teardownReasonAtAlarm,
 } from './lib/security.ts'
+import { requestHasClientMcpHeaders } from './lib/ws.ts'
 
 type McpTextResult = { content: Array<{ type: 'text', text: string }> }
 
@@ -73,9 +74,23 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       throw new Error('state_readonly')
   }
 
+  async onConnect(conn: unknown, ctx: { request: Request }): Promise<void> {
+    if (requestHasClientMcpHeaders(ctx.request)) {
+      ;(conn as { close: (code: number, reason: string) => void }).close(1008, 'mcp_headers_forbidden')
+      return
+    }
+    await super.onConnect(conn, ctx)
+  }
+
   async onStart(props?: TerminalProps): Promise<void> {
-    if (props?.sessionKey)
-      await this.ctx.storage.put(SESSION_KEY_STORAGE, props.sessionKey)
+    if (this.state.ended)
+      throw new Error('session_ended')
+    const key = props?.sessionKey
+    if (key) {
+      if (!await isTerminalSessionActive(this.env.HYPERDRIVE_CAPGO_DIRECT_EU, key))
+        throw new Error('session_ended')
+      await this.ctx.storage.put(SESSION_KEY_STORAGE, key)
+    }
     await super.onStart(props)
   }
 

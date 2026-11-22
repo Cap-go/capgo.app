@@ -10,12 +10,20 @@ export function buildSessionKey(orgId: string, appId: string, sessionId: string)
 export type TerminalMcpTransport = 'sse' | 'streamable-http' | 'rpc'
 
 /** McpAgent requires `transport:sessionId`; one name for WS + MCP on the same session. */
+export async function terminalSessionIdHash(sessionKey: string): Promise<string> {
+  return sha256Hex(sessionKey)
+}
+
 export async function terminalDurableObjectName(
   sessionKey: string,
   transport: TerminalMcpTransport = 'streamable-http',
 ): Promise<string> {
-  const hash = await sha256Hex(sessionKey)
+  const hash = await terminalSessionIdHash(sessionKey)
   return `${transport}:${hash}`
+}
+
+export async function terminalMcpSessionHeaderId(sessionKey: string): Promise<string> {
+  return terminalSessionIdHash(sessionKey)
 }
 
 function utf8BytePrefix(bytes: Uint8Array, maxBytes: number): Uint8Array {
