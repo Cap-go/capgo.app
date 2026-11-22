@@ -93,40 +93,44 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
         let bytes = this.state.outputBytes
         let combined = ''
         let truncated = false
-        if (proc.stdout) {
-          const reader = proc.stdout.getReader()
-          const decoder = new TextDecoder()
-          try {
-            while (true) {
-              const { done, value } = await reader.read()
-              if (done)
-                break
-              const chunk = decoder.decode(value, { stream: true })
-              const capped = capOutputBytes(chunk, bytes)
-              bytes = capped.total
-              truncated = truncated || capped.truncated
-              if (capped.text) {
-                combined += capped.text
-                this.broadcast(JSON.stringify({ type: 'stdout', chunk: capped.text, truncated }))
-              }
-              if (truncated) {
-                void proc.kill?.()
-                break
+        let exitCode = -1
+        try {
+          if (proc.stdout) {
+            const reader = proc.stdout.getReader()
+            const decoder = new TextDecoder()
+            try {
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done)
+                  break
+                const chunk = decoder.decode(value, { stream: true })
+                const capped = capOutputBytes(chunk, bytes)
+                bytes = capped.total
+                truncated = truncated || capped.truncated
+                if (capped.text) {
+                  combined += capped.text
+                  this.broadcast(JSON.stringify({ type: 'stdout', chunk: capped.text, truncated }))
+                }
+                if (truncated) {
+                  void proc.kill?.()
+                  break
+                }
               }
             }
+            finally {
+              reader.releaseLock()
+            }
           }
-          finally {
-            reader.releaseLock()
+          try {
+            exitCode = await proc.exitCode
+          }
+          catch {
+            exitCode = -1
           }
         }
-        let exitCode: number
-        try {
-          exitCode = await proc.exitCode
+        finally {
+          this.setState({ ...this.state, outputBytes: bytes })
         }
-        catch {
-          exitCode = -1
-        }
-        this.setState({ ...this.state, outputBytes: bytes })
         return {
           content: [{
             type: 'text',

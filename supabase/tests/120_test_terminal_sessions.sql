@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(9);
+SELECT plan(11);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -26,6 +26,24 @@ SELECT tests.authenticate_as_service_role();
 SELECT ok(
   public.terminal_org_entitled('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
   'entitled org passes terminal_org_entitled'
+);
+
+UPDATE public.stripe_info
+SET is_good_plan = false
+WHERE customer_id = (
+  SELECT customer_id FROM public.orgs WHERE id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+);
+
+SELECT is(
+  public.terminal_org_entitled('046a36ac-e03c-4590-9257-bd6c9dba9ee8'),
+  false,
+  'unpaid plan blocks terminal'
+);
+
+UPDATE public.stripe_info
+SET is_good_plan = true
+WHERE customer_id = (
+  SELECT customer_id FROM public.orgs WHERE id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
 );
 
 UPDATE public.orgs
@@ -100,6 +118,12 @@ SELECT is(
    WHERE session_key = '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s1'),
   'ended',
   'finished session is ended'
+);
+
+SELECT ok(
+  (SELECT billed_minutes FROM public.terminal_sessions
+   WHERE session_key = '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s1') >= 1,
+  'billed_minutes persisted'
 );
 
 SELECT tests.authenticate_as('test_user');

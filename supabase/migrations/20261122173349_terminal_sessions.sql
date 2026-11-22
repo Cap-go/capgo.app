@@ -16,7 +16,7 @@ CREATE TABLE public.terminal_sessions (
   started_at timestamptz NOT NULL DEFAULT now(),
   ended_at timestamptz,
   billed_minutes integer NOT NULL DEFAULT 0 CHECK (billed_minutes >= 0),
-  max_duration_minutes integer NOT NULL DEFAULT 60 CHECK (max_duration_minutes BETWEEN 1 AND 240),
+  max_duration_minutes integer NOT NULL DEFAULT 60 CHECK (max_duration_minutes BETWEEN 1 AND 60),
   teardown_reason text
 );
 
@@ -129,7 +129,9 @@ BEGIN
 
   IF EXISTS (
     SELECT 1 FROM public.terminal_sessions t
-    WHERE t.session_key = p_session_key AND t.status = 'active'
+    WHERE t.session_key = p_session_key
+      AND t.status = 'active'
+      AND t.started_at + make_interval(mins => t.max_duration_minutes) > now()
   ) THEN
     RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'reused', true);
   END IF;

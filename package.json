@@ -168,6 +168,7 @@
     "deploy:cloudflare:translation:prod": "bunx wrangler deploy --config cloudflare_workers/translation/wrangler.jsonc --env=prod --minify --outdir dist --upload-source-maps",
     "deploy:cloudflare:files:prod": "bunx wrangler deploy --config cloudflare_workers/files/wrangler.jsonc --env=prod --minify",
     "deploy:cloudflare:gotrue:prod": "bunx wrangler deploy --config cloudflare_workers/gotrue/wrangler.jsonc --minify",
+    "deploy:cloudflare:terminal:prod": "bunx wrangler deploy --config cloudflare_workers/terminal/wrangler.jsonc --env=prod --minify --upload-source-maps",
     "deploy:cloudflare:preprod": "bun run deploy:cloudflare:api:preprod && bun run deploy:cloudflare:translation:preprod && bun run deploy:cloudflare:files:preprod && bun run deploy:cloudflare:plugin:preprod",
     "deploy:cloudflare:api:preprod": "bun scripts/ensure-posthog-queues.ts preprod && bunx wrangler deploy --config cloudflare_workers/api/wrangler.jsonc --env=preprod --minify",
     "deploy:cloudflare:translation:preprod": "bunx wrangler deploy --config cloudflare_workers/translation/wrangler.jsonc --env=preprod --minify",

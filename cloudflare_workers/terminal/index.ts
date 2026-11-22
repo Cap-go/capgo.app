@@ -114,7 +114,19 @@ export default {
       if (!parts)
         return new Response('not_found', { status: 404 })
       try {
-        await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
+        const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
+        const block = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
+          sessionKey,
+          orgId: parts.orgId,
+          appId: parts.appId,
+          apikeyId: key.apikeyId,
+          maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
+          maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
+        })
+        if (block) {
+          const status = block.status
+          return new Response(block.statusText || 'forbidden', { status })
+        }
       }
       catch {
         return new Response('forbidden', { status: 403 })

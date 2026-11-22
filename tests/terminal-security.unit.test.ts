@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { TERMINAL_EGRESS_ALLOWLIST } from '../cloudflare_workers/terminal/lib/constants.ts'
 import { isEgressHostAllowed } from '../cloudflare_workers/terminal/lib/egress.ts'
 import {
+  extractApiKey,
+  parseSessionRoute,
+} from '../cloudflare_workers/terminal/lib/http.ts'
+import {
   assertSafeCommand,
   buildSessionKey,
   capOutputBytes,
@@ -42,6 +46,23 @@ describe('terminal security', () => {
     expect(alarmAt).toBe(3_601_000)
     expect(shouldTeardownByAlarm(alarmAt, alarmAt)).toBe(true)
     expect(shouldTeardownByAlarm(alarmAt - 1, alarmAt)).toBe(false)
+  })
+
+  it('parses api keys from authorization header', () => {
+    const bearer = new Request('https://api.capgo.app/terminal/health', {
+      headers: { authorization: 'Bearer capg_test_key' },
+    })
+  expect(extractApiKey(bearer)).toBe('capg_test_key')
+    const emptyBearer = new Request('https://api.capgo.app/terminal/health', {
+      headers: { authorization: 'Bearer', capgkey: 'from_header' },
+    })
+    expect(extractApiKey(emptyBearer)).toBe('from_header')
+  })
+
+  it('rejects websocket paths with extra segments', () => {
+    const key = 'org:com.app:session'
+    expect(parseSessionRoute(`/terminal/ws/${encodeURIComponent(key)}`, '/terminal/ws/')).toBe(key)
+    expect(parseSessionRoute(`/terminal/ws/${encodeURIComponent(key)}/extra`, '/terminal/ws/')).toBeNull()
   })
 
   it('allows only configured egress hosts', () => {
