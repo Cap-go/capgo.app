@@ -370,7 +370,12 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
         throw error
       // A concurrent creator won. Re-read and authorize the existing channel
       // before applying settings; creation permission alone cannot authorize updates.
-      return await upsertChannel(c, pg, body, apikey)
+      return await upsertChannel(c, pg, body, apikey).catch((retryError: unknown) => {
+        // The re-read can hit the same cached "missing"; the insert then returns the row.
+        if (retryError instanceof ChannelAlreadyExistsError)
+          return upsertChannel(c, pg, body, apikey, retryError.existing)
+        throw retryError
+      })
     }
   }
   finally {
