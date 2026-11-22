@@ -117,7 +117,7 @@ CREATE TABLE public.terminal_sessions (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   owner_org uuid NOT NULL REFERENCES public.orgs (id) ON DELETE CASCADE,
-  app_id text NOT NULL REFERENCES public.apps (app_id) ON DELETE RESTRICT,
+  app_id text NOT NULL REFERENCES public.apps (app_id) ON DELETE CASCADE,
   apikey_id bigint REFERENCES public.apikeys (id) ON DELETE SET NULL,
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'sleeping', 'ended', 'teardown')),
   started_at timestamptz NOT NULL DEFAULT now(),

@@ -7,10 +7,15 @@ export function buildSessionKey(orgId: string, appId: string, sessionId: string)
   return `${orgId}:${appId}:${sessionId}`
 }
 
-/** DO agent name: colons break agents transport naming; session key stays in props. */
-export async function terminalDurableObjectName(sessionKey: string): Promise<string> {
+export type TerminalMcpTransport = 'sse' | 'streamable-http' | 'rpc'
+
+/** McpAgent requires `transport:sessionId`; session key stays in props. */
+export async function terminalDurableObjectName(
+  sessionKey: string,
+  transport: TerminalMcpTransport = 'streamable-http',
+): Promise<string> {
   const hash = await sha256Hex(sessionKey)
-  return `terminal-${hash}`
+  return `${transport}:${hash}`
 }
 
 function utf8BytePrefix(bytes: Uint8Array, maxBytes: number): Uint8Array {

@@ -50,8 +50,9 @@ describe('terminal security', () => {
   it('does not expand past the byte cap on multibyte utf-8', () => {
     const limit = 256 * 1024
     const capped = capOutputBytes('é', limit - 1)
-    expect(new TextEncoder().encode(capped.text).length).toBeLessThanOrEqual(limit)
-    expect(capped.total).toBeLessThanOrEqual(limit)
+    expect(capped.text).toBe('')
+    expect(capped.total).toBe(limit - 1)
+    expect(capped.truncated).toBe(true)
   })
 
   it('resets the output cap for each command', () => {
@@ -125,8 +126,8 @@ describe('terminal security', () => {
     const key = buildSessionKey('org', 'com.app', 'sess')
     const a = await terminalDurableObjectName(key)
     const b = await terminalDurableObjectName(`${key}--extra`)
-    expect(a).not.toContain(':')
-    expect(a.startsWith('terminal-')).toBe(true)
+    expect(a.startsWith('streamable-http:')).toBe(true)
+    expect(a.split(':').length).toBe(2)
     expect(a).not.toBe(b)
   })
 
