@@ -218,8 +218,7 @@ export async function finalizeTerminalSession(
       [sessionKey, reason],
     )
     const billedMinutes = result.rows[0]?.minutes ?? 0
-    const stillActive = await isTerminalSessionActive(hyperdrive, sessionKey)
-    return { billedMinutes, finalized: !stillActive }
+    return { billedMinutes, finalized: true }
   }
   finally {
     await client.end().catch(() => {})
