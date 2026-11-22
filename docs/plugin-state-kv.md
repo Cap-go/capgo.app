@@ -105,13 +105,13 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 
 ## Controls
 
-| Setting | Scope | Default and purpose |
-| --- | --- | --- |
-| `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | `private.settings` | Disabled. Set to `true` to enqueue changes and run backfill. |
-| `PLUGIN_STATE_KV` | Plugin Worker runtime | Off. Accepts `off`, `on`, or a percentage such as `1%`. Sampling is stable by app and device across endpoints. |
-| `PLUGIN_STATE_KV_AUTHORITATIVE` | Plugin Worker runtime | False. Trust published app-deletion pointers only after verifying complete coverage. Unpublished app pointers always use replicas. Leave false during rollout. |
-| `PLUGIN_STATE_KV_STRICT` | Plugin Worker runtime | False. Tests enable it to reject database reads that escape a KV session. |
-| `PLUGIN_STATE_TIMING` | Plugin Worker runtime | Off. Accepts the same percentage syntax and samples both response paths. |
+| Setting                           | Scope                 | Default and purpose                                                                                                                                            |
+| --------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | `private.settings`    | Disabled. Set to `true` to enqueue changes and run backfill.                                                                                                   |
+| `PLUGIN_STATE_KV`                 | Plugin Worker runtime | Off. Accepts `off`, `on`, or a percentage such as `1%`. Sampling is stable by app and device across endpoints.                                                 |
+| `PLUGIN_STATE_KV_AUTHORITATIVE`   | Plugin Worker runtime | False. Trust published app-deletion pointers only after verifying complete coverage. Unpublished app pointers always use replicas. Leave false during rollout. |
+| `PLUGIN_STATE_KV_STRICT`          | Plugin Worker runtime | False. Tests enable it to reject database reads that escape a KV session.                                                                                      |
+| `PLUGIN_STATE_TIMING`             | Plugin Worker runtime | Off. Accepts the same percentage syntax and samples both response paths.                                                                                       |
 
 Set read/timing shares with the internal per-environment commands:
 
@@ -470,7 +470,9 @@ basis points. Sampled requests also record `r2_pointer_reads`,
 `r2_pointer_ms`, `r2_pointer_timeouts`, `kv_value_reads`, `kv_value_ms`, and
 `kv_value_timeouts`. A sampled request whose read finishes in the background
 also logs `message=plugin_state_refill` with the document path, `outcome`
-(`cached` or `failed`), colo, and the full provider read time in `duration_ms`.
+(`cached`; `not_cached` when the read finished but the best-effort cache write
+did not land; or `failed`), colo, and the full provider read time in
+`duration_ms`.
 Use it to size the request deadlines: the request metrics stop at the deadline.
 The durations and operation counts are per-request totals for each provider;
 cache hits contribute zero provider operations. Gate rollout on R2 time,

@@ -388,6 +388,36 @@ describe('published plugin state reader', () => {
     expect(refillLogs(log)[0]).toMatchObject({ outcome: 'cached', duration_ms: 300 })
   })
 
+  it('logs a refill whose cache write did not land as not_cached', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const cache = memoryCache()
+    cache.put.mockRejectedValue(new Error('cache unavailable'))
+    vi.stubGlobal('caches', { open: async () => cache })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const appId = 'com.example.refill-not-cached'
+    const key = await pluginStateImmutableKey(await pluginStateAppKey(appId), '7')
+    const app = new Hono()
+    app.get('/', async (c) => {
+      startPluginStateReadMetrics(c)
+      const session = await startPluginStateRequest(c, appId, 'device')
+      return c.json({ source: session ? 'kv' : 'db' })
+    })
+    const request = app.request('/', undefined, {
+      PLUGIN_STATE: { get: async () => ({ f: 1, app_id: appId, exists: false, built_at: 7 }) },
+      PLUGIN_STATE_POINTERS: { get: async () => {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        return { json: async () => ({ f: 1, generation: '7', kvKey: key }) }
+      } },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    expect((await request).headers.get('X-Plugin-State')).toBe('cold')
+    await vi.waitFor(() => expect(refillLogs(log)).toHaveLength(1))
+    expect(refillLogs(log)[0]).toMatchObject({ outcome: 'not_cached', duration_ms: 100 })
+  })
+
   it('records R2 and KV operations separately for sampled requests', async () => {
     const current = await pluginStateImmutableKey(KEY, '2')
     const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()

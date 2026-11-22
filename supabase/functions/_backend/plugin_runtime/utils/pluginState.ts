@@ -295,7 +295,8 @@ function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request,
   // Timing-sampled requests log how long the full provider read took, excluding the cache write.
   let readEndedAt: number | null = null
   const now = () => sampledSince === null ? 0 : performance.now()
-  const log = (outcome: 'cached' | 'failed') => {
+  // not_cached: the read finished, but the best-effort cache write did not land.
+  const log = (outcome: 'cached' | 'not_cached' | 'failed') => {
     if (sampledSince === null)
       return
     cloudlog({
@@ -313,8 +314,7 @@ function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request,
       const value = published.value === null ? null : options.parse(published.value)
       if (options.reuseParsed && published.revision)
         rememberDoc(request.url, { revision: published.revision, value })
-      await putDocument(helper, request, options, value, published.revision, true)
-      log('cached')
+      log(await putDocument(helper, request, options, value, published.revision, true) ? 'cached' : 'not_cached')
     })
     .catch(() => log('failed'))
     .finally(() => {
