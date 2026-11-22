@@ -2228,13 +2228,18 @@ export function getBackupRecoveryChargeId(stripeEvent: Stripe.Event): string {
 
 // Stripe only retries the default card; charge the backup before the org is marked failed.
 // Stripe errors propagate so the webhook is retried; the backup charge is idempotent per failed charge.
-async function chargeBackupCard(c: Context<MiddlewareKeyVariablesStripe>, stripeEvent: Stripe.Event, customerId: string): Promise<BackupRecovery> {
+async function chargeBackupCard(
+  c: Context<MiddlewareKeyVariablesStripe>,
+  stripeEvent: Stripe.Event,
+  customerId: string,
+  opts?: { chargeLookup?: Pick<Stripe.Charge, 'payment_intent'> },
+): Promise<BackupRecovery> {
   const stripe = getStripe(c, getWebhookBillingAccount(c))
   // Retry the invoice this charge was for, not whichever invoice is newest.
   const invoice = stripeEvent.type === 'charge.failed'
     ? await findInvoiceForCharge(stripe, stripeEvent.data.object)
     : stripeEvent.type === 'payment_intent.payment_failed'
-      ? await findInvoiceForCharge(stripe, { payment_intent: stripeEvent.data.object.id })
+      ? await findInvoiceForCharge(stripe, opts?.chargeLookup ?? { payment_intent: stripeEvent.data.object.id })
       : null
   if (!invoice)
     return 'not_recovered'
@@ -2270,13 +2275,16 @@ async function handleFailedSubscriptionPayment(
   stripeData: StripeData,
   org: Org,
 ) {
-  if (stripeEvent.type === 'payment_intent.payment_failed') {
+  const paymentIntentLookup = stripeEvent.type === 'payment_intent.payment_failed'
+    ? { payment_intent: stripeEvent.data.object.id }
+    : undefined
+  if (paymentIntentLookup) {
     const stripe = getStripe(c, getWebhookBillingAccount(c))
-    const invoice = await findInvoiceForCharge(stripe, { payment_intent: stripeEvent.data.object.id })
+    const invoice = await findInvoiceForCharge(stripe, paymentIntentLookup)
     if (!invoice || !isSubscriptionInvoice(invoice))
       return null
   }
-  const recovery = await chargeBackupCard(c, stripeEvent, stripeData.data.customer_id)
+  const recovery = await chargeBackupCard(c, stripeEvent, stripeData.data.customer_id, paymentIntentLookup ? { chargeLookup: paymentIntentLookup } : undefined)
   if (recovery !== 'not_recovered') {
     // recovered: charge.succeeded keeps the plan active. backup_attempt_failed: dunning already ran.
     cloudlog({ requestId: c.get('requestId'), message: 'Skipping failed payment handling', recovery, orgId: org.id })
