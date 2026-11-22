@@ -495,6 +495,29 @@ describe('plugin state prewarm (regional worker)', () => {
     expect(ops.connections.open).toBe(0)
   })
 
+  it('reports an entry as not removed when its cleanup delete never starts', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const { env, publish } = providers()
+    const { cache } = memoryCache()
+    await publishApp(publish)
+    const appKey = await pluginStateAppKey(APP_ID)
+    const get = env.PLUGIN_STATE_POINTERS.get.getMockImplementation()!
+    let appReads = 0
+    env.PLUGIN_STATE_POINTERS.get.mockImplementation(async (key: string) => {
+      if (key === appKey && ++appReads === 2)
+        throw new Error('R2 unavailable')
+      return get(key)
+    })
+    // Pointer, body, KV value, lookup, put, then the failing pointer check: no
+    // operation is left for the cleanup delete, so nothing is in flight.
+    const ops = prewarmOperations(6)
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID, Date.now() + 6000, ops))).toMatchObject({
+      error: 'plugin state missing: publication check after write unavailable; entry not removed, it expires with its TTL',
+    })
+    expect(cache.delete).not.toHaveBeenCalled()
+  })
+
   it('does nothing while KV reads are off in the region', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'off')
     const { env, publish } = providers()
@@ -739,6 +762,41 @@ describe('plugin state prewarm route', () => {
     expect(body.results[0].error).toContain('cache write timed out')
     // A timed-out write keeps its payload in memory, so it keeps its slot too.
     expect(maxOpen).toBeLessThanOrEqual(2)
+  })
+
+  it('starts a read timer once the read is admitted, not while it queues for a connection', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    memoryCache()
+    const { env, publish } = providers()
+    const rows = Array.from({ length: 6 }, (_, i) => channelRow(i + 1, { id: 4001 + i, name: `5.${i}.0` }))
+    await publish(await pluginStateAppKey(APP_ID), '1', appDoc(rows, []))
+    const versionKeys: string[] = []
+    for (const row of rows) {
+      const key = await pluginStateVersionKey(APP_ID, row.version.name)
+      versionKeys.push(key)
+      await publish(key, '1', { id: row.version.id, owner_org: OWNER, deleted: false })
+    }
+    // The first five bundle-name pointer reads hold all five connections for
+    // 1.9 s; the sixth then takes 300 ms once admitted: 2.2 s after it was
+    // requested, past the 2 s read timeout if that timer had run while queued.
+    const get = env.PLUGIN_STATE_POINTERS.get.getMockImplementation()!
+    const firstRead = new Set<string>()
+    env.PLUGIN_STATE_POINTERS.get.mockImplementation(async (key: string) => {
+      const index = versionKeys.indexOf(key)
+      if (index >= 0 && !firstRead.has(key)) {
+        firstRead.add(key)
+        await new Promise(resolve => setTimeout(resolve, index < 5 ? 1900 : 300))
+      }
+      return get(key)
+    })
+    const pending = onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID, Date.now() + 6000))
+    for (let step = 0; step < 60; step++) {
+      await new Promise(resolve => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    // App document plus all six bundle names, none timed out.
+    expect(await pending).toEqual({ app_id: APP_ID, revision: '1', cached: 7, error: undefined })
   })
 
   it('warms each listed app and reports the data center it ran in', async () => {

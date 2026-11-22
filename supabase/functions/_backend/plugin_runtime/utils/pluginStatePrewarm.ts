@@ -267,6 +267,11 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
   const warmed = new Set<string>()
   const notRemoved = '; entry not removed, it expires with its TTL'
   const removalPending = '; entry removal still pending'
+  const removalSuffix = (removal: 'removed' | 'kept' | 'pending') => {
+    if (removal === 'removed')
+      return ''
+    return removal === 'pending' ? removalPending : notRemoved
+  }
 
   /**
    * Reads and writes stop PREWARM_CLEANUP_RESERVE_MS before `endsAt`, so a
@@ -355,15 +360,12 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
 
   /** Delete an entry, waiting no longer than `endsAt` allows. */
   const remove = async (request: Request, endsAt: number): Promise<'removed' | 'kept' | 'pending'> => {
-    let deleting: Promise<boolean>
-    try {
-      deleting = (await startOperation(ops, endsAt, () => helper.delete(request))).running
-    }
-    catch (error) {
-      // Not even started: out of operations or no slot before the deadline.
-      return errorMessage(error).includes('budget') ? 'pending' : 'kept'
-    }
-    const removed = await raceTimeout(deleting, endsAt - Date.now())
+    const started = await startOperation(ops, endsAt, () => helper.delete(request)).catch(() => null)
+    // Never started (out of operations, or no slot before the deadline):
+    // nothing is in flight, so the entry simply stays.
+    if (!started)
+      return 'kept'
+    const removed = await raceTimeout(started.running, endsAt - Date.now())
     if (removed === 'timeout')
       return 'pending'
     return removed ? 'removed' : 'kept'
@@ -386,8 +388,7 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
       // repair the entry, so it lives until its TTL (30 s) at most.
       warmed.delete(request.url)
       const removal = await remove(request, endsAt)
-      const suffix = removal === 'removed' ? '' : removal === 'pending' ? removalPending : notRemoved
-      throw new PluginStateMiss(`publication check after write unavailable${suffix}`)
+      throw new PluginStateMiss(`publication check after write unavailable${removalSuffix(removal)}`)
     }
     if (latest === null || (written !== null && BigInt(latest) <= BigInt(written)))
       return 'current'
@@ -397,7 +398,7 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
   const warmTarget = <T>(target: WarmTarget<T>) => warm(target, 0, budgetEndsAt)
   try {
     const app = await warmTarget({ layout: PLUGIN_STATE_CACHE.app, params: { app_id: appId }, kvKey: await pluginStateAppKey(appId), parse: parsePluginStateApp })
-    if (!app.value || app.value.app_id !== appId || !app.value.exists)
+    if (app.value?.app_id !== appId || !app.value.exists)
       return { app_id: appId, revision: app.revision, cached: warmed.size, skipped: app.value ? undefined : 'unpublished' }
     const manifestIds = new Set(app.value.manifest_ids ?? [])
     const bundles = prewarmBundles(app.value)
@@ -418,6 +419,24 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
   catch (error) {
     return { app_id: appId, revision: null, cached: warmed.size, error: errorMessage(error) }
   }
+}
+
+/**
+ * Run `run` over `items` with at most `limit` in flight, keeping the input
+ * order in the results; the next item starts as soon as one finishes.
+ */
+export function mapWithConcurrency<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = Array.from({ length: items.length })
+  let next = 0
+  const worker = (): Promise<void> => {
+    if (next >= items.length)
+      return Promise.resolve()
+    const index = next++
+    return run(items[index]).then((result) => {
+      results[index] = result
+    }).then(worker)
+  }
+  return Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker)).then(() => results)
 }
 
 async function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'> {

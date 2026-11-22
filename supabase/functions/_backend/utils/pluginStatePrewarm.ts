@@ -149,6 +149,12 @@ export async function prewarmPluginStateRegions(c: Context, appIds: string[]): P
     : { region: region.name, status: null, placement: null, results: [], error: 'budget_exhausted' })))
 }
 
+/** `region:error`, plus `:status` when the region answered (401 vs 5xx). */
+function regionFailure(region: RegionPrewarmResult) {
+  const status = region.status === null ? '' : `:${region.status}`
+  return `${region.region}:${region.error}${status}`
+}
+
 /**
  * Background prewarm after a successful plugin state purge. Never delays or
  * fails the purge drain; outcomes are only logged.
@@ -161,7 +167,7 @@ export function schedulePluginStatePrewarm(c: Context, appIds: string[], delayMs
     .then((regions) => {
       // A region call can succeed while some of its apps failed or ran out of budget.
       const failed = regions.flatMap(region => region.error !== null
-        ? [`${region.region}:${region.error}${region.status === null ? '' : `:${region.status}`}`]
+        ? [regionFailure(region)]
         : region.results.filter(app => app.error || app.skipped === 'budget').map(app => `${region.region}:${app.app_id}:${app.error ?? app.skipped}`))
       cloudlog({
         requestId: c.get('requestId'),
