@@ -128,10 +128,11 @@ or a newer one, is kept, so a slow prewarm never moves a cache back to older
 state. When the cache lookup fails or times out (500 ms), the document is
 reported as an error rather than written blind. A prewarmed miss gets the
 30-second document TTL, like a late refill, because it can land after a purge.
-The Cache API has no conditional put, so a newer entry written between the
-lookup and the put can still be replaced; that window is the same for every
-Cache API refill, bounded by the 30-second TTL, and the next publication's
-purge and prewarm replace it.
+The Cache API has no conditional put, so after each write the prewarm reads
+the R2 pointer again. A newer entry that the put could have replaced comes from
+a publication that is already visible there; when the pointer has moved past
+the written generation, the prewarm writes the newer one (at most two retries,
+then it reports an error).
 Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 Failures are only logged (`plugin state prewarmed`); devices then fill the
 cache as usual.

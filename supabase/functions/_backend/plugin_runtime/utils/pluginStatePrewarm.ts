@@ -58,6 +58,14 @@ function deadline<T>(read: () => Promise<T>, what: string, budgetEndsAt: number)
   ]).finally(() => clearTimeout(timer))
 }
 
+/** Generation the R2 pointer publishes now (null: no pointer). */
+async function readPublishedGeneration(pointers: R2Bucket, logicalKey: string, budgetEndsAt: number): Promise<string | null> {
+  const object = await deadline(() => pointers.get(logicalKey), 'publication index', budgetEndsAt)
+  if (!object)
+    return null
+  return parsePluginStatePointer(await deadline(() => object.json<unknown>(), 'publication index body', budgetEndsAt)).generation
+}
+
 /** The strongly consistent R2 pointer, then the immutable KV value it names. */
 async function readPublication(pointers: R2Bucket, store: KVNamespace, logicalKey: string, budgetEndsAt: number): Promise<Publication> {
   const object = await deadline(() => pointers.get(logicalKey), 'publication index', budgetEndsAt)
@@ -131,7 +139,7 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
   const helper = new CacheHelper(c)
   const tags = [pluginStateAppCacheTag(appId)]
   let cached = 0
-  const warm = async <T>(target: WarmTarget<T>): Promise<{ value: T | null, revision: string | null }> => {
+  const warm = async <T>(target: WarmTarget<T>, attempt = 0): Promise<{ value: T | null, revision: string | null }> => {
     const request = helper.buildRequest(target.layout.path, target.params)
     const published = await readPublication(pointers, store, target.kvKey, budgetEndsAt)
     const value = published.value === null ? null : target.parse(published.value)
@@ -153,6 +161,16 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     if (!stored)
       throw new PluginStateMiss('cache write failed')
     cached++
+    // The Cache API has no conditional put, so a newer entry stored between the
+    // lookup and this put could have been replaced. Such an entry comes from a
+    // publication that is already visible in the strongly consistent pointer:
+    // if the pointer moved past what was written, warm again with the newer one.
+    const latest = await readPublishedGeneration(pointers, target.kvKey, budgetEndsAt)
+    if (latest !== null && (published.revision === null || BigInt(latest) > BigInt(published.revision))) {
+      if (attempt >= 2)
+        throw new PluginStateMiss('publication kept moving during the prewarm')
+      return warm(target, attempt + 1)
+    }
     return { value, revision: published.revision }
   }
 

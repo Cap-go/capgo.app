@@ -177,6 +177,50 @@ describe('plugin state prewarm (regional worker)', () => {
     expect(cache.put.mock.calls.some(([request]) => request.url === appRequestUrl)).toBe(false)
   })
 
+  it('rewrites the newer generation when one lands between its lookup and its put', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    const { env, publish } = providers()
+    const { cache, entries } = memoryCache()
+    await publishApp(publish)
+    const appKey = await pluginStateAppKey(APP_ID)
+    const appRequestUrl = 'https://plugin.na.capgo.app/.plugin-state-app-v2?app_id=com.example.prewarm'
+    const match = cache.match.getMockImplementation()!
+    let raced = false
+    cache.match.mockImplementation(async (request: Request) => {
+      const found = await match(request)
+      if (request.url === appRequestUrl && !raced) {
+        raced = true
+        // After this lookup missed: generation 6 is published and a device request caches it.
+        await publish(appKey, '6', { ...appDoc(), built_at: 6 })
+        entries.set(appRequestUrl, { body: JSON.stringify({ v: { ...appDoc(), built_at: 6 } }), headers: new Headers({ 'X-Plugin-State-Revision': '6' }) })
+      }
+      return found
+    })
+
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ revision: '6', error: undefined })
+    // The stale generation 5 put replaced 6 for a moment; the pointer check wrote 6 back.
+    const appPuts = cache.put.mock.calls.filter(([request]) => request.url === appRequestUrl)
+    expect(appPuts).toHaveLength(2)
+    expect(entries.get(appRequestUrl)?.headers.get('X-Plugin-State-Revision')).toBe('6')
+  })
+
+  it('gives up with an error when the publication keeps moving', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    const { env, publish } = providers()
+    memoryCache()
+    await publishApp(publish)
+    const appKey = await pluginStateAppKey(APP_ID)
+    let generation = 5
+    const get = env.PLUGIN_STATE_POINTERS.get.getMockImplementation()!
+    env.PLUGIN_STATE_POINTERS.get.mockImplementation(async (key: string) => {
+      // Every read of the app pointer sees one newer publication.
+      if (key === appKey)
+        await publish(appKey, String(++generation), { ...appDoc(), built_at: generation })
+      return get(key)
+    })
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ error: 'plugin state missing: publication kept moving during the prewarm' })
+  })
+
   it('does nothing while KV reads are off in the region', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'off')
     const { env, publish } = providers()
