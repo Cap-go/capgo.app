@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildSessionKey } from '../cloudflare_workers/terminal/lib/security.ts'
 
-const fetchSpy = vi.fn(async (req: Request) => {
-  expect(req.headers.get('mcp-session-id')).toMatch(/^[a-f0-9]{64}$/)
+    const fetchSpy = vi.fn(async (req: Request) => {
+      expect(req.headers.get('mcp-session-id')).toMatch(/^[a-f0-9]{64}$/)
+      expect(req.headers.has('cf-mcp-method')).toBe(false)
+      expect(req.headers.has('cf-mcp-message')).toBe(false)
   const body = await req.json() as { method: string }
   expect(body.method).toBe('tools/call')
   return new Response(JSON.stringify({
@@ -35,6 +37,8 @@ describe('terminal mcp http', () => {
       headers: {
         accept: 'application/json, text/event-stream',
         'content-type': 'application/json',
+        'cf-mcp-method': 'POST',
+        'cf-mcp-message': 'e30=',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
