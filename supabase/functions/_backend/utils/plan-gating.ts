@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { servicePrincipal, withRlsContext } from './pg_rls.ts'
+import { getInvoiceSubscriptionId } from './stripe_event.ts'
 import { findLatestOpenSubscriptionInvoice, getStripe, isOpenSubscriptionInvoicePaymentProcessing, getSubscriptionData, planProductIdOrFilter } from './stripe.ts'
 import { isStripeConfiguredForAccount, normalizeBillingAccount } from './stripe_billing.ts'
 import { getCurrentPlanNameOrg } from './supabase.ts'
@@ -63,7 +64,10 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
       if (isStripeConfiguredForAccount(c, billingAccount)) {
         try {
           const openInvoice = await findLatestOpenSubscriptionInvoice(c, org.customer_id, billingAccount)
-          renewalPaymentProcessing = openInvoice?.id
+          const invoiceSubscriptionId = openInvoice ? getInvoiceSubscriptionId(openInvoice) : undefined
+          const invoiceMatchesSubscription = !!stripeInfo.subscription_id
+            && invoiceSubscriptionId === stripeInfo.subscription_id
+          renewalPaymentProcessing = openInvoice?.id && invoiceMatchesSubscription
             ? await isOpenSubscriptionInvoicePaymentProcessing(getStripe(c, billingAccount), openInvoice.id)
             : false
         }
@@ -111,7 +115,7 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
  * @param c - Hono context
  * @param orgId - Organization ID to validate
  * @param feature Feature name for the permission error
- * @param requirePaid Also verify the live Stripe subscription is active, with the same product and no past-due balance
+ * @param requirePaid Also verify the live Stripe subscription matches the billed product; past-due is allowed only while that subscription’s renewal payment is processing.
  * @throws {HTTPException} 403 if org is not on Enterprise plan
  */
 export async function requireEnterprisePlan(c: Context, orgId: string, feature = 'SSO', requirePaid = false): Promise<void> {
