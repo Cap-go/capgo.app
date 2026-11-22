@@ -863,7 +863,9 @@ export async function findLatestOpenSubscriptionInvoice(c: Context, customerId: 
 
 export async function getSubscriptionInvoicePaymentIntent(stripe: Stripe, invoiceId: string): Promise<Stripe.PaymentIntent | null> {
   const payments = await stripe.invoicePayments.list({ invoice: invoiceId, limit: 10 })
-  const pending = payments.data.find(payment => payment.status === 'open') ?? payments.data[0]
+  const pending = payments.data.find(payment => payment.status === 'open')
+    ?? payments.data.find(payment => payment.status === 'processing')
+    ?? payments.data[0]
   const paymentIntent = pending?.payment?.payment_intent
   if (!paymentIntent)
     return null
@@ -891,6 +893,7 @@ export function subscriptionInvoicePaymentStateFromInvoice(
 ): 'paid' | 'unpaid' | 'first_invoice_unpaid' {
   if (invoice.status === 'paid')
     return 'paid'
+  // Renewal/access gating: ACH/async renewals stay usable while processing; first invoices stay blocked until settled.
   if (invoice.status === 'open' && paymentIntentStatus === 'processing' && invoice.billing_reason !== 'subscription_create')
     return 'paid'
   return invoice.billing_reason === 'subscription_create' ? 'first_invoice_unpaid' : 'unpaid'

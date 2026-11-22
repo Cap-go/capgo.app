@@ -2235,8 +2235,14 @@ async function chargeBackupCard(c: Context<MiddlewareKeyVariablesStripe>, stripe
   const failedPaymentIntent = stripeEvent.type === 'payment_intent.payment_failed'
     ? stripeEvent.data.object
     : null
+  const failedChargeId = failedCharge?.id
+    ?? (typeof failedPaymentIntent?.latest_charge === 'string'
+      ? failedPaymentIntent.latest_charge
+      : failedPaymentIntent?.latest_charge?.id)
+    ?? failedPaymentIntent?.id
+    ?? 'unknown'
   const result = await payInvoiceWithBackupCard(c, stripe, customerId, invoice.id, {
-    chargeId: failedCharge?.id ?? failedPaymentIntent?.id ?? 'unknown',
+    chargeId: failedChargeId,
     paymentMethodId: failedCharge && typeof failedCharge.payment_method === 'string'
       ? failedCharge.payment_method
       : typeof failedPaymentIntent?.payment_method === 'string'

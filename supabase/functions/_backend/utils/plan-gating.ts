@@ -78,7 +78,9 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
         }
       }
     }
-    if ((stripeInfo.past_due_at && !renewalPaymentProcessing) || subscription?.status !== 'active' || subscription?.productId !== stripeInfo.product_id)
+    const subscriptionBlocking = subscription?.status !== 'active'
+      && !(renewalPaymentProcessing && subscription?.status === 'past_due')
+    if ((stripeInfo.past_due_at && !renewalPaymentProcessing) || subscriptionBlocking || subscription?.productId !== stripeInfo.product_id)
       return null
   }
 

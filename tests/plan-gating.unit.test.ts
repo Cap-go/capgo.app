@@ -97,6 +97,7 @@ describe('paid Enterprise feature gating', () => {
 describe('past-due renewal payment processing exemption', () => {
   it('allows requirePaidPlan when renewal payment is processing', async () => {
     billing({ past_due_at: '2026-01-02T00:00:00Z' })
+    mocks.subscription.mockResolvedValueOnce({ ok: true, data: { status: 'past_due', productId: 'enterprise-product' } })
     stripeMocks.findLatestOpenSubscriptionInvoice.mockResolvedValueOnce({ id: 'in_1' })
     stripeMocks.isOpenSubscriptionInvoicePaymentProcessing.mockResolvedValueOnce(true)
     await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).resolves.toBeUndefined()
