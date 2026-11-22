@@ -98,11 +98,14 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 
 ## Prewarm
 
-Every regional plugin worker has a placement hint, so it runs in one data
-center (check the `cf-placement` response header, for example `remote-CMH` for
-`plugin.na.capgo.app`). The Cache API is local to the data center a worker runs
-in, so each region has a single plugin-state cache, keyed by the regional
-hostname the snippet forwards devices to.
+A regional plugin worker with an active placement hint runs in one data
+center. Check the `cf-placement` response header to confirm it, for example
+`remote-CMH` for `plugin.na.capgo.app`. A worker that returns no `cf-placement`
+header (seen for `plugin.jp.capgo.app` on 2026-11-22) may not run in one data
+center, so its prewarm may not warm the cache its devices read. The Cache API is
+local to the data center a worker runs in, so a placed region has a single
+plugin-state cache, keyed by the regional hostname the snippet forwards devices
+to.
 
 After the purge queue (`triggers/updates_cache_purge.ts`) purges a
 `plugin_state` batch, the API worker waits one second for the purge to reach
@@ -116,7 +119,9 @@ bundle-name and manifest documents of the bundles its channels serve (at most
 after 6 seconds, reporting the apps it could not start as `budget`. It writes
 the shared app, bundle-name and manifest Cache API entries device requests
 read; per-device override entries are not prewarmed. Only confirmed cache
-writes count as `cached`. An entry that already holds the published generation is kept.
+writes count as `cached`. An entry that already holds the published generation,
+or a newer one, is kept, so a slow prewarm never moves a cache back to older
+state.
 Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 Failures are only logged (`plugin state prewarmed`); devices then fill the
 cache as usual.
@@ -130,13 +135,13 @@ on demand and prints each region's data center and result.
 
 ## Controls
 
-| Setting | Scope | Default and purpose |
-| --- | --- | --- |
-| `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | `private.settings` | Disabled. Set to `true` to enqueue changes and run backfill. |
-| `PLUGIN_STATE_KV` | Plugin Worker runtime | Off. Accepts `off`, `on`, or a percentage such as `1%`. Sampling is stable by app and device across endpoints. |
-| `PLUGIN_STATE_KV_AUTHORITATIVE` | Plugin Worker runtime | False. Trust published app-deletion pointers only after verifying complete coverage. Unpublished app pointers always use replicas. Leave false during rollout. |
-| `PLUGIN_STATE_KV_STRICT` | Plugin Worker runtime | False. Tests enable it to reject database reads that escape a KV session. |
-| `PLUGIN_STATE_TIMING` | Plugin Worker runtime | Off. Accepts the same percentage syntax and samples both response paths. |
+| Setting                           | Scope                 | Default and purpose                                                                                                                                            |
+| --------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | `private.settings`    | Disabled. Set to `true` to enqueue changes and run backfill.                                                                                                   |
+| `PLUGIN_STATE_KV`                 | Plugin Worker runtime | Off. Accepts `off`, `on`, or a percentage such as `1%`. Sampling is stable by app and device across endpoints.                                                 |
+| `PLUGIN_STATE_KV_AUTHORITATIVE`   | Plugin Worker runtime | False. Trust published app-deletion pointers only after verifying complete coverage. Unpublished app pointers always use replicas. Leave false during rollout. |
+| `PLUGIN_STATE_KV_STRICT`          | Plugin Worker runtime | False. Tests enable it to reject database reads that escape a KV session.                                                                                      |
+| `PLUGIN_STATE_TIMING`             | Plugin Worker runtime | Off. Accepts the same percentage syntax and samples both response paths.                                                                                       |
 
 Set read/timing shares with the internal per-environment commands:
 

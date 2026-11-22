@@ -13,7 +13,7 @@ import type { Context } from 'hono'
 import type { PluginStateAppDoc } from './pluginStateFormat.ts'
 import { CacheHelper } from './cache.ts'
 import { PLUGIN_STATE_CACHE } from './pluginState.ts'
-import { pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
+import { isPluginStateGeneration, pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
 import { PluginStateMiss } from './pluginStateRegistry.ts'
 import { parsePluginStateShareBps } from './pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateManifestStorage, parsePluginStatePointer, parsePluginStateVersion } from './pluginStateValidation.ts'
@@ -80,6 +80,24 @@ interface WarmTarget<T> {
   parse: (value: unknown) => T
 }
 
+/**
+ * True when the cached entry may be replaced by a read of `published`.
+ * Generations only grow, so an entry already holding the same or a newer
+ * generation is kept: a slow prewarm never moves a cache back to older state.
+ */
+export function shouldReplaceCachedGeneration(current: string | null | undefined, published: string | null) {
+  // No entry (undefined): a cold fill always writes.
+  if (current === undefined)
+    return true
+  // Nothing published: never newer than what is cached.
+  if (published === null)
+    return false
+  // A cached miss, or an entry without a readable generation.
+  if (current === null || !isPluginStateGeneration(current))
+    return true
+  return BigInt(published) > BigInt(current)
+}
+
 /** Bundle id/name pairs served by the app's channels (current and rollout bundles). */
 export function prewarmBundles(doc: PluginStateAppDoc): { id: number, name: string }[] {
   const bundles = new Map<number, string>()
@@ -116,9 +134,9 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     const published = await readPublication(pointers, store, target.kvKey, budgetEndsAt)
     const value = published.value === null ? null : target.parse(published.value)
     const current = await helper.matchResponse(request, { timeoutMs: PLUGIN_STATE_CACHE.matchTimeoutMs })
-    const currentRevision = current?.headers.get(PLUGIN_STATE_CACHE.revisionHeader) ?? null
+    const currentRevision = current ? current.headers.get(PLUGIN_STATE_CACHE.revisionHeader) : undefined
     void current?.body?.cancel().catch(() => undefined)
-    if (current && published.revision !== null && currentRevision === published.revision)
+    if (!shouldReplaceCachedGeneration(currentRevision, published.revision))
       return { value, revision: published.revision }
     const stored = await helper.putJson(request, { v: value }, value === null ? PLUGIN_STATE_CACHE.negativeTtlSeconds : target.layout.ttlSeconds, {
       tags,

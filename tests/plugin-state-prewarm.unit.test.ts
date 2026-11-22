@@ -1,17 +1,28 @@
+import process from 'node:process'
 import { Hono } from 'hono'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app as prewarmRoute } from '../supabase/functions/_backend/plugin_runtime/private/plugin_state_prewarm.ts'
 import { resetPluginStateMemory, startPluginStateRequest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginState.ts'
 import { pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
-import { prewarmBundles, prewarmPluginStateApp } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
+import { prewarmBundles, prewarmPluginStateApp, shouldReplaceCachedGeneration } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
 import { drainUpdatesCachePurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { PLUGIN_REGIONS } from '../supabase/functions/_backend/utils/pluginRegionTargets.ts'
 import { pluginStatePrewarmTargets, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
 
 const APP_ID = 'com.example.prewarm'
 const OWNER = '00000000-0000-4000-8000-000000000001'
+// Region targets come from this file's stubs only, never from the parent environment.
+const inheritedTargets = process.env.PLUGIN_REGION_TARGETS
+
+beforeEach(() => {
+  delete process.env.PLUGIN_REGION_TARGETS
+})
 
 afterEach(() => {
+  if (inheritedTargets === undefined)
+    delete process.env.PLUGIN_REGION_TARGETS
+  else
+    process.env.PLUGIN_REGION_TARGETS = inheritedTargets
   resetPluginStateMemory()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -139,6 +150,30 @@ describe('plugin state prewarm (regional worker)', () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined)
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ app_id: APP_ID, cached: 0, error: 'plugin state missing: cache write failed' })
+  })
+
+  it('never replaces a cached entry with an older or equal generation', async () => {
+    expect(shouldReplaceCachedGeneration(undefined, null)).toBe(true)
+    expect(shouldReplaceCachedGeneration(undefined, '5')).toBe(true)
+    expect(shouldReplaceCachedGeneration(null, '5')).toBe(true)
+    expect(shouldReplaceCachedGeneration(null, null)).toBe(false)
+    expect(shouldReplaceCachedGeneration('5', null)).toBe(false)
+    expect(shouldReplaceCachedGeneration('5', '5')).toBe(false)
+    expect(shouldReplaceCachedGeneration('6', '5')).toBe(false)
+    expect(shouldReplaceCachedGeneration('10', '9')).toBe(false)
+    expect(shouldReplaceCachedGeneration('9', '10')).toBe(true)
+    expect(shouldReplaceCachedGeneration('garbage', '5')).toBe(true)
+
+    // A device request stored generation 6 while this prewarm still read generation 5.
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    const { env, publish } = providers()
+    const { cache, entries } = memoryCache()
+    await publishApp(publish)
+    const appRequestUrl = 'https://plugin.na.capgo.app/.plugin-state-app-v2?app_id=com.example.prewarm'
+    entries.set(appRequestUrl, { body: JSON.stringify({ v: { ...appDoc(), built_at: 2 } }), headers: new Headers({ 'X-Plugin-State-Revision': '6' }) })
+    await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))
+    expect(entries.get(appRequestUrl)?.headers.get('X-Plugin-State-Revision')).toBe('6')
+    expect(cache.put.mock.calls.some(([request]) => request.url === appRequestUrl)).toBe(false)
   })
 
   it('does nothing while KV reads are off in the region', async () => {

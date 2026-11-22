@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import process from 'node:process'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { prewarm } from '../supabase/functions/_backend/public/app/prewarm.ts'
 import { PLUGIN_REGIONS } from '../supabase/functions/_backend/utils/pluginRegionTargets.ts'
 import { checkPermission } from '../supabase/functions/_backend/utils/rbac.ts'
@@ -6,6 +7,12 @@ import { checkPermission } from '../supabase/functions/_backend/utils/rbac.ts'
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({ checkPermission: vi.fn() }))
 
 const APP_ID = 'com.example.prewarm'
+// An inherited PLUGIN_REGION_TARGETS would replace the production region list.
+const inheritedTargets = process.env.PLUGIN_REGION_TARGETS
+
+beforeEach(() => {
+  delete process.env.PLUGIN_REGION_TARGETS
+})
 
 function context() {
   const raw = new Request(`https://api.capgo.app/app/${APP_ID}/prewarm`, { method: 'POST' })
@@ -13,6 +20,10 @@ function context() {
 }
 
 afterEach(() => {
+  if (inheritedTargets === undefined)
+    delete process.env.PLUGIN_REGION_TARGETS
+  else
+    process.env.PLUGIN_REGION_TARGETS = inheritedTargets
   vi.mocked(checkPermission).mockReset()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
