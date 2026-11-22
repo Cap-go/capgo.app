@@ -7,6 +7,8 @@ when working with code in this repository.
 
 The admin dashboard lives in [`Cap-go/capgo_admin_dashboard`](https://github.com/Cap-go/capgo_admin_dashboard) and reads the Capgo database read-only; Capgo carries no admin code.
 
+When a bug affects a dashboard dataset, include the historical repair in the same pull request. Identify the affected period, reconstruct each recoverable day from authoritative records, and verify the corrected series against those records. Document any dates or values that cannot be recovered and why. Dashboard trends over time are our highest priority.
+
 ## MUST NOT — never publish private customer data
 
 **This repository is public.** Chat, tickets, and internal messages may contain
