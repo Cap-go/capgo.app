@@ -221,6 +221,10 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'invalid_session_key');
   END IF;
 
+  IF NOT public.terminal_org_entitled(p_org_id) THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'terminal_not_entitled');
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1 FROM public.apps a WHERE a.app_id = p_app_id AND a.owner_org = p_org_id
   ) THEN

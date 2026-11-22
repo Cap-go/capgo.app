@@ -121,10 +121,13 @@ describe('terminal security', () => {
     expect(authErrorResponse(new Error('boom')).status).toBe(500)
   })
 
-  it('builds colon-free durable object names', () => {
+  it('builds colon-free durable object names', async () => {
     const key = buildSessionKey('org', 'com.app', 'sess')
-    expect(terminalDurableObjectName(key)).not.toContain(':')
-    expect(terminalDurableObjectName(key)).toContain('terminal--')
+    const a = await terminalDurableObjectName(key)
+    const b = await terminalDurableObjectName(`${key}--extra`)
+    expect(a).not.toContain(':')
+    expect(a.startsWith('terminal-')).toBe(true)
+    expect(a).not.toBe(b)
   })
 
   it('requires write or all on an app-scoped key', () => {

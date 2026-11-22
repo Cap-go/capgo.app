@@ -132,7 +132,12 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
           WS_TOKEN_TTL_SECONDS,
         )
       }
-      catch {
+      catch (error) {
+        console.error(JSON.stringify({
+          event: 'terminal_ws_token_set_failed',
+          session_key: sessionKey,
+          message: error instanceof Error ? error.message : String(error),
+        }))
         tokenStored = false
       }
       if (!tokenStored) {
@@ -178,7 +183,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       return authErrorResponse(error)
     }
     await finishTerminalSession(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, 'client_end')
-    const agentName = terminalDurableObjectName(sessionKey)
+    const agentName = await terminalDurableObjectName(sessionKey)
     const agent = await getAgentByName(env.TERMINAL_SESSION, agentName, {
       props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
     })
@@ -213,7 +218,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       return new Response('unauthorized', { status: 401 })
     }
 
-    const agent = await getAgentByName(env.TERMINAL_SESSION, terminalDurableObjectName(sessionKey), {
+    const agent = await getAgentByName(env.TERMINAL_SESSION, await terminalDurableObjectName(sessionKey), {
       props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
     })
     return agent.fetch(request)
@@ -246,7 +251,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
     catch (error) {
       return authErrorResponse(error)
     }
-    const agent = await getAgentByName(env.TERMINAL_SESSION, terminalDurableObjectName(sessionKey), {
+    const agent = await getAgentByName(env.TERMINAL_SESSION, await terminalDurableObjectName(sessionKey), {
       props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
     })
     return agent.fetch(request)

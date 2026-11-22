@@ -14,6 +14,8 @@ RUN apt-get update \
   && mkdir -p /workspace/project \
   && chown -R 1000:1000 /workspace
 
+ENV NODE_EXTRA_CA_CERTS=/etc/cloudflare/certs/cloudflare-containers-ca.crt
+
 USER 1000
 WORKDIR /workspace/project
 CMD ["sleep", "infinity"]

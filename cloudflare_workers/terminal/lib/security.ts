@@ -1,4 +1,5 @@
 import { TERMINAL_OUTPUT_MAX_BYTES, TERMINAL_WORKSPACE_ROOT } from './constants.ts'
+import { sha256Hex } from './crypto.ts'
 
 const COMMAND_DENY_RE = /\b(sudo|su|mount|umount|chroot|nsenter|pkexec|doas|runuser)\b/i
 
@@ -7,8 +8,9 @@ export function buildSessionKey(orgId: string, appId: string, sessionId: string)
 }
 
 /** DO agent name: colons break agents transport naming; session key stays in props. */
-export function terminalDurableObjectName(sessionKey: string): string {
-  return `terminal--${sessionKey.replaceAll(':', '--')}`
+export async function terminalDurableObjectName(sessionKey: string): Promise<string> {
+  const hash = await sha256Hex(sessionKey)
+  return `terminal-${hash}`
 }
 
 function utf8BytePrefix(bytes: Uint8Array, maxBytes: number): Uint8Array {
@@ -71,7 +73,13 @@ export async function readTextWithByteCap(response: Response): Promise<{ text: s
       if (truncated)
         break
     }
-    text += decoder.decode()
+    const flush = decoder.decode()
+    if (flush) {
+      const capped = capOutputBytes(flush, bytes)
+      bytes = capped.total
+      truncated = truncated || capped.truncated
+      text += capped.text
+    }
   }
   finally {
     reader.releaseLock()
