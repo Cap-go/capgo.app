@@ -92,6 +92,13 @@ describe('CI/CD AI setup prompt', () => {
     expect(prompt).toContain('CAPGO_STORE_SUBMIT_REVIEW=false')
   })
 
+  it('keeps the iOS pull request IPA in Capgo for the simulator', () => {
+    const prompt = buildCiAiPrompt({ ...base, product: 'builder', strategy: 'pull_request', provider: 'github' })
+    expect(prompt).toContain('npx @capgo/cli@latest build request com.example.cicd --platform ios --use-stored-credentials --output-upload')
+    expect(prompt).toContain('iOS pull request previews with --output-upload so Capgo keeps the IPA for the cloud simulator')
+    expect(prompt).toContain('saved iOS IPA opens from the build in the Capgo simulator')
+  })
+
   it('requires repository discovery, review and actual CI evidence without leaking credentials', () => {
     const prompt = buildCiAiPrompt({ ...base, product: 'ota', strategy: 'main', provider: 'github' })
     for (const requirement of ['Capacitor config', 'lockfile', 'workspace/monorepo', 'webDir', 'Preserve existing CI jobs', 'provider validator/linter', 'PR or a reviewable diff', 'actual CI run succeeds', 'CI run URL', 'secure stdin entry', 'Ask me only for missing provider permissions'])
