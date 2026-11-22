@@ -172,7 +172,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
     }
     const id = env.TERMINAL_SESSION.idFromName(sessionKey)
     const stub = env.TERMINAL_SESSION.get(id)
-    return stub.fetch(new Request('http://do/terminal/end', { method: 'POST' }))
+    return stub.fetch(new Request('https://do/terminal/end', { method: 'POST' }))
   }
 
   if (path.startsWith('/terminal/ws/')) {
