@@ -2212,6 +2212,20 @@ async function handleActiveSubscriptionUpdate(
 
 type BackupRecovery = 'recovered' | 'backup_attempt_failed' | 'not_recovered'
 
+/** Stable idempotency anchor for backup charges (latest charge when present, else the PaymentIntent id). */
+export function getBackupRecoveryChargeId(stripeEvent: Stripe.Event): string {
+  if (stripeEvent.type === 'charge.failed')
+    return stripeEvent.data.object.id
+  if (stripeEvent.type === 'payment_intent.payment_failed') {
+    const failedPaymentIntent = stripeEvent.data.object
+    const latestCharge = failedPaymentIntent.latest_charge
+    return (typeof latestCharge === 'string' ? latestCharge : latestCharge?.id)
+      ?? failedPaymentIntent.id
+      ?? 'unknown'
+  }
+  return 'unknown'
+}
+
 // Stripe only retries the default card; charge the backup before the org is marked failed.
 // Stripe errors propagate so the webhook is retried; the backup charge is idempotent per failed charge.
 async function chargeBackupCard(c: Context<MiddlewareKeyVariablesStripe>, stripeEvent: Stripe.Event, customerId: string): Promise<BackupRecovery> {
@@ -2235,12 +2249,7 @@ async function chargeBackupCard(c: Context<MiddlewareKeyVariablesStripe>, stripe
   const failedPaymentIntent = stripeEvent.type === 'payment_intent.payment_failed'
     ? stripeEvent.data.object
     : null
-  const failedChargeId = failedCharge?.id
-    ?? (typeof failedPaymentIntent?.latest_charge === 'string'
-      ? failedPaymentIntent.latest_charge
-      : failedPaymentIntent?.latest_charge?.id)
-    ?? failedPaymentIntent?.id
-    ?? 'unknown'
+  const failedChargeId = getBackupRecoveryChargeId(stripeEvent)
   const result = await payInvoiceWithBackupCard(c, stripe, customerId, invoice.id, {
     chargeId: failedChargeId,
     paymentMethodId: failedCharge && typeof failedCharge.payment_method === 'string'
@@ -2619,4 +2628,5 @@ export const stripeEventTestUtils = {
   shouldStampTransferInvoiceFooter,
   buildTransferInvoiceFooter,
   getTransferInvoiceFooterUpdate,
+  getBackupRecoveryChargeId,
 }

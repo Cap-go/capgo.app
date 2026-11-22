@@ -98,9 +98,24 @@ describe('past-due renewal payment processing exemption', () => {
   it('allows requirePaidPlan when renewal payment is processing', async () => {
     billing({ past_due_at: '2026-01-02T00:00:00Z' })
     mocks.subscription.mockResolvedValueOnce({ ok: true, data: { status: 'past_due', productId: 'enterprise-product' } })
-    stripeMocks.findLatestOpenSubscriptionInvoice.mockResolvedValueOnce({ id: 'in_1' })
+    stripeMocks.findLatestOpenSubscriptionInvoice.mockResolvedValueOnce({
+      id: 'in_1',
+      parent: { subscription_details: { subscription: 'subscription-id' } },
+    })
     stripeMocks.isOpenSubscriptionInvoicePaymentProcessing.mockResolvedValueOnce(true)
     await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).resolves.toBeUndefined()
+  })
+
+  it('rejects requirePaidPlan when open invoice belongs to another subscription', async () => {
+    billing({ past_due_at: '2026-01-02T00:00:00Z' })
+    mocks.subscription.mockResolvedValueOnce({ ok: true, data: { status: 'past_due', productId: 'enterprise-product' } })
+    stripeMocks.findLatestOpenSubscriptionInvoice.mockResolvedValueOnce({
+      id: 'in_1',
+      parent: { subscription_details: { subscription: 'other-subscription' } },
+    })
+    stripeMocks.isOpenSubscriptionInvoicePaymentProcessing.mockResolvedValueOnce(true)
+    await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).rejects.toMatchObject({ status: 403 })
+    expect(stripeMocks.isOpenSubscriptionInvoicePaymentProcessing).not.toHaveBeenCalled()
   })
 
   it('rejects requirePaidPlan when past due without processing payment', async () => {
