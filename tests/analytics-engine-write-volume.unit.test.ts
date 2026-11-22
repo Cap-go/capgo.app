@@ -69,6 +69,7 @@ describe('analytics engine write volume', () => {
         await createStatsLogs(context, 'com.example.app', 'device-1', action, '1.0.0', { attempt_id: attempt })
     }
     expect(writeDataPoint.mock.calls.map(([point]) => point.blobs[1])).toEqual(['download_10', 'download_50', 'download_90'])
+    expect(writeDataPoint.mock.calls.map(([point]) => point.doubles)).toEqual([[0, 1000], [0, 1000], [0, 1000]])
     expect(writeDataPoint.mock.calls.every(([point]) => JSON.parse(point.blobs[3]).attempt_id === '1469')).toBe(true)
   })
 

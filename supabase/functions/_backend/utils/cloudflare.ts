@@ -345,6 +345,12 @@ function keepAppLogVolumeSample(action: string, deviceId: string) {
   return appLogDeviceKept(deviceId)
 }
 
+export const DOWNLOAD_PROGRESS_SAMPLE_RATE = 1000
+
+export function isIntermediateDownloadProgress(action: string) {
+  return /^download_[1-9]0$/.test(action)
+}
+
 export function trackLogsCF(c: Context, app_id: string, device_id: string, action: string, version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
   if (!c.env.APP_LOG)
     return Promise.resolve()
@@ -352,8 +358,11 @@ export function trackLogsCF(c: Context, app_id: string, device_id: string, actio
     return Promise.resolve()
 
   const durationMs = parseStatsDurationMs(metadata)
-  const doubles = APP_LOG_VOLUME_SAMPLED_ACTION_SET.has(action)
-    ? [durationMs ?? 0, APP_LOG_VOLUME_SAMPLE_RATE]
+  const sampleRate = isIntermediateDownloadProgress(action)
+    ? DOWNLOAD_PROGRESS_SAMPLE_RATE
+    : APP_LOG_VOLUME_SAMPLED_ACTION_SET.has(action) && APP_LOG_VOLUME_SAMPLE_RATE
+  const doubles = sampleRate
+    ? [durationMs ?? 0, sampleRate]
     : (durationMs !== null ? [durationMs] : null)
   c.env.APP_LOG.writeDataPoint({
     blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],

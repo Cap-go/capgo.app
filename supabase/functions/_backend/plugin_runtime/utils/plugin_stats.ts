@@ -3,7 +3,7 @@ import type { DeviceDataCollection } from './deviceDataCollection.ts'
 import type { Database } from './supabase.types.ts'
 import type { DeviceWithoutCreatedAt, StatsActions, StatsMetadata, VersionUsageChannel } from './types.ts'
 import { getRuntimeKey } from 'hono/adapter'
-import { createIfNotExistStoreInfo, trackBandwidthUsageCF, trackDevicesCF, trackDeviceUsageCF, trackLogsCF, trackLogsCFExternal, trackVersionUsageCF, updateStoreApp } from './cloudflare.ts'
+import { createIfNotExistStoreInfo, DOWNLOAD_PROGRESS_SAMPLE_RATE, isIntermediateDownloadProgress, trackBandwidthUsageCF, trackDevicesCF, trackDeviceUsageCF, trackLogsCF, trackLogsCFExternal, trackVersionUsageCF, updateStoreApp } from './cloudflare.ts'
 import { normalizeDeviceCountryCode } from './deviceComparison.ts'
 import { applyDeviceDataCollectionToDevice, applyDeviceDataCollectionToLogDimensions, DEFAULT_DEVICE_DATA_COLLECTION } from './deviceDataCollection.ts'
 import { simpleError200 } from './hono.ts'
@@ -74,13 +74,13 @@ function canUseSupabaseFallback(c: Context) {
 // Keep every milestone for the same sample. Older clients have no attempt ID,
 // so retries for the same device and target version share a sampling decision.
 export function isDroppedStatsLogAction(action: string, appId: string, deviceId: string, version?: string, attemptId?: string) {
-  if (!/^download_[1-9]0$/.test(action))
+  if (!isIntermediateDownloadProgress(action))
     return false
-  const key = JSON.stringify([appId, deviceId.toLowerCase(), version, attemptId])
+  const key = JSON.stringify([appId, deviceId.toLowerCase(), version || 'unknown', attemptId])
   let hash = 2166136261
   for (const character of key)
     hash = Math.imul(hash ^ character.codePointAt(0)!, 16777619)
-  return (hash >>> 0) % 1000 !== 0
+  return (hash >>> 0) % DOWNLOAD_PROGRESS_SAMPLE_RATE !== 0
 }
 
 export function normalizeStatsMetadata(metadata?: StatsMetadata): StatsMetadata | undefined {
