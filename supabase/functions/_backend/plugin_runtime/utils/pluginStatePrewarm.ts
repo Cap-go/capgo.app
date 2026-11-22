@@ -15,7 +15,7 @@ import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
 import { PLUGIN_STATE_CACHE } from './pluginState.ts'
 import { isPluginStateGeneration, pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
-import { PREWARM_CLEANUP_RESERVE_MS, PREWARM_MANIFEST_CONCURRENCY, PREWARM_MAX_OPERATIONS } from './pluginStatePrewarmLimits.ts'
+import { PREWARM_CLEANUP_RESERVE_MS, PREWARM_CONNECTIONS, PREWARM_MANIFEST_CONCURRENCY, PREWARM_MAX_OPERATIONS } from './pluginStatePrewarmLimits.ts'
 import { PluginStateMiss } from './pluginStateRegistry.ts'
 import { parsePluginStateShareBps } from './pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateManifestStorage, parsePluginStatePointer, parsePluginStateVersion } from './pluginStateValidation.ts'
@@ -56,32 +56,66 @@ interface Publication {
  * keeps moving cannot push the call past the per-invocation operation limits),
  * and its manifest load slots (so large manifests cannot exhaust memory).
  */
+interface Slots {
+  open: number
+  waiting: (() => void)[]
+}
+
 export interface PrewarmOperations {
   used: number
   max: number
-  manifests: { open: number, waiting: (() => void)[] }
+  /** Manifest loads (memory). */
+  manifests: Slots
+  /** R2, KV and Cache API operations in flight (invocation connections). */
+  connections: Slots
 }
 
 export function prewarmOperations(max = PREWARM_MAX_OPERATIONS): PrewarmOperations {
-  return { used: 0, max, manifests: { open: 0, waiting: [] } }
+  return { used: 0, max, manifests: { open: 0, waiting: [] }, connections: { open: 0, waiting: [] } }
+}
+
+/** Take a slot, waiting at most until `endsAt` (false: not admitted in time). */
+function acquire(slots: Slots, limit: number, endsAt: number): Promise<boolean> {
+  if (slots.open < limit) {
+    slots.open++
+    return Promise.resolve(true)
+  }
+  const wait = endsAt - Date.now()
+  if (wait <= 0)
+    return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const admit = () => {
+      clearTimeout(timer)
+      resolve(true)
+    }
+    const timer = setTimeout(() => {
+      const index = slots.waiting.indexOf(admit)
+      if (index >= 0)
+        slots.waiting.splice(index, 1)
+      resolve(false)
+    }, wait)
+    slots.waiting.push(admit)
+  })
+}
+
+/** Hand the slot straight to the next waiter, or free it. */
+function release(slots: Slots) {
+  const next = slots.waiting.shift()
+  if (next)
+    next()
+  else
+    slots.open--
 }
 
 /** Run one manifest load once the call has a free manifest slot. */
-async function withManifestSlot<T>(ops: PrewarmOperations, run: () => Promise<T>): Promise<T> {
-  const slots = ops.manifests
-  if (slots.open < PREWARM_MANIFEST_CONCURRENCY)
-    slots.open++
-  else
-    await new Promise<void>(resolve => slots.waiting.push(resolve))
+async function withManifestSlot<T>(ops: PrewarmOperations, endsAt: number, run: () => Promise<T>): Promise<T> {
+  if (!await acquire(ops.manifests, PREWARM_MANIFEST_CONCURRENCY, endsAt))
+    throw new PluginStateMiss('prewarm budget exhausted')
   try {
     return await run()
   }
   finally {
-    const next = slots.waiting.shift()
-    if (next)
-      next()
-    else
-      slots.open--
+    release(ops.manifests)
   }
 }
 
@@ -91,20 +125,45 @@ function spend(ops: PrewarmOperations) {
   ops.used++
 }
 
-/** One provider read, bounded by PREWARM_READ_TIMEOUT_MS and by what is left of `budgetEndsAt`. */
-function deadline<T>(read: () => Promise<T>, what: string, budgetEndsAt: number, ops: PrewarmOperations): Promise<T> {
-  const remaining = Math.min(PREWARM_READ_TIMEOUT_MS, budgetEndsAt - Date.now())
-  if (remaining <= 0)
-    return Promise.reject(new PluginStateMiss('prewarm budget exhausted'))
+/**
+ * Start one R2, KV or Cache API operation once the call holds a connection
+ * slot (waiting no longer than `endsAt`), and keep the slot until the
+ * operation settles, even after a caller stopped waiting for it.
+ */
+async function startOperation<T>(ops: PrewarmOperations, endsAt: number, operation: () => Promise<T>): Promise<{ running: Promise<T> }> {
+  spend(ops)
+  if (!await acquire(ops.connections, PREWARM_CONNECTIONS, endsAt))
+    throw new PluginStateMiss('prewarm budget exhausted')
+  let running: Promise<T>
   try {
-    spend(ops)
+    running = operation()
   }
   catch (error) {
-    return Promise.reject(error)
+    release(ops.connections)
+    throw error
+  }
+  running.then(() => release(ops.connections), () => release(ops.connections))
+  // Wrapped: an async function returning the promise itself would wait for it.
+  return { running }
+}
+
+/**
+ * One provider read. Its PREWARM_READ_TIMEOUT_MS timer starts once it holds a
+ * connection slot, so queueing behind this call's own reads is not counted
+ * against the provider; the whole read still stops at `budgetEndsAt`.
+ */
+async function deadline<T>(read: () => Promise<T>, what: string, budgetEndsAt: number, ops: PrewarmOperations): Promise<T> {
+  if (budgetEndsAt - Date.now() <= 0)
+    throw new PluginStateMiss('prewarm budget exhausted')
+  const { running } = await startOperation(ops, budgetEndsAt, read)
+  const remaining = Math.min(PREWARM_READ_TIMEOUT_MS, budgetEndsAt - Date.now())
+  if (remaining <= 0) {
+    void running.catch(() => undefined)
+    throw new PluginStateMiss('prewarm budget exhausted')
   }
   let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
-    read(),
+    running,
     new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(new PluginStateMiss(`${what} timed out`)), remaining)
     }),
@@ -207,11 +266,7 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     const request = helper.buildRequest(target.layout.path, target.params)
     const published = await readPublication(pointers, store, target.kvKey, workEndsAt, ops)
     const value = published.value === null ? null : target.parse(published.value)
-    const lookupMs = Math.min(PREWARM_CACHE_LOOKUP_TIMEOUT_MS, workEndsAt - Date.now())
-    if (lookupMs <= 0)
-      throw new PluginStateMiss('prewarm budget exhausted')
-    spend(ops)
-    const current = await helper.probeResponse(request, lookupMs)
+    const current = await deadline(() => helper.probeResponse(request, Math.max(1, Math.min(PREWARM_CACHE_LOOKUP_TIMEOUT_MS, workEndsAt - Date.now()))), 'cache lookup', workEndsAt, ops)
     // Unknown cache state: an existing newer entry must not be overwritten blindly.
     if (current === undefined)
       throw new PluginStateMiss('cache lookup unavailable')
@@ -220,18 +275,18 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     if (!shouldReplaceCachedGeneration(currentRevision, published.revision))
       return { value, revision: published.revision }
     // No write starts once the budget is spent: it could only end as a timeout.
-    const putMs = Math.min(PREWARM_CACHE_PUT_TIMEOUT_MS, workEndsAt - Date.now())
-    if (putMs <= 0)
+    if (workEndsAt - Date.now() <= 0)
       throw new PluginStateMiss('prewarm budget exhausted')
-    spend(ops)
     // Like a late refill, a prewarm can land after a purge: a miss gets the
     // document TTL, never the longer negative TTL of an on-time miss.
     // Unbounded here: the race below keeps hold of a write that finishes late.
-    const put = helper.putJson(request, { v: value }, target.layout.ttlSeconds, {
+    const { running: put } = await startOperation(ops, workEndsAt, () => helper.putJson(request, { v: value }, target.layout.ttlSeconds, {
       tags,
       headers: published.revision ? { [PLUGIN_STATE_CACHE.revisionHeader]: published.revision } : undefined,
-    })
-    const stored = await raceTimeout(put, putMs)
+    }))
+    // No write may run past the budget's work window: it could only end as a timeout.
+    const putMs = Math.min(PREWARM_CACHE_PUT_TIMEOUT_MS, workEndsAt - Date.now())
+    const stored = putMs > 0 ? await raceTimeout(put, putMs) : 'timeout'
     if (stored === 'timeout') {
       // The write may still land, after this call returns. Check it then, and
       // when the pointer moved, overwrite it with the newer generation.
@@ -285,13 +340,15 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
 
   /** Delete an entry, waiting no longer than `endsAt` allows. */
   const remove = async (request: Request, endsAt: number): Promise<'removed' | 'kept' | 'pending'> => {
+    let deleting: Promise<boolean>
     try {
-      spend(ops)
+      deleting = (await startOperation(ops, endsAt, () => helper.delete(request))).running
     }
-    catch {
-      return 'kept'
+    catch (error) {
+      // Not even started: out of operations or no slot before the deadline.
+      return errorMessage(error).includes('budget') ? 'pending' : 'kept'
     }
-    const removed = await raceTimeout(helper.delete(request), endsAt - Date.now())
+    const removed = await raceTimeout(deleting, endsAt - Date.now())
     if (removed === 'timeout')
       return 'pending'
     return removed ? 'removed' : 'kept'
@@ -336,7 +393,7 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
         .then(kvKey => warmTarget({ layout: PLUGIN_STATE_CACHE.version, params: { app_id: appId, name: bundle.name }, kvKey, parse: parsePluginStateVersion }))
         .then(() => undefined),
       ...(manifestIds.has(bundle.id)
-        ? [withManifestSlot(ops, () => warmTarget({ layout: PLUGIN_STATE_CACHE.manifest, params: { app_id: appId, version_id: String(bundle.id) }, kvKey: pluginStateManifestKey(bundle.id), parse: parsePluginStateManifestStorage }))
+        ? [withManifestSlot(ops, budgetEndsAt, () => warmTarget({ layout: PLUGIN_STATE_CACHE.manifest, params: { app_id: appId, version_id: String(bundle.id) }, kvKey: pluginStateManifestKey(bundle.id), parse: parsePluginStateManifestStorage }))
             .then(() => undefined)]
         : []),
     ]))

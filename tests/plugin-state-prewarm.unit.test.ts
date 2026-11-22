@@ -600,9 +600,12 @@ describe('plugin state prewarm route', () => {
     }
     const body = await (await response).json() as { results: { app_id: string, skipped?: string, error?: string }[] }
     expect(Date.now() - startedAt).toBeLessThanOrEqual(6100)
-    // Waves of four: 0-3.9 s, then 3.9-5.7 s with the KV read cut to what is left
-    // before the 300 ms cleanup reserve; the last two apps never start.
-    expect(body.results.slice(0, 8).every(result => result.error?.includes('timed out'))).toBe(true)
+    // Waves of four. The first wave's KV reads never answer, so they keep their
+    // connection slots (as a hung binding call keeps its connection): the second
+    // wave times out or never gets a slot before the work window closes, and the
+    // last two apps never start.
+    expect(body.results.slice(0, 4).every(result => result.error?.includes('timed out'))).toBe(true)
+    expect(body.results.slice(4, 8).every(result => /timed out|budget exhausted/.test(result.error ?? ''))).toBe(true)
     expect(body.results.slice(8)).toEqual([
       { app_id: 'com.example.slow8', revision: null, cached: 0, skipped: 'budget' },
       { app_id: 'com.example.slow9', revision: null, cached: 0, skipped: 'budget' },
@@ -646,6 +649,45 @@ describe('plugin state prewarm route', () => {
     // 1 app document + 8 bundle names + 8 manifests per app.
     expect(body.results.map(result => result.cached)).toEqual([17, 17, 17, 17])
     expect(maxOpen).toBe(2)
+  })
+
+  it('keeps R2, KV and cache operations of a call within five connections, timing each once admitted', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    const { cache } = memoryCache()
+    const { env, publish } = providers()
+    const appIds = Array.from({ length: 4 }, (_, i) => `com.example.connections${i}`)
+    let bundleId = 2000
+    for (const appId of appIds) {
+      const rows = Array.from({ length: 8 }, (_, i) => channelRow(i + 1, { id: ++bundleId, name: `3.${i}.0` }))
+      await publish(await pluginStateAppKey(appId), '1', { ...appDoc(rows, rows.map(row => row.version.id)), app_id: appId })
+      for (const row of rows) {
+        await publish(await pluginStateVersionKey(appId, row.version.name), '1', { id: row.version.id, owner_org: OWNER, deleted: false })
+        await publish(pluginStateManifestKey(row.version.id), '1', { f: 1, built_at: 1, version_id: row.version.id, app_id: appId, deleted: false, entries: [], sizes: [] })
+      }
+    }
+    // Every binding call counts as one open connection while it runs.
+    let open = 0
+    let maxOpen = 0
+    const track = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) => async (...args: A) => {
+      open++
+      maxOpen = Math.max(maxOpen, open)
+      try {
+        await new Promise(resolve => setTimeout(resolve, 2))
+        return await fn(...args)
+      }
+      finally {
+        open--
+      }
+    }
+    env.PLUGIN_STATE_POINTERS.get.mockImplementation(track(env.PLUGIN_STATE_POINTERS.get.getMockImplementation()!))
+    env.PLUGIN_STATE.get.mockImplementation(track(env.PLUGIN_STATE.get.getMockImplementation()!))
+    cache.match.mockImplementation(track(cache.match.getMockImplementation()!))
+    cache.put.mockImplementation(track(cache.put.getMockImplementation()!))
+    const response = await call({ app_ids: appIds }, 'prewarm-secret', env)
+    const body = await response.json() as { results: { cached: number, error?: string }[] }
+    expect(body.results.map(result => result.error ?? null)).toEqual([null, null, null, null])
+    expect(body.results.map(result => result.cached)).toEqual([17, 17, 17, 17])
+    expect(maxOpen).toBeLessThanOrEqual(5)
   })
 
   it('warms each listed app and reports the data center it ran in', async () => {

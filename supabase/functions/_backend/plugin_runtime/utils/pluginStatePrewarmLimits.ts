@@ -22,5 +22,11 @@ export const PREWARM_MAX_OPERATIONS = 900
  * call far below the Worker's 128 MiB memory limit.
  */
 export const PREWARM_MANIFEST_CONCURRENCY = 2
+/**
+ * R2, KV and Cache API operations in flight per call. Workers allow six
+ * simultaneous open connections per invocation, and these bindings count:
+ * past that the runtime queues them, which would eat their timeouts.
+ */
+export const PREWARM_CONNECTIONS = 5
 /** Kept free at the end of each budget so a cleanup delete still fits. */
 export const PREWARM_CLEANUP_RESERVE_MS = 300
