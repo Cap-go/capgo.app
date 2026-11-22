@@ -2511,12 +2511,9 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
   if (stripeEvent.type === 'payment_intent.payment_failed') {
     const paymentIntent = stripeEvent.data.object
     const stripe = getStripe(c, getWebhookBillingAccount(c))
-    const invoiceId = typeof paymentIntent.invoice === 'string' ? paymentIntent.invoice : paymentIntent.invoice?.id
-    if (invoiceId) {
-      const invoice = await stripe.invoices.retrieve(invoiceId)
-      if (isSubscriptionInvoice(invoice))
-        await handleFailedSubscriptionPayment(c, stripeEvent, stripeData, org)
-    }
+    const invoice = await findInvoiceForCharge(stripe, { payment_intent: paymentIntent.id })
+    if (invoice && isSubscriptionInvoice(invoice))
+      await handleFailedSubscriptionPayment(c, stripeEvent, stripeData, org)
     return c.json(BRES)
   }
 
