@@ -18,7 +18,7 @@ import { PluginStateMiss } from './pluginStateRegistry.ts'
 import { parsePluginStateShareBps } from './pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateManifestStorage, parsePluginStatePointer, parsePluginStateVersion } from './pluginStateValidation.ts'
 import { pluginStateAppCacheTag } from './updatesCacheTag.ts'
-import { getEnv } from './utils.ts'
+import { backgroundTask, getEnv } from './utils.ts'
 
 /** Each provider read of a prewarm (R2 pointer, pointer body, KV value), within the app's budget. */
 export const PREWARM_READ_TIMEOUT_MS = 2000
@@ -26,6 +26,10 @@ export const PREWARM_READ_TIMEOUT_MS = 2000
 export const PREWARM_APP_BUDGET_MS = 6000
 /** Off the device path: a slow lookup is still worth waiting for before deciding to write. */
 const PREWARM_CACHE_LOOKUP_TIMEOUT_MS = 500
+/** How long a prewarm waits for its own cache write before handing it to the background. */
+const PREWARM_CACHE_PUT_TIMEOUT_MS = 500
+/** Budget of the background check that follows a write that finished late. */
+const PREWARM_LATE_WRITE_CHECK_MS = 2000
 /** Bundles warmed per app beside its app document (channel and rollout bundles). */
 export const PREWARM_MAX_BUNDLES = 8
 
@@ -153,11 +157,19 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
       return { value, revision: published.revision }
     // Like a late refill, a prewarm can land after a purge: a miss gets the
     // document TTL, never the longer negative TTL of an on-time miss.
-    const stored = await helper.putJson(request, { v: value }, target.layout.ttlSeconds, {
+    // Unbounded here: the race below keeps hold of a write that finishes late.
+    const put = helper.putJson(request, { v: value }, target.layout.ttlSeconds, {
       tags,
-      timeoutMs: PLUGIN_STATE_CACHE.putTimeoutMs,
       headers: published.revision ? { [PLUGIN_STATE_CACHE.revisionHeader]: published.revision } : undefined,
     })
+    const stored = await raceTimeout(put, Math.min(PREWARM_CACHE_PUT_TIMEOUT_MS, budgetEndsAt - Date.now()))
+    if (stored === 'timeout') {
+      // The write may still land, after this call returns. Check it then.
+      void backgroundTask(c, put.then(landed => landed
+        ? reconcile(request, target.kvKey, published.revision, Date.now() + PREWARM_LATE_WRITE_CHECK_MS)
+        : undefined).catch(() => undefined))
+      throw new PluginStateMiss('cache write timed out')
+    }
     if (!stored)
       throw new PluginStateMiss('cache write failed')
     cached++
@@ -165,13 +177,35 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     // lookup and this put could have been replaced. Such an entry comes from a
     // publication that is already visible in the strongly consistent pointer:
     // if the pointer moved past what was written, warm again with the newer one.
-    const latest = await readPublishedGeneration(pointers, target.kvKey, budgetEndsAt)
-    if (latest !== null && (published.revision === null || BigInt(latest) > BigInt(published.revision))) {
+    const moved = await reconcile(request, target.kvKey, published.revision, budgetEndsAt)
+    if (moved) {
       if (attempt >= 2)
         throw new PluginStateMiss('publication kept moving during the prewarm')
       return warm(target, attempt + 1)
     }
     return { value, revision: published.revision }
+  }
+
+  /**
+   * After a write of `written`: false when the pointer still publishes it.
+   * true when the pointer moved past it. When the pointer cannot be read, the
+   * entry is deleted (a cold miss is safe, a stale entry is not) and this throws.
+   * A pointer that moved also deletes the entry, so nothing stale is left even
+   * when no retry follows.
+   */
+  const reconcile = async (request: Request, logicalKey: string, written: string | null, endsAt: number): Promise<boolean> => {
+    let latest: string | null
+    try {
+      latest = await readPublishedGeneration(pointers, logicalKey, endsAt)
+    }
+    catch {
+      await helper.delete(request)
+      throw new PluginStateMiss('publication check after write unavailable')
+    }
+    const moved = latest !== null && (written === null || BigInt(latest) > BigInt(written))
+    if (moved)
+      await helper.delete(request)
+    return moved
   }
 
   try {
@@ -191,6 +225,20 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
   }
   catch (error) {
     return { app_id: appId, revision: null, cached, error: errorMessage(error) }
+  }
+}
+
+async function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'> {
+  if (ms <= 0)
+    return 'timeout'
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([promise, new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), ms)
+    })])
+  }
+  finally {
+    clearTimeout(timer)
   }
 }
 

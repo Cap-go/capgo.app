@@ -131,8 +131,11 @@ reported as an error rather than written blind. A prewarmed miss gets the
 The Cache API has no conditional put, so after each write the prewarm reads
 the R2 pointer again. A newer entry that the put could have replaced comes from
 a publication that is already visible there; when the pointer has moved past
-the written generation, the prewarm writes the newer one (at most two retries,
-then it reports an error).
+the written generation, the prewarm deletes its entry and writes the newer one
+(at most two retries, then it reports an error with the entry deleted). When
+that pointer read fails, the entry is deleted too: a cold miss is safe, a stale
+entry is not. A write still pending after 500 ms is reported as timed out, and
+the same check runs in the background once it lands.
 Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 Failures are only logged (`plugin state prewarmed`); devices then fill the
 cache as usual.

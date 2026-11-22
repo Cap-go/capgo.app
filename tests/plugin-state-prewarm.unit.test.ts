@@ -11,6 +11,7 @@ import { pluginStatePrewarmTargets, prewarmPluginStateRegions, schedulePluginSta
 
 const APP_ID = 'com.example.prewarm'
 const OWNER = '00000000-0000-4000-8000-000000000001'
+const APP_URL = `https://plugin.na.capgo.app/.plugin-state-app-v2?app_id=${APP_ID}`
 // Region targets come from this file's stubs only, never from the parent environment.
 const inheritedTargets = process.env.PLUGIN_REGION_TARGETS
 
@@ -80,6 +81,7 @@ function memoryCache() {
       return entry ? new Response(entry.body, { headers: entry.headers }) : undefined
     }),
     put: vi.fn(async (request: Request, response: Response) => { entries.set(request.url, { body: await response.text(), headers: new Headers(response.headers) }) }),
+    delete: vi.fn(async (request: Request) => entries.delete(request.url)),
   }
   vi.stubGlobal('caches', { open: async () => cache, default: cache })
   return { cache, entries }
@@ -207,7 +209,7 @@ describe('plugin state prewarm (regional worker)', () => {
   it('gives up with an error when the publication keeps moving', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     const { env, publish } = providers()
-    memoryCache()
+    const { entries } = memoryCache()
     await publishApp(publish)
     const appKey = await pluginStateAppKey(APP_ID)
     let generation = 5
@@ -219,6 +221,61 @@ describe('plugin state prewarm (regional worker)', () => {
       return get(key)
     })
     expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ error: 'plugin state missing: publication kept moving during the prewarm' })
+    // Out of retries: nothing it wrote is left behind; devices refill from the pointer.
+    expect(entries.has(APP_URL)).toBe(false)
+  })
+
+  it('deletes its entry when the pointer check after the write fails', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const { env, publish } = providers()
+    const { entries } = memoryCache()
+    await publishApp(publish)
+    const appKey = await pluginStateAppKey(APP_ID)
+    const get = env.PLUGIN_STATE_POINTERS.get.getMockImplementation()!
+    let appReads = 0
+    env.PLUGIN_STATE_POINTERS.get.mockImplementation(async (key: string) => {
+      if (key === appKey && ++appReads === 2)
+        throw new Error('R2 unavailable')
+      return get(key)
+    })
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ cached: 1, error: 'plugin state missing: publication check after write unavailable' })
+    expect(entries.has(APP_URL)).toBe(false)
+  })
+
+  it('checks a write that lands after its timeout and removes it when a newer generation exists', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { env, publish } = providers()
+    const { cache, entries } = memoryCache()
+    await publishApp(publish)
+    const appKey = await pluginStateAppKey(APP_ID)
+    const put = cache.put.getMockImplementation()!
+    let delayed = false
+    cache.put.mockImplementation(async (request: Request, response: Response) => {
+      if (request.url !== APP_URL || delayed)
+        return put(request, response)
+      delayed = true
+      // Past the prewarm's 500 ms write timeout, generation 6 is published and cached...
+      await new Promise(resolve => setTimeout(resolve, 550))
+      await publish(appKey, '6', { ...appDoc(), built_at: 6 })
+      entries.set(APP_URL, { body: JSON.stringify({ v: { ...appDoc(), built_at: 6 } }), headers: new Headers({ 'X-Plugin-State-Revision': '6' }) })
+      // ...then the stale generation 5 write finally lands over it.
+      await new Promise(resolve => setTimeout(resolve, 50))
+      return put(request, response)
+    })
+    const pending = onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))
+    // Run past the delayed write (600 ms) and its background check.
+    for (let step = 0; step < 60; step++) {
+      await new Promise(resolve => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(25)
+    }
+    expect(await pending).toMatchObject({ error: 'plugin state missing: cache write timed out' })
+    // The background check saw the pointer at 6 and removed the stale 5: the next
+    // device request refills generation 6 from the pointer.
+    expect(cache.delete).toHaveBeenCalledOnce()
+    expect(entries.has(APP_URL)).toBe(false)
   })
 
   it('does nothing while KV reads are off in the region', async () => {
