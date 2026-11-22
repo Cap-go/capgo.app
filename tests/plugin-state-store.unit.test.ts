@@ -1,6 +1,8 @@
 import type { KVNamespace } from '@cloudflare/workers-types'
+import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import { Hono } from 'hono'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetPluginStateMemory, startPluginStateRequest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginState.ts'
 import { pluginStateAppKey, pluginStateImmutableKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { PluginStateMiss } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateRegistry.ts'
@@ -32,6 +34,19 @@ function refillLogs(log: { mock: { calls: unknown[][] } }) {
       return entry
     })
 }
+
+beforeEach(() => {
+  // crypto.subtle settles on the real event loop, outside fake timers, so on a
+  // busy CI runner the fake clock can move on before a key hash finishes (a
+  // measured 300 ms read came out as 500 ms). Hash synchronously instead: the
+  // same digest, settled within the awaited microtasks.
+  vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+    const name = (typeof algorithm === 'string' ? algorithm : algorithm.name).toLowerCase().replace('-', '')
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+    const digest = createHash(name).update(Buffer.from(bytes)).digest()
+    return digest.buffer.slice(digest.byteOffset, digest.byteOffset + digest.byteLength) as ArrayBuffer
+  })
+})
 
 afterEach(() => {
   resetPluginStateMemory()
