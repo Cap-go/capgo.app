@@ -5,7 +5,7 @@ import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { findLatestOpenSubscriptionInvoice, getLatestOpenSubscriptionInvoice, getStripe, isOpenSubscriptionInvoicePaymentProcessing, shouldBlockPastDueForProcessingPayment, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { findLatestOpenSubscriptionInvoice, getLatestOpenSubscriptionInvoice, getStripe, isOpenSubscriptionInvoicePaymentProcessing, isStripeConfiguredForAccount, shouldBlockPastDueForProcessingPayment, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { normalizeBillingAccount } from '../utils/stripe_billing.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
@@ -80,10 +80,18 @@ app.post('/', middlewareAuth, async (c) => {
     return c.json(notPastDue)
 
   const billingAccount = normalizeBillingAccount(stripeInfo.billing_account)
-  const openInvoice = await findLatestOpenSubscriptionInvoice(c, org.customer_id, billingAccount)
-  const paymentProcessing = openInvoice?.id
-    ? await isOpenSubscriptionInvoicePaymentProcessing(getStripe(c, billingAccount), openInvoice.id)
-    : false
+  let openInvoice: Awaited<ReturnType<typeof findLatestOpenSubscriptionInvoice>> = null
+  let paymentProcessing = false
+  if (isStripeConfiguredForAccount(c, billingAccount)) {
+    try {
+      openInvoice = await findLatestOpenSubscriptionInvoice(c, org.customer_id, billingAccount)
+      if (openInvoice?.id)
+        paymentProcessing = await isOpenSubscriptionInvoicePaymentProcessing(getStripe(c, billingAccount), openInvoice.id)
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'stripe_past_due open invoice', orgId: body.orgId, customerId: org.customer_id, error })
+    }
+  }
   if (shouldBlockPastDueForProcessingPayment(paymentProcessing))
     return c.json({ past_due: false, invoice: openInvoice ? toOpenSubscriptionInvoiceSummary(openInvoice) : null, payment_processing: true })
 

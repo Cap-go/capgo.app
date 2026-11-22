@@ -261,8 +261,14 @@ export async function getOpenInvoiceSummary(c: Context, ctx: InAppBillingContext
   const invoice = await findLatestOpenSubscriptionInvoice(c, ctx.customerId, ctx.billingAccount)
   if (!invoice?.id)
     return null
-  const paymentIntent = await getSubscriptionInvoicePaymentIntent(ctx.stripe, invoice.id)
-  const paymentProcessing = isSubscriptionInvoicePaymentProcessing(paymentIntent)
+  let paymentProcessing = false
+  try {
+    const paymentIntent = await getSubscriptionInvoicePaymentIntent(ctx.stripe, invoice.id)
+    paymentProcessing = isSubscriptionInvoicePaymentProcessing(paymentIntent)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getOpenInvoiceSummary payment intent', customerId: ctx.customerId, invoiceId: invoice.id, error })
+  }
   return {
     id: invoice.id,
     amountDue: invoice.amount_remaining ?? invoice.amount_due,
@@ -555,13 +561,18 @@ export async function payOpenInvoice(c: Context, ctx: InAppBillingContext): Prom
   const invoice = await findLatestOpenSubscriptionInvoice(c, ctx.customerId, ctx.billingAccount)
   if (!invoice?.id)
     return { status: 'paid' }
-  const existingIntent = await getInvoicePaymentIntent(ctx, invoice.id)
-  if (isSubscriptionInvoicePaymentProcessing(existingIntent))
-    return { status: 'processing', message: INVOICE_PAYMENT_PROCESSING_MESSAGE }
-  if (existingIntent?.status === 'succeeded')
-    return { status: 'paid' }
-  if (existingIntent?.status === 'requires_capture')
-    return { status: 'processing', message: INVOICE_PAYMENT_REQUIRES_CAPTURE_MESSAGE }
+  try {
+    const existingIntent = await getInvoicePaymentIntent(ctx, invoice.id)
+    if (isSubscriptionInvoicePaymentProcessing(existingIntent))
+      return { status: 'processing', message: INVOICE_PAYMENT_PROCESSING_MESSAGE }
+    if (existingIntent?.status === 'succeeded')
+      return { status: 'paid' }
+    if (existingIntent?.status === 'requires_capture')
+      return { status: 'processing', message: INVOICE_PAYMENT_REQUIRES_CAPTURE_MESSAGE }
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'in-app invoice pay pre-check', customerId: ctx.customerId, invoiceId: invoice.id, error })
+  }
   try {
     const paid = await ctx.stripe.invoices.pay(invoice.id)
     if (paid.status === 'paid')

@@ -432,6 +432,8 @@ export async function payOpenInvoice(orgId: string): Promise<PayInvoiceResult> {
   if (!stripe)
     return { status: 'requires_payment_method', message: i18n.global.t('billing-stripe-load-error') }
   const { error, paymentIntent } = await stripe.handleNextAction({ clientSecret: result.clientSecret })
+  if (paymentIntent?.status === 'processing')
+    return { status: 'processing', message: i18n.global.t('billing-invoice-payment-processing') }
   if (error || paymentIntent?.status !== 'succeeded')
     return { status: 'requires_payment_method', message: error?.message ?? i18n.global.t('billing-payment-failed') }
   return { status: 'paid' }

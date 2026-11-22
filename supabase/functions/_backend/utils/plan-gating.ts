@@ -61,10 +61,21 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
     if (stripeInfo.past_due_at) {
       const billingAccount = normalizeBillingAccount(stripeInfo.billing_account)
       if (isStripeConfiguredForAccount(c, billingAccount)) {
-        const openInvoice = await findLatestOpenSubscriptionInvoice(c, org.customer_id, billingAccount)
-        renewalPaymentProcessing = openInvoice?.id
-          ? await isOpenSubscriptionInvoicePaymentProcessing(getStripe(c, billingAccount), openInvoice.id)
-          : false
+        try {
+          const openInvoice = await findLatestOpenSubscriptionInvoice(c, org.customer_id, billingAccount)
+          renewalPaymentProcessing = openInvoice?.id
+            ? await isOpenSubscriptionInvoicePaymentProcessing(getStripe(c, billingAccount), openInvoice.id)
+            : false
+        }
+        catch (error) {
+          cloudlogErr({
+            requestId: c.get('requestId'),
+            message: 'Unable to check renewal payment processing for active plan check',
+            orgId,
+            customerId: org.customer_id,
+            error,
+          })
+        }
       }
     }
     if ((stripeInfo.past_due_at && !renewalPaymentProcessing) || subscription?.status !== 'active' || subscription?.productId !== stripeInfo.product_id)

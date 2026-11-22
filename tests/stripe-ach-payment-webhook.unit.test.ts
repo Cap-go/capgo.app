@@ -118,6 +118,10 @@ describe('active subscription status gating', () => {
     expect(subscriptionInvoicePaymentStateFromInvoice({ status: 'open', billing_reason: 'subscription_cycle' }, 'processing')).toBe('paid')
   })
 
+  it.concurrent('does not treat the first subscription invoice as paid while processing', () => {
+    expect(subscriptionInvoicePaymentStateFromInvoice({ status: 'open', billing_reason: 'subscription_create' }, 'processing')).toBe('first_invoice_unpaid')
+  })
+
   it.concurrent('keeps the past_due grace period for renewals only', () => {
     expect(resolveActiveSubscriptionStatus('past_due', { status: 'succeeded', subscription_id: 'sub_ach' }, 'sub_ach', 'unpaid')).toBe('past_due')
     expect(resolveActiveSubscriptionStatus('past_due', { status: 'failed', subscription_id: 'sub_ach' }, 'sub_ach', 'unpaid')).toBe('past_due')

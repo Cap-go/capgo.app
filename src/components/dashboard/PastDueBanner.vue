@@ -91,6 +91,11 @@ async function retryPayment() {
       return
     }
     if (result.status === 'processing') {
+      pastDue.value = {
+        past_due: false,
+        invoice: invoice.value,
+        payment_processing: true,
+      }
       toast.info(result.message || t('billing-invoice-payment-processing'))
       return
     }

@@ -80,7 +80,7 @@ const subscriptionLine = computed(() => {
     return t('billing-currency-renews-in', { currency: sub.pendingCurrency.toUpperCase(), date: endDate })
   if (sub.cancelAtPeriodEnd || sub.cancelAt)
     return t('billing-subscription-ends', { date: endDate })
-  if (sub.status === 'past_due' || sub.status === 'unpaid')
+  if ((sub.status === 'past_due' || sub.status === 'unpaid') && !openInvoiceProcessing.value)
     return t('billing-subscription-past-due')
   return endDate ? t('billing-subscription-renews', { date: endDate }) : t('billing-subscription-active')
 })

@@ -891,7 +891,7 @@ export function subscriptionInvoicePaymentStateFromInvoice(
 ): 'paid' | 'unpaid' | 'first_invoice_unpaid' {
   if (invoice.status === 'paid')
     return 'paid'
-  if (invoice.status === 'open' && paymentIntentStatus === 'processing')
+  if (invoice.status === 'open' && paymentIntentStatus === 'processing' && invoice.billing_reason !== 'subscription_create')
     return 'paid'
   return invoice.billing_reason === 'subscription_create' ? 'first_invoice_unpaid' : 'unpaid'
 }
