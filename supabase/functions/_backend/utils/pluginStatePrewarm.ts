@@ -179,8 +179,8 @@ export function schedulePluginStatePrewarm(c: Context, appIds: string[], delayMs
       const failed = regions.flatMap(region => region.error !== null
         ? [regionFailure(region)]
         : region.results.filter(app => app.error || app.skipped === 'budget').map(app => `${region.region}:${app.app_id}:${app.error ?? app.skipped}`))
-      // Answered without cf-placement: warmed a data center that may not be the
-      // one its devices read (the region is not pinned).
+      // Answered without a remote-XXX cf-placement (local-XXX or none): it warmed
+      // a data center that may not be the one its devices read.
       const unplaced = [...new Set(regions.filter(region => region.error === null && !isPinnedPlacement(region.placement)).map(region => region.region))]
       cloudlog({
         requestId: c.get('requestId'),
