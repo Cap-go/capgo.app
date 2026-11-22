@@ -69,13 +69,16 @@ function canUseSupabaseFallback(c: Context) {
   return Boolean(supabaseFallbacks) && !shouldSkipSupabaseStatsFallback(c)
 }
 
-// Intermediate download progress (download_10 ... download_90) is not read by
-// any stats query and was ~28% of APP_LOG writes. download_0, download_complete
-// and failure actions are still recorded.
-const DROPPED_DOWNLOAD_PROGRESS_ACTION = /^download_[1-9]0$/
-
-export function isDroppedStatsLogAction(action: string) {
-  return DROPPED_DOWNLOAD_PROGRESS_ACTION.test(action)
+// Keep every milestone for the same sample. Older clients have no attempt ID,
+// so retries for the same device and target version share a sampling decision.
+export function isDroppedStatsLogAction(action: string, appId: string, deviceId: string, version?: string, attemptId?: string) {
+  if (!/^download_[1-9]0$/.test(action))
+    return false
+  const key = JSON.stringify([appId, deviceId.toLowerCase(), version, attemptId])
+  let hash = 2166136261
+  for (let i = 0; i < key.length; i++)
+    hash = Math.imul(hash ^ key.charCodeAt(i), 16777619)
+  return (hash >>> 0) % 1000 !== 0
 }
 
 export function normalizeStatsMetadata(metadata?: StatsMetadata): StatsMetadata | undefined {
@@ -200,7 +203,7 @@ export function createStatsLogsExternal(c: Context, app_id: string, device_id: s
 }
 
 export function createStatsLogs(c: Context, app_id: string, device_id: string, action: Database['public']['Enums']['stats_action'], versionName?: string, metadata?: StatsMetadata, dimensions?: StatsLogDimensions) {
-  if (isDroppedStatsLogAction(action))
+  if (isDroppedStatsLogAction(action, app_id, device_id, versionName, metadata?.attempt_id))
     return Promise.resolve()
   const lowerDeviceId = device_id
   const finalVersionName = versionName && versionName !== '' ? versionName : 'unknown'
