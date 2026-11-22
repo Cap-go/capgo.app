@@ -128,6 +128,7 @@ describe('terminal security', () => {
     const b = await terminalDurableObjectName(`${key}--extra`)
     expect(a.startsWith('streamable-http:')).toBe(true)
     expect(a.split(':').length).toBe(2)
+    expect(a).toBe(await terminalDurableObjectName(key, 'streamable-http'))
     expect(a).not.toBe(b)
   })
 

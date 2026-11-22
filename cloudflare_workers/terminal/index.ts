@@ -10,7 +10,6 @@ import {
 import {
   buildSessionKey,
   terminalDurableObjectName,
-  type TerminalMcpTransport,
 } from './lib/security.ts'
 import {
   consumeTerminalWsToken,
@@ -193,16 +192,11 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
         message: error instanceof Error ? error.message : String(error),
       }))
     }
-    const transports: TerminalMcpTransport[] = ['streamable-http', 'sse']
-    const endReq = new Request('https://do/terminal/end', { method: 'POST' })
-    const props = { sessionKey, orgId: parts.orgId, appId: parts.appId }
-    let lastResponse: Response | null = null
-    for (const transport of transports) {
-      const agentName = await terminalDurableObjectName(sessionKey, transport)
-      const agent = await getAgentByName(env.TERMINAL_SESSION, agentName, { props })
-      lastResponse = await agent.fetch(endReq)
-    }
-    return lastResponse ?? Response.json({ status: 'ok' })
+    const agentName = await terminalDurableObjectName(sessionKey)
+    const agent = await getAgentByName(env.TERMINAL_SESSION, agentName, {
+      props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
+    })
+    return agent.fetch(new Request('https://do/terminal/end', { method: 'POST' }))
   }
 
   if (path.startsWith('/terminal/ws/')) {
@@ -233,7 +227,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       return new Response('unauthorized', { status: 401 })
     }
 
-    const agent = await getAgentByName(env.TERMINAL_SESSION, await terminalDurableObjectName(sessionKey, 'sse'), {
+    const agent = await getAgentByName(env.TERMINAL_SESSION, await terminalDurableObjectName(sessionKey), {
       props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
     })
     return agent.fetch(request)
@@ -266,7 +260,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
     catch (error) {
       return authErrorResponse(error)
     }
-    const agent = await getAgentByName(env.TERMINAL_SESSION, await terminalDurableObjectName(sessionKey, 'streamable-http'), {
+    const agent = await getAgentByName(env.TERMINAL_SESSION, await terminalDurableObjectName(sessionKey), {
       props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
     })
     return agent.fetch(request)

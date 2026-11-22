@@ -9,7 +9,7 @@ export function buildSessionKey(orgId: string, appId: string, sessionId: string)
 
 export type TerminalMcpTransport = 'sse' | 'streamable-http' | 'rpc'
 
-/** McpAgent requires `transport:sessionId`; session key stays in props. */
+/** McpAgent requires `transport:sessionId`; one name for WS + MCP on the same session. */
 export async function terminalDurableObjectName(
   sessionKey: string,
   transport: TerminalMcpTransport = 'streamable-http',
