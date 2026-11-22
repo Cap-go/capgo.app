@@ -9,7 +9,7 @@ import { pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, plu
 import { prewarmBundles, prewarmOperations, prewarmPluginStateApp, shouldReplaceCachedGeneration } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
 import { drainUpdatesCachePurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { PLUGIN_REGIONS } from '../supabase/functions/_backend/utils/pluginRegionTargets.ts'
-import { pluginStatePrewarmTargets, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
+import { pluginStatePrewarmTargets, PrewarmNotConfigured, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
 
 const APP_ID = 'com.example.prewarm'
 const OWNER = '00000000-0000-4000-8000-000000000001'
@@ -793,7 +793,7 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     expect(results.filter(region => region.error === 'budget_exhausted')).toHaveLength(PLUGIN_REGIONS.length * 2 - 6)
   })
 
-  it('calls nothing without targets or an API secret', async () => {
+  it('calls nothing without targets, and fails loudly without the API secret', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     vi.stubEnv('ENV_NAME', 'capgo_api-local')
@@ -801,8 +801,36 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     expect(await prewarmPluginStateRegions(context(), [APP_ID])).toEqual([])
     vi.stubEnv('ENV_NAME', 'capgo_api-prod')
     vi.stubEnv('API_SECRET', '')
-    expect(await prewarmPluginStateRegions(context(), [APP_ID])).toEqual([])
+    await expect(prewarmPluginStateRegions(context(), [APP_ID])).rejects.toBeInstanceOf(PrewarmNotConfigured)
     expect(fetchMock).not.toHaveBeenCalled()
+    // The background run logs it instead of reporting zero regions.
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    schedulePluginStatePrewarm(context(), [APP_ID], 0)
+    await vi.waitFor(() => expect(error.mock.calls.flat().join(' ')).toContain('plugin state prewarm failed'))
+  })
+
+  it('reports requested apps missing from a 2xx answer, and logs failed calls with their status', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('plugin.jp.'))
+        return new Response('{}', { status: 401 })
+      return Response.json({ placement: null, results: [{ app_id: 'com.example.one', revision: '1', cached: 1 }] })
+    }))
+    const results = await prewarmPluginStateRegions(context(), ['com.example.one', 'com.example.two'])
+    expect(results.find(region => region.region === 'na')?.results).toEqual([
+      { app_id: 'com.example.one', revision: '1', cached: 1 },
+      { app_id: 'com.example.two', revision: null, cached: 0, error: 'missing_result' },
+    ])
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    schedulePluginStatePrewarm(context(), ['com.example.one', 'com.example.two'], 0)
+    await vi.waitFor(() => expect(log.mock.calls.flat()).toContain('plugin state prewarmed'))
+    const call = log.mock.calls.find(args => args.includes('plugin state prewarmed'))!
+    const failed = call[call.indexOf('failed') + 1] as string[]
+    expect(failed).toContain('jp:http_error:401')
+    expect(failed).toContain('na:com.example.two:missing_result')
   })
 
   it('prewarms the plugin_state apps of a successful purge batch after the purge', async () => {

@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { quickError } from '../../utils/hono.ts'
-import { prewarmPluginStateRegions } from '../../utils/pluginStatePrewarm.ts'
+import { PrewarmNotConfigured, prewarmPluginStateRegions } from '../../utils/pluginStatePrewarm.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -15,7 +15,11 @@ export async function prewarm(c: Context<MiddlewareKeyVariables>, appId: string)
     throw quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: appId })
   if (!(await checkPermission(c, 'app.upload_bundle', { appId })))
     throw quickError(401, 'cannot_access_app', 'You can\'t access this app', { app_id: appId })
-  const regions = await prewarmPluginStateRegions(c, [appId])
+  const regions = await prewarmPluginStateRegions(c, [appId]).catch((error: unknown) => {
+    if (error instanceof PrewarmNotConfigured)
+      throw quickError(503, 'prewarm_unavailable', 'Plugin state prewarm is not configured on this server')
+    throw error
+  })
   return c.json({
     app_id: appId,
     regions: regions.map((region) => {

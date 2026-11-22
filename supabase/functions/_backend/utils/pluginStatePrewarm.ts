@@ -105,7 +105,11 @@ async function prewarmRegion(region: PluginRegion, secret: string, appIds: strin
     // Cloudflare sets cf-placement on responses of placed workers. Without it the
     // region is not pinned to one data center and its prewarm may miss device caches.
     const placement = response.headers.get('cf-placement') ?? body.placement ?? null
-    return { ...base, status: response.status, placement, results: Array.isArray(body.results) ? body.results : [], error: null }
+    const results = Array.isArray(body.results) ? body.results : []
+    // A 2xx answer must account for every requested app: a missing one did not prewarm.
+    const answered = new Set(results.map(result => result.app_id))
+    const missing = appIds.filter(appId => !answered.has(appId)).map(app_id => ({ app_id, revision: null, cached: 0, error: 'missing_result' }))
+    return { ...base, status: response.status, placement, results: [...results, ...missing], error: null }
   }
   catch (error) {
     return { ...base, error: error instanceof Error ? error.message : 'prewarm failed' }
@@ -117,12 +121,22 @@ async function prewarmRegion(region: PluginRegion, secret: string, appIds: strin
  * in that order. Calls run through a pool sized to the connection limit, and a
  * call that could not finish inside the total budget is reported, not sent.
  */
+/** Thrown when regions are configured but the API secret the regional route requires is not. */
+export class PrewarmNotConfigured extends Error {
+  constructor() {
+    super('plugin state prewarm needs API_SECRET to call the regional workers')
+    this.name = 'PrewarmNotConfigured'
+  }
+}
+
 export async function prewarmPluginStateRegions(c: Context, appIds: string[]): Promise<RegionPrewarmResult[]> {
   const targets = pluginStatePrewarmTargets(c)
-  const secret = getEnv(c, 'API_SECRET')
   const unique = [...new Set(appIds)]
-  if (!targets.length || !secret || !unique.length)
+  if (!targets.length || !unique.length)
     return []
+  const secret = getEnv(c, 'API_SECRET')
+  if (!secret)
+    throw new PrewarmNotConfigured()
   const calls: { region: PluginRegion, batch: string[] }[] = []
   for (let i = 0; i < unique.length; i += PREWARM_MAX_APPS) {
     const batch = unique.slice(i, i + PREWARM_MAX_APPS)
@@ -147,7 +161,7 @@ export function schedulePluginStatePrewarm(c: Context, appIds: string[], delayMs
     .then((regions) => {
       // A region call can succeed while some of its apps failed or ran out of budget.
       const failed = regions.flatMap(region => region.error !== null
-        ? [`${region.region}:${region.error}`]
+        ? [`${region.region}:${region.error}${region.status === null ? '' : `:${region.status}`}`]
         : region.results.filter(app => app.error || app.skipped === 'budget').map(app => `${region.region}:${app.app_id}:${app.error ?? app.skipped}`))
       cloudlog({
         requestId: c.get('requestId'),

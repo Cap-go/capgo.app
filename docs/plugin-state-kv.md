@@ -128,8 +128,9 @@ Workers allow six open connections per invocation, and the drain also holds
 its database socket and sends Cloudflare purge calls, so prewarm calls take at
 most three slots per invocation. Overlapping prewarm runs of one drain share
 them; another invocation has its own, so a cancelled invocation cannot stall
-it. A call's 8-second timeout starts only once it holds a slot, and calls that
-cannot start within 20 seconds of their run are reported instead of sent. A region that answers HTTP 200 without an
+it. A call's 8-second timeout starts only once it holds a slot. A run has a 20-second total budget that must still cover
+the 8-second call timeout, so calls that cannot start within 12 seconds of
+their run are reported as `budget_exhausted` instead of sent. A region that answers HTTP 200 without an
 app's outcome is reported as `missing_result`.
 
 ### Regional call
@@ -168,9 +169,11 @@ the entry is deleted too: a cold miss is safe, a stale entry is not. A write
 still pending after 500 ms is reported as timed out, and the same check runs in
 the background once it lands, with its own 2-second budget.
 
-A stale entry can remain only when its delete fails or is still pending and no
-newer write follows: the pointer read failed, the newer KV value has not
-propagated yet, or the retries, operations or budget ran out. The error (or,
+A stale entry written by the prewarm can remain only when its delete fails or
+is still pending and no newer write follows: the pointer read failed, the newer
+KV value has not propagated yet, or the retries, operations or budget ran out.
+When the cache lookup itself fails, the prewarm writes nothing and leaves
+whatever the cache already holds, which expires with its TTL like any entry. The error (or,
 for a late write, the `plugin state prewarm late write not reconciled` log)
 says so, and the entry expires with its 30-second TTL, which bounds every
 Cache API refill. Failures are only logged (`plugin state prewarmed`); devices

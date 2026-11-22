@@ -40,6 +40,13 @@ describe('POST /app/:id/prewarm', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('answers 503 when the server cannot call the regional workers', async () => {
+    vi.mocked(checkPermission).mockResolvedValue(true)
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', '')
+    await expect(prewarm(context(), APP_ID)).rejects.toMatchObject({ status: 503 })
+  })
+
   it('rejects an invalid app id before checking permissions', async () => {
     await expect(prewarm(context(), 'not an app')).rejects.toMatchObject({ status: 400 })
     expect(checkPermission).not.toHaveBeenCalled()
