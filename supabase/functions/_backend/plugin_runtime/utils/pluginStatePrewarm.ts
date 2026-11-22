@@ -8,9 +8,9 @@
 // Unlike a device request, a prewarm waits for R2 and KV (bounded below): it
 // runs off the device path, so it can absorb a slow provider read.
 
-import type { KVNamespace, R2Bucket } from '@cloudflare/workers-types'
+import type { KVNamespace, R2Bucket, R2ObjectBody } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
-import type { PluginStateAppDoc } from './pluginStateFormat.ts'
+import type { PluginStateAppDoc, PluginStatePointer } from './pluginStateFormat.ts'
 import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
 import { PLUGIN_STATE_CACHE } from './pluginState.ts'
@@ -39,7 +39,11 @@ export interface PluginStatePrewarmResult {
   app_id: string
   /** Publication generation of the app document; null when none is published. */
   revision: string | null
-  /** Documents confirmed written to this data center's cache. Current entries are kept. */
+  /**
+   * Distinct documents whose cache write was accepted (cache.put resolved) and
+   * reconciled. Cloudflare does not confirm storage on put, so this counts
+   * accepted writes, not entries proven present. Current entries are kept.
+   */
   cached: number
   skipped?: 'disabled' | 'unavailable' | 'unpublished' | 'budget'
   error?: string
@@ -169,38 +173,61 @@ async function startOperation<T>(ops: PrewarmOperations, endsAt: number, operati
  * connection slot, so queueing behind this call's own reads is not counted
  * against the provider; the whole read still stops at `budgetEndsAt`.
  */
-async function deadline<T>(read: () => Promise<T>, what: string, budgetEndsAt: number, ops: PrewarmOperations): Promise<T> {
+async function deadline<T>(read: () => Promise<T>, what: string, budgetEndsAt: number, ops: PrewarmOperations, dispose?: (abandoned: T) => void): Promise<T> {
   if (budgetEndsAt - Date.now() <= 0)
     throw new PluginStateMiss('prewarm budget exhausted')
   const { running } = await startOperation(ops, budgetEndsAt, read)
+  // A result that arrives after this read gave up is disposed (an R2 body is cancelled).
+  const abandon = () => {
+    void running.then(value => dispose?.(value), () => undefined)
+  }
   const remaining = Math.min(PREWARM_READ_TIMEOUT_MS, budgetEndsAt - Date.now())
   if (remaining <= 0) {
-    void running.catch(() => undefined)
+    abandon()
     throw new PluginStateMiss('prewarm budget exhausted')
   }
   let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
     running,
     new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new PluginStateMiss(`${what} timed out`)), remaining)
+      timer = setTimeout(() => {
+        abandon()
+        reject(new PluginStateMiss(`${what} timed out`))
+      }, remaining)
     }),
   ]).finally(() => clearTimeout(timer))
 }
 
-/** Generation the R2 pointer publishes now (null: no pointer). */
-async function readPublishedGeneration(pointers: R2Bucket, logicalKey: string, budgetEndsAt: number, ops: PrewarmOperations): Promise<string | null> {
-  const object = await deadline(() => pointers.get(logicalKey), 'publication index', budgetEndsAt, ops)
+/** Free an R2 object body nobody will read. */
+function discardObject(object: R2ObjectBody | null) {
+  void object?.body?.cancel().catch(() => undefined)
+}
+
+/** The pointer behind an R2 object; its body is cancelled when the read does not get to consume it. */
+async function readPointerObject(pointers: R2Bucket, logicalKey: string, budgetEndsAt: number, ops: PrewarmOperations): Promise<PluginStatePointer | null> {
+  const object = await deadline(() => pointers.get(logicalKey), 'publication index', budgetEndsAt, ops, discardObject)
   if (!object)
     return null
-  return parsePluginStatePointer(await deadline(() => object.json<unknown>(), 'publication index body', budgetEndsAt, ops)).generation
+  try {
+    return parsePluginStatePointer(await deadline(() => object.json<unknown>(), 'publication index body', budgetEndsAt, ops))
+  }
+  catch (error) {
+    // Refused (no budget or slot) or timed out before the body was consumed.
+    discardObject(object)
+    throw error
+  }
+}
+
+/** Generation the R2 pointer publishes now (null: no pointer). */
+async function readPublishedGeneration(pointers: R2Bucket, logicalKey: string, budgetEndsAt: number, ops: PrewarmOperations): Promise<string | null> {
+  return (await readPointerObject(pointers, logicalKey, budgetEndsAt, ops))?.generation ?? null
 }
 
 /** The strongly consistent R2 pointer, then the immutable KV value it names. */
 async function readPublication(pointers: R2Bucket, store: KVNamespace, logicalKey: string, budgetEndsAt: number, ops: PrewarmOperations): Promise<Publication> {
-  const object = await deadline(() => pointers.get(logicalKey), 'publication index', budgetEndsAt, ops)
-  if (!object)
+  const pointer = await readPointerObject(pointers, logicalKey, budgetEndsAt, ops)
+  if (!pointer)
     return { value: null, revision: null }
-  const pointer = parsePluginStatePointer(await deadline(() => object.json<unknown>(), 'publication index body', budgetEndsAt, ops))
   if (pointer.kvKey === null)
     return { value: null, revision: pointer.generation }
   if (pointer.kvKey !== await pluginStateImmutableKey(logicalKey, pointer.generation))

@@ -12,14 +12,16 @@ export const PREWARM_CALL_BUDGET_MS = 6000
 export const PREWARM_CALL_TIMEOUT_MS = PREWARM_CALL_BUDGET_MS + 2000
 /**
  * Provider and cache operations one call may start, across all its apps and
- * retries: below the 1,000 operations a Worker invocation may make.
+ * retries: this feature's own operation budget, which bounds the work and cost
+ * of a call however often a publication moves.
  */
 export const PREWARM_MAX_OPERATIONS = 900
 /**
  * Manifest documents loaded at once per call, across all its apps. A manifest
  * can approach 4 MiB (the sync's MANIFEST_MEMORY_LIMIT_BYTES), and a load holds
  * its parsed value plus serialization and cache-write buffers, so this keeps a
- * call far below the Worker's 128 MiB memory limit.
+ * call's own manifest memory to two documents' worth (other requests the isolate
+ * handles at the same time use memory of their own).
  */
 export const PREWARM_MANIFEST_CONCURRENCY = 2
 /**

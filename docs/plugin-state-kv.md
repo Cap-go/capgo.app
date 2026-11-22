@@ -106,8 +106,11 @@ devices read. On 2026-11-22 `capgo_plugin-jp-prod` reported `placement.mode:
 targeted` (`gcp:asia-northeast1`) in its script settings but returned no
 `cf-placement` header, even on uncached paths, so the Japan prewarm is not
 relied on until that placement is active. The prewarm reports each region's
-`cf-placement` value: the `plugin state prewarmed` log lists regions that
-answered without one under `unplaced`, and `app prewarm` flags them.
+`cf-placement` value. Only `remote-XXX` shows the call ran in the worker's
+placement data center: the API worker is placed in `aws:eu-west-2`, so
+`local-XXX` means a regional call stayed where it arrived. The `plugin state
+prewarmed` log lists regions without a `remote-` value under `unplaced`, the
+public endpoint returns `pinned`, and `app prewarm` flags them.
 
 The Cache API is local to the data center a worker runs in, so a placed region
 has a single plugin-state cache. Cache keys include the request hostname. The
@@ -139,22 +142,28 @@ app's outcome is reported as `missing_result`.
 Each regional worker reads the app document, plus the bundle-name and manifest
 documents of the bundles its channels serve (at most 8 bundles). Each provider
 read waits up to 2 seconds. The whole call has a 6-second budget and at most
-900 provider and cache operations, shared by every app and retry, below the
-1,000 operations a Worker invocation may make. R2, KV and Cache API calls count
+900 provider and cache operations, shared by every app and retry: this
+feature's own budget, which bounds the work of a call however often a
+publication moves. R2, KV and Cache API calls count
 toward the six simultaneous connections of an invocation, so a call runs at
 most five at once; each read's 2-second timer starts once it holds a slot, and
 waiting for one still ends at the call budget. Manifests, which can approach
 4 MiB each, load at most two at a time per call across all its apps (a
 manifest keeps its slot until its cache write, and any late check or repair of
 that write, settles, since a pending write still holds its payload), and
-bundle documents are dropped as soon as they are cached, so a call stays far
-below the Worker's 128 MiB memory limit. Reads and writes stop 300 ms
+bundle documents are dropped as soon as they are cached. This bounds one call's
+manifest memory to about two documents; the 128 MiB limit applies to the whole
+isolate, which may handle other requests at the same time. Reads and writes stop 300 ms
 before the budget ends, leaving that time for cleanup deletes; apps that cannot
 start before then are reported as `budget`, and no write starts once the budget
 is spent. It writes the shared app, bundle-name and manifest Cache API entries
 device requests read; per-device override entries are not prewarmed. `cached`
-counts the distinct keys this call wrote and confirmed at the published
-generation, each once; entries that already held it are kept and not counted.
+counts the distinct keys whose write this call made and reconciled at the
+published generation, each once; entries that already held it are kept and not
+counted. Cloudflare's `cache.put` does not confirm storage, so `cached` counts
+accepted writes: confirming each one with a read-back would cost another
+operation per document from the shared budget and still only prove the entry
+existed at that instant.
 Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 
 ### Ordering and its limits

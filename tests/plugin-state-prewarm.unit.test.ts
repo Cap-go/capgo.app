@@ -9,7 +9,7 @@ import { pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, plu
 import { prewarmBundles, prewarmOperations, prewarmPluginStateApp, prewarmSlotsForTests, shouldReplaceCachedGeneration } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
 import { drainUpdatesCachePurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { PLUGIN_REGIONS } from '../supabase/functions/_backend/utils/pluginRegionTargets.ts'
-import { pluginStatePrewarmTargets, PrewarmNotConfigured, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
+import { isPinnedPlacement, pluginStatePrewarmTargets, PrewarmNotConfigured, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
 
 const APP_ID = 'com.example.prewarm'
 const OWNER = '00000000-0000-4000-8000-000000000001'
@@ -561,6 +561,30 @@ describe('plugin state prewarm (regional worker)', () => {
     expect(ops.connections.open).toBe(0)
   })
 
+  it('cancels an R2 pointer body that arrives after its read gave up, or whose read was refused', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    memoryCache()
+    // A pointer that only arrives after the 2 s read timeout.
+    const cancel = vi.fn(async () => undefined)
+    const late = { PLUGIN_STATE: { get: vi.fn() }, PLUGIN_STATE_POINTERS: { get: vi.fn(() => new Promise(resolve => setTimeout(() => resolve({ json: vi.fn(), body: { cancel } }), 2500))) } }
+    const pending = onRegionalHost(late, c => prewarmPluginStateApp(c, APP_ID, Date.now() + 6000))
+    for (let step = 0; step < 30; step++) {
+      await new Promise(resolve => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    expect(await pending).toMatchObject({ error: 'plugin state missing: publication index timed out' })
+    expect(cancel).toHaveBeenCalledOnce()
+    vi.useRealTimers()
+    // A pointer whose body read is refused: the operation budget only covered the get.
+    const refusedCancel = vi.fn(async () => undefined)
+    const json = vi.fn()
+    const refused = { PLUGIN_STATE: { get: vi.fn() }, PLUGIN_STATE_POINTERS: { get: vi.fn(async () => ({ json, body: { cancel: refusedCancel } })) } }
+    expect(await onRegionalHost(refused, c => prewarmPluginStateApp(c, APP_ID, Date.now() + 6000, prewarmOperations(1)))).toMatchObject({ error: 'plugin state missing: prewarm operation budget exhausted' })
+    expect(json).not.toHaveBeenCalled()
+    expect(refusedCancel).toHaveBeenCalledOnce()
+  })
+
   it('does nothing while KV reads are off in the region', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'off')
     const { env, publish } = providers()
@@ -922,6 +946,23 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     expect(results.filter(region => region.region === 'jp')).toHaveLength(3)
     expect(results.filter(region => region.region === 'jp').every(region => region.error === 'http_error' && region.status === 503)).toBe(true)
     expect(results.find(region => region.region === 'na')).toMatchObject({ status: 200, placement: 'remote-na', error: null })
+  })
+
+  it('treats only remote- placements as pinned, in the log as in the API', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    expect(isPinnedPlacement('remote-CMH')).toBe(true)
+    expect(isPinnedPlacement('local-LHR')).toBe(false)
+    expect(isPinnedPlacement(null)).toBe(false)
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => Response.json({ placement: null, results: [{ app_id: APP_ID, revision: '1', cached: 1 }] }, {
+      headers: { 'cf-placement': url.includes('plugin.jp.') ? 'local-LHR' : 'remote-XXX' },
+    })))
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    schedulePluginStatePrewarm(context(), [APP_ID], 0)
+    await vi.waitFor(() => expect(log.mock.calls.flat()).toContain('plugin state prewarmed'))
+    const call = log.mock.calls.find(args => args.includes('plugin state prewarmed'))!
+    expect(call[call.indexOf('unplaced') + 1]).toEqual(['jp'])
   })
 
   it('takes the data center from the cf-placement response header Cloudflare adds to placed workers', async () => {

@@ -59,6 +59,16 @@ const PREWARM_TOTAL_BUDGET_MS = 20_000
 /** Let the zone purge reach every data center before refilling it. */
 export const PREWARM_AFTER_PURGE_DELAY_MS = 1000
 
+/**
+ * True when cf-placement shows the regional call was moved to the worker's
+ * placement data center (`remote-XXX`). `local-XXX` means it ran where the call
+ * arrived, and no value means the worker is not placed: either way the cache
+ * it warmed may not be the one its devices read.
+ */
+export function isPinnedPlacement(placement: string | null) {
+  return typeof placement === 'string' && placement.startsWith('remote-')
+}
+
 export interface RegionPrewarmResult {
   region: string
   status: number | null
@@ -171,7 +181,7 @@ export function schedulePluginStatePrewarm(c: Context, appIds: string[], delayMs
         : region.results.filter(app => app.error || app.skipped === 'budget').map(app => `${region.region}:${app.app_id}:${app.error ?? app.skipped}`))
       // Answered without cf-placement: warmed a data center that may not be the
       // one its devices read (the region is not pinned).
-      const unplaced = [...new Set(regions.filter(region => region.error === null && region.placement === null).map(region => region.region))]
+      const unplaced = [...new Set(regions.filter(region => region.error === null && !isPinnedPlacement(region.placement)).map(region => region.region))]
       cloudlog({
         requestId: c.get('requestId'),
         message: 'plugin state prewarmed',

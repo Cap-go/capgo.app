@@ -9,6 +9,8 @@ export interface PrewarmRegion {
   region: string
   /** HTTP status of the regional call; null when it never answered. */
   status?: number | null
+  /** The call ran in the worker's placement data center (server-side cf-placement check). */
+  pinned?: boolean
   placement: string | null
   revision: string | null
   cached: number
@@ -36,8 +38,9 @@ export function describePrewarmRegion(region: PrewarmRegion) {
   if (region.skipped)
     return `skipped (${region.skipped})`
   const result = region.cached > 0 ? `warmed ${region.cached} document${region.cached === 1 ? '' : 's'}` : 'already warm'
-  // No data center reported: the region is not pinned, so device requests may read other caches.
-  return region.placement ? result : `${result} (region not pinned to one data center)`
+  // Not confirmed in its placement data center: device requests may read another cache.
+  const pinned = region.pinned ?? Boolean(region.placement?.startsWith('remote-'))
+  return pinned ? result : `${result} (not confirmed in the region's pinned data center)`
 }
 
 /**

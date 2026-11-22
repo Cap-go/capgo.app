@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { quickError } from '../../utils/hono.ts'
-import { PrewarmNotConfigured, prewarmPluginStateRegions } from '../../utils/pluginStatePrewarm.ts'
+import { isPinnedPlacement, PrewarmNotConfigured, prewarmPluginStateRegions } from '../../utils/pluginStatePrewarm.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -30,6 +30,7 @@ export async function prewarm(c: Context<MiddlewareKeyVariables>, appId: string)
         region: region.region,
         status: region.status,
         placement: region.placement,
+        pinned: isPinnedPlacement(region.placement),
         revision: result?.revision ?? null,
         cached: result?.cached ?? 0,
         skipped: result?.skipped ?? null,
