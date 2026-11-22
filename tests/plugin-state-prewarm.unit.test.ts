@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import process from 'node:process'
 import { Hono } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,6 +19,15 @@ const inheritedTargets = process.env.PLUGIN_REGION_TARGETS
 
 beforeEach(() => {
   delete process.env.PLUGIN_REGION_TARGETS
+  // crypto.subtle settles on the real event loop, outside fake timers, so a busy
+  // CI runner could let the fake clock run ahead of it. Hash synchronously
+  // instead: the same digest, settled within the awaited microtasks.
+  vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+    const name = (typeof algorithm === 'string' ? algorithm : algorithm.name).toLowerCase().replace('-', '')
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+    const digest = createHash(name).update(Buffer.from(bytes)).digest()
+    return digest.buffer.slice(digest.byteOffset, digest.byteOffset + digest.byteLength) as ArrayBuffer
+  })
 })
 
 afterEach(() => {
