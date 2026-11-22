@@ -106,7 +106,8 @@ devices read. On 2026-11-22 `capgo_plugin-jp-prod` reported `placement.mode:
 targeted` (`gcp:asia-northeast1`) in its script settings but returned no
 `cf-placement` header, even on uncached paths, so the Japan prewarm is not
 relied on until that placement is active. The prewarm reports each region's
-`cf-placement` value, and `app prewarm` flags a region without one.
+`cf-placement` value: the `plugin state prewarmed` log lists regions that
+answered without one under `unplaced`, and `app prewarm` flags them.
 
 The Cache API is local to the data center a worker runs in, so a placed region
 has a single plugin-state cache. Cache keys include the request hostname. The
@@ -152,7 +153,8 @@ before the budget ends, leaving that time for cleanup deletes; apps that cannot
 start before then are reported as `budget`, and no write starts once the budget
 is spent. It writes the shared app, bundle-name and manifest Cache API entries
 device requests read; per-device override entries are not prewarmed. `cached`
-counts the distinct keys the call left at the published generation, each once.
+counts the distinct keys this call wrote and confirmed at the published
+generation, each once; entries that already held it are kept and not counted.
 Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 
 ### Ordering and its limits

@@ -1025,6 +1025,10 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     const failed = call[call.indexOf('failed') + 1] as string[]
     expect(failed).toContain('jp:http_error:401')
     expect(failed).toContain('na:com.example.two:missing_result')
+    // Answered 2xx without cf-placement: listed, not counted as failed.
+    const unplaced = call[call.indexOf('unplaced') + 1] as string[]
+    expect(unplaced).toContain('na')
+    expect(unplaced).not.toContain('jp')
   })
 
   it('prewarms the plugin_state apps of a successful purge batch after the purge', async () => {
