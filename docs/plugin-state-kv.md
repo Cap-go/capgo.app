@@ -471,8 +471,9 @@ basis points. Sampled requests also record `r2_pointer_reads`,
 `kv_value_timeouts`. A sampled request whose read finishes in the background
 also logs `message=plugin_state_refill` with the document path, `outcome`
 (`cached`; `not_cached` when the read finished but the best-effort cache write
-did not land; or `failed`), colo, and the full provider read time in
-`duration_ms`.
+was not confirmed, because it failed or exceeded its 200 ms timeout (a
+timed-out write is not cancelled and may still land later); or `failed`),
+colo, and the full provider read time in `duration_ms`.
 Use it to size the request deadlines: the request metrics stop at the deadline.
 The durations and operation counts are per-request totals for each provider;
 cache hits contribute zero provider operations. Gate rollout on R2 time,
