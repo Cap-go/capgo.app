@@ -63,8 +63,9 @@ AS $$
   )
   AND EXISTS (
     SELECT 1
-    FROM public.stripe_info si
-    WHERE si.org_id = p_org_id
+    FROM public.orgs o
+    JOIN public.stripe_info si ON si.customer_id = o.customer_id
+    WHERE o.id = p_org_id
       AND si.status = 'succeeded'
       AND si.is_good_plan = true
   );

@@ -17,7 +17,9 @@ WHERE id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8';
 
 UPDATE public.stripe_info
 SET status = 'succeeded', is_good_plan = true
-WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8';
+WHERE customer_id = (
+  SELECT customer_id FROM public.orgs WHERE id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+);
 
 SELECT tests.authenticate_as_service_role();
 
