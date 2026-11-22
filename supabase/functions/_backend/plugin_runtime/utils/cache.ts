@@ -221,7 +221,8 @@ export class CacheHelper {
 
   /**
    * Write JSON to Cache API. Resolves true once the entry is stored, false when
-   * there is no cache, the write failed, or it exceeded `timeoutMs`.
+   * there is no cache, the write failed, or it exceeded `timeoutMs`: false is
+   * "not confirmed", since a timed-out write is not cancelled and may still land.
    * Pass `timeoutMs` for best-effort waitUntil caches (device/MAU). Omit it for
    * rate-limit counters that must finish the write before treating it as recorded.
    */
