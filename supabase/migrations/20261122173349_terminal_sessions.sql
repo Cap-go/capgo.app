@@ -17,7 +17,9 @@ CREATE TABLE public.terminal_sessions (
   ended_at timestamptz,
   billed_minutes integer NOT NULL DEFAULT 0 CHECK (billed_minutes >= 0),
   max_duration_minutes integer NOT NULL DEFAULT 60 CHECK (max_duration_minutes BETWEEN 1 AND 60),
-  teardown_reason text
+  teardown_reason text,
+  ws_connect_token_hash text,
+  ws_connect_token_expires_at timestamptz
 );
 
 ALTER TABLE public.terminal_sessions OWNER TO postgres;
@@ -214,3 +216,62 @@ REVOKE ALL ON FUNCTION public.terminal_session_finish(text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.terminal_session_finish(text, text) FROM anon;
 REVOKE ALL ON FUNCTION public.terminal_session_finish(text, text) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.terminal_session_finish(text, text) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.terminal_session_set_ws_token(
+  p_session_key text,
+  p_token_hash text,
+  p_ttl_seconds integer DEFAULT 300
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  UPDATE public.terminal_sessions
+  SET ws_connect_token_hash = p_token_hash,
+      ws_connect_token_expires_at = now() + make_interval(secs => p_ttl_seconds),
+      updated_at = now()
+  WHERE session_key = p_session_key
+    AND status = 'active';
+  RETURN FOUND;
+END;
+$$;
+
+ALTER FUNCTION public.terminal_session_set_ws_token(text, text, integer) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.terminal_session_set_ws_token(text, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.terminal_session_set_ws_token(text, text, integer) FROM anon;
+REVOKE ALL ON FUNCTION public.terminal_session_set_ws_token(text, text, integer) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.terminal_session_set_ws_token(text, text, integer) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.terminal_session_consume_ws_token(
+  p_session_key text,
+  p_token_hash text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_ok boolean;
+BEGIN
+  UPDATE public.terminal_sessions
+  SET ws_connect_token_hash = NULL,
+      ws_connect_token_expires_at = NULL,
+      updated_at = now()
+  WHERE session_key = p_session_key
+    AND status = 'active'
+    AND ws_connect_token_hash = p_token_hash
+    AND ws_connect_token_expires_at IS NOT NULL
+    AND ws_connect_token_expires_at > now()
+  RETURNING true INTO v_ok;
+  RETURN COALESCE(v_ok, false);
+END;
+$$;
+
+ALTER FUNCTION public.terminal_session_consume_ws_token(text, text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.terminal_session_consume_ws_token(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.terminal_session_consume_ws_token(text, text) FROM anon;
+REVOKE ALL ON FUNCTION public.terminal_session_consume_ws_token(text, text) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.terminal_session_consume_ws_token(text, text) TO service_role;

@@ -3,6 +3,13 @@
   "logpush": true,
   "compatibility_date": "2026-11-10",
   "main": "./index.ts",
+  "services": [
+    {
+      "binding": "TERMINAL_EGRESS",
+      "service": "capgo_terminal",
+      "entrypoint": "TerminalEgress"
+    }
+  ],
   "compatibility_flags": ["nodejs_compat", "nodejs_compat_populate_process_env"],
   "workers_dev": false,
   "upload_source_maps": true,
@@ -32,6 +39,13 @@
   "env": {
     "prod": {
       "name": "capgo_terminal-prod",
+      "services": [
+        {
+          "binding": "TERMINAL_EGRESS",
+          "service": "capgo_terminal-prod",
+          "entrypoint": "TerminalEgress"
+        }
+      ],
       "containers": [
         {
           "class_name": "TerminalSession",

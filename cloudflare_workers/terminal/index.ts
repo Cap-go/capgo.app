@@ -1,15 +1,25 @@
 import { getAgentByName } from 'agents'
 import { TERMINAL_MAX_CONCURRENCY_PER_ORG, TERMINAL_MAX_SESSION_MINUTES } from './lib/constants.ts'
 import { authErrorResponse } from './lib/errors.ts'
+import { handleTerminalEgress } from './lib/egress_proxy.ts'
 import {
   extractApiKey,
+  normalizeTerminalPath,
   parseSessionRoute,
 } from './lib/http.ts'
 import {
   buildSessionKey,
 } from './lib/security.ts'
-import { reserveTerminalSession, validateApiKeyForApp } from './lib/apikey.ts'
+import {
+  consumeTerminalWsToken,
+  reserveTerminalSession,
+  setTerminalWsToken,
+  sha256Hex,
+  validateApiKeyForApp,
+} from './lib/apikey.ts'
 import { TerminalSession, type TerminalEnv } from './terminal_session.ts'
+
+const WS_TOKEN_TTL_SECONDS = 300
 
 function parseSessionKeyParts(sessionKey: string): { orgId: string, appId: string } | null {
   const parts = sessionKey.split(':')
@@ -40,6 +50,15 @@ function parseStartSessionBody(
   return { orgId: orgId.trim(), appId: appId.trim(), sessionId: sessionId.trim() }
 }
 
+function parseEndSessionBody(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    return null
+  const sessionKey = (raw as Record<string, unknown>).session_key
+  if (typeof sessionKey !== 'string' || !sessionKey.trim())
+    return null
+  return sessionKey.trim()
+}
+
 function reserveStatus(error: string | undefined): number {
   if (error === 'concurrency_limit')
     return 429
@@ -56,123 +75,182 @@ async function ensureReserved(
   return Response.json({ error: reserved.error ?? 'reserve_failed' }, { status: reserveStatus(reserved.error) })
 }
 
-export default {
-  async fetch(request: Request, env: TerminalEnv, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url)
+function mintWsConnectToken(): string {
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+}
 
-    if (url.pathname === '/terminal/sessions' && request.method === 'POST') {
-      const apiKey = extractApiKey(request)
-      if (!apiKey)
-        return Response.json({ error: 'missing_apikey' }, { status: 401 })
+async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<Response> {
+  const url = new URL(request.url)
+  const path = normalizeTerminalPath(url.pathname)
 
-      let raw: unknown
-      try {
-        raw = await request.json()
-      }
-      catch {
-        return Response.json({ error: 'invalid_json' }, { status: 400 })
-      }
-      const parsed = parseStartSessionBody(raw)
-      if (!parsed)
-        return Response.json({ error: 'missing_fields' }, { status: 400 })
+  if (path === '/terminal/sessions' && request.method === 'POST') {
+    const apiKey = extractApiKey(request)
+    if (!apiKey)
+      return Response.json({ error: 'missing_apikey' }, { status: 401 })
 
-      const { orgId, appId, sessionId } = parsed
-      const sessionKey = buildSessionKey(orgId, appId, sessionId)
-      try {
-        const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, orgId, appId)
-        const block = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
-          sessionKey,
-          orgId,
-          appId,
-          apikeyId: key.apikeyId,
-          maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
-          maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
-        })
-        if (block)
-          return block
-
-        const mcpQuery = `session_key=${encodeURIComponent(sessionKey)}`
-        return Response.json({
-          session_key: sessionKey,
-          mcp_url: `${url.origin}/terminal/mcp?${mcpQuery}`,
-          websocket_url: `${url.origin}/terminal/ws/${encodeURIComponent(sessionKey)}`,
-        })
-      }
-      catch (error) {
-        return authErrorResponse(error)
-      }
+    let raw: unknown
+    try {
+      raw = await request.json()
     }
+    catch {
+      return Response.json({ error: 'invalid_json' }, { status: 400 })
+    }
+    const parsed = parseStartSessionBody(raw)
+    if (!parsed)
+      return Response.json({ error: 'missing_fields' }, { status: 400 })
 
-    if (url.pathname.startsWith('/terminal/ws/')) {
-      const sessionKey = parseSessionRoute(url.pathname, '/terminal/ws/')
-      if (!sessionKey)
-        return new Response('not_found', { status: 404 })
-      const apiKey = extractApiKey(request)
-      if (!apiKey)
-        return new Response('unauthorized', { status: 401 })
-      const parts = parseSessionKeyParts(sessionKey)
-      if (!parts)
-        return new Response('not_found', { status: 404 })
+    const { orgId, appId, sessionId } = parsed
+    const sessionKey = buildSessionKey(orgId, appId, sessionId)
+    try {
+      const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, orgId, appId)
+      const block = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
+        sessionKey,
+        orgId,
+        appId,
+        apikeyId: key.apikeyId,
+        maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
+        maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
+      })
+      if (block)
+        return block
+
+      const wsToken = mintWsConnectToken()
+      const wsTokenHash = await sha256Hex(wsToken)
+      const tokenStored = await setTerminalWsToken(
+        env.HYPERDRIVE_CAPGO_DIRECT_EU,
+        sessionKey,
+        wsTokenHash,
+        WS_TOKEN_TTL_SECONDS,
+      )
+      if (!tokenStored)
+        return Response.json({ error: 'ws_token_failed' }, { status: 500 })
+
+      const mcpQuery = `session_key=${encodeURIComponent(sessionKey)}`
+      const wsQuery = `ws_token=${encodeURIComponent(wsToken)}`
+      return Response.json({
+        session_key: sessionKey,
+        mcp_url: `${url.origin}/terminal/mcp?${mcpQuery}`,
+        websocket_url: `${url.origin}/terminal/ws/${encodeURIComponent(sessionKey)}?${wsQuery}`,
+        ws_connect_token: wsToken,
+      })
+    }
+    catch (error) {
+      return authErrorResponse(error)
+    }
+  }
+
+  if (path === '/terminal/sessions/end' && request.method === 'POST') {
+    const apiKey = extractApiKey(request)
+    if (!apiKey)
+      return Response.json({ error: 'missing_apikey' }, { status: 401 })
+    let raw: unknown
+    try {
+      raw = await request.json()
+    }
+    catch {
+      return Response.json({ error: 'invalid_json' }, { status: 400 })
+    }
+    const sessionKey = parseEndSessionBody(raw)
+    if (!sessionKey)
+      return Response.json({ error: 'missing_session_key' }, { status: 400 })
+    const parts = parseSessionKeyParts(sessionKey)
+    if (!parts)
+      return Response.json({ error: 'invalid_session_key' }, { status: 400 })
+    try {
+      await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
+    }
+    catch (error) {
+      return authErrorResponse(error)
+    }
+    const id = env.TERMINAL_SESSION.idFromName(sessionKey)
+    const stub = env.TERMINAL_SESSION.get(id)
+    return stub.fetch(new Request('http://do/terminal/end', { method: 'POST' }))
+  }
+
+  if (path.startsWith('/terminal/ws/')) {
+    const sessionKey = parseSessionRoute(path, '/terminal/ws/')
+    if (!sessionKey)
+      return new Response('not_found', { status: 404 })
+    const parts = parseSessionKeyParts(sessionKey)
+    if (!parts)
+      return new Response('not_found', { status: 404 })
+
+    const apiKey = extractApiKey(request)
+    const wsToken = url.searchParams.get('ws_token')?.trim()
+    if (apiKey) {
       try {
-        const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
-        const block = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
-          sessionKey,
-          orgId: parts.orgId,
-          appId: parts.appId,
-          apikeyId: key.apikeyId,
-          maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
-          maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
-        })
-        if (block) {
-          const status = block.status
-          return new Response(block.statusText || 'forbidden', { status })
-        }
+        await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
       }
       catch {
         return new Response('forbidden', { status: 403 })
       }
-      const id = env.TERMINAL_SESSION.idFromName(sessionKey)
-      return env.TERMINAL_SESSION.get(id).fetch(request)
+    }
+    else if (wsToken) {
+      const tokenHash = await sha256Hex(wsToken)
+      const ok = await consumeTerminalWsToken(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, tokenHash)
+      if (!ok)
+        return new Response('unauthorized', { status: 401 })
+    }
+    else {
+      return new Response('unauthorized', { status: 401 })
     }
 
-    if (url.pathname.startsWith('/terminal/mcp')) {
-      const apiKey = extractApiKey(request)
-      if (!apiKey)
-        return Response.json({ error: 'missing_apikey' }, { status: 401 })
-      const sessionKey = url.searchParams.get('session_key')
-        || request.headers.get('X-Capgo-Terminal-Session')
-      if (!sessionKey)
-        return Response.json({ error: 'missing_session_key' }, { status: 400 })
-      const parts = parseSessionKeyParts(sessionKey)
-      if (!parts)
-        return Response.json({ error: 'invalid_session_key' }, { status: 400 })
-      try {
-        const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
-        const block = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
-          sessionKey,
-          orgId: parts.orgId,
-          appId: parts.appId,
-          apikeyId: key.apikeyId,
-          maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
-          maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
-        })
-        if (block)
-          return block
-      }
-      catch (error) {
-        return authErrorResponse(error)
-      }
-      const agent = await getAgentByName(env.TERMINAL_SESSION, sessionKey, {
-        props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
+    const id = env.TERMINAL_SESSION.idFromName(sessionKey)
+    return env.TERMINAL_SESSION.get(id).fetch(request)
+  }
+
+  if (path.startsWith('/terminal/mcp')) {
+    const apiKey = extractApiKey(request)
+    if (!apiKey)
+      return Response.json({ error: 'missing_apikey' }, { status: 401 })
+    const sessionKey = url.searchParams.get('session_key')
+      || request.headers.get('X-Capgo-Terminal-Session')
+    if (!sessionKey)
+      return Response.json({ error: 'missing_session_key' }, { status: 400 })
+    const parts = parseSessionKeyParts(sessionKey)
+    if (!parts)
+      return Response.json({ error: 'invalid_session_key' }, { status: 400 })
+    try {
+      const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
+      const block = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
+        sessionKey,
+        orgId: parts.orgId,
+        appId: parts.appId,
+        apikeyId: key.apikeyId,
+        maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
+        maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
       })
-      return agent.fetch(request)
+      if (block)
+        return block
     }
+    catch (error) {
+      return authErrorResponse(error)
+    }
+    const agent = await getAgentByName(env.TERMINAL_SESSION, sessionKey, {
+      props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
+    })
+    return agent.fetch(request)
+  }
 
-    if (url.pathname === '/terminal/health')
-      return Response.json({ status: 'ok' })
+  if (path === '/terminal/health')
+    return Response.json({ status: 'ok' })
 
-    return new Response('not_found', { status: 404 })
+  return new Response('not_found', { status: 404 })
+}
+
+export default {
+  async fetch(request: Request, env: TerminalEnv, ctx: ExecutionContext): Promise<Response> {
+    return handleTerminalFetch(request, env)
   },
 } satisfies ExportedHandler<TerminalEnv>
 
 export { TerminalSession }
+
+export const TerminalEgress = {
+  fetch: handleTerminalEgress,
+} satisfies ExportedHandler

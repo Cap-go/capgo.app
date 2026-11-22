@@ -1,17 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { TERMINAL_EGRESS_ALLOWLIST } from '../cloudflare_workers/terminal/lib/constants.ts'
+import { assertTerminalApiKeyPolicy } from '../cloudflare_workers/terminal/lib/apikey.ts'
+import { TERMINAL_EGRESS_ALLOWLIST, TERMINAL_IDLE_MS, TERMINAL_MAX_SESSION_MINUTES } from '../cloudflare_workers/terminal/lib/constants.ts'
 import { isEgressHostAllowed } from '../cloudflare_workers/terminal/lib/egress.ts'
+import { handleTerminalEgress } from '../cloudflare_workers/terminal/lib/egress_proxy.ts'
 import {
   extractApiKey,
+  normalizeTerminalPath,
   parseSessionRoute,
 } from '../cloudflare_workers/terminal/lib/http.ts'
 import {
   assertSafeCommand,
   buildSessionKey,
   capOutputBytes,
+  nextSessionAlarmAtMs,
   resolveWorkspacePath,
   sessionAlarmAtMs,
   shouldTeardownByAlarm,
+  teardownReasonAtAlarm,
 } from '../cloudflare_workers/terminal/lib/security.ts'
 
 describe('terminal security', () => {
@@ -38,6 +43,15 @@ describe('terminal security', () => {
     expect(second.truncated).toBe(true)
     expect(second.total).toBe(limit)
     expect(new TextEncoder().encode(second.text).length).toBe(limit - first.total)
+  })
+
+  it('resets the output cap for each command', () => {
+    const limit = 256 * 1024
+    const first = capOutputBytes('a'.repeat(limit), 0)
+    expect(first.truncated).toBe(false)
+    const second = capOutputBytes('bb', 0)
+    expect(second.total).toBe(2)
+    expect(second.truncated).toBe(false)
   })
 
   it('fires alarm teardown at max duration', () => {
@@ -69,5 +83,29 @@ describe('terminal security', () => {
     for (const host of TERMINAL_EGRESS_ALLOWLIST)
       expect(isEgressHostAllowed(host)).toBe(true)
     expect(isEgressHostAllowed('evil.example')).toBe(false)
+  })
+
+  it('blocks egress proxy traffic outside the allowlist', async () => {
+    const denied = await handleTerminalEgress(new Request('https://evil.example/path'))
+    expect(denied.status).toBe(403)
+  })
+
+  it('normalizes terminal paths with a trailing slash', () => {
+    expect(normalizeTerminalPath('/terminal/sessions/')).toBe('/terminal/sessions')
+    expect(normalizeTerminalPath('/terminal/health')).toBe('/terminal/health')
+  })
+
+  it('schedules idle teardown before max duration', () => {
+    const started = 10_000
+    const now = started + 1_000
+    const alarmAt = nextSessionAlarmAtMs(started, TERMINAL_MAX_SESSION_MINUTES, TERMINAL_IDLE_MS, now)
+    expect(alarmAt).toBe(now + TERMINAL_IDLE_MS)
+    expect(teardownReasonAtAlarm(started, TERMINAL_MAX_SESSION_MINUTES, alarmAt)).toBe('idle_timeout')
+  })
+
+  it('requires write or all on an app-scoped key', () => {
+    expect(() => assertTerminalApiKeyPolicy(true, true)).not.toThrow()
+    expect(() => assertTerminalApiKeyPolicy(false, true)).toThrow('apikey_app_forbidden')
+    expect(() => assertTerminalApiKeyPolicy(true, false)).toThrow('apikey_not_app_scoped')
   })
 })

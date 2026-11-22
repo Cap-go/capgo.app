@@ -1,3 +1,9 @@
+export function normalizeTerminalPath(pathname: string): string {
+  if (pathname.length > 1 && pathname.endsWith('/'))
+    return pathname.slice(0, -1)
+  return pathname
+}
+
 export function extractApiKey(request: Request): string | null {
   const header = request.headers.get('authorization')?.trim()
   if (header) {

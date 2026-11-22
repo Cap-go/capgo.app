@@ -12,8 +12,9 @@ import { finishTerminalSession } from './lib/apikey.ts'
 import {
   assertSafeCommand,
   capOutputBytes,
+  nextSessionAlarmAtMs,
   resolveWorkspacePath,
-  sessionAlarmAtMs,
+  teardownReasonAtAlarm,
 } from './lib/security.ts'
 
 type McpTextResult = { content: Array<{ type: 'text', text: string }> }
@@ -36,6 +37,7 @@ function registerMcpTool(
 export interface TerminalEnv {
   TERMINAL_SESSION: DurableObjectNamespace<TerminalSession>
   HYPERDRIVE_CAPGO_DIRECT_EU: { connectionString: string }
+  TERMINAL_EGRESS?: Fetcher
 }
 
 export interface TerminalProps extends Record<string, unknown> {
@@ -46,7 +48,6 @@ export interface TerminalProps extends Record<string, unknown> {
 
 export interface TerminalAgentState {
   startedAtMs: number
-  outputBytes: number
   ended: boolean
 }
 
@@ -55,7 +56,6 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
 
   initialState: TerminalAgentState = {
     startedAtMs: Date.now(),
-    outputBytes: 0,
     ended: false,
   }
 
@@ -64,6 +64,22 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
   private assertActive() {
     if (this.state.ended)
       throw new Error('session_ended')
+  }
+
+  private async bumpSessionAlarm() {
+    const started = this.state.startedAtMs || Date.now()
+    await this.ctx.storage.setAlarm(
+      nextSessionAlarmAtMs(started, TERMINAL_MAX_SESSION_MINUTES, TERMINAL_IDLE_MS, Date.now()),
+    )
+  }
+
+  async onRequest(request: Request): Promise<Response> {
+    const path = new URL(request.url).pathname
+    if (path === '/terminal/end' && request.method === 'POST') {
+      await this.teardown('client_end')
+      return Response.json({ status: 'ok' })
+    }
+    return super.onRequest(request)
   }
 
   async init() {
@@ -81,6 +97,7 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       async ({ command }) => {
         this.assertActive()
         assertSafeCommand(command)
+        await this.bumpSessionAlarm()
         await this.ensureContainer()
         const container = this.ctx.container!
         const proc = await container.exec(['sh', '-c', command], {
@@ -90,46 +107,41 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
           stderr: 'combined',
           signal: AbortSignal.timeout(TERMINAL_COMMAND_TIMEOUT_MS),
         })
-        let bytes = this.state.outputBytes
+        let bytes = 0
         let combined = ''
         let truncated = false
         let exitCode = -1
-        try {
-          if (proc.stdout) {
-            const reader = proc.stdout.getReader()
-            const decoder = new TextDecoder()
-            try {
-              while (true) {
-                const { done, value } = await reader.read()
-                if (done)
-                  break
-                const chunk = decoder.decode(value, { stream: true })
-                const capped = capOutputBytes(chunk, bytes)
-                bytes = capped.total
-                truncated = truncated || capped.truncated
-                if (capped.text) {
-                  combined += capped.text
-                  this.broadcast(JSON.stringify({ type: 'stdout', chunk: capped.text, truncated }))
-                }
-                if (truncated) {
-                  void proc.kill?.()
-                  break
-                }
+        if (proc.stdout) {
+          const reader = proc.stdout.getReader()
+          const decoder = new TextDecoder()
+          try {
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done)
+                break
+              const chunk = decoder.decode(value, { stream: true })
+              const capped = capOutputBytes(chunk, bytes)
+              bytes = capped.total
+              truncated = truncated || capped.truncated
+              if (capped.text) {
+                combined += capped.text
+                this.broadcast(JSON.stringify({ type: 'stdout', chunk: capped.text, truncated }))
+              }
+              if (truncated) {
+                void proc.kill?.()
+                break
               }
             }
-            finally {
-              reader.releaseLock()
-            }
           }
-          try {
-            exitCode = await proc.exitCode
-          }
-          catch {
-            exitCode = -1
+          finally {
+            reader.releaseLock()
           }
         }
-        finally {
-          this.setState({ ...this.state, outputBytes: bytes })
+        try {
+          exitCode = await proc.exitCode
+        }
+        catch {
+          exitCode = -1
         }
         return {
           content: [{
@@ -147,6 +159,7 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       { path: z.string().min(1) },
       async ({ path }) => {
         this.assertActive()
+        await this.bumpSessionAlarm()
         const fullPath = resolveWorkspacePath(path)
         await this.ensureContainer()
         const response = await this.files!.readFile(fullPath)
@@ -165,6 +178,7 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       { path: z.string().min(1), content: z.string() },
       async ({ path, content }) => {
         this.assertActive()
+        await this.bumpSessionAlarm()
         const fullPath = resolveWorkspacePath(path)
         await this.ensureContainer()
         await this.files!.writeFile(fullPath, content)
@@ -177,7 +191,7 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
     const startedAt = this.state.startedAtMs || Date.now()
     if (!this.state.startedAtMs)
       this.setState({ ...this.state, startedAtMs: startedAt })
-    await this.ctx.storage.setAlarm(sessionAlarmAtMs(startedAt, TERMINAL_MAX_SESSION_MINUTES))
+    await this.bumpSessionAlarm()
   }
 
   async ensureContainer() {
@@ -185,17 +199,20 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
     if (!container)
       throw new Error('container_not_configured')
     if (!container.running) {
-      // Preview: allowlist in TERMINAL_EGRESS_ALLOWLIST; wire container outbound filtering when CF Sandbox exposes it.
       container.start({
         image: container.images.sandbox,
-        enableInternet: true,
+        enableInternet: false,
       })
+      if (this.env.TERMINAL_EGRESS)
+        await container.interceptAllOutboundHttp(this.env.TERMINAL_EGRESS)
       await container.setInactivityTimeout(TERMINAL_IDLE_MS)
     }
   }
 
   async alarm() {
-    await this.teardown('max_duration_alarm')
+    const started = this.state.startedAtMs || Date.now()
+    const reason = teardownReasonAtAlarm(started, TERMINAL_MAX_SESSION_MINUTES, Date.now())
+    await this.teardown(reason)
   }
 
   async teardown(reason: string) {

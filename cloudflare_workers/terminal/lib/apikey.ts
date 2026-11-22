@@ -10,6 +10,15 @@ export interface TerminalApiKeyContext {
   rbacId: string
 }
 
+export const TERMINAL_APIKEY_MODES = ['write', 'all'] as const
+
+export function assertTerminalApiKeyPolicy(allowedModes: boolean, appScoped: boolean): void {
+  if (!allowedModes)
+    throw new Error('apikey_app_forbidden')
+  if (!appScoped)
+    throw new Error('apikey_not_app_scoped')
+}
+
 export async function validateApiKeyForApp(
   hyperdrive: PostgresHyperdrive,
   apiKey: string,
@@ -18,39 +27,59 @@ export async function validateApiKeyForApp(
 ): Promise<TerminalApiKeyContext> {
   const client = new Client({ connectionString: hyperdrive.connectionString })
   await client.connect()
-  const keyRows = await client.query<{
-    id: string
-    user_id: string
-    rbac_id: string
-    expires_at: string | null
-  }>(
-    'SELECT id, user_id, rbac_id, expires_at FROM public.find_apikey_by_value($1::text)',
-    [apiKey],
-  )
-  if (keyRows.rowCount !== 1)
-    throw new Error('invalid_apikey')
-  const row = keyRows.rows[0]!
-  if (row.expires_at && new Date(row.expires_at) < new Date())
-    throw new Error('apikey_expired')
+  try {
+    const keyRows = await client.query<{
+      id: string
+      user_id: string
+      rbac_id: string
+      expires_at: string | null
+    }>(
+      'SELECT id, user_id, rbac_id, expires_at FROM public.find_apikey_by_value($1::text)',
+      [apiKey],
+    )
+    if (keyRows.rowCount !== 1)
+      throw new Error('invalid_apikey')
+    const row = keyRows.rows[0]!
+    if (row.expires_at && new Date(row.expires_at) < new Date())
+      throw new Error('apikey_expired')
 
-  const allowed = await client.query<{ ok: boolean }>(
-    `SELECT public.is_allowed_capgkey($1::text, '{read,upload,write,all}'::text[], $2::varchar) AS ok`,
-    [apiKey, appId],
-  )
-  if (!allowed.rows[0]?.ok)
-    throw new Error('apikey_app_forbidden')
+    const allowed = await client.query<{ ok: boolean }>(
+      `SELECT public.is_allowed_capgkey($1::text, '{write,all}'::text[], $2::varchar) AS ok`,
+      [apiKey, appId],
+    )
 
-  const orgRow = await client.query<{ owner_org: string }>(
-    'SELECT owner_org FROM public.apps WHERE app_id = $1',
-    [appId],
-  )
-  if (orgRow.rowCount !== 1 || orgRow.rows[0]!.owner_org !== orgId)
-    throw new Error('app_org_mismatch')
+    const scoped = await client.query<{ ok: boolean }>(
+      `SELECT EXISTS (
+        SELECT 1
+        FROM public.role_bindings AS rb
+        WHERE rb.principal_type = public.rbac_principal_apikey()
+          AND rb.principal_id = $1::uuid
+          AND rb.scope_type = public.rbac_scope_app()
+          AND rb.app_id = $2::varchar
+          AND (rb.expires_at IS NULL OR rb.expires_at > pg_catalog.now())
+      ) AS ok`,
+      [row.rbac_id, appId],
+    )
+    assertTerminalApiKeyPolicy(
+      Boolean(allowed.rows[0]?.ok),
+      Boolean(scoped.rows[0]?.ok),
+    )
 
-  return {
-    apikeyId: Number(row.id),
-    userId: row.user_id,
-    rbacId: row.rbac_id,
+    const orgRow = await client.query<{ owner_org: string }>(
+      'SELECT owner_org FROM public.apps WHERE app_id = $1',
+      [appId],
+    )
+    if (orgRow.rowCount !== 1 || orgRow.rows[0]!.owner_org !== orgId)
+      throw new Error('app_org_mismatch')
+
+    return {
+      apikeyId: Number(row.id),
+      userId: row.user_id,
+      rbacId: row.rbac_id,
+    }
+  }
+  finally {
+    await client.end().catch(() => {})
   }
 }
 
@@ -67,23 +96,67 @@ export async function reserveTerminalSession(
 ): Promise<{ ok: boolean, error?: string }> {
   const client = new Client({ connectionString: hyperdrive.connectionString })
   await client.connect()
-  const result = await client.query<{ result: { ok: boolean, error?: string } }>(
-    `SELECT public.terminal_session_reserve(
+  try {
+    const result = await client.query<{ result: { ok: boolean, error?: string } }>(
+      `SELECT public.terminal_session_reserve(
       $1::text, $2::uuid, $3::text, $4::bigint, $5::integer, $6::integer
     ) AS result`,
-    [
-      input.sessionKey,
-      input.orgId,
-      input.appId,
-      input.apikeyId,
-      input.maxDurationMinutes,
-      input.maxConcurrency,
-    ],
-  )
-  const payload = result.rows[0]?.result
-  if (!payload?.ok)
-    return { ok: false, error: payload?.error ?? 'reserve_failed' }
-  return { ok: true }
+      [
+        input.sessionKey,
+        input.orgId,
+        input.appId,
+        input.apikeyId,
+        input.maxDurationMinutes,
+        input.maxConcurrency,
+      ],
+    )
+    const payload = result.rows[0]?.result
+    if (!payload?.ok)
+      return { ok: false, error: payload?.error ?? 'reserve_failed' }
+    return { ok: true }
+  }
+  finally {
+    await client.end().catch(() => {})
+  }
+}
+
+export async function setTerminalWsToken(
+  hyperdrive: PostgresHyperdrive,
+  sessionKey: string,
+  tokenHash: string,
+  ttlSeconds: number,
+): Promise<boolean> {
+  const client = new Client({ connectionString: hyperdrive.connectionString })
+  await client.connect()
+  try {
+    const result = await client.query<{ ok: boolean }>(
+      'SELECT public.terminal_session_set_ws_token($1::text, $2::text, $3::integer) AS ok',
+      [sessionKey, tokenHash, ttlSeconds],
+    )
+    return Boolean(result.rows[0]?.ok)
+  }
+  finally {
+    await client.end().catch(() => {})
+  }
+}
+
+export async function consumeTerminalWsToken(
+  hyperdrive: PostgresHyperdrive,
+  sessionKey: string,
+  tokenHash: string,
+): Promise<boolean> {
+  const client = new Client({ connectionString: hyperdrive.connectionString })
+  await client.connect()
+  try {
+    const result = await client.query<{ ok: boolean }>(
+      'SELECT public.terminal_session_consume_ws_token($1::text, $2::text) AS ok',
+      [sessionKey, tokenHash],
+    )
+    return Boolean(result.rows[0]?.ok)
+  }
+  finally {
+    await client.end().catch(() => {})
+  }
 }
 
 export async function finishTerminalSession(
@@ -103,4 +176,13 @@ export async function finishTerminalSession(
   catch {
     return 0
   }
+  finally {
+    await client.end().catch(() => {})
+  }
+}
+
+export async function sha256Hex(text: string): Promise<string> {
+  const data = new TextEncoder().encode(text)
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }

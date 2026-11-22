@@ -42,3 +42,23 @@ export function shouldTeardownByAlarm(nowMs: number, alarmAtMs: number | null): 
     return false
   return nowMs >= alarmAtMs
 }
+
+export function nextSessionAlarmAtMs(
+  startedAtMs: number,
+  maxDurationMinutes: number,
+  idleMs: number,
+  nowMs: number,
+): number {
+  const maxAt = sessionAlarmAtMs(startedAtMs, maxDurationMinutes)
+  const idleAt = nowMs + idleMs
+  return Math.min(maxAt, idleAt)
+}
+
+export function teardownReasonAtAlarm(
+  startedAtMs: number,
+  maxDurationMinutes: number,
+  nowMs: number,
+): 'max_duration_alarm' | 'idle_timeout' {
+  const maxAt = sessionAlarmAtMs(startedAtMs, maxDurationMinutes)
+  return nowMs >= maxAt ? 'max_duration_alarm' : 'idle_timeout'
+}
