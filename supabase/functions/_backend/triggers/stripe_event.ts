@@ -2270,13 +2270,6 @@ async function handleFailedSubscriptionPayment(
   stripeData: StripeData,
   org: Org,
 ) {
-  if (stripeEvent.type === 'payment_intent.payment_failed') {
-  // charge.failed owns stripe_info updates and dunning for the same decline; only try backup here.
-    const recovery = await chargeBackupCard(c, stripeEvent, stripeData.data.customer_id)
-    if (recovery !== 'not_recovered')
-      cloudlog({ requestId: c.get('requestId'), message: 'Skipping failed payment handling', recovery, orgId: org.id })
-    return null
-  }
   const recovery = await chargeBackupCard(c, stripeEvent, stripeData.data.customer_id)
   if (recovery !== 'not_recovered') {
     // recovered: charge.succeeded keeps the plan active. backup_attempt_failed: dunning already ran.
@@ -2428,7 +2421,9 @@ async function getSubscriptionPaymentState(
   // Stripe errors fail the webhook so it is retried.
   const stripe = getStripe(c, getWebhookBillingAccount(c))
   const invoice = await stripe.invoices.retrieve(invoiceId)
-  const paymentIntent = invoice.id ? await getSubscriptionInvoicePaymentIntent(stripe, invoice.id) : null
+  const paymentIntent = invoice.status === 'open' && invoice.id
+    ? await getSubscriptionInvoicePaymentIntent(stripe, invoice.id)
+    : null
   return subscriptionInvoicePaymentStateFromInvoice(invoice, paymentIntent?.status ?? null)
 }
 

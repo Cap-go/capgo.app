@@ -159,7 +159,7 @@ async function submit() {
         <span class="d-loading d-loading-spinner d-loading-lg text-blue-500" />
       </div>
       <div ref="container" class="min-h-[1px]" data-test="billing-payment-element" />
-      <p v-if="infoMessage" class="mt-4 rounded-lg bg-sky-50 p-3 text-sm text-sky-800 dark:bg-sky-500/10 dark:text-sky-200" data-test="billing-card-info">
+      <p v-if="infoMessage" class="mt-4 rounded-lg bg-sky-50 p-3 text-sm text-sky-800 dark:bg-sky-500/10 dark:text-sky-200" role="status" data-test="billing-card-info">
         {{ infoMessage }}
       </p>
       <p v-else-if="errorMessage" class="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-300" role="alert" data-test="billing-card-error">
