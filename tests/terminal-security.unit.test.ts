@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { assertTerminalApiKeyPolicy } from '../cloudflare_workers/terminal/lib/apikey.ts'
+import { authErrorResponse } from '../cloudflare_workers/terminal/lib/errors.ts'
 import { TERMINAL_EGRESS_ALLOWLIST, TERMINAL_IDLE_MS, TERMINAL_MAX_SESSION_MINUTES } from '../cloudflare_workers/terminal/lib/constants.ts'
 import { isEgressHostAllowed } from '../cloudflare_workers/terminal/lib/egress.ts'
 import { handleTerminalEgress } from '../cloudflare_workers/terminal/lib/egress_proxy.ts'
@@ -12,6 +13,7 @@ import {
   assertSafeCommand,
   buildSessionKey,
   capOutputBytes,
+  terminalDurableObjectName,
   nextSessionAlarmAtMs,
   resolveWorkspacePath,
   sessionAlarmAtMs,
@@ -43,6 +45,13 @@ describe('terminal security', () => {
     expect(second.truncated).toBe(true)
     expect(second.total).toBe(limit)
     expect(new TextEncoder().encode(second.text).length).toBe(limit - first.total)
+  })
+
+  it('does not expand past the byte cap on multibyte utf-8', () => {
+    const limit = 256 * 1024
+    const capped = capOutputBytes('é', limit - 1)
+    expect(new TextEncoder().encode(capped.text).length).toBeLessThanOrEqual(limit)
+    expect(capped.total).toBeLessThanOrEqual(limit)
   })
 
   it('resets the output cap for each command', () => {
@@ -101,6 +110,21 @@ describe('terminal security', () => {
     const alarmAt = nextSessionAlarmAtMs(started, TERMINAL_MAX_SESSION_MINUTES, TERMINAL_IDLE_MS, now)
     expect(alarmAt).toBe(now + TERMINAL_IDLE_MS)
     expect(teardownReasonAtAlarm(started, TERMINAL_MAX_SESSION_MINUTES, alarmAt)).toBe('idle_timeout')
+  })
+
+  it('maps auth errors to status codes', () => {
+    expect(authErrorResponse(new Error('invalid_apikey')).status).toBe(401)
+    expect(authErrorResponse(new Error('apikey_expired')).status).toBe(401)
+    expect(authErrorResponse(new Error('apikey_app_forbidden')).status).toBe(403)
+    expect(authErrorResponse(new Error('apikey_not_app_scoped')).status).toBe(403)
+    expect(authErrorResponse(new Error('app_org_mismatch')).status).toBe(403)
+    expect(authErrorResponse(new Error('boom')).status).toBe(500)
+  })
+
+  it('builds colon-free durable object names', () => {
+    const key = buildSessionKey('org', 'com.app', 'sess')
+    expect(terminalDurableObjectName(key)).not.toContain(':')
+    expect(terminalDurableObjectName(key)).toContain('terminal--')
   })
 
   it('requires write or all on an app-scoped key', () => {

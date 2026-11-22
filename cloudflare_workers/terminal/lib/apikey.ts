@@ -44,8 +44,8 @@ export async function validateApiKeyForApp(
       throw new Error('apikey_expired')
 
     const allowed = await client.query<{ ok: boolean }>(
-      `SELECT public.is_allowed_capgkey($1::text, '{write,all}'::text[], $2::varchar) AS ok`,
-      [apiKey, appId],
+      `SELECT public.is_allowed_capgkey($1::text, $2::text[], $3::varchar) AS ok`,
+      [apiKey, [...TERMINAL_APIKEY_MODES], appId],
     )
 
     const scoped = await client.query<{ ok: boolean }>(
@@ -173,9 +173,6 @@ export async function finishTerminalSession(
       [sessionKey, reason],
     )
     return result.rows[0]?.minutes ?? 0
-  }
-  catch {
-    return 0
   }
   finally {
     await client.end().catch(() => {})

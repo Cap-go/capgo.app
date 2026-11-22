@@ -13,11 +13,14 @@ import {
   assertSafeCommand,
   capOutputBytes,
   nextSessionAlarmAtMs,
+  readTextWithByteCap,
   resolveWorkspacePath,
   teardownReasonAtAlarm,
 } from './lib/security.ts'
 
 type McpTextResult = { content: Array<{ type: 'text', text: string }> }
+
+const SESSION_KEY_STORAGE = 'terminal_session_key'
 
 function registerMcpTool(
   server: McpServer,
@@ -26,7 +29,7 @@ function registerMcpTool(
   inputSchema: Record<string, z.ZodTypeAny>,
   handler: (args: Record<string, string>) => Promise<McpTextResult>,
 ) {
-  const register = server.registerTool as (
+  const register = server.registerTool.bind(server) as (
     toolName: string,
     config: { description: string, inputSchema: Record<string, z.ZodTypeAny> },
     cb: (args: Record<string, string>) => Promise<McpTextResult>,
@@ -60,6 +63,27 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
   }
 
   private files: Files | null = null
+
+  shouldConnectionBeReadonly(_connection: unknown, _ctx: unknown): boolean {
+    return true
+  }
+
+  validateStateChange(_nextState: TerminalAgentState, source: unknown): void {
+    if (source !== 'server')
+      throw new Error('state_readonly')
+  }
+
+  async onStart(props?: TerminalProps): Promise<void> {
+    if (props?.sessionKey)
+      await this.ctx.storage.put(SESSION_KEY_STORAGE, props.sessionKey)
+    await super.onStart(props)
+  }
+
+  private async sessionKeyForTeardown(): Promise<string | undefined> {
+    return this.props?.sessionKey
+      ?? await this.ctx.storage.get<string>(SESSION_KEY_STORAGE)
+      ?? undefined
+  }
 
   private assertActive() {
     if (this.state.ended)
@@ -163,10 +187,9 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
         const fullPath = resolveWorkspacePath(path)
         await this.ensureContainer()
         const response = await this.files!.readFile(fullPath)
-        const text = await response.text()
-        const capped = capOutputBytes(text, 0)
+        const { text, truncated } = await readTextWithByteCap(response)
         return {
-          content: [{ type: 'text', text: JSON.stringify({ content: capped.text, truncated: capped.truncated }) }],
+          content: [{ type: 'text', text: JSON.stringify({ content: text, truncated }) }],
         }
       },
     )
@@ -212,6 +235,11 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
   }
 
   async alarm() {
+    if (!this.props?.sessionKey) {
+      const key = await this.ctx.storage.get<string>(SESSION_KEY_STORAGE)
+      if (key)
+        this.props = { ...this.props, sessionKey: key, orgId: '', appId: '' }
+    }
     const started = this.state.startedAtMs || Date.now()
     const reason = teardownReasonAtAlarm(started, TERMINAL_MAX_SESSION_MINUTES, Date.now())
     await this.teardown(reason)
@@ -219,18 +247,27 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
 
   async teardown(reason: string) {
     this.setState({ ...this.state, ended: true })
-    const key = this.props?.sessionKey
+    const key = await this.sessionKeyForTeardown()
     if (key) {
       try {
         await finishTerminalSession(this.env.HYPERDRIVE_CAPGO_DIRECT_EU, key, reason)
       }
-      catch {
-        /* continue container cleanup */
+      catch (error) {
+        console.error(JSON.stringify({
+          event: 'terminal_finish_failed',
+          session_key: key,
+          reason,
+          message: error instanceof Error ? error.message : String(error),
+        }))
       }
     }
-    const container = this.ctx.container
-    if (container?.running)
-      await container.destroy()
-    await this.ctx.storage.deleteAll()
+    try {
+      const container = this.ctx.container
+      if (container?.running)
+        await container.destroy()
+    }
+    finally {
+      await this.ctx.storage.deleteAll()
+    }
   }
 }

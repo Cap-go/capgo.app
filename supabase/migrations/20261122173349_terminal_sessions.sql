@@ -5,12 +5,114 @@ ALTER TABLE public.orgs
 COMMENT ON COLUMN public.orgs.cloud_terminal_enabled IS
   'When true and the org has a paid plan, API keys may open cloud terminal sessions for entitled apps. Off by default.';
 
+-- cloud_terminal_enabled is billing-gated; guard ships in the same migration as the column.
+CREATE OR REPLACE FUNCTION "public"."guard_org_billing_columns"()
+RETURNS "trigger"
+LANGUAGE "plpgsql" SECURITY DEFINER
+SET "search_path" TO ''
+AS $$
+DECLARE
+  v_request_role text := public.current_request_role();
+  v_bootstrap_org_id text := COALESCE(
+    pg_catalog.current_setting('capgo.org_creation_bootstrap_org_id', true),
+    ''
+  );
+  v_expected_has_usage_credits boolean;
+BEGIN
+  IF public.is_internal_request_role(v_request_role) THEN
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.customer_id IS NOT NULL THEN
+      RAISE EXCEPTION 'PERMISSION_DENIED_ORG_CUSTOMER_ID'
+        USING ERRCODE = '42501';
+    END IF;
+
+    IF NEW.auto_top_up_enabled IS DISTINCT FROM false
+      OR NEW.auto_top_up_threshold IS DISTINCT FROM 10::numeric
+      OR NEW.auto_top_up_monthly_limit IS DISTINCT FROM 0::numeric
+      OR NEW.auto_top_up_last_attempt_at IS NOT NULL
+      OR NEW.has_usage_credits IS DISTINCT FROM false
+      OR NEW.cloud_terminal_enabled IS DISTINCT FROM false
+    THEN
+      RAISE EXCEPTION 'PERMISSION_DENIED_ORG_BILLING_COLUMNS'
+        USING ERRCODE = '42501';
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  IF NEW.customer_id IS DISTINCT FROM OLD.customer_id
+    AND NOT (
+      v_bootstrap_org_id <> ''
+      AND v_bootstrap_org_id = NEW.id::text
+    )
+  THEN
+    RAISE EXCEPTION 'PERMISSION_DENIED_ORG_CUSTOMER_ID'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NEW.auto_top_up_enabled IS DISTINCT FROM OLD.auto_top_up_enabled
+    OR NEW.auto_top_up_threshold IS DISTINCT FROM OLD.auto_top_up_threshold
+    OR NEW.auto_top_up_monthly_limit
+    IS DISTINCT FROM OLD.auto_top_up_monthly_limit
+    OR NEW.auto_top_up_last_attempt_at
+    IS DISTINCT FROM OLD.auto_top_up_last_attempt_at
+  THEN
+    RAISE EXCEPTION 'PERMISSION_DENIED_ORG_BILLING_COLUMNS'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NEW.cloud_terminal_enabled IS DISTINCT FROM OLD.cloud_terminal_enabled THEN
+    RAISE EXCEPTION 'PERMISSION_DENIED_ORG_BILLING_COLUMNS'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NEW.has_usage_credits IS DISTINCT FROM OLD.has_usage_credits THEN
+    SELECT EXISTS (
+      SELECT 1
+      FROM public.usage_credit_grants AS g
+      WHERE g.org_id = NEW.id
+        AND g.expires_at >= pg_catalog.now()
+        AND g.credits_consumed < g.credits_total
+    ) INTO v_expected_has_usage_credits;
+
+    IF NEW.has_usage_credits IS DISTINCT FROM v_expected_has_usage_credits THEN
+      RAISE EXCEPTION 'PERMISSION_DENIED_ORG_BILLING_COLUMNS'
+        USING ERRCODE = '42501';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION "public"."guard_org_billing_columns"() OWNER TO "postgres";
+REVOKE ALL ON FUNCTION "public"."guard_org_billing_columns"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."guard_org_billing_columns"() TO "service_role";
+
+DROP TRIGGER IF EXISTS "guard_org_billing_columns" ON "public"."orgs";
+
+CREATE TRIGGER "guard_org_billing_columns"
+BEFORE UPDATE OF
+"customer_id",
+"has_usage_credits",
+"auto_top_up_enabled",
+"auto_top_up_threshold",
+"auto_top_up_monthly_limit",
+"auto_top_up_last_attempt_at",
+"cloud_terminal_enabled"
+ON "public"."orgs"
+FOR EACH ROW
+EXECUTE FUNCTION "public"."guard_org_billing_columns"();
+
 CREATE TABLE public.terminal_sessions (
   session_key text PRIMARY KEY,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   owner_org uuid NOT NULL REFERENCES public.orgs (id) ON DELETE CASCADE,
-  app_id text NOT NULL REFERENCES public.apps (app_id) ON DELETE CASCADE,
+  app_id text NOT NULL REFERENCES public.apps (app_id) ON DELETE RESTRICT,
   apikey_id bigint REFERENCES public.apikeys (id) ON DELETE SET NULL,
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'sleeping', 'ended', 'teardown')),
   started_at timestamptz NOT NULL DEFAULT now(),
@@ -119,10 +221,6 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'invalid_session_key');
   END IF;
 
-  IF NOT public.terminal_org_entitled(p_org_id) THEN
-    RETURN jsonb_build_object('ok', false, 'error', 'terminal_not_entitled');
-  END IF;
-
   IF NOT EXISTS (
     SELECT 1 FROM public.apps a WHERE a.app_id = p_app_id AND a.owner_org = p_org_id
   ) THEN
@@ -142,6 +240,19 @@ BEGIN
   FROM public.orgs
   WHERE id = p_org_id
   FOR UPDATE;
+
+  IF NOT public.terminal_org_entitled(p_org_id) THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'terminal_not_entitled');
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.terminal_sessions t
+    WHERE t.session_key = p_session_key
+      AND t.status = 'active'
+      AND t.started_at + make_interval(mins => t.max_duration_minutes) > now()
+  ) THEN
+    RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'reused', true);
+  END IF;
 
   SELECT public.terminal_count_active_sessions(p_org_id) INTO v_active;
   IF v_active >= p_max_concurrency THEN

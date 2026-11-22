@@ -6,6 +6,20 @@ export function buildSessionKey(orgId: string, appId: string, sessionId: string)
   return `${orgId}:${appId}:${sessionId}`
 }
 
+/** DO agent name: colons break agents transport naming; session key stays in props. */
+export function terminalDurableObjectName(sessionKey: string): string {
+  return `terminal--${sessionKey.replaceAll(':', '--')}`
+}
+
+function utf8BytePrefix(bytes: Uint8Array, maxBytes: number): Uint8Array {
+  if (bytes.length <= maxBytes)
+    return bytes
+  let end = maxBytes
+  while (end > 0 && (bytes[end]! & 0xC0) === 0x80)
+    end--
+  return bytes.slice(0, end)
+}
+
 export function assertSafeCommand(command: string): void {
   const trimmed = command.trim()
   if (!trimmed)
@@ -29,8 +43,40 @@ export function capOutputBytes(chunk: string, bytesSoFar: number): { text: strin
     return { text: '', total: bytesSoFar, truncated: true }
   if (next.length <= room)
     return { text: chunk, total: bytesSoFar + next.length, truncated: false }
-  const slice = next.slice(0, room)
-  return { text: new TextDecoder().decode(slice), total: bytesSoFar + slice.length, truncated: true }
+  const slice = utf8BytePrefix(next, room)
+  return {
+    text: new TextDecoder().decode(slice),
+    total: bytesSoFar + slice.length,
+    truncated: slice.length < next.length,
+  }
+}
+
+export async function readTextWithByteCap(response: Response): Promise<{ text: string, truncated: boolean }> {
+  const reader = response.body?.getReader()
+  if (!reader)
+    return { text: '', truncated: false }
+  const decoder = new TextDecoder()
+  let bytes = 0
+  let text = ''
+  let truncated = false
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done)
+        break
+      const capped = capOutputBytes(decoder.decode(value, { stream: true }), bytes)
+      bytes = capped.total
+      truncated = truncated || capped.truncated
+      text += capped.text
+      if (truncated)
+        break
+    }
+    text += decoder.decode()
+  }
+  finally {
+    reader.releaseLock()
+  }
+  return { text, truncated }
 }
 
 export function sessionAlarmAtMs(startedAtMs: number, maxDurationMinutes: number): number {
