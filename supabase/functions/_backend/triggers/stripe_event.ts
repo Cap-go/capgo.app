@@ -30,7 +30,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
@@ -2393,10 +2393,10 @@ async function getSubscriptionPaymentState(
     return 'unpaid'
   // The event snapshot can predate the payment: read the live invoice.
   // Stripe errors fail the webhook so it is retried.
-  const invoice = await getStripe(c, getWebhookBillingAccount(c)).invoices.retrieve(invoiceId)
-  if (invoice.status === 'paid')
-    return 'paid'
-  return invoice.billing_reason === 'subscription_create' ? 'first_invoice_unpaid' : 'unpaid'
+  const stripe = getStripe(c, getWebhookBillingAccount(c))
+  const invoice = await stripe.invoices.retrieve(invoiceId)
+  const paymentIntent = invoice.id ? await getSubscriptionInvoicePaymentIntent(stripe, invoice.id) : null
+  return subscriptionInvoicePaymentStateFromInvoice(invoice, paymentIntent?.status ?? null)
 }
 
 // The trial plan subscription only converts the org once its first invoice is paid.
@@ -2506,6 +2506,18 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
 
   if (stripeEvent.type === 'payment_intent.succeeded') {
     return handlePaymentIntentStripeEvent(c, stripeEvent, org)
+  }
+
+  if (stripeEvent.type === 'payment_intent.payment_failed') {
+    const paymentIntent = stripeEvent.data.object
+    const stripe = getStripe(c, getWebhookBillingAccount(c))
+    const invoiceId = typeof paymentIntent.invoice === 'string' ? paymentIntent.invoice : paymentIntent.invoice?.id
+    if (invoiceId) {
+      const invoice = await stripe.invoices.retrieve(invoiceId)
+      if (isSubscriptionInvoice(invoice))
+        await handleFailedSubscriptionPayment(c, stripeEvent, stripeData, org)
+    }
+    return c.json(BRES)
   }
 
   const customerSourceResponse = await handleCustomerSourceStripeEvent(c, org, stripeEvent)

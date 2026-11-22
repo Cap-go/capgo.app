@@ -2,7 +2,8 @@ import type { Context } from 'hono'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { servicePrincipal, withRlsContext } from './pg_rls.ts'
-import { getSubscriptionData, planProductIdOrFilter } from './stripe.ts'
+import { findLatestOpenSubscriptionInvoice, getStripe, isOpenSubscriptionInvoicePaymentProcessing, getSubscriptionData, planProductIdOrFilter } from './stripe.ts'
+import { isStripeConfiguredForAccount, normalizeBillingAccount } from './stripe_billing.ts'
 import { getCurrentPlanNameOrg } from './supabase.ts'
 
 function isActivePlanStatus(status: string | null | undefined): boolean {
@@ -34,9 +35,9 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
     return null
   }
 
-  const { data: stripeInfo, error: stripeError } = await selectSingle<{ status: string | null, is_good_plan: boolean | null, product_id: string | null, subscription_id: string | null, past_due_at: unknown }>(
+  const { data: stripeInfo, error: stripeError } = await selectSingle<{ status: string | null, is_good_plan: boolean | null, product_id: string | null, subscription_id: string | null, past_due_at: unknown, billing_account: string | null }>(
     c,
-    'SELECT status, is_good_plan, product_id, subscription_id, past_due_at FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+    'SELECT status, is_good_plan, product_id, subscription_id, past_due_at, billing_account FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
     [org.customer_id],
   )
   if (stripeError || !stripeInfo?.product_id) {
@@ -56,7 +57,17 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
   if (requirePaid) {
     const subscriptionResult = await getSubscriptionData(c, org.customer_id, stripeInfo.subscription_id)
     const subscription = subscriptionResult.ok ? subscriptionResult.data : null
-    if (stripeInfo.past_due_at || subscription?.status !== 'active' || subscription?.productId !== stripeInfo.product_id)
+    let renewalPaymentProcessing = false
+    if (stripeInfo.past_due_at) {
+      const billingAccount = normalizeBillingAccount(stripeInfo.billing_account)
+      if (isStripeConfiguredForAccount(c, billingAccount)) {
+        const openInvoice = await findLatestOpenSubscriptionInvoice(c, org.customer_id, billingAccount)
+        renewalPaymentProcessing = openInvoice?.id
+          ? await isOpenSubscriptionInvoicePaymentProcessing(getStripe(c, billingAccount), openInvoice.id)
+          : false
+      }
+    }
+    if ((stripeInfo.past_due_at && !renewalPaymentProcessing) || subscription?.status !== 'active' || subscription?.productId !== stripeInfo.product_id)
       return null
   }
 

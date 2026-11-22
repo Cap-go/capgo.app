@@ -9,13 +9,18 @@ const mocks = vi.hoisted(() => ({
   syncBillingProfile: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
-  findLatestOpenSubscriptionInvoice: mocks.findLatestOpenSubscriptionInvoice,
-  getActiveSubscriptionId: mocks.getActiveSubscriptionId,
-  lookupActiveSubscriptionId: mocks.lookupActiveSubscriptionId,
-  getStripe: vi.fn(),
-  syncSubscriptionData: mocks.syncSubscriptionData,
-}))
+vi.mock('../supabase/functions/_backend/utils/stripe.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/stripe.ts')>()
+  return {
+    ...actual,
+    findLatestOpenSubscriptionInvoice: mocks.findLatestOpenSubscriptionInvoice,
+    getActiveSubscriptionId: mocks.getActiveSubscriptionId,
+    lookupActiveSubscriptionId: mocks.lookupActiveSubscriptionId,
+    getStripe: vi.fn(),
+    syncSubscriptionData: mocks.syncSubscriptionData,
+    getSubscriptionInvoicePaymentIntent: actual.getSubscriptionInvoicePaymentIntent,
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile_sync.ts', () => ({ syncBillingProfile: mocks.syncBillingProfile }))
 
@@ -40,6 +45,7 @@ const {
   parsePaymentMethodRole,
   payInvoiceWithBackupCard,
   getOpenInvoicePaymentSecret,
+  getOpenInvoiceSummary,
   payOpenInvoice,
   removeBackupCard,
   resumeSubscription,
@@ -471,6 +477,27 @@ describe('getOpenInvoicePaymentSecret', () => {
     expect(stripe.paymentIntents.update).toHaveBeenCalledWith('pi_123', { setup_future_usage: 'off_session' })
   })
 
+  it.each([
+    { status: 'succeeded', error: 'invoice_payment_succeeded' },
+    { status: 'canceled', error: 'invoice_payment_canceled' },
+    { status: 'requires_capture', error: 'invoice_payment_requires_capture' },
+  ] as const)('returns %s without updating setup_future_usage', async ({ status, error }) => {
+    const stripe = createStripe()
+    mocks.findLatestOpenSubscriptionInvoice.mockResolvedValue({ id: 'in_123' })
+    stripe.invoicePayments.list.mockResolvedValue({ data: [{ status: 'open', payment: { payment_intent: 'pi_123' } }] })
+    stripe.paymentIntents.retrieve.mockResolvedValue({
+      id: 'pi_123',
+      status,
+      client_secret: 'pi_123_secret',
+      setup_future_usage: null,
+    })
+
+    await expect(getOpenInvoicePaymentSecret(createContext(), createBillingContext(stripe))).rejects.toMatchObject({
+      cause: { error },
+    })
+    expect(stripe.paymentIntents.update).not.toHaveBeenCalled()
+  })
+
   it('does not update setup_future_usage when it is already off_session', async () => {
     const stripe = createStripe()
     mocks.findLatestOpenSubscriptionInvoice.mockResolvedValue({ id: 'in_123' })
@@ -487,6 +514,27 @@ describe('getOpenInvoicePaymentSecret', () => {
       publishableKey: 'pk_test_123',
     })
     expect(stripe.paymentIntents.update).not.toHaveBeenCalled()
+  })
+})
+
+describe('getOpenInvoiceSummary', () => {
+  it('flags paymentProcessing when the PaymentIntent is processing', async () => {
+    const stripe = createStripe()
+    mocks.findLatestOpenSubscriptionInvoice.mockResolvedValue({
+      id: 'in_123',
+      amount_remaining: 9900,
+      amount_due: 9900,
+      currency: 'usd',
+    })
+    stripe.invoicePayments.list.mockResolvedValue({ data: [{ status: 'open', payment: { payment_intent: 'pi_123' } }] })
+    stripe.paymentIntents.retrieve.mockResolvedValue({ id: 'pi_123', status: 'processing' })
+
+    await expect(getOpenInvoiceSummary(createContext(), createBillingContext(stripe))).resolves.toEqual({
+      id: 'in_123',
+      amountDue: 9900,
+      currency: 'usd',
+      paymentProcessing: true,
+    })
   })
 })
 

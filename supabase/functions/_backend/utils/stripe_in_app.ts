@@ -8,7 +8,7 @@ import type Stripe from 'stripe'
 import type { BillingAccount } from './stripe_billing.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { findLatestOpenSubscriptionInvoice, getActiveSubscriptionId, getStripe, lookupActiveSubscriptionId, syncSubscriptionData } from './stripe.ts'
+import { findLatestOpenSubscriptionInvoice, getActiveSubscriptionId, getStripe, getSubscriptionInvoicePaymentIntent, isSubscriptionInvoicePaymentProcessing, lookupActiveSubscriptionId, syncSubscriptionData } from './stripe.ts'
 import { getBillingAccountForCustomer, getStripePublishableKey, isStripeConfiguredForAccount } from './stripe_billing.ts'
 import { releaseTrialPlanSchedule } from './stripe_trial_plan.ts'
 
@@ -68,6 +68,7 @@ export interface OpenInvoiceSummary {
   id: string
   amountDue: number
   currency: string
+  paymentProcessing?: boolean
 }
 
 export type PayInvoiceResult
@@ -82,7 +83,10 @@ const INVOICE_PAYMENT_INTENT_SETUP_FUTURE_USAGE_UPDATABLE = new Set<Stripe.Payme
   'requires_action',
 ])
 
-const INVOICE_PAYMENT_PROCESSING_MESSAGE = 'This invoice payment is already processing and should settle shortly. Refresh in a few minutes.'
+export const INVOICE_PAYMENT_PROCESSING_MESSAGE = 'This invoice payment is already processing and should settle shortly. Refresh in a few minutes.'
+const INVOICE_PAYMENT_SUCCEEDED_MESSAGE = 'This invoice payment already succeeded. Refresh billing in a moment.'
+const INVOICE_PAYMENT_CANCELED_MESSAGE = 'This invoice payment was canceled. Try paying again.'
+const INVOICE_PAYMENT_REQUIRES_CAPTURE_MESSAGE = 'This invoice payment is awaiting capture. Refresh in a moment or contact support if it stays open.'
 
 function toIso(seconds: number | null | undefined) {
   return seconds ? new Date(seconds * 1000).toISOString() : null
@@ -257,7 +261,14 @@ export async function getOpenInvoiceSummary(c: Context, ctx: InAppBillingContext
   const invoice = await findLatestOpenSubscriptionInvoice(c, ctx.customerId, ctx.billingAccount)
   if (!invoice?.id)
     return null
-  return { id: invoice.id, amountDue: invoice.amount_remaining ?? invoice.amount_due, currency: invoice.currency }
+  const paymentIntent = await getSubscriptionInvoicePaymentIntent(ctx.stripe, invoice.id)
+  const paymentProcessing = isSubscriptionInvoicePaymentProcessing(paymentIntent)
+  return {
+    id: invoice.id,
+    amountDue: invoice.amount_remaining ?? invoice.amount_due,
+    currency: invoice.currency,
+    ...(paymentProcessing ? { paymentProcessing: true } : {}),
+  }
 }
 
 export async function createCardSetupIntent(ctx: InAppBillingContext) {
@@ -485,15 +496,22 @@ async function ensureInvoicePaymentIntentOffSession(ctx: InAppBillingContext, pa
   return await ctx.stripe.paymentIntents.update(paymentIntent.id, { setup_future_usage: 'off_session' })
 }
 
-async function getInvoicePaymentIntent(ctx: InAppBillingContext, invoiceId: string) {
-  const payments = await ctx.stripe.invoicePayments.list({ invoice: invoiceId, limit: 10 })
-  const pending = payments.data.find(payment => payment.status === 'open') ?? payments.data[0]
-  const paymentIntent = pending?.payment?.payment_intent
-  if (!paymentIntent)
-    return null
-  return typeof paymentIntent === 'string'
-    ? await ctx.stripe.paymentIntents.retrieve(paymentIntent)
-    : paymentIntent
+function getInvoicePaymentIntent(ctx: InAppBillingContext, invoiceId: string) {
+  return getSubscriptionInvoicePaymentIntent(ctx.stripe, invoiceId)
+}
+
+function assertPayableInvoicePaymentIntent(paymentIntent: Stripe.PaymentIntent | null) {
+  if (!paymentIntent?.client_secret)
+    throw simpleError('invoice_payment_unavailable', 'No payment is available for this invoice right now')
+  if (paymentIntent.status === 'processing')
+    throw simpleError('invoice_payment_processing', INVOICE_PAYMENT_PROCESSING_MESSAGE)
+  if (paymentIntent.status === 'succeeded')
+    throw simpleError('invoice_payment_succeeded', INVOICE_PAYMENT_SUCCEEDED_MESSAGE)
+  if (paymentIntent.status === 'canceled')
+    throw simpleError('invoice_payment_canceled', INVOICE_PAYMENT_CANCELED_MESSAGE)
+  if (paymentIntent.status === 'requires_capture')
+    throw simpleError('invoice_payment_requires_capture', INVOICE_PAYMENT_REQUIRES_CAPTURE_MESSAGE)
+  return paymentIntent
 }
 
 function getStripeErrorCode(error: unknown) {
@@ -538,8 +556,12 @@ export async function payOpenInvoice(c: Context, ctx: InAppBillingContext): Prom
   if (!invoice?.id)
     return { status: 'paid' }
   const existingIntent = await getInvoicePaymentIntent(ctx, invoice.id)
-  if (existingIntent?.status === 'processing')
+  if (isSubscriptionInvoicePaymentProcessing(existingIntent))
     return { status: 'processing', message: INVOICE_PAYMENT_PROCESSING_MESSAGE }
+  if (existingIntent?.status === 'succeeded')
+    return { status: 'paid' }
+  if (existingIntent?.status === 'requires_capture')
+    return { status: 'processing', message: INVOICE_PAYMENT_REQUIRES_CAPTURE_MESSAGE }
   try {
     const paid = await ctx.stripe.invoices.pay(invoice.id)
     if (paid.status === 'paid')
@@ -558,13 +580,17 @@ export async function payOpenInvoice(c: Context, ctx: InAppBillingContext): Prom
     }
   }
   const paymentIntent = await getInvoicePaymentIntent(ctx, invoice.id)
-  if (paymentIntent?.status === 'processing')
+  if (isSubscriptionInvoicePaymentProcessing(paymentIntent))
     return { status: 'processing', message: INVOICE_PAYMENT_PROCESSING_MESSAGE }
+  if (paymentIntent?.status === 'requires_capture')
+    return { status: 'processing', message: INVOICE_PAYMENT_REQUIRES_CAPTURE_MESSAGE }
   // Without Stripe.js there is no way to run 3DS here; ask for another card instead.
   if (paymentIntent?.status === 'requires_action' && paymentIntent.client_secret && ctx.publishableKey)
     return { status: 'requires_action', clientSecret: paymentIntent.client_secret, publishableKey: ctx.publishableKey }
   if (paymentIntent?.status === 'succeeded')
     return { status: 'paid' }
+  if (paymentIntent?.status === 'canceled')
+    return { status: 'requires_payment_method', message: INVOICE_PAYMENT_CANCELED_MESSAGE }
   return { status: 'requires_payment_method', message: paymentIntent?.last_payment_error?.message ?? 'Payment failed' }
 }
 
@@ -574,11 +600,7 @@ export async function getOpenInvoicePaymentSecret(c: Context, ctx: InAppBillingC
   const invoice = await findLatestOpenSubscriptionInvoice(c, ctx.customerId, ctx.billingAccount)
   if (!invoice?.id)
     return null
-  const paymentIntent = await getInvoicePaymentIntent(ctx, invoice.id)
-  if (!paymentIntent?.client_secret || paymentIntent.status === 'succeeded' || paymentIntent.status === 'canceled')
-    return null
-  if (paymentIntent.status === 'processing')
-    throw simpleError('invoice_payment_processing', INVOICE_PAYMENT_PROCESSING_MESSAGE)
+  const paymentIntent = assertPayableInvoicePaymentIntent(await getInvoicePaymentIntent(ctx, invoice.id))
   await ensureInvoicePaymentIntentOffSession(ctx, paymentIntent)
-  return { clientSecret: paymentIntent.client_secret, publishableKey }
+  return { clientSecret: paymentIntent.client_secret!, publishableKey }
 }

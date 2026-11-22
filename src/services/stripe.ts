@@ -234,6 +234,7 @@ interface PastDueInvoice {
 export interface PastDueStatus {
   past_due: boolean
   invoice: PastDueInvoice | null
+  payment_processing?: boolean
 }
 
 export async function getPastDueStatus(orgId: string): Promise<PastDueStatus | null> {
@@ -301,7 +302,7 @@ export interface BillingOverview {
   backupCard: BillingCard | null
   subscription: BillingSubscription | null
   invoices: BillingInvoice[]
-  openInvoice: { id: string, amountDue: number, currency: string } | null
+  openInvoice: { id: string, amountDue: number, currency: string, paymentProcessing?: boolean } | null
   trialPlan: TrialPlan | null
 }
 
