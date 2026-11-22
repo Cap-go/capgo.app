@@ -197,23 +197,25 @@ export class CacheHelper {
   }
 
   /**
-   * Write JSON to Cache API.
+   * Write JSON to Cache API. Resolves true once cache.put accepted the entry
+   * (Cloudflare does not confirm storage on put), false when there is no cache,
+   * the write failed, or it exceeded `timeoutMs`: false is "not confirmed",
+   * since a timed-out write is not cancelled and may still land.
    * Pass `timeoutMs` for best-effort waitUntil caches (device/MAU). Omit it for
    * rate-limit counters that must finish the write before treating it as recorded.
    */
-  async putJson(key: Request, payload: unknown, ttlSeconds: number, options?: CachePutOptions) {
+  async putJson(key: Request, payload: unknown, ttlSeconds: number, options?: CachePutOptions): Promise<boolean> {
     if (options?.timeoutMs == null)
       return this.putJsonUnbound(key, payload, ttlSeconds, options?.tags, options?.headers)
     const result = await withTimeout(this.putJsonUnbound(key, payload, ttlSeconds, options.tags, options.headers), options.timeoutMs)
-    if (result === TIMEOUT)
-      return
+    return result !== TIMEOUT && result
   }
 
-  private async putJsonUnbound(key: Request, payload: unknown, ttlSeconds: number, tags?: string[], extraHeaders?: Record<string, string>) {
+  private async putJsonUnbound(key: Request, payload: unknown, ttlSeconds: number, tags?: string[], extraHeaders?: Record<string, string>): Promise<boolean> {
     try {
       const cache = await this.ensureCache()
       if (!cache)
-        return
+        return false
       const headers = new Headers({
         ...extraHeaders,
         'Content-Type': 'application/json',
@@ -226,9 +228,11 @@ export class CacheHelper {
       }
       const response = new Response(JSON.stringify(payload), { headers })
       await cache.put(key, response.clone())
+      return true
     }
     catch (error) {
       this.logCacheError('Error writing cached response', error)
+      return false
     }
   }
 
