@@ -1,0 +1,120 @@
+import type { Hyperdrive } from '@cloudflare/workers-types'
+import { Client } from 'pg'
+
+export interface TerminalApiKeyContext {
+  apikeyId: number
+  userId: string
+  rbacId: string
+}
+
+export async function validateApiKeyForApp(
+  hyperdrive: Hyperdrive,
+  apiKey: string,
+  orgId: string,
+  appId: string,
+): Promise<TerminalApiKeyContext> {
+  const client = new Client({ connectionString: hyperdrive.connectionString })
+  await client.connect()
+  try {
+    const keyRows = await client.query<{
+      id: string
+      user_id: string
+      rbac_id: string
+      expires_at: string | null
+    }>(
+      'SELECT id, user_id, rbac_id, expires_at FROM public.find_apikey_by_value($1::text)',
+      [apiKey],
+    )
+    if (keyRows.rowCount !== 1)
+      throw new Error('invalid_apikey')
+    const row = keyRows.rows[0]!
+    if (row.expires_at && new Date(row.expires_at) < new Date())
+      throw new Error('apikey_expired')
+
+    const allowed = await client.query<{ ok: boolean }>(
+      `SELECT public.is_allowed_capgkey($1::text, '{read,upload,write,all}'::text[], $2::varchar) AS ok`,
+      [apiKey, appId],
+    )
+    if (!allowed.rows[0]?.ok)
+      throw new Error('apikey_app_forbidden')
+
+    const orgRow = await client.query<{ owner_org: string }>(
+      'SELECT owner_org FROM public.apps WHERE app_id = $1',
+      [appId],
+    )
+    if (orgRow.rowCount !== 1 || orgRow.rows[0]!.owner_org !== orgId)
+      throw new Error('app_org_mismatch')
+
+    return {
+      apikeyId: Number(row.id),
+      userId: row.user_id,
+      rbacId: row.rbac_id,
+    }
+  }
+  finally {
+    await client.end()
+  }
+}
+
+export async function reserveTerminalSession(
+  hyperdrive: Hyperdrive,
+  input: {
+    sessionKey: string
+    orgId: string
+    appId: string
+    apikeyId: number
+    maxDurationMinutes: number
+    maxConcurrency: number
+  },
+): Promise<{ ok: boolean, error?: string }> {
+  const client = new Client({ connectionString: hyperdrive.connectionString })
+  await client.connect()
+  try {
+    const entitled = await client.query<{ ok: boolean }>(
+      'SELECT public.terminal_org_entitled($1::uuid) AS ok',
+      [input.orgId],
+    )
+    if (!entitled.rows[0]?.ok)
+      return { ok: false, error: 'terminal_not_entitled' }
+
+    const result = await client.query<{ result: { ok: boolean, error?: string } }>(
+      `SELECT public.terminal_session_reserve(
+        $1::text, $2::uuid, $3::text, $4::bigint, $5::integer, $6::integer
+      ) AS result`,
+      [
+        input.sessionKey,
+        input.orgId,
+        input.appId,
+        input.apikeyId,
+        input.maxDurationMinutes,
+        input.maxConcurrency,
+      ],
+    )
+    const payload = result.rows[0]?.result
+    if (!payload?.ok)
+      return { ok: false, error: payload?.error ?? 'reserve_failed' }
+    return { ok: true }
+  }
+  finally {
+    await client.end()
+  }
+}
+
+export async function finishTerminalSession(
+  hyperdrive: Hyperdrive,
+  sessionKey: string,
+  reason: string,
+): Promise<number> {
+  const client = new Client({ connectionString: hyperdrive.connectionString })
+  await client.connect()
+  try {
+    const result = await client.query<{ minutes: number }>(
+      'SELECT public.terminal_session_finish($1::text, $2::text) AS minutes',
+      [sessionKey, reason],
+    )
+    return result.rows[0]?.minutes ?? 0
+  }
+  finally {
+    await client.end()
+  }
+}

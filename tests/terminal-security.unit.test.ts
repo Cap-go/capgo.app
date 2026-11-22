@@ -1,0 +1,48 @@
+import { describe, expect, it } from 'vitest'
+import { TERMINAL_EGRESS_ALLOWLIST } from '../cloudflare_workers/terminal/lib/constants.ts'
+import { isEgressHostAllowed } from '../cloudflare_workers/terminal/lib/egress.ts'
+import {
+  assertSafeCommand,
+  buildSessionKey,
+  capOutputBytes,
+  resolveWorkspacePath,
+  sessionAlarmAtMs,
+  shouldTeardownByAlarm,
+} from '../cloudflare_workers/terminal/lib/security.ts'
+
+describe('terminal security', () => {
+  it('builds stable session keys', () => {
+    expect(buildSessionKey('org', 'com.app', 'sess'))
+      .toBe('org:com.app:sess')
+  })
+
+  it('denies privileged commands', () => {
+    expect(() => assertSafeCommand('sudo rm -rf /')).toThrow('command_denied')
+    expect(() => assertSafeCommand('echo ok')).not.toThrow()
+  })
+
+  it('locks paths to workspace', () => {
+    expect(resolveWorkspacePath('src/main.ts')).toBe('/workspace/project/src/main.ts')
+    expect(() => resolveWorkspacePath('../etc/passwd')).toThrow('path_outside_workspace')
+  })
+
+  it('caps streamed output', () => {
+    const first = capOutputBytes('abcdef', 0)
+    expect(first.total).toBe(6)
+    const second = capOutputBytes('ghijklmnop', first.total)
+    expect(second.truncated || second.total <= 256 * 1024).toBe(true)
+  })
+
+  it('fires alarm teardown at max duration', () => {
+    const started = 1_000
+    const alarmAt = sessionAlarmAtMs(started, 60)
+    expect(shouldTeardownByAlarm(alarmAt, alarmAt)).toBe(true)
+    expect(shouldTeardownByAlarm(alarmAt - 1, alarmAt)).toBe(false)
+  })
+
+  it('allows only configured egress hosts', () => {
+    for (const host of TERMINAL_EGRESS_ALLOWLIST)
+      expect(isEgressHostAllowed(host)).toBe(true)
+    expect(isEgressHostAllowed('evil.example')).toBe(false)
+  })
+})

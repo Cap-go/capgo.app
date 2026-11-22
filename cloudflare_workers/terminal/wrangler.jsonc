@@ -1,0 +1,50 @@
+{
+  "name": "capgo_terminal",
+  "logpush": true,
+  "compatibility_date": "2026-11-10",
+  "main": "./index.ts",
+  "compatibility_flags": ["nodejs_compat", "nodejs_compat_populate_process_env"],
+  "workers_dev": false,
+  "upload_source_maps": true,
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "TerminalSession",
+      "name": "capgo-terminal-sandbox-v1",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "sandbox": {
+          "dockerfile": "./Dockerfile"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "TERMINAL_SESSION", "class_name": "TerminalSession" }]
+  },
+  "migrations": [{ "tag": "terminal-v1", "new_sqlite_classes": ["TerminalSession"] }],
+  "exports": {
+    "TerminalSession": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "env": {
+    "prod": {
+      "name": "capgo_terminal-prod",
+      "vars": { "ENV_NAME": "capgo_terminal-prod" },
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
+          "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+        }
+      ],
+      "routes": [
+        {
+          "pattern": "api.capgo.app/terminal/*",
+          "zone_name": "capgo.app"
+        }
+      ]
+    }
+  }
+}
