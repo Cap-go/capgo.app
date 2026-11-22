@@ -74,9 +74,10 @@ export async function validateApiKeyForApp(
           WHERE rb.principal_type = public.rbac_principal_apikey()
             AND rb.principal_id = $1::uuid
             AND rb.scope_type = public.rbac_scope_org()
+            AND rb.org_id = $3::uuid
             AND (rb.expires_at IS NULL OR rb.expires_at > pg_catalog.now())
         ) AS org_ok`,
-      [row.rbac_id, appId],
+      [row.rbac_id, appId, orgId],
     )
     const appScoped = Boolean(scoped.rows[0]?.app_ok)
     const orgScoped = Boolean(scoped.rows[0]?.org_ok)

@@ -24,5 +24,7 @@ export function wsConnectAuth(request: Request, url: URL): WsConnectAuth {
   const wsToken = url.searchParams.get('ws_token')?.trim()
   if (!wsToken)
     return { kind: 'unauthorized' }
+  if (request.method !== 'GET' || request.headers.get('upgrade')?.toLowerCase() !== 'websocket')
+    return { kind: 'unauthorized' }
   return { kind: 'ok', wsToken }
 }

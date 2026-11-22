@@ -221,13 +221,13 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
     if (wsAuth.kind === 'unauthorized')
       return new Response('unauthorized', { status: 401 })
 
-    if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey))
-      return new Response('gone', { status: 410 })
-
     const tokenHash = await sha256Hex(wsAuth.wsToken)
     const ok = await consumeTerminalWsToken(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, tokenHash)
     if (!ok)
       return new Response('unauthorized', { status: 401 })
+
+    if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey))
+      return new Response('gone', { status: 410 })
 
     const agent = await getAgentByName(env.TERMINAL_SESSION, await terminalDurableObjectName(sessionKey), {
       props: { sessionKey, orgId: parts.orgId, appId: parts.appId },

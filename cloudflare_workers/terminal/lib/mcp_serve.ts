@@ -1,5 +1,6 @@
 import { TerminalSession, type TerminalEnv } from '../terminal_session.ts'
 import { terminalMcpSessionHeaderId } from './security.ts'
+import { stripClientMcpHeaders } from './ws.ts'
 
 export { terminalMcpSessionHeaderId } from './security.ts'
 
@@ -29,9 +30,9 @@ export async function handleTerminalMcpRequest(
   session: TerminalMcpSession,
 ): Promise<Response> {
   const mcpSessionId = await terminalMcpSessionHeaderId(session.sessionKey)
-  const headers = new Headers(request.headers)
+  const headers = new Headers(stripClientMcpHeaders(request).headers)
   headers.set('mcp-session-id', mcpSessionId)
-  const routed = new Request(request, { headers })
+  const routed = new Request(stripClientMcpHeaders(request), { headers })
   const ctx = {
     props: {
       sessionKey: session.sessionKey,

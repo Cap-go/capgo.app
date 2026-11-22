@@ -153,7 +153,7 @@ describe('terminal security', () => {
 
   it('ws auth accepts only ws_token', () => {
     const url = new URL('https://api.capgo.app/terminal/ws/org%3Aapp%3As?ws_token=tok')
-    expect(wsConnectAuth(new Request(url), url).kind).toBe('ok')
+    expect(wsConnectAuth(new Request(url, { headers: { upgrade: 'websocket' } }), url).kind).toBe('ok')
     expect(wsConnectAuth(new Request(url, { headers: { authorization: 'Bearer k' } }), url).kind).toBe('reject_apikey')
     expect(wsConnectAuth(new Request('https://api.capgo.app/terminal/ws/x'), new URL('https://api.capgo.app/terminal/ws/x')).kind).toBe('unauthorized')
   })
