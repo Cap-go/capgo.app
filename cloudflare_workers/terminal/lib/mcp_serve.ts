@@ -30,9 +30,10 @@ export async function handleTerminalMcpRequest(
   session: TerminalMcpSession,
 ): Promise<Response> {
   const mcpSessionId = await terminalMcpSessionHeaderId(session.sessionKey)
-  const headers = new Headers(stripClientMcpHeaders(request).headers)
+  const sanitized = stripClientMcpHeaders(request)
+  const headers = new Headers(sanitized.headers)
   headers.set('mcp-session-id', mcpSessionId)
-  const routed = new Request(stripClientMcpHeaders(request), { headers })
+  const routed = new Request(sanitized, { headers })
   const ctx = {
     props: {
       sessionKey: session.sessionKey,
