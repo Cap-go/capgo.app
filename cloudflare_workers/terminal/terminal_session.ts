@@ -47,6 +47,7 @@ export interface TerminalProps extends Record<string, unknown> {
 export interface TerminalAgentState {
   startedAtMs: number
   outputBytes: number
+  ended: boolean
 }
 
 export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, TerminalProps> {
@@ -55,9 +56,15 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
   initialState: TerminalAgentState = {
     startedAtMs: Date.now(),
     outputBytes: 0,
+    ended: false,
   }
 
   private files: Files | null = null
+
+  private assertActive() {
+    if (this.state.ended)
+      throw new Error('session_ended')
+  }
 
   async init() {
     const container = this.ctx.container
@@ -72,6 +79,7 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       'Run a shell command in the session workspace. Output is streamed to connected WebSocket clients.',
       { command: z.string().min(1) },
       async ({ command }) => {
+        this.assertActive()
         assertSafeCommand(command)
         await this.ensureContainer()
         const container = this.ctx.container!
@@ -101,15 +109,23 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
                 combined += capped.text
                 this.broadcast(JSON.stringify({ type: 'stdout', chunk: capped.text, truncated }))
               }
-              if (truncated)
+              if (truncated) {
+                void proc.kill?.()
                 break
+              }
             }
           }
           finally {
             reader.releaseLock()
           }
         }
-        const exitCode = await proc.exitCode
+        let exitCode: number
+        try {
+          exitCode = await proc.exitCode
+        }
+        catch {
+          exitCode = -1
+        }
         this.setState({ ...this.state, outputBytes: bytes })
         return {
           content: [{
@@ -126,13 +142,14 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       'Read a file under /workspace/project.',
       { path: z.string().min(1) },
       async ({ path }) => {
+        this.assertActive()
         const fullPath = resolveWorkspacePath(path)
         await this.ensureContainer()
         const response = await this.files!.readFile(fullPath)
         const text = await response.text()
         const capped = capOutputBytes(text, 0)
         return {
-          content: [{ type: 'text', text: capped.text }],
+          content: [{ type: 'text', text: JSON.stringify({ content: capped.text, truncated: capped.truncated }) }],
         }
       },
     )
@@ -143,6 +160,7 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       'Write a file under /workspace/project.',
       { path: z.string().min(1), content: z.string() },
       async ({ path, content }) => {
+        this.assertActive()
         const fullPath = resolveWorkspacePath(path)
         await this.ensureContainer()
         await this.files!.writeFile(fullPath, content)
@@ -163,6 +181,7 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
     if (!container)
       throw new Error('container_not_configured')
     if (!container.running) {
+      // Preview: allowlist in TERMINAL_EGRESS_ALLOWLIST; wire container outbound filtering when CF Sandbox exposes it.
       container.start({
         image: container.images.sandbox,
         enableInternet: true,
@@ -176,9 +195,16 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
   }
 
   async teardown(reason: string) {
+    this.setState({ ...this.state, ended: true })
     const key = this.props?.sessionKey
-    if (key)
-      await finishTerminalSession(this.env.HYPERDRIVE_CAPGO_DIRECT_EU, key, reason)
+    if (key) {
+      try {
+        await finishTerminalSession(this.env.HYPERDRIVE_CAPGO_DIRECT_EU, key, reason)
+      }
+      catch {
+        /* continue container cleanup */
+      }
+    }
     const container = this.ctx.container
     if (container?.running)
       await container.destroy()

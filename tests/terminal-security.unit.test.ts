@@ -29,13 +29,17 @@ describe('terminal security', () => {
   it('caps streamed output', () => {
     const first = capOutputBytes('abcdef', 0)
     expect(first.total).toBe(6)
-    const second = capOutputBytes('ghijklmnop', first.total)
-    expect(second.truncated || second.total <= 256 * 1024).toBe(true)
+    const limit = 256 * 1024
+    const second = capOutputBytes('g'.repeat(limit), first.total)
+    expect(second.truncated).toBe(true)
+    expect(second.total).toBe(limit)
+    expect(new TextEncoder().encode(second.text).length).toBe(limit - first.total)
   })
 
   it('fires alarm teardown at max duration', () => {
     const started = 1_000
     const alarmAt = sessionAlarmAtMs(started, 60)
+    expect(alarmAt).toBe(3_601_000)
     expect(shouldTeardownByAlarm(alarmAt, alarmAt)).toBe(true)
     expect(shouldTeardownByAlarm(alarmAt - 1, alarmAt)).toBe(false)
   })

@@ -32,6 +32,22 @@
   "env": {
     "prod": {
       "name": "capgo_terminal-prod",
+      "containers": [
+        {
+          "class_name": "TerminalSession",
+          "name": "capgo-terminal-sandbox-v1",
+          "scheduling_policy": "durable_object",
+          "images": {
+            "sandbox": {
+              "dockerfile": "./Dockerfile"
+            }
+          }
+        }
+      ],
+      "durable_objects": {
+        "bindings": [{ "name": "TERMINAL_SESSION", "class_name": "TerminalSession" }]
+      },
+      "migrations": [{ "tag": "terminal-v1", "new_sqlite_classes": ["TerminalSession"] }],
       "vars": { "ENV_NAME": "capgo_terminal-prod" },
       "hyperdrive": [
         {

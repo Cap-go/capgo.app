@@ -87,7 +87,8 @@ AS $$
   SELECT COUNT(*)::integer
   FROM public.terminal_sessions
   WHERE owner_org = p_org_id
-    AND status = 'active';
+    AND status = 'active'
+    AND started_at + make_interval(mins => max_duration_minutes) > now();
 $$;
 
 ALTER FUNCTION public.terminal_count_active_sessions(uuid) OWNER TO postgres;
@@ -126,16 +127,21 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'invalid_app');
   END IF;
 
-  SELECT public.terminal_count_active_sessions(p_org_id) INTO v_active;
-  IF v_active >= p_max_concurrency THEN
-    RETURN jsonb_build_object('ok', false, 'error', 'concurrency_limit', 'active', v_active, 'limit', p_max_concurrency);
-  END IF;
-
   IF EXISTS (
     SELECT 1 FROM public.terminal_sessions t
     WHERE t.session_key = p_session_key AND t.status = 'active'
   ) THEN
     RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'reused', true);
+  END IF;
+
+  PERFORM 1
+  FROM public.orgs
+  WHERE id = p_org_id
+  FOR UPDATE;
+
+  SELECT public.terminal_count_active_sessions(p_org_id) INTO v_active;
+  IF v_active >= p_max_concurrency THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'concurrency_limit', 'active', v_active, 'limit', p_max_concurrency);
   END IF;
 
   IF EXISTS (

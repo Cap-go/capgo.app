@@ -1,5 +1,6 @@
 import { getAgentByName } from 'agents'
 import { TERMINAL_MAX_CONCURRENCY_PER_ORG, TERMINAL_MAX_SESSION_MINUTES } from './lib/constants.ts'
+import { authErrorResponse } from './lib/errors.ts'
 import {
   extractApiKey,
   parseSessionRoute,
@@ -21,6 +22,40 @@ function parseSessionKeyParts(sessionKey: string): { orgId: string, appId: strin
   return { orgId, appId }
 }
 
+function parseStartSessionBody(
+  raw: unknown,
+): { orgId: string, appId: string, sessionId: string } | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    return null
+  const body = raw as Record<string, unknown>
+  const orgId = body.org_id
+  const appId = body.app_id
+  const sessionId = body.session_id
+  if (typeof orgId !== 'string' || !orgId.trim())
+    return null
+  if (typeof appId !== 'string' || !appId.trim())
+    return null
+  if (typeof sessionId !== 'string' || !sessionId.trim())
+    return null
+  return { orgId: orgId.trim(), appId: appId.trim(), sessionId: sessionId.trim() }
+}
+
+function reserveStatus(error: string | undefined): number {
+  if (error === 'concurrency_limit')
+    return 429
+  return 403
+}
+
+async function ensureReserved(
+  hyperdrive: TerminalEnv['HYPERDRIVE_CAPGO_DIRECT_EU'],
+  input: Parameters<typeof reserveTerminalSession>[1],
+): Promise<Response | null> {
+  const reserved = await reserveTerminalSession(hyperdrive, input)
+  if (reserved.ok)
+    return null
+  return Response.json({ error: reserved.error ?? 'reserve_failed' }, { status: reserveStatus(reserved.error) })
+}
+
 export default {
   async fetch(request: Request, env: TerminalEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url)
@@ -30,21 +65,22 @@ export default {
       if (!apiKey)
         return Response.json({ error: 'missing_apikey' }, { status: 401 })
 
-      let body: { org_id?: string, app_id?: string, session_id?: string }
+      let raw: unknown
       try {
-        body = await request.json() as typeof body
+        raw = await request.json()
       }
       catch {
         return Response.json({ error: 'invalid_json' }, { status: 400 })
       }
-      const { org_id: orgId, app_id: appId, session_id: sessionId } = body
-      if (!orgId || !appId || !sessionId)
+      const parsed = parseStartSessionBody(raw)
+      if (!parsed)
         return Response.json({ error: 'missing_fields' }, { status: 400 })
 
+      const { orgId, appId, sessionId } = parsed
       const sessionKey = buildSessionKey(orgId, appId, sessionId)
       try {
         const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, orgId, appId)
-        const reserved = await reserveTerminalSession(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
+        const block = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
           sessionKey,
           orgId,
           appId,
@@ -52,8 +88,8 @@ export default {
           maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
           maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
         })
-        if (!reserved.ok)
-          return Response.json({ error: reserved.error }, { status: reserved.error === 'concurrency_limit' ? 429 : 403 })
+        if (block)
+          return block
 
         const mcpQuery = `session_key=${encodeURIComponent(sessionKey)}`
         return Response.json({
@@ -63,8 +99,7 @@ export default {
         })
       }
       catch (error) {
-        const message = error instanceof Error ? error.message : 'auth_failed'
-        return Response.json({ error: message }, { status: 403 })
+        return authErrorResponse(error)
       }
     }
 
@@ -72,9 +107,18 @@ export default {
       const sessionKey = parseSessionRoute(url.pathname, '/terminal/ws/')
       if (!sessionKey)
         return new Response('not_found', { status: 404 })
-      const apiKey = extractApiKey(request) || url.searchParams.get('capgkey') || ''
+      const apiKey = extractApiKey(request)
       if (!apiKey)
         return new Response('unauthorized', { status: 401 })
+      const parts = parseSessionKeyParts(sessionKey)
+      if (!parts)
+        return new Response('not_found', { status: 404 })
+      try {
+        await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
+      }
+      catch {
+        return new Response('forbidden', { status: 403 })
+      }
       const id = env.TERMINAL_SESSION.idFromName(sessionKey)
       return env.TERMINAL_SESSION.get(id).fetch(request)
     }
@@ -91,11 +135,20 @@ export default {
       if (!parts)
         return Response.json({ error: 'invalid_session_key' }, { status: 400 })
       try {
-        await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
+        const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
+        const block = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
+          sessionKey,
+          orgId: parts.orgId,
+          appId: parts.appId,
+          apikeyId: key.apikeyId,
+          maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
+          maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
+        })
+        if (block)
+          return block
       }
       catch (error) {
-        const message = error instanceof Error ? error.message : 'auth_failed'
-        return Response.json({ error: message }, { status: 403 })
+        return authErrorResponse(error)
       }
       const agent = await getAgentByName(env.TERMINAL_SESSION, sessionKey, {
         props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
