@@ -37,7 +37,8 @@ export function describePrewarmRegion(region: PrewarmRegion) {
     return 'skipped (KV reads off in this region)'
   if (region.skipped)
     return `skipped (${region.skipped})`
-  const result = region.cached > 0 ? `warmed ${region.cached} document${region.cached === 1 ? '' : 's'}` : 'already warm'
+  // Cloudflare accepts a cache write without confirming storage: say "wrote", not "stored".
+  const result = region.cached > 0 ? `wrote ${region.cached} document${region.cached === 1 ? '' : 's'} to the cache` : 'already warm'
   // Not confirmed in its placement data center: device requests may read another cache.
   const pinned = region.pinned ?? Boolean(region.placement?.startsWith('remote-'))
   return pinned ? result : `${result} (not confirmed in the region's pinned data center)`
