@@ -97,8 +97,10 @@ interface WarmTarget<T> {
 
 /**
  * True when the cached entry may be replaced by a read of `published`.
- * Generations only grow, so an entry already holding the same or a newer
- * generation is kept: a slow prewarm never moves a cache back to older state.
+ * Generations only grow, so an entry that this lookup sees holding the same or
+ * a newer generation is kept. The lookup and the write are not atomic: a newer
+ * entry stored in between is handled by the pointer check after the write
+ * (see `reconcile` in prewarmPluginStateApp).
  */
 export function shouldReplaceCachedGeneration(current: string | null | undefined, published: string | null) {
   // No entry (undefined): a cold fill always writes.
