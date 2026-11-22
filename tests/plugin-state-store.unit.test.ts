@@ -21,6 +21,18 @@ function memoryCache() {
   }
 }
 
+/** `plugin_state_refill` lines, rebuilt from the key/value console arguments of cloudlog. */
+function refillLogs(log: { mock: { calls: unknown[][] } }) {
+  return log.mock.calls
+    .filter(call => call.includes('plugin_state_refill'))
+    .map((call) => {
+      const entry: Record<string, unknown> = {}
+      for (let i = 0; i + 1 < call.length; i += 2)
+        entry[String(call[i])] = call[i + 1]
+      return entry
+    })
+}
+
 afterEach(() => {
   resetPluginStateMemory()
   vi.restoreAllMocks()
@@ -313,10 +325,10 @@ describe('published plugin state reader', () => {
     expect(getPointer).toHaveBeenCalledOnce()
   })
 
-  it('logs the full refill time for sampled requests and retries after a failed refill', async () => {
+  it('logs a failed refill with its full read time and retries it on the next cold request', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const cache = memoryCache()
     vi.stubGlobal('caches', { open: async () => cache })
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
@@ -332,14 +344,48 @@ describe('published plugin state reader', () => {
     const first = app.request('/', undefined, bindings)
     await vi.advanceTimersByTimeAsync(R2_POINTER_TIMEOUT_MS + LATE_READ_TIMEOUT_MS + 1)
     expect((await first).headers.get('X-Plugin-State')).toBe('cold')
-    await vi.waitFor(() => expect(log.mock.calls.flat()).toContain('plugin_state_refill'))
-    const line = log.mock.calls.flat().map(String).join(' ')
-    expect(line).toContain('failed')
+    await vi.waitFor(() => expect(refillLogs(log)).toHaveLength(1))
+    expect(refillLogs(log)[0]).toMatchObject({ outcome: 'failed', duration_ms: R2_POINTER_TIMEOUT_MS + LATE_READ_TIMEOUT_MS })
     expect(cache.put).not.toHaveBeenCalled()
     const retry = app.request('/', undefined, bindings)
     await vi.advanceTimersByTimeAsync(R2_POINTER_TIMEOUT_MS + 1)
     expect((await retry).headers.get('X-Plugin-State')).toBe('cold')
     expect(getPointer).toHaveBeenCalledTimes(2)
+  })
+
+  it('logs the provider read time of a cached refill without the cache write', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const cache = memoryCache()
+    const put = cache.put.getMockImplementation()!
+    cache.put.mockImplementation(async (request, response) => {
+      await new Promise(resolve => setTimeout(resolve, 150))
+      await put(request, response)
+    })
+    vi.stubGlobal('caches', { open: async () => cache })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const appId = 'com.example.timed-refill'
+    const key = await pluginStateImmutableKey(await pluginStateAppKey(appId), '4')
+    const app = new Hono()
+    app.get('/', async (c) => {
+      startPluginStateReadMetrics(c)
+      const session = await startPluginStateRequest(c, appId, 'device')
+      return c.json({ source: session ? 'kv' : 'db' })
+    })
+    const request = app.request('/', undefined, {
+      PLUGIN_STATE: { get: async () => ({ f: 1, app_id: appId, exists: false, built_at: 4 }) },
+      PLUGIN_STATE_POINTERS: { get: async () => {
+        await new Promise(resolve => setTimeout(resolve, 300))
+        return { json: async () => ({ f: 1, generation: '4', kvKey: key }) }
+      } },
+    })
+    await vi.advanceTimersByTimeAsync(300)
+    expect((await request).headers.get('X-Plugin-State')).toBe('cold')
+    await vi.advanceTimersByTimeAsync(150)
+    await vi.waitFor(() => expect(refillLogs(log)).toHaveLength(1))
+    expect(cache.put).toHaveBeenCalledOnce()
+    expect(refillLogs(log)[0]).toMatchObject({ outcome: 'cached', duration_ms: 300 })
   })
 
   it('records R2 and KV operations separately for sampled requests', async () => {
@@ -610,6 +656,33 @@ describe('sampled pointer phase diagnostics', () => {
     await settled
     expect(cancel).toHaveBeenCalledOnce()
     expect(get).not.toHaveBeenCalled()
+  })
+
+  it('discards pointer headers arriving after the background budget', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const json = vi.fn()
+    const cancel = vi.fn(async () => undefined)
+    const late = Promise.withResolvers<{ publication: Promise<unknown> }>()
+    const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
+    app.get('/', async (c) => {
+      await expect(readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY, publication => late.resolve({ publication }))).rejects.toBeInstanceOf(PluginStateMiss)
+      return c.json({ done: true })
+    })
+    const request = app.request('/', undefined, {
+      PLUGIN_STATE: { get: vi.fn() },
+      PLUGIN_STATE_POINTERS: { get: async () => {
+        await new Promise(resolve => setTimeout(resolve, R2_POINTER_TIMEOUT_MS + LATE_READ_TIMEOUT_MS + 10))
+        return { json, body: { cancel } }
+      } },
+    })
+    await vi.advanceTimersByTimeAsync(R2_POINTER_TIMEOUT_MS + 1)
+    expect(await (await request).json()).toEqual({ done: true })
+    const { publication } = await late.promise
+    const settled = expect(publication).rejects.toBeInstanceOf(PluginStateMiss)
+    await vi.advanceTimersByTimeAsync(LATE_READ_TIMEOUT_MS + 10)
+    await settled
+    expect(json).not.toHaveBeenCalled()
+    expect(cancel).toHaveBeenCalledOnce()
   })
 
   it('does not read the timing clock for an unsampled request', async () => {

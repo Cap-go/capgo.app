@@ -137,7 +137,11 @@ async function readPointer(
           }
           if (onLate) {
             keepLate = true
-            onLate(lateDeadline(read, 'publication index', () => discard(current)))
+            onLate(lateDeadline(read, 'publication index', () => {
+              // Past the background budget too: an object whose headers arrive later is discarded.
+              keepLate = false
+              discard(current)
+            }))
           }
           else {
             discard(current)

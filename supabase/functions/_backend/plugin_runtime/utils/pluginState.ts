@@ -286,7 +286,9 @@ function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request,
     void publication.catch(() => undefined)
     return
   }
-  // Timing-sampled requests log how long the full provider read took.
+  // Timing-sampled requests log how long the full provider read took, excluding the cache write.
+  let readEndedAt: number | null = null
+  const now = () => sampledSince === null ? 0 : performance.now()
   const log = (outcome: 'cached' | 'failed') => {
     if (sampledSince === null)
       return
@@ -295,12 +297,13 @@ function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request,
       message: 'plugin_state_refill',
       document: options.cachePath,
       outcome,
-      duration_ms: Math.round((performance.now() - sampledSince) * 100) / 100,
+      duration_ms: Math.round(((readEndedAt ?? now()) - sampledSince) * 100) / 100,
       colo: c.req.raw.cf?.colo ?? null,
     })
   }
   const refill = publication
     .then(async (published) => {
+      readEndedAt = now()
       const value = published.value === null ? null : options.parse(published.value)
       if (options.reuseParsed && published.revision)
         rememberDoc(request.url, { revision: published.revision, value })
