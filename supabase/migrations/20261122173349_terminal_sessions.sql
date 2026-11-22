@@ -92,6 +92,11 @@ ALTER FUNCTION "public"."guard_org_billing_columns"() OWNER TO "postgres";
 REVOKE ALL ON FUNCTION "public"."guard_org_billing_columns"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."guard_org_billing_columns"() TO "service_role";
 
+COMMENT ON FUNCTION "public"."guard_org_billing_columns"() IS
+'BEFORE INSERT/UPDATE guard for org billing columns (customer_id, '
+'has_usage_credits, auto_top_up_*, cloud_terminal_enabled). User/capgkey roles '
+'cannot write them; service_role/postgres bypass via is_internal_request_role.';
+
 DROP TRIGGER IF EXISTS "guard_org_billing_columns" ON "public"."orgs";
 
 CREATE TRIGGER "guard_org_billing_columns"
