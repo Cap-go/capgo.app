@@ -4,6 +4,7 @@ import { computed, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
 import BuildChartControls from '~/components/dashboard/BuildChartControls.vue'
+import BuildSigningCredentials from '~/components/dashboard/BuildSigningCredentials.vue'
 import BuildStatsCard from '~/components/dashboard/BuildStatsCard.vue'
 import BuildTimeCard from '~/components/dashboard/BuildTimeCard.vue'
 import SimulatorSessionCard from '~/components/dashboard/SimulatorSessionCard.vue'
@@ -102,6 +103,7 @@ watchEffect(async () => {
             </div>
           </div>
 
+          <BuildSigningCredentials v-if="id && !showingBuildSteps" :key="`credentials-${id}`" :app-id="id" />
           <SimulatorSessionCard v-if="id" v-show="!showingBuildSteps" :key="id" :app-id="id" />
           <BuildTable :app-id="id" @update:showing-steps="showingBuildSteps = $event" />
         </div>

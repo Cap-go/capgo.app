@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, createDirectApiKeyWithBindings, getSupabaseClient, resetAndSeedAppData, resetAppData, USER_ID_2 } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, getAuthHeaders, getAuthHeadersForCredentials, getSupabaseClient, resetAndSeedAppData, resetAppData, USER_ID_2, USER_PASSWORD } from './test-utils.ts'
 
 // Dedicated app/org per run: these tests write stored credentials for their own app only.
 describe('/build/credentials stored native build credentials', () => {
@@ -173,6 +173,19 @@ describe('/build/credentials stored native build credentials', () => {
     expect(response.status).toBe(200)
     response = await fetch(`${BASE_URL}/build/credentials`, { method: 'DELETE', headers: headers(adminKey), body: JSON.stringify({ app_id: appId, platform: 'android' }) })
     expect(response.status).toBe(404)
+  })
+
+  it('accepts an authorized maker session and rejects another organization or an API key on the session route', async () => {
+    const path = `${BASE_URL}/build/credentials/session`
+    const body = JSON.stringify({ app_id: appId, platform: 'android', mode: 'merge', credentials: { KEYSTORE_KEY_ALIAS: 'test-signing-alias' } })
+    const upload = (auth: HeadersInit) => fetch(path, { method: 'PUT', headers: auth, body })
+    const outsider = await getAuthHeaders()
+    expect((await upload(outsider)).status).toBe(403)
+    expect((await upload(headers(adminKey))).ok).toBe(false)
+    const owner = await getAuthHeadersForCredentials('test2@capgo.app', USER_PASSWORD)
+    const response = await upload(owner)
+    expect(response.status).toBe(200)
+    expect(await response.text()).not.toContain('test-signing-alias')
   })
 
   it('POST /build/request with use_stored_credentials requires app admin rights', async () => {

@@ -452,13 +452,17 @@ export async function getBuildCredentialsStatus(c: Context): Promise<Response> {
   return c.json({ app_id: appId, platforms })
 }
 
-export async function putBuildCredentials(c: Context, apikey: ApikeyRow): Promise<Response> {
+export async function putBuildCredentials(c: Context, apikey?: ApikeyRow): Promise<Response> {
   const body = await readJsonBody(c)
   const appId = parseAppId(body.app_id)
   const platform = parsePlatform(body.platform)
   const mode = parseMode(body.mode)
   await requireAppPermission(c, WRITE_PERMISSION, appId)
-  const result = await storeBuildCredentials(c, { appId, platform, mode, incoming: body.credentials, actor: actorFromApikey(c, apikey) })
+  const auth = c.get('auth')
+  if (!apikey && (auth?.authType !== 'jwt' || !auth.userId))
+    throw quickError(401, 'unauthorized', 'A signed-in user is required')
+  const actor = apikey ? actorFromApikey(c, apikey) : { userId: auth.userId, apikeyId: null, apikeyName: null }
+  const result = await storeBuildCredentials(c, { appId, platform, mode, incoming: body.credentials, actor })
   return c.json(result)
 }
 
