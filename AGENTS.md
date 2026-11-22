@@ -280,7 +280,10 @@ backfill code, design for this scale:
   back by deleting its row. The dispatcher only sends to origins in
   `SUPABASE_URL` / `HTTP_DISPATCH_ALLOWED_ORIGINS`. A target row's `runtime`
   (`supabase` by default, or `cloudflare`; an exact target overrides `*`)
-  picks where it runs. With `cloudflare`, the claim does not return queue
+  picks where it runs. While `*` routes everything (prod), switch one target
+  by inserting its own row with `runtime = 'cloudflare'`, and switch it back
+  by deleting that row: an `UPDATE` on its name matches nothing. With
+  `cloudflare`, the claim does not return queue
   wakeups: it reads the readable pgmq ids and sends them to the prod-only
   Cloudflare Queue `capgo-pgmq-prod`
   (`supabase/functions/_backend/triggers/queue_relay.ts`), whose consumer

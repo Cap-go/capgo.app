@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(13);
+SELECT plan(14);
 
 SELECT pgmq.create('test_http_dispatch');
 
@@ -149,6 +149,19 @@ SELECT throws_ok(
   '23514',
   NULL,
   'only supabase and cloudflare runtimes are accepted'
+);
+
+-- Prod routes every target with '*'. Deleting a target's own row is how it
+-- goes back: it stays in the outbox, with the wildcard's runtime.
+DELETE FROM public.http_dispatch_targets WHERE target = 'test_http_dispatch';
+DELETE FROM public.http_dispatch_outbox WHERE target = 'test_http_dispatch';
+
+SELECT public.process_function_queue('test_http_dispatch', 100);
+
+SELECT results_eq(
+  $$SELECT runtime FROM public.http_dispatch_outbox WHERE target = 'test_http_dispatch'$$,
+  $$VALUES ('supabase'::text)$$,
+  'deleting an exact target returns it to the wildcard runtime'
 );
 
 SELECT ok(

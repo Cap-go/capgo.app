@@ -20,9 +20,12 @@
 --
 -- Self-host, local and CI have no http_dispatch_targets rows, so they keep
 -- calling the Supabase functions through pg_net exactly as before. Existing
--- rows default to 'supabase'; switching a target and back is one UPDATE:
---   UPDATE public.http_dispatch_targets SET runtime = 'cloudflare' WHERE target = 'on_app_update';
--- An exact target overrides '*'.
+-- rows default to 'supabase'. An exact target overrides '*', so a target
+-- routed only by '*' (as every target is in prod) is switched by adding its
+-- own row, and switched back by deleting that row:
+--   INSERT INTO public.http_dispatch_targets (target, runtime) VALUES ('on_app_update', 'cloudflare')
+--   ON CONFLICT (target) DO UPDATE SET runtime = excluded.runtime;
+--   DELETE FROM public.http_dispatch_targets WHERE target = 'on_app_update';
 
 ALTER TABLE public.http_dispatch_targets
 ADD COLUMN runtime text NOT NULL DEFAULT 'supabase'
