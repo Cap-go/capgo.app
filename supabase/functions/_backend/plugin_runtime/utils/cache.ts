@@ -257,15 +257,18 @@ export class CacheHelper {
     }
   }
 
-  async delete(key: Request) {
+  /** Resolves false when there is no cache or the delete failed (the error is logged). */
+  async delete(key: Request): Promise<boolean> {
     const cache = await this.ensureCache()
     if (!cache)
-      return
+      return false
     try {
       await cache.delete(key)
+      return true
     }
     catch (error) {
       this.logCacheError('Error deleting cached response', error)
+      return false
     }
   }
 

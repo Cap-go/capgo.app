@@ -135,7 +135,11 @@ the written generation, the prewarm deletes its entry and writes the newer one
 (at most two retries, then it reports an error with the entry deleted). When
 that pointer read fails, the entry is deleted too: a cold miss is safe, a stale
 entry is not. A write still pending after 500 ms is reported as timed out, and
-the same check runs in the background once it lands.
+the same check runs in the background once it lands, writing the newer
+generation over it when the pointer moved. A failed delete after a moved
+pointer is repaired by that newer write. Only when both the pointer read and
+the delete fail can a stale entry remain; the error says so, and the entry
+expires with its 30-second TTL, which bounds every Cache API refill.
 Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 Failures are only logged (`plugin state prewarmed`); devices then fill the
 cache as usual.

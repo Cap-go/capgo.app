@@ -143,9 +143,9 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
   const helper = new CacheHelper(c)
   const tags = [pluginStateAppCacheTag(appId)]
   let cached = 0
-  const warm = async <T>(target: WarmTarget<T>, attempt = 0): Promise<{ value: T | null, revision: string | null }> => {
+  const warm = async <T>(target: WarmTarget<T>, attempt = 0, endsAt = budgetEndsAt): Promise<{ value: T | null, revision: string | null }> => {
     const request = helper.buildRequest(target.layout.path, target.params)
-    const published = await readPublication(pointers, store, target.kvKey, budgetEndsAt)
+    const published = await readPublication(pointers, store, target.kvKey, endsAt)
     const value = published.value === null ? null : target.parse(published.value)
     const current = await helper.probeResponse(request, PREWARM_CACHE_LOOKUP_TIMEOUT_MS)
     // Unknown cache state: an existing newer entry must not be overwritten blindly.
@@ -162,12 +162,15 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
       tags,
       headers: published.revision ? { [PLUGIN_STATE_CACHE.revisionHeader]: published.revision } : undefined,
     })
-    const stored = await raceTimeout(put, Math.min(PREWARM_CACHE_PUT_TIMEOUT_MS, budgetEndsAt - Date.now()))
+    const stored = await raceTimeout(put, Math.min(PREWARM_CACHE_PUT_TIMEOUT_MS, endsAt - Date.now()))
     if (stored === 'timeout') {
-      // The write may still land, after this call returns. Check it then.
-      void backgroundTask(c, put.then(landed => landed
-        ? reconcile(request, target.kvKey, published.revision, Date.now() + PREWARM_LATE_WRITE_CHECK_MS)
-        : undefined).catch(() => undefined))
+      // The write may still land, after this call returns. Check it then, and
+      // when the pointer moved, overwrite it with the newer generation.
+      void backgroundTask(c, put.then(async (landed) => {
+        const lateEndsAt = Date.now() + PREWARM_LATE_WRITE_CHECK_MS
+        if (landed && await reconcile(request, target.kvKey, published.revision, lateEndsAt) !== 'current')
+          await warm(target, attempt + 1, lateEndsAt)
+      }).catch(() => undefined))
       throw new PluginStateMiss('cache write timed out')
     }
     if (!stored)
@@ -177,35 +180,38 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     // lookup and this put could have been replaced. Such an entry comes from a
     // publication that is already visible in the strongly consistent pointer:
     // if the pointer moved past what was written, warm again with the newer one.
-    const moved = await reconcile(request, target.kvKey, published.revision, budgetEndsAt)
-    if (moved) {
+    // A moved pointer is repaired by the retry's write even when the delete failed.
+    const check = await reconcile(request, target.kvKey, published.revision, endsAt)
+    if (check !== 'current') {
       if (attempt >= 2)
-        throw new PluginStateMiss('publication kept moving during the prewarm')
-      return warm(target, attempt + 1)
+        throw new PluginStateMiss(check === 'removed' ? 'publication kept moving during the prewarm' : 'publication kept moving during the prewarm; entry not removed, it expires with its TTL')
+      return warm(target, attempt + 1, endsAt)
     }
     return { value, revision: published.revision }
   }
 
   /**
-   * After a write of `written`: false when the pointer still publishes it.
-   * true when the pointer moved past it. When the pointer cannot be read, the
-   * entry is deleted (a cold miss is safe, a stale entry is not) and this throws.
-   * A pointer that moved also deletes the entry, so nothing stale is left even
-   * when no retry follows.
+   * After a write of `written`: 'current' when the pointer still publishes it.
+   * When the pointer moved past it, the entry is deleted ('removed', or 'kept'
+   * if the delete failed) so nothing stale is left even without a retry. When
+   * the pointer cannot be read, the entry is deleted (a cold miss is safe, a
+   * stale entry is not) and this throws.
    */
-  const reconcile = async (request: Request, logicalKey: string, written: string | null, endsAt: number): Promise<boolean> => {
+  const reconcile = async (request: Request, logicalKey: string, written: string | null, endsAt: number): Promise<'current' | 'removed' | 'kept'> => {
     let latest: string | null
     try {
       latest = await readPublishedGeneration(pointers, logicalKey, endsAt)
     }
     catch {
-      await helper.delete(request)
+      // Neither the pointer nor the cache can be trusted: nothing else can
+      // repair the entry, so it lives until its TTL (30 s) at most.
+      if (!await helper.delete(request))
+        throw new PluginStateMiss('publication check after write unavailable; entry not removed, it expires with its TTL')
       throw new PluginStateMiss('publication check after write unavailable')
     }
-    const moved = latest !== null && (written === null || BigInt(latest) > BigInt(written))
-    if (moved)
-      await helper.delete(request)
-    return moved
+    if (latest === null || (written !== null && BigInt(latest) <= BigInt(written)))
+      return 'current'
+    return await helper.delete(request) ? 'removed' : 'kept'
   }
 
   try {

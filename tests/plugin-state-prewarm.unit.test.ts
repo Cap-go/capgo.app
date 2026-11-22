@@ -243,7 +243,7 @@ describe('plugin state prewarm (regional worker)', () => {
     expect(entries.has(APP_URL)).toBe(false)
   })
 
-  it('checks a write that lands after its timeout and removes it when a newer generation exists', async () => {
+  it('checks a write that lands after its timeout and replaces it when a newer generation exists', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -267,15 +267,94 @@ describe('plugin state prewarm (regional worker)', () => {
     })
     const pending = onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))
     // Run past the delayed write (600 ms) and its background check.
-    for (let step = 0; step < 60; step++) {
+    for (let step = 0; step < 80; step++) {
       await new Promise(resolve => setImmediate(resolve))
       await vi.advanceTimersByTimeAsync(25)
     }
     expect(await pending).toMatchObject({ error: 'plugin state missing: cache write timed out' })
-    // The background check saw the pointer at 6 and removed the stale 5: the next
-    // device request refills generation 6 from the pointer.
+    // The background check saw the pointer at 6, removed the stale 5 and wrote 6.
     expect(cache.delete).toHaveBeenCalledOnce()
-    expect(entries.has(APP_URL)).toBe(false)
+    expect(entries.get(APP_URL)?.headers.get('X-Plugin-State-Revision')).toBe('6')
+  })
+
+  it('repairs a moved pointer by rewriting even when the delete fails', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { env, publish } = providers()
+    const { cache, entries } = memoryCache()
+    await publishApp(publish)
+    cache.delete.mockRejectedValue(new Error('delete failed'))
+    const appKey = await pluginStateAppKey(APP_ID)
+    const match = cache.match.getMockImplementation()!
+    let raced = false
+    cache.match.mockImplementation(async (request: Request) => {
+      const found = await match(request)
+      if (request.url === APP_URL && !raced) {
+        raced = true
+        await publish(appKey, '6', { ...appDoc(), built_at: 6 })
+        entries.set(APP_URL, { body: JSON.stringify({ v: { ...appDoc(), built_at: 6 } }), headers: new Headers({ 'X-Plugin-State-Revision': '6' }) })
+      }
+      return found
+    })
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ revision: '6', error: undefined })
+    expect(cache.delete).toHaveBeenCalled()
+    expect(entries.get(APP_URL)?.headers.get('X-Plugin-State-Revision')).toBe('6')
+  })
+
+  it('says the entry was not removed when both the pointer check and the delete fail', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { env, publish } = providers()
+    const { cache } = memoryCache()
+    await publishApp(publish)
+    cache.delete.mockRejectedValue(new Error('delete failed'))
+    const appKey = await pluginStateAppKey(APP_ID)
+    const get = env.PLUGIN_STATE_POINTERS.get.getMockImplementation()!
+    let appReads = 0
+    env.PLUGIN_STATE_POINTERS.get.mockImplementation(async (key: string) => {
+      if (key === appKey && ++appReads === 2)
+        throw new Error('R2 unavailable')
+      return get(key)
+    })
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({
+      error: 'plugin state missing: publication check after write unavailable; entry not removed, it expires with its TTL',
+    })
+  })
+
+  it('overwrites a late stale write with the newer generation when the delete fails', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { env, publish } = providers()
+    const { cache, entries } = memoryCache()
+    await publishApp(publish)
+    cache.delete.mockRejectedValue(new Error('delete failed'))
+    const appKey = await pluginStateAppKey(APP_ID)
+    const put = cache.put.getMockImplementation()!
+    let delayed = false
+    cache.put.mockImplementation(async (request: Request, response: Response) => {
+      if (request.url !== APP_URL || delayed)
+        return put(request, response)
+      delayed = true
+      await new Promise(resolve => setTimeout(resolve, 550))
+      await publish(appKey, '6', { ...appDoc(), built_at: 6 })
+      entries.set(APP_URL, { body: JSON.stringify({ v: { ...appDoc(), built_at: 6 } }), headers: new Headers({ 'X-Plugin-State-Revision': '6' }) })
+      await new Promise(resolve => setTimeout(resolve, 50))
+      return put(request, response)
+    })
+    const pending = onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))
+    for (let step = 0; step < 80; step++) {
+      await new Promise(resolve => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(25)
+    }
+    expect(await pending).toMatchObject({ error: 'plugin state missing: cache write timed out' })
+    // The stale 5 landed over 6 and could not be deleted; the background check wrote 6 back.
+    expect(cache.delete).toHaveBeenCalled()
+    expect(entries.get(APP_URL)?.headers.get('X-Plugin-State-Revision')).toBe('6')
   })
 
   it('does nothing while KV reads are off in the region', async () => {
