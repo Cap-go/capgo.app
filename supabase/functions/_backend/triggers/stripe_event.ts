@@ -2270,6 +2270,12 @@ async function handleFailedSubscriptionPayment(
   stripeData: StripeData,
   org: Org,
 ) {
+  if (stripeEvent.type === 'payment_intent.payment_failed') {
+    const stripe = getStripe(c, getWebhookBillingAccount(c))
+    const invoice = await findInvoiceForCharge(stripe, { payment_intent: stripeEvent.data.object.id })
+    if (!invoice || !isSubscriptionInvoice(invoice))
+      return null
+  }
   const recovery = await chargeBackupCard(c, stripeEvent, stripeData.data.customer_id)
   if (recovery !== 'not_recovered') {
     // recovered: charge.succeeded keeps the plan active. backup_attempt_failed: dunning already ran.
