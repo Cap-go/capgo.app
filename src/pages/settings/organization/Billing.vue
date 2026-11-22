@@ -193,6 +193,11 @@ async function payNow() {
       await Promise.all([loadOverview(), refreshOrganization()])
       return
     }
+    if (result.status === 'processing') {
+      toast.info(result.message || t('billing-invoice-payment-processing'))
+      await Promise.all([loadOverview(), refreshOrganization()])
+      return
+    }
     toast.error(result.message || t('billing-payment-failed'))
     if (canEnterCard.value)
       showCardModal.value = 'invoice'

@@ -79,7 +79,10 @@ onMounted(async () => {
   }
   catch (error) {
     console.error('Cannot load card form', error)
-    errorMessage.value = t('billing-stripe-load-error')
+    if (props.mode === 'invoice' && await getCapgoApiErrorCode(error) === 'invoice_payment_processing')
+      errorMessage.value = t('billing-invoice-payment-processing')
+    else
+      errorMessage.value = t('billing-stripe-load-error')
   }
   finally {
     isLoading.value = false

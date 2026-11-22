@@ -326,6 +326,7 @@ export interface IntentSecret {
 type PayInvoiceResponse
   = | { status: 'paid' }
     | { status: 'requires_action', clientSecret: string, publishableKey: string }
+    | { status: 'processing', message: string }
     | { status: 'requires_payment_method', message: string }
 
 export type PayInvoiceResult = Exclude<PayInvoiceResponse, { status: 'requires_action' }>

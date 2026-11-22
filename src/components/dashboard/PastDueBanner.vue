@@ -89,6 +89,10 @@ async function retryPayment() {
       await onPaid()
       return
     }
+    if (result.status === 'processing') {
+      toast.info(result.message || t('billing-invoice-payment-processing'))
+      return
+    }
     toast.error(result.message || t('billing-payment-failed'))
     cardModalMode.value = 'invoice'
   }

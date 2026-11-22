@@ -73,7 +73,16 @@ export interface OpenInvoiceSummary {
 export type PayInvoiceResult
   = | { status: 'paid' }
     | { status: 'requires_action', clientSecret: string, publishableKey: string }
+    | { status: 'processing', message: string }
     | { status: 'requires_payment_method', message: string }
+
+const INVOICE_PAYMENT_INTENT_SETUP_FUTURE_USAGE_UPDATABLE = new Set<Stripe.PaymentIntent.Status>([
+  'requires_payment_method',
+  'requires_confirmation',
+  'requires_action',
+])
+
+const INVOICE_PAYMENT_PROCESSING_MESSAGE = 'This invoice payment is already processing and should settle shortly. Refresh in a few minutes.'
 
 function toIso(seconds: number | null | undefined) {
   return seconds ? new Date(seconds * 1000).toISOString() : null
@@ -469,6 +478,13 @@ export async function resumeSubscription(c: Context, ctx: InAppBillingContext) {
   return await getSubscriptionSummary(c, ctx)
 }
 
+async function ensureInvoicePaymentIntentOffSession(ctx: InAppBillingContext, paymentIntent: Stripe.PaymentIntent) {
+  if (paymentIntent.setup_future_usage === 'off_session'
+    || !INVOICE_PAYMENT_INTENT_SETUP_FUTURE_USAGE_UPDATABLE.has(paymentIntent.status))
+    return paymentIntent
+  return await ctx.stripe.paymentIntents.update(paymentIntent.id, { setup_future_usage: 'off_session' })
+}
+
 async function getInvoicePaymentIntent(ctx: InAppBillingContext, invoiceId: string) {
   const payments = await ctx.stripe.invoicePayments.list({ invoice: invoiceId, limit: 10 })
   const pending = payments.data.find(payment => payment.status === 'open') ?? payments.data[0]
@@ -521,6 +537,9 @@ export async function payOpenInvoice(c: Context, ctx: InAppBillingContext): Prom
   const invoice = await findLatestOpenSubscriptionInvoice(c, ctx.customerId, ctx.billingAccount)
   if (!invoice?.id)
     return { status: 'paid' }
+  const existingIntent = await getInvoicePaymentIntent(ctx, invoice.id)
+  if (existingIntent?.status === 'processing')
+    return { status: 'processing', message: INVOICE_PAYMENT_PROCESSING_MESSAGE }
   try {
     const paid = await ctx.stripe.invoices.pay(invoice.id)
     if (paid.status === 'paid')
@@ -539,6 +558,8 @@ export async function payOpenInvoice(c: Context, ctx: InAppBillingContext): Prom
     }
   }
   const paymentIntent = await getInvoicePaymentIntent(ctx, invoice.id)
+  if (paymentIntent?.status === 'processing')
+    return { status: 'processing', message: INVOICE_PAYMENT_PROCESSING_MESSAGE }
   // Without Stripe.js there is no way to run 3DS here; ask for another card instead.
   if (paymentIntent?.status === 'requires_action' && paymentIntent.client_secret && ctx.publishableKey)
     return { status: 'requires_action', clientSecret: paymentIntent.client_secret, publishableKey: ctx.publishableKey }
@@ -556,9 +577,8 @@ export async function getOpenInvoicePaymentSecret(c: Context, ctx: InAppBillingC
   const paymentIntent = await getInvoicePaymentIntent(ctx, invoice.id)
   if (!paymentIntent?.client_secret || paymentIntent.status === 'succeeded' || paymentIntent.status === 'canceled')
     return null
-  if (paymentIntent.setup_future_usage !== 'off_session') {
-    // Save the new card so the next renewal does not fail again.
-    await ctx.stripe.paymentIntents.update(paymentIntent.id, { setup_future_usage: 'off_session' })
-  }
+  if (paymentIntent.status === 'processing')
+    throw simpleError('invoice_payment_processing', INVOICE_PAYMENT_PROCESSING_MESSAGE)
+  await ensureInvoicePaymentIntentOffSession(ctx, paymentIntent)
   return { clientSecret: paymentIntent.client_secret, publishableKey }
 }

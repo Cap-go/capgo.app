@@ -4381,6 +4381,7 @@
   "billing-pay-amount": "Pay {amount}",
   "billing-invoice-paid": "Payment received. Thank you!",
   "billing-payment-failed": "The payment didn't go through. Try another card.",
+  "billing-invoice-payment-processing": "Your payment is already processing. It should settle shortly. Check back in a few minutes.",
   "billing-stripe-load-error": "The secure payment form couldn't load. Check your connection or disable blockers for js.stripe.com, then try again.",
   "billing-checkout-title": "Subscribe to {plan}",
   "billing-credits-checkout-title": "Buy credits",
