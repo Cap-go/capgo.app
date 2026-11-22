@@ -6,14 +6,11 @@
 
 import type { Context } from 'hono'
 import type { PluginRegion } from './pluginRegionTargets.ts'
+import { PREWARM_CALL_TIMEOUT_MS, PREWARM_MAX_APPS } from '../plugin_runtime/utils/pluginStatePrewarmLimits.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getConfiguredPluginRegions, PLUGIN_REGIONS } from './pluginRegionTargets.ts'
 import { backgroundTask, existInEnv, getEnv } from './utils.ts'
 
-/** Same limit as the plugin route (PREWARM_MAX_APPS). */
-const PREWARM_APPS_PER_CALL = 10
-/** Above the regional handler's 6 s budget, leaving room for the round trip. */
-const PREWARM_TIMEOUT_MS = 8000
 /** Workers allow 6 simultaneous outbound connections; more would queue and eat their timeout. */
 const PREWARM_CONNECTIONS = 6
 /** Stay inside the 30 s waitUntil window that runs the background prewarm. */
@@ -32,11 +29,19 @@ export interface RegionPrewarmResult {
 /**
  * Regional plugin workers to warm. Production defaults to the known regions;
  * other environments only warm explicitly configured targets, so local and CI
- * runs never call production hostnames.
+ * runs do not call production hostnames by default. Invalid configured
+ * targets disable the prewarm instead of failing the purge drain.
  */
 export function pluginStatePrewarmTargets(c: Context): PluginRegion[] {
-  if (existInEnv(c, 'PLUGIN_REGION_TARGETS'))
-    return getConfiguredPluginRegions(c)
+  if (existInEnv(c, 'PLUGIN_REGION_TARGETS')) {
+    try {
+      return getConfiguredPluginRegions(c)
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'plugin state prewarm skipped: invalid PLUGIN_REGION_TARGETS', error: serializeError(error) })
+      return []
+    }
+  }
   return getEnv(c, 'ENV_NAME').endsWith('-prod') ? PLUGIN_REGIONS : []
 }
 
@@ -47,7 +52,7 @@ async function prewarmRegion(region: PluginRegion, secret: string, appIds: strin
       method: 'POST',
       headers: { 'apisecret': secret, 'content-type': 'application/json' },
       body: JSON.stringify({ app_ids: appIds }),
-      signal: AbortSignal.timeout(PREWARM_TIMEOUT_MS),
+      signal: AbortSignal.timeout(PREWARM_CALL_TIMEOUT_MS),
     })
     if (!response.ok) {
       void response.body?.cancel().catch(() => undefined)
@@ -73,12 +78,12 @@ export async function prewarmPluginStateRegions(c: Context, appIds: string[]): P
   if (!targets.length || !secret || !unique.length)
     return []
   const calls: { region: PluginRegion, batch: string[] }[] = []
-  for (let i = 0; i < unique.length; i += PREWARM_APPS_PER_CALL) {
-    const batch = unique.slice(i, i + PREWARM_APPS_PER_CALL)
+  for (let i = 0; i < unique.length; i += PREWARM_MAX_APPS) {
+    const batch = unique.slice(i, i + PREWARM_MAX_APPS)
     for (const region of targets)
       calls.push({ region, batch })
   }
-  const lastStart = Date.now() + PREWARM_TOTAL_BUDGET_MS - PREWARM_TIMEOUT_MS
+  const lastStart = Date.now() + PREWARM_TOTAL_BUDGET_MS - PREWARM_CALL_TIMEOUT_MS
   const results: RegionPrewarmResult[] = Array.from({ length: calls.length })
   let next = 0
   await Promise.all(Array.from({ length: Math.min(PREWARM_CONNECTIONS, calls.length) }, async () => {
@@ -103,13 +108,17 @@ export function schedulePluginStatePrewarm(c: Context, appIds: string[], delayMs
   const run = new Promise(resolve => setTimeout(resolve, delayMs))
     .then(() => prewarmPluginStateRegions(c, appIds))
     .then((regions) => {
-      const failed = regions.filter(region => region.error !== null)
+      // A region call can succeed while some of its apps failed or ran out of budget.
+      const failed = regions.flatMap(region => region.error !== null
+        ? [`${region.region}:${region.error}`]
+        : region.results.filter(app => app.error || app.skipped === 'budget').map(app => `${region.region}:${app.app_id}:${app.error ?? app.skipped}`))
       cloudlog({
         requestId: c.get('requestId'),
         message: 'plugin state prewarmed',
         apps: new Set(appIds).size,
         regions: regions.length,
-        failed: failed.map(region => `${region.region}:${region.error}`),
+        failed: failed.slice(0, 20),
+        failed_count: failed.length,
         cached: regions.reduce((sum, region) => sum + region.results.reduce((count, app) => count + (app.cached ?? 0), 0), 0),
       })
     })

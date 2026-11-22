@@ -31,7 +31,7 @@ export interface PluginStatePrewarmResult {
   app_id: string
   /** Publication generation of the app document; null when none is published. */
   revision: string | null
-  /** Documents written to this data center's cache. Current entries are kept. */
+  /** Documents confirmed written to this data center's cache. Current entries are kept. */
   cached: number
   skipped?: 'disabled' | 'unavailable' | 'unpublished' | 'budget'
   error?: string
@@ -120,11 +120,13 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     void current?.body?.cancel().catch(() => undefined)
     if (current && published.revision !== null && currentRevision === published.revision)
       return { value, revision: published.revision }
-    await helper.putJson(request, { v: value }, value === null ? PLUGIN_STATE_CACHE.negativeTtlSeconds : target.layout.ttlSeconds, {
+    const stored = await helper.putJson(request, { v: value }, value === null ? PLUGIN_STATE_CACHE.negativeTtlSeconds : target.layout.ttlSeconds, {
       tags,
       timeoutMs: PLUGIN_STATE_CACHE.putTimeoutMs,
       headers: published.revision ? { [PLUGIN_STATE_CACHE.revisionHeader]: published.revision } : undefined,
     })
+    if (!stored)
+      throw new PluginStateMiss('cache write failed')
     cached++
     return { value, revision: published.revision }
   }

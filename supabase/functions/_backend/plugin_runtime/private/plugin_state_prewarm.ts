@@ -6,18 +6,12 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { PluginStatePrewarmResult } from '../utils/pluginStatePrewarm.ts'
 import { Hono } from 'hono/tiny'
 import { timingSafeEqual } from 'hono/utils/buffer'
-import { BRES, parseBody, quickError } from '../utils/hono.ts'
+import { BRES, quickError } from '../utils/hono.ts'
 import { prewarmPluginStateApp } from '../utils/pluginStatePrewarm.ts'
+import { PREWARM_CALL_BUDGET_MS, PREWARM_MAX_APPS } from '../utils/pluginStatePrewarmLimits.ts'
 import { getEnv, isValidAppId } from '../utils/utils.ts'
 
-/**
- * Apps per call. Each app reads up to 17 documents, so this keeps one call well
- * inside the per-invocation KV and R2 operation limits.
- */
-export const PREWARM_MAX_APPS = 10
 const PREWARM_CONCURRENCY = 4
-/** Whole-call budget, below the API worker's 8 s timeout (utils/pluginStatePrewarm.ts). */
-export const PREWARM_CALL_BUDGET_MS = 6000
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -26,8 +20,9 @@ app.post('/', async (c) => {
   const provided = c.req.header('apisecret')
   if (!secret || !provided || !await timingSafeEqual(provided, secret))
     throw quickError(401, 'invalid_api_secret', 'Invalid API secret')
-  const body = await parseBody<{ app_ids?: unknown } | null>(c)
-  const raw = body && typeof body === 'object' ? body.app_ids : undefined
+  // A null or malformed body falls through to the validation below (400).
+  const body: unknown = await c.req.raw.clone().json().catch(() => null)
+  const raw = body && typeof body === 'object' ? (body as { app_ids?: unknown }).app_ids : undefined
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > PREWARM_MAX_APPS || !raw.every(id => typeof id === 'string' && isValidAppId(id)))
     throw quickError(400, 'invalid_app_ids', `app_ids must list 1 to ${PREWARM_MAX_APPS} valid app ids`)
   const appIds = [...new Set(raw as string[])]

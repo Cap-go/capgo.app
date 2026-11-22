@@ -22,6 +22,7 @@ export async function prewarm(c: Context<MiddlewareKeyVariables>, appId: string)
       const result = region.results.find(entry => entry.app_id === appId)
       return {
         region: region.region,
+        status: region.status,
         placement: region.placement,
         revision: result?.revision ?? null,
         cached: result?.cached ?? 0,

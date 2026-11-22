@@ -114,14 +114,17 @@ instead of sent. Each regional worker reads the app document, plus the
 bundle-name and manifest documents of the bundles its channels serve (at most
 8 bundles). Each provider read waits up to 2 seconds, and the whole call stops
 after 6 seconds, reporting the apps it could not start as `budget`. It writes
-the same Cache API entries a device request would. An entry that already holds the published generation is kept.
+the shared app, bundle-name and manifest Cache API entries device requests
+read; per-device override entries are not prewarmed. Only confirmed cache
+writes count as `cached`. An entry that already holds the published generation is kept.
 Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 Failures are only logged (`plugin state prewarmed`); devices then fill the
 cache as usual.
 
 Production uses the region list in `utils/pluginRegionTargets.ts`. Other
 environments prewarm only when `PLUGIN_REGION_TARGETS` is set, so local and CI
-runs never call production hostnames. `npx @capgo/cli@latest app prewarm <appId>`
+runs do not use production hostnames by default; explicitly configured targets
+are used as provided, and an invalid value disables the prewarm. `npx @capgo/cli@latest app prewarm <appId>`
 (`POST /app/:id/prewarm`, `app.upload_bundle` permission) runs the same fan-out
 on demand and prints each region's data center and result.
 

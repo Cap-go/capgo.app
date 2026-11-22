@@ -1,4 +1,5 @@
 import type { OptionsBase } from '../schemas/base'
+import process from 'node:process'
 import { intro, log, outro } from '@clack/prompts'
 import { Table } from '@sauber/table'
 import { CliUserError } from '../shared/cli-user-error'
@@ -6,6 +7,8 @@ import { findSavedKey, formatCapgoCliInvokeError, getAppId, getCapgoCliHttpStatu
 
 export interface PrewarmRegion {
   region: string
+  /** HTTP status of the regional call; null when it never answered. */
+  status?: number | null
   placement: string | null
   revision: string | null
   cached: number
@@ -16,6 +19,12 @@ export interface PrewarmRegion {
 export interface PrewarmResponse {
   app_id: string
   regions: PrewarmRegion[]
+}
+
+/** A user-facing failure: printed here, since the CLI entry point does not repeat CliUserError messages. */
+function fail(message: string, context?: ConstructorParameters<typeof CliUserError>[1]): never {
+  log.error(message)
+  throw new CliUserError(message, context)
 }
 
 /** One line per region: where its cache lives and what the prewarm did there. */
@@ -38,11 +47,11 @@ export async function prewarmApp(appId: string | undefined, options: OptionsBase
   intro('Prewarm Capgo plugin regions')
   const apikey = options.apikey || findSavedKey()
   if (!apikey)
-    throw new CliUserError('Missing API key, you need to provide an API key to prewarm your app')
+    fail('Missing API key, you need to provide an API key to prewarm your app')
   const extConfig = await getConfig()
   const resolvedAppId = getAppId(appId, extConfig?.config)
   if (!resolvedAppId)
-    throw new CliUserError('Missing argument, you need to provide an appId, or be in a capacitor project')
+    fail('Missing argument, you need to provide an appId, or be in a capacitor project')
 
   const { data, error } = await invokeCapgoCliApi<PrewarmResponse>(`app/${encodeURIComponent(resolvedAppId)}/prewarm`, {
     apikey,
@@ -53,7 +62,7 @@ export async function prewarmApp(appId: string | undefined, options: OptionsBase
   if (error) {
     const status = getCapgoCliHttpStatus(error)
     if (status === 401 || status === 403)
-      throw new CliUserError('Cannot prewarm this app. Check that your API key has app.upload_bundle permission for it.', { appId: resolvedAppId, requiredPermissionKey: 'app.upload_bundle' })
+      fail('Cannot prewarm this app. Check that your API key has app.upload_bundle permission for it.', { appId: resolvedAppId, requiredPermissionKey: 'app.upload_bundle' })
     throw new Error(`Cannot prewarm app: ${await formatCapgoCliInvokeError(error)}`, { cause: error })
   }
 
@@ -67,7 +76,13 @@ export async function prewarmApp(appId: string | undefined, options: OptionsBase
   table.rows = regions.map(region => [region.region, region.placement ?? '-', describePrewarmRegion(region)])
   log.info(table.toString())
   const failed = regions.filter(region => region.error)
+  if (failed.length === regions.length) {
+    // Nothing was warmed: let scripts and CI see it.
+    process.exitCode = 1
+    outro('Prewarm failed in every region ❌')
+    return
+  }
   if (failed.length)
-    log.warn(`${failed.length} region${failed.length === 1 ? '' : 's'} could not be prewarmed; devices there read the database until their cache fills.`)
+    log.warn(`${failed.length} region${failed.length === 1 ? '' : 's'} could not be prewarmed; devices there fill the cache on their first requests.`)
   outro('Done ✅')
 }

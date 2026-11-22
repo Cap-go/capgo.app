@@ -48,8 +48,8 @@ describe('POST /app/:id/prewarm', () => {
     const body = await response.json() as { app_id: string, regions: Record<string, unknown>[] }
     expect(body.app_id).toBe(APP_ID)
     expect(body.regions.map(region => region.region)).toEqual(PLUGIN_REGIONS.map(region => region.name))
-    expect(body.regions.find(region => region.region === 'na')).toEqual({ region: 'na', placement: 'remote-XXX', revision: '7', cached: 3, skipped: null, error: null })
+    expect(body.regions.find(region => region.region === 'na')).toEqual({ region: 'na', status: 200, placement: 'remote-XXX', revision: '7', cached: 3, skipped: null, error: null })
     expect(body.regions.find(region => region.region === 'af')).toMatchObject({ skipped: 'disabled', cached: 0 })
-    expect(body.regions.find(region => region.region === 'sa')).toMatchObject({ error: 'network down', cached: 0 })
+    expect(body.regions.find(region => region.region === 'sa')).toMatchObject({ status: null, error: 'network down', cached: 0 })
   })
 })

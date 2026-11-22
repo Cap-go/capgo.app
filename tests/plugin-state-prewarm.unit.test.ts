@@ -130,6 +130,17 @@ describe('plugin state prewarm (regional worker)', () => {
     expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ revision: '6', cached: 1 })
   })
 
+  it('counts only confirmed cache writes', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    const { env, publish } = providers()
+    const { cache } = memoryCache()
+    await publishApp(publish)
+    cache.put.mockRejectedValue(new Error('cache unavailable'))
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ app_id: APP_ID, cached: 0, error: 'plugin state missing: cache write failed' })
+  })
+
   it('does nothing while KV reads are off in the region', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'off')
     const { env, publish } = providers()
@@ -189,9 +200,10 @@ describe('plugin state prewarm route', () => {
     expect((await call({ app_ids: [APP_ID] }, 'wrong')).status).toBe(401)
   })
 
-  it('rejects an empty, oversized or invalid app list', async () => {
+  it('rejects an empty, oversized or invalid app list, and a null body', async () => {
     for (const app_ids of [[], 'com.example.app', ['not an app id'], Array.from({ length: 11 }, (_, i) => `com.example.app${i}`)])
       expect((await call({ app_ids }, 'prewarm-secret')).status).toBe(400)
+    expect((await call(null, 'prewarm-secret')).status).toBe(400)
   })
 
   it('finishes inside its budget and reports the apps it could not start', async () => {
@@ -366,6 +378,7 @@ describe('plugin state prewarm fan-out (API worker)', () => {
   })
 
   it('does not prewarm after a failed purge', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     vi.stubEnv('ENV_NAME', 'capgo_api-prod')
     vi.stubEnv('API_SECRET', 'prewarm-secret')
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
@@ -375,8 +388,48 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     const claims: unknown[] = [{ status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.example.snapshot', scope: 'plugin_state', initial: true }], has_more: false }]
     const rpc = vi.fn(async (fn: string) => ({ data: fn === 'claim_updates_cache_purge' ? claims.shift() ?? { status: 'empty' } : null, error: null }))
     await drainUpdatesCachePurge(context(), rpc)
-    await new Promise(resolve => setTimeout(resolve, 50))
+    // Past the post-purge delay: a scheduled prewarm would have been sent by now.
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(fetchMock).toHaveBeenCalled()
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/plugin_state/prewarm'))).toBe(false)
+  })
+
+  it('skips the prewarm on malformed targets without failing the purge drain', async () => {
+    vi.stubEnv('PLUGIN_REGION_TARGETS', 'not json')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    expect(pluginStatePrewarmTargets(context())).toEqual([])
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    const fetchMock = vi.fn(async (_url: string) => Response.json({ success: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    const claims: unknown[] = [
+      { status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.example.a', scope: 'plugin_state', initial: true }], has_more: true },
+      { status: 'ok', lease_token: 'lease-2', apps: [{ app_id: 'com.example.b', scope: 'plugin_state', initial: true }], has_more: false },
+    ]
+    const rpc = vi.fn(async (fn: string) => ({ data: fn === 'claim_updates_cache_purge' ? claims.shift() ?? { status: 'empty' } : null, error: null }))
+    await expect(drainUpdatesCachePurge(context(), rpc)).resolves.toEqual({ purgedApps: 2, purgedAppIds: ['com.example.a', 'com.example.b'] })
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/plugin_state/prewarm'))).toBe(false)
+  })
+
+  it('logs app-level failures of region calls that answered', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => Response.json({
+      placement: null,
+      results: url.includes('plugin.na.')
+        ? [{ app_id: APP_ID, revision: null, cached: 0, error: 'published value timed out' }]
+        : [{ app_id: APP_ID, revision: '1', cached: 1 }],
+    })))
+    schedulePluginStatePrewarm(context(), [APP_ID], 0)
+    await vi.waitFor(() => expect(log.mock.calls.flat()).toContain('plugin state prewarmed'))
+    const call = log.mock.calls.find(args => args.includes('plugin state prewarmed'))!
+    const entry: Record<string, unknown> = {}
+    for (let i = 0; i + 1 < call.length; i += 2)
+      entry[String(call[i])] = call[i + 1]
+    expect(entry).toMatchObject({ failed: [`na:${APP_ID}:published value timed out`], failed_count: 1, cached: PLUGIN_REGIONS.length - 1 })
   })
 
   it('waits for the purge to propagate before refilling', async () => {
