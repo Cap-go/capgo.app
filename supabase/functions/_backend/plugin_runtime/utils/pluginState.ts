@@ -268,8 +268,14 @@ async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLo
   return { revision, value }
 }
 
-function putDocument<T>(helper: CacheHelper, request: Request, options: DocLoadOptions<T>, value: T | null, revision: string | null) {
-  return helper.putJson(request, { v: value }, value === null ? NEGATIVE_CACHE_TTL_SECONDS : options.ttlSeconds, {
+/**
+ * `late`: a background refill, which can land after a publication purge. It
+ * never caches longer than the document TTL, so a stale miss lasts at most
+ * as long as a stale value.
+ */
+function putDocument<T>(helper: CacheHelper, request: Request, options: DocLoadOptions<T>, value: T | null, revision: string | null, late = false) {
+  const ttlSeconds = value === null && !late ? NEGATIVE_CACHE_TTL_SECONDS : options.ttlSeconds
+  return helper.putJson(request, { v: value }, ttlSeconds, {
     tags: options.tags,
     timeoutMs: CACHE_PUT_TIMEOUT_MS,
     headers: revision ? { [REVISION_HEADER]: revision } : undefined,
@@ -307,7 +313,7 @@ function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request,
       const value = published.value === null ? null : options.parse(published.value)
       if (options.reuseParsed && published.revision)
         rememberDoc(request.url, { revision: published.revision, value })
-      await putDocument(helper, request, options, value, published.revision)
+      await putDocument(helper, request, options, value, published.revision, true)
       log('cached')
     })
     .catch(() => log('failed'))

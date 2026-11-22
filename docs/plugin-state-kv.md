@@ -25,7 +25,9 @@ decoding share a 50 ms deadline; the subsequent KV
 value read has its own 50 ms deadline. A timeout falls back to the existing
 replica path for that request, but the late read keeps going in the background
 (at most 2 seconds per provider read) and stores its result in the Cache API
-exactly like an on-time read. Without this refill, a location where R2 always
+like an on-time read. A late miss gets the 30-second document TTL instead of
+the 60-second negative TTL, because a late put can land after a publication
+purge. Without this refill, a location where R2 always
 answers after 50 ms would never warm up. Each isolate runs at most one refill
 per document; while it runs, other requests for that document skip the
 provider reads and use the replica immediately. Each request may load at most 16

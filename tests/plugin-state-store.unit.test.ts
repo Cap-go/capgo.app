@@ -609,9 +609,11 @@ describe('sampled pointer phase diagnostics', () => {
     const pendingObject = Promise.withResolvers<{ json: () => Promise<unknown> }>()
     const late = Promise.withResolvers<{ publication: Promise<unknown>, sampledSince: number | null }>()
     const get = vi.fn(async () => ({ value: 'late' }))
+    const observedMetrics = Promise.withResolvers<ReturnType<typeof startPluginStateReadMetrics>>()
     const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
     app.get('/', async (c) => {
       const metrics = startPluginStateReadMetrics(c)
+      observedMetrics.resolve(metrics)
       await expect(readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY, (publication, sampledSince) => late.resolve({ publication, sampledSince }))).rejects.toBeInstanceOf(PluginStateMiss)
       return c.json(metrics)
     })
@@ -620,13 +622,37 @@ describe('sampled pointer phase diagnostics', () => {
       PLUGIN_STATE_POINTERS: { get: () => pendingObject.promise },
     })
     await vi.advanceTimersByTimeAsync(R2_POINTER_TIMEOUT_MS + 1)
-    const frozen = await (await request).json()
-    expect(frozen).toMatchObject({ r2_pointer_reads: 1, r2_pointer_timeouts: 1, r2_pointer_first_failure: 'headers_timeout', kv_value_reads: 0 })
+    expect(await (await request).json()).toMatchObject({ r2_pointer_reads: 1, r2_pointer_timeouts: 1, r2_pointer_first_failure: 'headers_timeout', kv_value_reads: 0 })
+    const metrics = await observedMetrics.promise
+    const frozen = structuredClone(metrics)
     const { publication, sampledSince } = await late.promise
     expect(sampledSince).toEqual(expect.any(Number))
     pendingObject.resolve({ json: async () => ({ f: 1, generation: '2', kvKey: key }) })
     expect(await publication).toEqual({ value: { value: 'late' }, revision: '2' })
     expect(get).toHaveBeenCalledExactlyOnceWith(key, { type: 'json', cacheTtl: 30 })
+    // The late pointer body and KV read finished without touching the request's counters.
+    expect(metrics).toEqual(frozen)
+  })
+
+  it('caches a late refill of a miss no longer than a late value', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const cache = memoryCache()
+    vi.stubGlobal('caches', { open: async () => cache })
+    const pointer = Promise.withResolvers<null>()
+    const app = new Hono()
+    app.get('/', async c => c.json({ source: (await startPluginStateRequest(c, 'com.example.late-miss', 'device')) ? 'kv' : 'db' }))
+    const request = app.request('/', undefined, { PLUGIN_STATE: { get: vi.fn() }, PLUGIN_STATE_POINTERS: { get: () => pointer.promise } })
+    await vi.advanceTimersByTimeAsync(R2_POINTER_TIMEOUT_MS + 1)
+    expect((await request).headers.get('X-Plugin-State')).toBe('cold')
+    // No pointer: a miss, refilled after the request fell back.
+    pointer.resolve(null)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.waitFor(() => expect(cache.put).toHaveBeenCalledOnce())
+    const [, stored] = cache.put.mock.calls[0] as unknown as [Request, Response]
+    // An on-time miss keeps the 60 s negative TTL; a late one only gets the 30 s document TTL.
+    expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=30')
   })
 
   it('cancels a late pointer body that exceeds the background budget', async () => {
