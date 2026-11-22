@@ -103,6 +103,115 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 [KV consistency](https://developers.cloudflare.com/kv/concepts/how-kv-works/),
 [KV limits](https://developers.cloudflare.com/kv/platform/limits/).
 
+## Prewarm
+
+A regional plugin worker with an active placement hint runs in one data
+center. Check the `cf-placement` response header to confirm it, for example
+`remote-CMH` for `plugin.na.capgo.app`. A worker that returns no `cf-placement`
+header may not run in one data center, so its prewarm may not warm the cache its
+devices read. On 2026-11-22 `capgo_plugin-jp-prod` reported `placement.mode:
+targeted` (`gcp:asia-northeast1`) in its script settings but returned no
+`cf-placement` header, even on uncached paths, so the Japan prewarm is not
+relied on until that placement is active. The prewarm reports each region's
+`cf-placement` value. Only `remote-XXX` shows the call ran in the worker's
+placement data center: the API worker is placed in `aws:eu-west-2`, so
+`local-XXX` means a regional call stayed where it arrived. The `plugin state
+prewarmed` log lists regions without a `remote-` value under `unplaced`, the
+public endpoint returns `pinned`, and `app prewarm` flags them.
+
+The Cache API is local to the data center a worker runs in, so a placed region
+has a single plugin-state cache. Cache keys include the request hostname. The
+snippet forwards each device request to the regional hostname
+(`fetch(workerUrl + path)`), and the regional worker sees that hostname: on
+2026-11-22, all sampled live requests on `capgo_plugin-na-prod` (144) and
+`capgo_plugin-eu-prod` (105) had the URL and `Host` `plugin.na.capgo.app` and
+`plugin.eu.capgo.app`. The prewarm calls the same hostnames, so its keys match
+the device keys.
+
+### Fan-out
+
+After the purge queue (`triggers/updates_cache_purge.ts`) purges a
+`plugin_state` batch, the API worker waits one second for the purge to reach
+every data center. It then posts the batch's app ids, 10 per call, to
+`https://plugin.<region>.capgo.app/plugin_state/prewarm` with the API secret
+and `redirect: 'manual'`, so a redirect never carries the secret elsewhere.
+Workers allow six open connections per invocation, and the drain also holds
+its database socket and sends Cloudflare purge calls, so prewarm calls take at
+most three slots per invocation. Overlapping prewarm runs of one drain share
+them; another invocation has its own, so a cancelled invocation cannot stall
+it. A call's 8-second timeout starts only once it holds a slot. A run has a 20-second total budget that must still cover
+the 8-second call timeout, so calls that cannot start within 12 seconds of
+their run are reported as `budget_exhausted` instead of sent. A region that answers HTTP 200 without an
+app's outcome is reported as `missing_result`.
+
+### Regional call
+
+Each regional worker reads the app document, plus the bundle-name and manifest
+documents of the bundles its channels serve (at most 8 bundles). Each provider
+read waits up to 2 seconds. The whole call has a 6-second budget and at most
+900 provider and cache operations, shared by every app and retry: this
+feature's own budget, which bounds the work of a call however often a
+publication moves. R2, KV and Cache API calls count
+toward the six simultaneous connections of an invocation, so a call runs at
+most five at once; each read's 2-second timer starts once it holds a slot, and
+waiting for one still ends at the call budget. Manifests, which can approach
+4 MiB each, load at most two at a time per call across all its apps (a
+manifest keeps its slot until its cache write, and any late check or repair of
+that write, settles, since a pending write still holds its payload), and
+bundle documents are dropped as soon as they are cached. This bounds one call's
+manifest memory to about two documents; the 128 MiB limit applies to the whole
+isolate, which may handle other requests at the same time. Reads and writes stop 300 ms
+before the budget ends, leaving that time for cleanup deletes; apps that cannot
+start before then are reported as `budget`, and no write starts once the budget
+is spent. It writes the shared app, bundle-name and manifest Cache API entries
+device requests read; per-device override entries are not prewarmed. `cached`
+counts the distinct keys whose write this call made and reconciled at the
+published generation, each once; entries that already held it are kept and not
+counted. Cloudflare's `cache.put` does not confirm storage, so `cached` counts
+accepted writes: confirming each one with a read-back would cost another
+operation per document from the shared budget and still only prove the entry
+existed at that instant.
+Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
+
+### Ordering and its limits
+
+The lookup before a write keeps any entry that already holds the published
+generation or a newer one. When the lookup fails or times out (500 ms), the
+document is reported as an error rather than written blind. A prewarmed miss
+gets the 30-second document TTL, like a late refill, because it can land after
+a purge.
+
+The Cache API has no conditional put, so after each write the prewarm reads
+the R2 pointer again. A newer entry that the put could have replaced comes from
+a publication that is already visible there. When the pointer has moved past
+the written generation, the prewarm deletes its entry and writes the newer one,
+at most two retries. A failed delete is repaired by that newer write. A delete
+still pending at the budget is not waited on, and no repair starts then,
+because the pending delete could remove it later. When the pointer read fails,
+the entry is deleted too: a cold miss is safe, a stale entry is not. A write
+still pending after 500 ms is reported as timed out, and the same check runs in
+the background once it lands, with its own 2-second budget.
+
+A stale entry written by the prewarm can remain only when its delete fails or
+is still pending and no newer write follows: the pointer read failed, the newer
+KV value has not propagated yet, or the retries, operations or budget ran out.
+When the cache lookup itself fails, the prewarm writes nothing and leaves
+whatever the cache already holds, which expires with its TTL like any entry. The error (or,
+for a late write, the `plugin state prewarm late write not reconciled` log)
+says so, and the entry expires with its 30-second TTL, which bounds every
+Cache API refill. Failures are only logged (`plugin state prewarmed`); devices
+then fill the cache as usual.
+
+### Targets and the CLI
+
+Production uses the region list in `utils/pluginRegionTargets.ts`. Other
+environments prewarm only when `PLUGIN_REGION_TARGETS` is set, so local and CI
+runs do not use production hostnames by default; explicitly configured targets
+are used as provided, and an invalid value disables the prewarm.
+`npx @capgo/cli@latest app prewarm <appId>` (`POST /app/:id/prewarm`,
+`app.upload_bundle` permission) runs the same fan-out on demand and prints each
+region's data center and result.
+
 ## Controls
 
 | Setting                           | Scope                 | Default and purpose                                                                                                                                            |

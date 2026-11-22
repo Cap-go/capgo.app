@@ -1,0 +1,34 @@
+// Dependency-free limits shared by the regional prewarm route and the API
+// worker that calls it, so the two sides cannot drift apart.
+
+/**
+ * Apps per prewarm call. Each app reads up to 17 documents, so this keeps one
+ * call well inside the per-invocation KV and R2 operation limits.
+ */
+export const PREWARM_MAX_APPS = 10
+/** Whole-call budget of the regional route. */
+export const PREWARM_CALL_BUDGET_MS = 6000
+/** API worker timeout per call: the route budget plus room for the round trip. */
+export const PREWARM_CALL_TIMEOUT_MS = PREWARM_CALL_BUDGET_MS + 2000
+/**
+ * Provider and cache operations one call may start, across all its apps and
+ * retries: this feature's own operation budget, which bounds the work and cost
+ * of a call however often a publication moves.
+ */
+export const PREWARM_MAX_OPERATIONS = 900
+/**
+ * Manifest documents loaded at once per call, across all its apps. A manifest
+ * can approach 4 MiB (the sync's MANIFEST_MEMORY_LIMIT_BYTES), and a load holds
+ * its parsed value plus serialization and cache-write buffers, so this keeps a
+ * call's own manifest memory to two documents' worth (other requests the isolate
+ * handles at the same time use memory of their own).
+ */
+export const PREWARM_MANIFEST_CONCURRENCY = 2
+/**
+ * R2, KV and Cache API operations in flight per call. Workers allow six
+ * simultaneous open connections per invocation, and these bindings count:
+ * past that the runtime queues them, which would eat their timeouts.
+ */
+export const PREWARM_CONNECTIONS = 5
+/** Kept free at the end of each budget so a cleanup delete still fits. */
+export const PREWARM_CLEANUP_RESERVE_MS = 300

@@ -10,7 +10,8 @@
 // Claims are limited to one per second across all callers, so the Cloudflare
 // rate stays bounded whatever the backlog. A successful first purge schedules
 // re-purges (+3s / +10s / +60s / +180s) for replica lag; failed apps go back to the
-// queue at their Retry-After. Claims lease rows, so a crash before the ack
+// queue at their Retry-After. A purged plugin_state scope is then prewarmed in
+// every plugin region (utils/pluginStatePrewarm.ts). Claims lease rows, so a crash before the ack
 // only delays them. Every failure is soft: the cache TTL is the backstop.
 //
 // Token: CF_CACHE_PURGE_TOKEN, else the existing CF_ANALYTICS_TOKEN once it is
@@ -27,6 +28,7 @@ import { updatesCacheTagForScope } from '../plugin_runtime/utils/updatesCacheTag
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
+import { schedulePluginStatePrewarm } from '../utils/pluginStatePrewarm.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
 
 /** Cloudflare purge API accepts at most 100 tags per call on every plan. */
@@ -269,6 +271,9 @@ export async function drainUpdatesCachePurge(
       purgedApps += apps.length
       for (const row of apps)
         purgedAppIds.push(row.app_id)
+      // The snapshot entries just left every data center: refill each region's
+      // placement data center before devices hit it cold.
+      schedulePluginStatePrewarm(c, apps.filter(row => row.scope === 'plugin_state').map(row => row.app_id))
     }
     if (!claim.has_more)
       break

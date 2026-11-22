@@ -1,0 +1,41 @@
+import type { Context } from 'hono'
+import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import { quickError } from '../../utils/hono.ts'
+import { isPinnedPlacement, PrewarmNotConfigured, prewarmPluginStateRegions } from '../../utils/pluginStatePrewarm.ts'
+import { checkPermission } from '../../utils/rbac.ts'
+import { isValidAppId } from '../../utils/utils.ts'
+
+/**
+ * POST /app/:id/prewarm: load the app's published plugin state into every
+ * plugin region's cache now (the `app prewarm` CLI command). Publications
+ * already prewarm automatically after their purge; this is the manual trigger.
+ */
+export async function prewarm(c: Context<MiddlewareKeyVariables>, appId: string): Promise<Response> {
+  if (!appId || !isValidAppId(appId))
+    throw quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: appId })
+  if (!(await checkPermission(c, 'app.upload_bundle', { appId })))
+    throw quickError(401, 'cannot_access_app', 'You can\'t access this app', { app_id: appId })
+  const regions = await prewarmPluginStateRegions(c, [appId]).catch((error: unknown) => {
+    if (error instanceof PrewarmNotConfigured)
+      throw quickError(503, 'prewarm_unavailable', 'Plugin state prewarm is not configured on this server')
+    throw error
+  })
+  return c.json({
+    app_id: appId,
+    regions: regions.map((region) => {
+      const result = region.results.find(entry => entry.app_id === appId)
+      // A region that answered without this app's outcome did not prewarm it.
+      const missing = region.error === null && !result
+      return {
+        region: region.region,
+        status: region.status,
+        placement: region.placement,
+        pinned: isPinnedPlacement(region.placement),
+        revision: result?.revision ?? null,
+        cached: result?.cached ?? 0,
+        skipped: result?.skipped ?? null,
+        error: region.error ?? (missing ? 'missing_result' : result?.error ?? null),
+      }
+    }),
+  })
+}
