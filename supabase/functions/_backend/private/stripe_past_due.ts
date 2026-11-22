@@ -82,16 +82,26 @@ app.post('/', middlewareAuth, async (c) => {
   const billingAccount = normalizeBillingAccount(stripeInfo.billing_account)
   let openInvoice: Awaited<ReturnType<typeof findLatestOpenSubscriptionInvoice>> = null
   let paymentProcessing = false
+  let paymentProcessingUnknown = false
   if (isStripeConfiguredForAccount(c, billingAccount)) {
     try {
       openInvoice = await findLatestOpenSubscriptionInvoice(c, org.customer_id, billingAccount)
-      if (openInvoice?.id)
-        paymentProcessing = await isOpenSubscriptionInvoicePaymentProcessing(getStripe(c, billingAccount), openInvoice.id)
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'stripe_past_due open invoice', orgId: body.orgId, customerId: org.customer_id, error })
     }
+    if (openInvoice?.id) {
+      try {
+        paymentProcessing = await isOpenSubscriptionInvoicePaymentProcessing(getStripe(c, billingAccount), openInvoice.id)
+      }
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'stripe_past_due payment intent', orgId: body.orgId, customerId: org.customer_id, invoiceId: openInvoice.id, error })
+        paymentProcessingUnknown = true
+      }
+    }
   }
+  if (paymentProcessingUnknown)
+    return c.json({ past_due: false, invoice: openInvoice ? toOpenSubscriptionInvoiceSummary(openInvoice) : null, payment_processing: true })
   if (shouldBlockPastDueForProcessingPayment(paymentProcessing))
     return c.json({ past_due: false, invoice: openInvoice ? toOpenSubscriptionInvoiceSummary(openInvoice) : null, payment_processing: true })
 

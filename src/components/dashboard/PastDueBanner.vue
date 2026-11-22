@@ -82,9 +82,12 @@ async function onPaid() {
 
 // Retry with the saved card first; fall back to entering a new card in place.
 async function retryPayment() {
+  const requestOrgId = orgId.value
   isPaying.value = true
   try {
-    const result = await payOpenInvoice(orgId.value)
+    const result = await payOpenInvoice(requestOrgId)
+    if (requestOrgId !== orgId.value)
+      return
     if (result.status === 'paid') {
       toast.success(t('billing-invoice-paid'))
       await onPaid()

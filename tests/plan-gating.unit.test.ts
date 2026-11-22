@@ -108,6 +108,12 @@ describe('past-due renewal payment processing exemption', () => {
     stripeMocks.isOpenSubscriptionInvoicePaymentProcessing.mockResolvedValueOnce(false)
     await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).rejects.toMatchObject({ status: 403 })
   })
+
+  it('rejects requirePaidPlan when renewal processing lookup fails', async () => {
+    billing({ past_due_at: '2026-01-02T00:00:00Z' })
+    stripeMocks.findLatestOpenSubscriptionInvoice.mockRejectedValueOnce(new Error('stripe unavailable'))
+    await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).rejects.toMatchObject({ status: 403 })
+  })
 })
 
 describe('paid AI feature gating', () => {
