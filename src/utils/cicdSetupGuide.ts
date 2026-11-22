@@ -370,10 +370,10 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
       secret: 'CAPGO_PREVIEW_TOKEN',
       setup: 'build',
       sync: platform,
-      // Android previews are installable debug APK links; iOS previews go to TestFlight.
+      // Android previews keep a debug APK in Capgo. iOS previews upload to TestFlight and keep the IPA in Capgo for the cloud simulator.
       command: platform === 'android'
         ? `${buildCommand(platform)} --build-mode debug --no-playstore-upload --output-upload`
-        : buildCommand(platform),
+        : `${buildCommand(platform)} --output-upload`,
       env: NO_STORE_REVIEW,
     }))]
   }

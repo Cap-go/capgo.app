@@ -167,6 +167,37 @@ export class CacheHelper {
     return result
   }
 
+  /**
+   * Like matchResponse, but tells a miss (null) from a lookup that failed or
+   * timed out (undefined), for callers that must not overwrite what they could
+   * not see.
+   */
+  async probeResponse(key: Request, timeoutMs: number): Promise<Response | null | undefined> {
+    const lookup = this.lookupResponse(key)
+    const result = await withTimeout(lookup, timeoutMs)
+    if (result === TIMEOUT) {
+      void lookup.then(response => response?.body?.cancel()).catch(() => undefined)
+      return undefined
+    }
+    return result
+  }
+
+  /**
+   * probeResponse without a timeout: settles only when cache.match does, for
+   * callers that must account for the lookup until it really finishes.
+   */
+  lookupResponse(key: Request): Promise<Response | null | undefined> {
+    return (async () => {
+      const cache = await this.ensureCache()
+      if (!cache)
+        return undefined
+      return (await cache.match(key)) ?? null
+    })().catch((error: unknown) => {
+      this.logCacheError('Error reading cached response', error)
+      return undefined
+    })
+  }
+
   private async matchResponseUnbound(key: Request): Promise<Response | null> {
     try {
       const cache = await this.ensureCache()
@@ -197,23 +228,25 @@ export class CacheHelper {
   }
 
   /**
-   * Write JSON to Cache API.
+   * Write JSON to Cache API. Resolves true once cache.put accepted the entry
+   * (Cloudflare does not confirm storage on put), false when there is no cache,
+   * the write failed, or it exceeded `timeoutMs`: false is "not confirmed",
+   * since a timed-out write is not cancelled and may still land.
    * Pass `timeoutMs` for best-effort waitUntil caches (device/MAU). Omit it for
    * rate-limit counters that must finish the write before treating it as recorded.
    */
-  async putJson(key: Request, payload: unknown, ttlSeconds: number, options?: CachePutOptions) {
+  async putJson(key: Request, payload: unknown, ttlSeconds: number, options?: CachePutOptions): Promise<boolean> {
     if (options?.timeoutMs == null)
       return this.putJsonUnbound(key, payload, ttlSeconds, options?.tags, options?.headers)
     const result = await withTimeout(this.putJsonUnbound(key, payload, ttlSeconds, options.tags, options.headers), options.timeoutMs)
-    if (result === TIMEOUT)
-      return
+    return result !== TIMEOUT && result
   }
 
-  private async putJsonUnbound(key: Request, payload: unknown, ttlSeconds: number, tags?: string[], extraHeaders?: Record<string, string>) {
+  private async putJsonUnbound(key: Request, payload: unknown, ttlSeconds: number, tags?: string[], extraHeaders?: Record<string, string>): Promise<boolean> {
     try {
       const cache = await this.ensureCache()
       if (!cache)
-        return
+        return false
       const headers = new Headers({
         ...extraHeaders,
         'Content-Type': 'application/json',
@@ -226,21 +259,26 @@ export class CacheHelper {
       }
       const response = new Response(JSON.stringify(payload), { headers })
       await cache.put(key, response.clone())
+      return true
     }
     catch (error) {
       this.logCacheError('Error writing cached response', error)
+      return false
     }
   }
 
-  async delete(key: Request) {
+  /** Resolves false when there is no cache or the delete failed (the error is logged). */
+  async delete(key: Request): Promise<boolean> {
     const cache = await this.ensureCache()
     if (!cache)
-      return
+      return false
     try {
       await cache.delete(key)
+      return true
     }
     catch (error) {
       this.logCacheError('Error deleting cached response', error)
+      return false
     }
   }
 
