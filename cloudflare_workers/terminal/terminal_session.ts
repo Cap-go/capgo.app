@@ -74,9 +74,12 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       throw new Error('state_readonly')
   }
 
-  async onConnect(conn: unknown, ctx: { request: Request }): Promise<void> {
+  override async onConnect(
+    conn: Parameters<McpAgent<TerminalEnv, TerminalAgentState, TerminalProps>['onConnect']>[0],
+    ctx: Parameters<McpAgent<TerminalEnv, TerminalAgentState, TerminalProps>['onConnect']>[1],
+  ): Promise<void> {
     if (requestHasClientMcpHeaders(ctx.request)) {
-      ;(conn as { close: (code: number, reason: string) => void }).close(1008, 'mcp_headers_forbidden')
+      conn.close(1008, 'mcp_headers_forbidden')
       return
     }
     await super.onConnect(conn, ctx)

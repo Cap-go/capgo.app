@@ -4,7 +4,6 @@ const FORBIDDEN_ERRORS = new Set([
   'apikey_not_app_scoped',
   'apikey_ambiguous_scope',
   'app_org_mismatch',
-  'session_not_active',
 ])
 
 export function authErrorResponse(error: unknown): Response {

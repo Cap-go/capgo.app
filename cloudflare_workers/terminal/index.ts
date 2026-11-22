@@ -52,7 +52,10 @@ function parseStartSessionBody(
     return null
   if (typeof sessionId !== 'string' || !sessionId.trim())
     return null
-  return { orgId: orgId.trim(), appId: appId.trim(), sessionId: sessionId.trim() }
+  const trimmedSessionId = sessionId.trim()
+  if (trimmedSessionId.length > 128)
+    return null
+  return { orgId: orgId.trim(), appId: appId.trim(), sessionId: trimmedSessionId }
 }
 
 function parseEndSessionBody(raw: unknown): string | null {
@@ -256,7 +259,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       if (reserved instanceof Response)
         return reserved
       if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey))
-        throw new Error('session_not_active')
+        return Response.json({ error: 'session_not_active' }, { status: 410 })
     }
     catch (error) {
       return authErrorResponse(error)

@@ -115,7 +115,7 @@ export async function reserveTerminalSession(
   const client = new Client({ connectionString: hyperdrive.connectionString })
   await client.connect()
   try {
-    const result = await client.query<{ result: { ok: boolean, error?: string } }>(
+    const result = await client.query<{ result: { ok: boolean, error?: string, reused?: boolean } }>(
       `SELECT public.terminal_session_reserve(
       $1::text, $2::uuid, $3::text, $4::bigint, $5::integer, $6::integer
     ) AS result`,

@@ -12,9 +12,11 @@ const fetchSpy = vi.fn(async (req: Request) => {
   }), { headers: { 'content-type': 'application/json' } })
 })
 
+const serveSpy = vi.fn(() => ({ fetch: fetchSpy }))
+
 vi.mock('../cloudflare_workers/terminal/terminal_session.ts', () => ({
   TerminalSession: {
-    serve: vi.fn(() => ({ fetch: fetchSpy })),
+    serve: serveSpy,
   },
 }))
 
@@ -48,6 +50,10 @@ describe('terminal mcp http', () => {
       appId: 'com.test.app',
     })
 
+    expect(serveSpy).toHaveBeenCalledWith('/terminal/mcp', {
+      binding: 'TERMINAL_SESSION',
+      transport: 'streamable-http',
+    })
     expect(fetchSpy).toHaveBeenCalledOnce()
     expect(response.status).toBe(200)
   })

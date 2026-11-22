@@ -3,15 +3,17 @@ import { terminalMcpSessionHeaderId } from './security.ts'
 
 export { terminalMcpSessionHeaderId } from './security.ts'
 
-let terminalMcpHttp: { fetch: typeof fetch } | null = null
+type TerminalMcpHttpWorker = {
+  fetch: (request: Request, env: TerminalEnv, ctx: ExecutionContext) => Promise<Response>
+}
 
-function terminalMcpHttpHandler() {
-  if (!terminalMcpHttp) {
-    terminalMcpHttp = TerminalSession.serve('/terminal/mcp', {
-      binding: 'TERMINAL_SESSION',
-      transport: 'streamable-http',
-    })
-  }
+let terminalMcpHttp: TerminalMcpHttpWorker | null = null
+
+function terminalMcpHttpHandler(): TerminalMcpHttpWorker {
+  terminalMcpHttp ??= TerminalSession.serve('/terminal/mcp', {
+    binding: 'TERMINAL_SESSION',
+    transport: 'streamable-http',
+  }) as TerminalMcpHttpWorker
   return terminalMcpHttp
 }
 
