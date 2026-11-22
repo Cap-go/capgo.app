@@ -30,7 +30,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
@@ -2212,15 +2212,37 @@ async function handleActiveSubscriptionUpdate(
 
 type BackupRecovery = 'recovered' | 'backup_attempt_failed' | 'not_recovered'
 
+/** Stable idempotency anchor for backup charges (latest charge when present, else the PaymentIntent id). */
+export function getBackupRecoveryChargeId(stripeEvent: Stripe.Event): string {
+  if (stripeEvent.type === 'charge.failed')
+    return stripeEvent.data.object.id
+  if (stripeEvent.type === 'payment_intent.payment_failed') {
+    const failedPaymentIntent = stripeEvent.data.object
+    const latestCharge = failedPaymentIntent.latest_charge
+    return (typeof latestCharge === 'string' ? latestCharge : latestCharge?.id)
+      ?? failedPaymentIntent.id
+      ?? 'unknown'
+  }
+  return 'unknown'
+}
+
 // Stripe only retries the default card; charge the backup before the org is marked failed.
 // Stripe errors propagate so the webhook is retried; the backup charge is idempotent per failed charge.
-async function chargeBackupCard(c: Context<MiddlewareKeyVariablesStripe>, stripeEvent: Stripe.Event, customerId: string): Promise<BackupRecovery> {
-  if (stripeEvent.type !== 'charge.failed')
-    return 'not_recovered'
-  const charge = stripeEvent.data.object
+async function chargeBackupCard(
+  c: Context<MiddlewareKeyVariablesStripe>,
+  stripeEvent: Stripe.Event,
+  customerId: string,
+  opts?: { chargeLookup?: Pick<Stripe.Charge, 'payment_intent'> },
+): Promise<BackupRecovery> {
   const stripe = getStripe(c, getWebhookBillingAccount(c))
   // Retry the invoice this charge was for, not whichever invoice is newest.
-  const invoice = await findInvoiceForCharge(stripe, charge)
+  const invoice = stripeEvent.type === 'charge.failed'
+    ? await findInvoiceForCharge(stripe, stripeEvent.data.object)
+    : stripeEvent.type === 'payment_intent.payment_failed'
+      ? await findInvoiceForCharge(stripe, opts?.chargeLookup ?? { payment_intent: stripeEvent.data.object.id })
+      : null
+  if (!invoice)
+    return 'not_recovered'
   if (!invoice?.id || !isSubscriptionInvoice(invoice))
     return 'not_recovered'
   // Already settled (for example Pay now charged the backup first): nothing failed anymore.
@@ -2228,9 +2250,18 @@ async function chargeBackupCard(c: Context<MiddlewareKeyVariablesStripe>, stripe
     return 'recovered'
   if (invoice.status !== 'open')
     return 'not_recovered'
+  const failedCharge = stripeEvent.type === 'charge.failed' ? stripeEvent.data.object : null
+  const failedPaymentIntent = stripeEvent.type === 'payment_intent.payment_failed'
+    ? stripeEvent.data.object
+    : null
+  const failedChargeId = getBackupRecoveryChargeId(stripeEvent)
   const result = await payInvoiceWithBackupCard(c, stripe, customerId, invoice.id, {
-    chargeId: charge.id,
-    paymentMethodId: typeof charge.payment_method === 'string' ? charge.payment_method : null,
+    chargeId: failedChargeId,
+    paymentMethodId: failedCharge && typeof failedCharge.payment_method === 'string'
+      ? failedCharge.payment_method
+      : typeof failedPaymentIntent?.payment_method === 'string'
+        ? failedPaymentIntent.payment_method
+        : null,
   })
   if (result === 'paid')
     return 'recovered'
@@ -2244,7 +2275,16 @@ async function handleFailedSubscriptionPayment(
   stripeData: StripeData,
   org: Org,
 ) {
-  const recovery = await chargeBackupCard(c, stripeEvent, stripeData.data.customer_id)
+  const paymentIntentLookup = stripeEvent.type === 'payment_intent.payment_failed'
+    ? { payment_intent: stripeEvent.data.object.id }
+    : undefined
+  if (paymentIntentLookup) {
+    const stripe = getStripe(c, getWebhookBillingAccount(c))
+    const invoice = await findInvoiceForCharge(stripe, paymentIntentLookup)
+    if (!invoice || !isSubscriptionInvoice(invoice))
+      return null
+  }
+  const recovery = await chargeBackupCard(c, stripeEvent, stripeData.data.customer_id, paymentIntentLookup ? { chargeLookup: paymentIntentLookup } : undefined)
   if (recovery !== 'not_recovered') {
     // recovered: charge.succeeded keeps the plan active. backup_attempt_failed: dunning already ran.
     cloudlog({ requestId: c.get('requestId'), message: 'Skipping failed payment handling', recovery, orgId: org.id })
@@ -2393,10 +2433,12 @@ async function getSubscriptionPaymentState(
     return 'unpaid'
   // The event snapshot can predate the payment: read the live invoice.
   // Stripe errors fail the webhook so it is retried.
-  const invoice = await getStripe(c, getWebhookBillingAccount(c)).invoices.retrieve(invoiceId)
-  if (invoice.status === 'paid')
-    return 'paid'
-  return invoice.billing_reason === 'subscription_create' ? 'first_invoice_unpaid' : 'unpaid'
+  const stripe = getStripe(c, getWebhookBillingAccount(c))
+  const invoice = await stripe.invoices.retrieve(invoiceId)
+  const paymentIntent = invoice.status === 'open' && invoice.id
+    ? await getSubscriptionInvoicePaymentIntent(stripe, invoice.id)
+    : null
+  return subscriptionInvoicePaymentStateFromInvoice(invoice, paymentIntent?.status ?? null)
 }
 
 // The trial plan subscription only converts the org once its first invoice is paid.
@@ -2595,4 +2637,5 @@ export const stripeEventTestUtils = {
   shouldStampTransferInvoiceFooter,
   buildTransferInvoiceFooter,
   getTransferInvoiceFooterUpdate,
+  getBackupRecoveryChargeId,
 }

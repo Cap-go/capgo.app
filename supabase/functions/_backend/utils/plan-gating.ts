@@ -2,7 +2,9 @@ import type { Context } from 'hono'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { servicePrincipal, withRlsContext } from './pg_rls.ts'
-import { getSubscriptionData, planProductIdOrFilter } from './stripe.ts'
+import { getInvoiceSubscriptionId } from './stripe_event.ts'
+import { findLatestOpenSubscriptionInvoice, getStripe, isOpenSubscriptionInvoicePaymentProcessing, getSubscriptionData, planProductIdOrFilter } from './stripe.ts'
+import { isStripeConfiguredForAccount, normalizeBillingAccount } from './stripe_billing.ts'
 import { getCurrentPlanNameOrg } from './supabase.ts'
 
 function isActivePlanStatus(status: string | null | undefined): boolean {
@@ -34,9 +36,9 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
     return null
   }
 
-  const { data: stripeInfo, error: stripeError } = await selectSingle<{ status: string | null, is_good_plan: boolean | null, product_id: string | null, subscription_id: string | null, past_due_at: unknown }>(
+  const { data: stripeInfo, error: stripeError } = await selectSingle<{ status: string | null, is_good_plan: boolean | null, product_id: string | null, subscription_id: string | null, past_due_at: unknown, billing_account: string | null }>(
     c,
-    'SELECT status, is_good_plan, product_id, subscription_id, past_due_at FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+    'SELECT status, is_good_plan, product_id, subscription_id, past_due_at, billing_account FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
     [org.customer_id],
   )
   if (stripeError || !stripeInfo?.product_id) {
@@ -56,7 +58,33 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
   if (requirePaid) {
     const subscriptionResult = await getSubscriptionData(c, org.customer_id, stripeInfo.subscription_id)
     const subscription = subscriptionResult.ok ? subscriptionResult.data : null
-    if (stripeInfo.past_due_at || subscription?.status !== 'active' || subscription?.productId !== stripeInfo.product_id)
+    let renewalPaymentProcessing = false
+    if (stripeInfo.past_due_at) {
+      const billingAccount = normalizeBillingAccount(stripeInfo.billing_account)
+      if (isStripeConfiguredForAccount(c, billingAccount)) {
+        try {
+          const openInvoice = await findLatestOpenSubscriptionInvoice(c, org.customer_id, billingAccount)
+          const invoiceSubscriptionId = openInvoice ? getInvoiceSubscriptionId(openInvoice) : undefined
+          const invoiceMatchesSubscription = !!stripeInfo.subscription_id
+            && invoiceSubscriptionId === stripeInfo.subscription_id
+          renewalPaymentProcessing = openInvoice?.id && invoiceMatchesSubscription
+            ? await isOpenSubscriptionInvoicePaymentProcessing(getStripe(c, billingAccount), openInvoice.id)
+            : false
+        }
+        catch (error) {
+          cloudlogErr({
+            requestId: c.get('requestId'),
+            message: 'Unable to check renewal payment processing for active plan check',
+            orgId,
+            customerId: org.customer_id,
+            error,
+          })
+        }
+      }
+    }
+    const subscriptionBlocking = subscription?.status !== 'active'
+      && !(renewalPaymentProcessing && subscription?.status === 'past_due')
+    if ((stripeInfo.past_due_at && !renewalPaymentProcessing) || subscriptionBlocking || subscription?.productId !== stripeInfo.product_id)
       return null
   }
 
@@ -87,7 +115,7 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
  * @param c - Hono context
  * @param orgId - Organization ID to validate
  * @param feature Feature name for the permission error
- * @param requirePaid Also verify the live Stripe subscription is active, with the same product and no past-due balance
+ * @param requirePaid Also verify the live Stripe subscription matches the billed product; past-due is allowed only while that subscription’s renewal payment is processing.
  * @throws {HTTPException} 403 if org is not on Enterprise plan
  */
 export async function requireEnterprisePlan(c: Context, orgId: string, feature = 'SSO', requirePaid = false): Promise<void> {

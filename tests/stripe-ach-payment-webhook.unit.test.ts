@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
 import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
+import { subscriptionInvoicePaymentStateFromInvoice } from '../supabase/functions/_backend/utils/stripe.ts'
 
 const mockContext = {
   get: () => 'test-request-id',
@@ -61,6 +62,16 @@ describe('ACH subscription event extraction', () => {
     expect(extractDataEvent(mockContext, makeSubscriptionEvent('customer.subscription.updated')).data.status).toBe('updated')
   })
 
+  it.concurrent('maps payment_intent.payment_failed to a failed billing event', () => {
+    const { data } = extractDataEvent(mockContext, {
+      created: 1_712_184_400,
+      type: 'payment_intent.payment_failed',
+      data: { object: { id: 'pi_failed', customer: 'cus_ach', object: 'payment_intent' } },
+    } as any)
+    expect(data.customer_id).toBe('cus_ach')
+    expect(data.status).toBe('failed')
+  })
+
   it.concurrent.each(['invoice.paid', 'invoice.payment_succeeded'] as const)('reads the customer and subscription of a paid %s', (type) => {
     const { data } = extractDataEvent(mockContext, makeInvoiceEvent(type))
     expect(data.customer_id).toBe('cus_ach')
@@ -101,6 +112,14 @@ describe('active subscription status gating', () => {
   it.concurrent('keeps a failed payment visible until a payment succeeds', () => {
     expect(resolveActiveSubscriptionStatus('updated', { status: 'failed', subscription_id: 'sub_ach' }, 'sub_ach', 'unpaid')).toBe('failed')
     expect(resolveActiveSubscriptionStatus('updated', { status: 'failed', subscription_id: 'sub_ach' }, 'sub_ach', 'paid')).toBe('succeeded')
+  })
+
+  it.concurrent('treats renewal invoices with a processing PaymentIntent as paid for access', () => {
+    expect(subscriptionInvoicePaymentStateFromInvoice({ status: 'open', billing_reason: 'subscription_cycle' }, 'processing')).toBe('paid')
+  })
+
+  it.concurrent('does not treat the first subscription invoice as paid while processing', () => {
+    expect(subscriptionInvoicePaymentStateFromInvoice({ status: 'open', billing_reason: 'subscription_create' }, 'processing')).toBe('first_invoice_unpaid')
   })
 
   it.concurrent('keeps the past_due grace period for renewals only', () => {

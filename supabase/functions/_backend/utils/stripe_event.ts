@@ -298,6 +298,11 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
     data.customer_id = getStripeCustomerId(paymentIntent.customer)
     data.status = 'succeeded'
   }
+  else if (event.type === 'payment_intent.payment_failed') {
+    const paymentIntent = event.data.object as Stripe.PaymentIntent
+    data.customer_id = getStripeCustomerId(paymentIntent.customer)
+    data.status = 'failed'
+  }
   else if (event.type === 'customer.updated' || event.type === 'customer.created') {
     const customer = event.data.object as Stripe.Customer
     data.customer_id = customer.id
