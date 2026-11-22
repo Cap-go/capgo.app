@@ -97,7 +97,7 @@ export async function reserveTerminalSession(
     maxDurationMinutes: number
     maxConcurrency: number
   },
-): Promise<{ ok: boolean, error?: string }> {
+): Promise<{ ok: boolean, error?: string, reused?: boolean }> {
   const client = new Client({ connectionString: hyperdrive.connectionString })
   await client.connect()
   try {
@@ -117,7 +117,7 @@ export async function reserveTerminalSession(
     const payload = result.rows[0]?.result
     if (!payload?.ok)
       return { ok: false, error: payload?.error ?? 'reserve_failed' }
-    return { ok: true }
+    return { ok: true, reused: payload.reused === true }
   }
   finally {
     await client.end().catch(() => {})

@@ -37,7 +37,9 @@ export function assertSafeCommand(command: string): void {
 
 export function resolveWorkspacePath(relativePath: string): string {
   const normalized = relativePath.replace(/^\/+/, '').trim()
-  if (!normalized || normalized.includes('..') || normalized.includes('\0'))
+  if (!normalized || normalized.includes('\0'))
+    throw new Error('path_outside_workspace')
+  if (normalized.split('/').some(segment => segment === '..'))
     throw new Error('path_outside_workspace')
   return `${TERMINAL_WORKSPACE_ROOT}/${normalized}`
 }

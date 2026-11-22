@@ -314,10 +314,14 @@ BEGIN
     RETURN 0;
   END IF;
 
-  v_minutes := LEAST(
-    v_row.max_duration_minutes,
-    GREATEST(1, extract(epoch FROM (now() - v_row.started_at))::integer / 60)
-  );
+  IF p_reason = 'ws_token_failed' THEN
+    v_minutes := 0;
+  ELSE
+    v_minutes := LEAST(
+      v_row.max_duration_minutes,
+      GREATEST(1, extract(epoch FROM (now() - v_row.started_at))::integer / 60)
+    );
+  END IF;
 
   UPDATE public.terminal_sessions
   SET status = 'ended',

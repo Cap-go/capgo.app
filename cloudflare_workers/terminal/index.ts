@@ -70,11 +70,11 @@ function reserveStatus(error: string | undefined): number {
 async function ensureReserved(
   hyperdrive: TerminalEnv['HYPERDRIVE_CAPGO_DIRECT_EU'],
   input: Parameters<typeof reserveTerminalSession>[1],
-): Promise<Response | null> {
+): Promise<Response | { reused: boolean }> {
   const reserved = await reserveTerminalSession(hyperdrive, input)
-  if (reserved.ok)
-    return null
-  return Response.json({ error: reserved.error ?? 'reserve_failed' }, { status: reserveStatus(reserved.error) })
+  if (!reserved.ok)
+    return Response.json({ error: reserved.error ?? 'reserve_failed' }, { status: reserveStatus(reserved.error) })
+  return { reused: reserved.reused === true }
 }
 
 function mintWsConnectToken(): string {
@@ -110,7 +110,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
     const sessionKey = buildSessionKey(orgId, appId, sessionId)
     try {
       const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, orgId, appId)
-      const block = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
+      const reserved = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
         sessionKey,
         orgId,
         appId,
@@ -118,8 +118,9 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
         maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
         maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
       })
-      if (block)
-        return block
+      if (reserved instanceof Response)
+        return reserved
+      const sessionCreatedThisRequest = !reserved.reused
 
       const wsToken = mintWsConnectToken()
       const wsTokenHash = await sha256Hex(wsToken)
@@ -141,7 +142,8 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
         tokenStored = false
       }
       if (!tokenStored) {
-        await finishTerminalSession(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, 'ws_token_failed')
+        if (sessionCreatedThisRequest)
+          await finishTerminalSession(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, 'ws_token_failed')
         return Response.json({ error: 'ws_token_failed' }, { status: 500 })
       }
 
@@ -246,7 +248,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       return Response.json({ error: 'invalid_session_key' }, { status: 400 })
     try {
       const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
-      const block = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
+      const reserved = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
         sessionKey,
         orgId: parts.orgId,
         appId: parts.appId,
@@ -254,8 +256,8 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
         maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
         maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
       })
-      if (block)
-        return block
+      if (reserved instanceof Response)
+        return reserved
     }
     catch (error) {
       return authErrorResponse(error)
