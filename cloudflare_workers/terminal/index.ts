@@ -1,3 +1,4 @@
+import { getAgentByName } from 'agents'
 import { TERMINAL_MAX_CONCURRENCY_PER_ORG, TERMINAL_MAX_SESSION_MINUTES } from './lib/constants.ts'
 import {
   extractApiKey,
@@ -9,7 +10,16 @@ import {
 import { reserveTerminalSession, validateApiKeyForApp } from './lib/apikey.ts'
 import { TerminalSession, type TerminalEnv } from './terminal_session.ts'
 
-const mcp = TerminalSession.serve('/terminal/mcp', { binding: 'TERMINAL_SESSION' })
+function parseSessionKeyParts(sessionKey: string): { orgId: string, appId: string } | null {
+  const parts = sessionKey.split(':')
+  if (parts.length < 3)
+    return null
+  const orgId = parts[0]
+  const appId = parts[1]
+  if (!orgId || !appId)
+    return null
+  return { orgId, appId }
+}
 
 export default {
   async fetch(request: Request, env: TerminalEnv, ctx: ExecutionContext): Promise<Response> {
@@ -45,9 +55,10 @@ export default {
         if (!reserved.ok)
           return Response.json({ error: reserved.error }, { status: reserved.error === 'concurrency_limit' ? 429 : 403 })
 
+        const mcpQuery = `session_key=${encodeURIComponent(sessionKey)}`
         return Response.json({
           session_key: sessionKey,
-          mcp_url: `${url.origin}/terminal/mcp`,
+          mcp_url: `${url.origin}/terminal/mcp?${mcpQuery}`,
           websocket_url: `${url.origin}/terminal/ws/${encodeURIComponent(sessionKey)}`,
         })
       }
@@ -69,10 +80,27 @@ export default {
     }
 
     if (url.pathname.startsWith('/terminal/mcp')) {
-      const auth = extractApiKey(request)
-      if (!auth)
+      const apiKey = extractApiKey(request)
+      if (!apiKey)
         return Response.json({ error: 'missing_apikey' }, { status: 401 })
-      return mcp.fetch(request, env, ctx)
+      const sessionKey = url.searchParams.get('session_key')
+        || request.headers.get('X-Capgo-Terminal-Session')
+      if (!sessionKey)
+        return Response.json({ error: 'missing_session_key' }, { status: 400 })
+      const parts = parseSessionKeyParts(sessionKey)
+      if (!parts)
+        return Response.json({ error: 'invalid_session_key' }, { status: 400 })
+      try {
+        await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
+      }
+      catch (error) {
+        const message = error instanceof Error ? error.message : 'auth_failed'
+        return Response.json({ error: message }, { status: 403 })
+      }
+      const agent = await getAgentByName(env.TERMINAL_SESSION, sessionKey, {
+        props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
+      })
+      return agent.fetch(request)
     }
 
     if (url.pathname === '/terminal/health')
