@@ -10,9 +10,14 @@ import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getConfiguredPluginRegions, PLUGIN_REGIONS } from './pluginRegionTargets.ts'
 import { backgroundTask, existInEnv, getEnv } from './utils.ts'
 
-/** Same limit as the plugin route: one purge batch is one call per region. */
-const PREWARM_APPS_PER_CALL = 100
+/** Same limit as the plugin route (PREWARM_MAX_APPS). */
+const PREWARM_APPS_PER_CALL = 10
+/** Above the regional handler's 6 s budget, leaving room for the round trip. */
 const PREWARM_TIMEOUT_MS = 8000
+/** Workers allow 6 simultaneous outbound connections; more would queue and eat their timeout. */
+const PREWARM_CONNECTIONS = 6
+/** Stay inside the 30 s waitUntil window that runs the background prewarm. */
+const PREWARM_TOTAL_BUDGET_MS = 20_000
 /** Let the zone purge reach every data center before refilling it. */
 export const PREWARM_AFTER_PURGE_DELAY_MS = 1000
 
@@ -56,17 +61,35 @@ async function prewarmRegion(region: PluginRegion, secret: string, appIds: strin
   }
 }
 
-/** Warm the given apps in every region; returns one entry per region and batch. */
+/**
+ * Warm the given apps in every region; returns one entry per batch and region,
+ * in that order. Calls run through a pool sized to the connection limit, and a
+ * call that could not finish inside the total budget is reported, not sent.
+ */
 export async function prewarmPluginStateRegions(c: Context, appIds: string[]): Promise<RegionPrewarmResult[]> {
   const targets = pluginStatePrewarmTargets(c)
   const secret = getEnv(c, 'API_SECRET')
   const unique = [...new Set(appIds)]
   if (!targets.length || !secret || !unique.length)
     return []
-  const batches: string[][] = []
-  for (let i = 0; i < unique.length; i += PREWARM_APPS_PER_CALL)
-    batches.push(unique.slice(i, i + PREWARM_APPS_PER_CALL))
-  const results = await Promise.all(batches.flatMap(batch => targets.map(region => prewarmRegion(region, secret, batch))))
+  const calls: { region: PluginRegion, batch: string[] }[] = []
+  for (let i = 0; i < unique.length; i += PREWARM_APPS_PER_CALL) {
+    const batch = unique.slice(i, i + PREWARM_APPS_PER_CALL)
+    for (const region of targets)
+      calls.push({ region, batch })
+  }
+  const lastStart = Date.now() + PREWARM_TOTAL_BUDGET_MS - PREWARM_TIMEOUT_MS
+  const results: RegionPrewarmResult[] = Array.from({ length: calls.length })
+  let next = 0
+  await Promise.all(Array.from({ length: Math.min(PREWARM_CONNECTIONS, calls.length) }, async () => {
+    while (next < calls.length) {
+      const index = next++
+      const { region, batch } = calls[index]
+      results[index] = Date.now() <= lastStart
+        ? await prewarmRegion(region, secret, batch)
+        : { region: region.name, status: null, placement: null, results: [], error: 'budget_exhausted' }
+    }
+  }))
   return results
 }
 

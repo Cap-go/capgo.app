@@ -106,12 +106,15 @@ hostname the snippet forwards devices to.
 
 After the purge queue (`triggers/updates_cache_purge.ts`) purges a
 `plugin_state` batch, the API worker waits one second for the purge to reach
-every data center. It then posts the batch's app ids to
+every data center. It then posts the batch's app ids, 10 per call, to
 `https://plugin.<region>.capgo.app/plugin_state/prewarm` with the API secret.
-Each regional worker reads the app document, plus the bundle-name and manifest
-documents of the bundles its channels serve (at most 8 bundles). It waits up to
-2 seconds per provider read and writes the same Cache API entries a device
-request would. An entry that already holds the published generation is kept.
+Calls go through a pool of six connections (the Workers limit), each times out
+after 8 seconds, and calls that cannot start within 20 seconds are reported
+instead of sent. Each regional worker reads the app document, plus the
+bundle-name and manifest documents of the bundles its channels serve (at most
+8 bundles). Each provider read waits up to 2 seconds, and the whole call stops
+after 6 seconds, reporting the apps it could not start as `budget`. It writes
+the same Cache API entries a device request would. An entry that already holds the published generation is kept.
 Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 Failures are only logged (`plugin state prewarmed`); devices then fill the
 cache as usual.

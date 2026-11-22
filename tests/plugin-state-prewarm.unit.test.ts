@@ -190,8 +190,39 @@ describe('plugin state prewarm route', () => {
   })
 
   it('rejects an empty, oversized or invalid app list', async () => {
-    for (const app_ids of [[], 'com.example.app', ['not an app id'], Array.from({ length: 101 }, (_, i) => `com.example.app${i}`)])
+    for (const app_ids of [[], 'com.example.app', ['not an app id'], Array.from({ length: 11 }, (_, i) => `com.example.app${i}`)])
       expect((await call({ app_ids }, 'prewarm-secret')).status).toBe(400)
+  })
+
+  it('finishes inside its budget and reports the apps it could not start', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    memoryCache()
+    // Each pointer answers after 1.9 s; the KV value never does.
+    const env = {
+      PLUGIN_STATE: { get: vi.fn(() => new Promise<never>(() => {})) },
+      PLUGIN_STATE_POINTERS: { get: vi.fn(async (key: string) => {
+        await new Promise(resolve => setTimeout(resolve, 1900))
+        return { json: async () => ({ f: 1, generation: '1', kvKey: await pluginStateImmutableKey(key, '1') }) }
+      }) },
+    }
+    const startedAt = Date.now()
+    const appIds = Array.from({ length: 10 }, (_, i) => `com.example.slow${i}`)
+    let settled = false
+    const response = call({ app_ids: appIds }, 'prewarm-secret', env).finally(() => { settled = true })
+    // crypto.subtle settles on the real event loop: let it run between fake-clock steps.
+    for (let step = 0; step < 100 && !settled; step++) {
+      await new Promise(resolve => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    const body = await (await response).json() as { results: { app_id: string, skipped?: string, error?: string }[] }
+    expect(Date.now() - startedAt).toBeLessThanOrEqual(6100)
+    // Waves of four: 0-3.9 s, then 3.9-6 s with the KV read cut to the 0.2 s left, then out of budget.
+    expect(body.results.slice(0, 8).every(result => result.error?.includes('timed out'))).toBe(true)
+    expect(body.results.slice(8)).toEqual([
+      { app_id: 'com.example.slow8', revision: null, cached: 0, skipped: 'budget' },
+      { app_id: 'com.example.slow9', revision: null, cached: 0, skipped: 'budget' },
+    ])
   })
 
   it('warms each listed app and reports the data center it ran in', async () => {
@@ -231,31 +262,61 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     expect(pluginStatePrewarmTargets(context()).map(region => region.url)).toEqual(['http://localhost:8788/ok'])
   })
 
-  it('posts every batch of app ids to each regional hostname with the API secret', async () => {
+  it('posts batches of at most 10 app ids to each regional hostname, six connections at a time', async () => {
     vi.stubEnv('ENV_NAME', 'capgo_api-prod')
     vi.stubEnv('API_SECRET', 'prewarm-secret')
+    let open = 0
+    let maxOpen = 0
     const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      open++
+      maxOpen = Math.max(maxOpen, open)
+      await new Promise(resolve => setTimeout(resolve, 1))
+      open--
       const appIds = JSON.parse(String(init.body)).app_ids as string[]
       if (url.includes('plugin.jp.'))
         return new Response('{}', { status: 503 })
       return Response.json({ placement: `remote-${new URL(url).hostname.split('.')[1]}`, results: appIds.map(app_id => ({ app_id, revision: '1', cached: 1 })) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const appIds = Array.from({ length: 150 }, (_, index) => `com.example.app${index}`)
+    const appIds = Array.from({ length: 25 }, (_, index) => `com.example.app${index}`)
     const results = await prewarmPluginStateRegions(context(), [...appIds, appIds[0]])
 
-    expect(fetchMock).toHaveBeenCalledTimes(PLUGIN_REGIONS.length * 2)
+    expect(fetchMock).toHaveBeenCalledTimes(PLUGIN_REGIONS.length * 3)
+    expect(maxOpen).toBe(6)
     const urls = new Set(fetchMock.mock.calls.map(([url]) => url))
     expect([...urls].sort()).toEqual(PLUGIN_REGIONS.map(region => `${new URL(region.url).origin}/plugin_state/prewarm`).sort())
+    const sent = new Set<string>()
     for (const [, init] of fetchMock.mock.calls) {
       expect(new Headers(init.headers).get('apisecret')).toBe('prewarm-secret')
-      expect(JSON.parse(String(init.body)).app_ids.length).toBeLessThanOrEqual(100)
+      const batch = JSON.parse(String(init.body)).app_ids as string[]
+      expect(batch.length).toBeLessThanOrEqual(10)
+      batch.forEach(appId => sent.add(appId))
     }
-    expect(results.filter(region => region.region === 'jp')).toEqual([
-      { region: 'jp', status: 503, placement: null, results: [], error: 'http_error' },
-      { region: 'jp', status: 503, placement: null, results: [], error: 'http_error' },
-    ])
+    expect(sent.size).toBe(25)
+    // One entry per batch and region, regions in configured order within each batch.
+    expect(results.map(region => region.region)).toEqual([0, 1, 2].flatMap(() => PLUGIN_REGIONS.map(region => region.name)))
+    expect(results.filter(region => region.region === 'jp')).toHaveLength(3)
+    expect(results.filter(region => region.region === 'jp').every(region => region.error === 'http_error' && region.status === 503)).toBe(true)
     expect(results.find(region => region.region === 'na')).toMatchObject({ status: 200, placement: 'remote-na', error: null })
+  })
+
+  it('reports calls it could not start inside the total budget instead of sending them late', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    // Every call takes 7 s: two rounds of six fit before the 12 s last start.
+    const fetchMock = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 7000))
+      return Response.json({ placement: null, results: [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const appIds = Array.from({ length: 20 }, (_, index) => `com.example.app${index}`)
+    const pending = prewarmPluginStateRegions(context(), appIds)
+    await vi.advanceTimersByTimeAsync(30_000)
+    const results = await pending
+    expect(results).toHaveLength(PLUGIN_REGIONS.length * 2)
+    expect(fetchMock).toHaveBeenCalledTimes(12)
+    expect(results.filter(region => region.error === 'budget_exhausted')).toHaveLength(PLUGIN_REGIONS.length * 2 - 12)
   })
 
   it('calls nothing without targets or an API secret', async () => {

@@ -20,8 +20,10 @@ import { parsePluginStateApp, parsePluginStateManifestStorage, parsePluginStateP
 import { pluginStateAppCacheTag } from './updatesCacheTag.ts'
 import { getEnv } from './utils.ts'
 
-/** Each provider read of a prewarm (R2 pointer, pointer body, KV value). */
+/** Each provider read of a prewarm (R2 pointer, pointer body, KV value), within the app's budget. */
 export const PREWARM_READ_TIMEOUT_MS = 2000
+/** Default total budget of one app when the caller sets none. */
+export const PREWARM_APP_BUDGET_MS = 6000
 /** Bundles warmed per app beside its app document (channel and rollout bundles). */
 export const PREWARM_MAX_BUNDLES = 8
 
@@ -31,7 +33,7 @@ export interface PluginStatePrewarmResult {
   revision: string | null
   /** Documents written to this data center's cache. Current entries are kept. */
   cached: number
-  skipped?: 'disabled' | 'unavailable' | 'unpublished'
+  skipped?: 'disabled' | 'unavailable' | 'unpublished' | 'budget'
   error?: string
 }
 
@@ -40,27 +42,32 @@ interface Publication {
   revision: string | null
 }
 
-function deadline<T>(read: Promise<T>, what: string): Promise<T> {
+/** One provider read, bounded by PREWARM_READ_TIMEOUT_MS and by what is left of `budgetEndsAt`. */
+function deadline<T>(read: () => Promise<T>, what: string, budgetEndsAt: number): Promise<T> {
+  const remaining = Math.min(PREWARM_READ_TIMEOUT_MS, budgetEndsAt - Date.now())
+  if (remaining <= 0)
+    return Promise.reject(new PluginStateMiss('prewarm budget exhausted'))
   let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
-    read,
+    read(),
     new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new PluginStateMiss(`${what} timed out`)), PREWARM_READ_TIMEOUT_MS)
+      timer = setTimeout(() => reject(new PluginStateMiss(`${what} timed out`)), remaining)
     }),
   ]).finally(() => clearTimeout(timer))
 }
 
 /** The strongly consistent R2 pointer, then the immutable KV value it names. */
-async function readPublication(pointers: R2Bucket, store: KVNamespace, logicalKey: string): Promise<Publication> {
-  const object = await deadline(pointers.get(logicalKey), 'publication index')
+async function readPublication(pointers: R2Bucket, store: KVNamespace, logicalKey: string, budgetEndsAt: number): Promise<Publication> {
+  const object = await deadline(() => pointers.get(logicalKey), 'publication index', budgetEndsAt)
   if (!object)
     return { value: null, revision: null }
-  const pointer = parsePluginStatePointer(await deadline(object.json<unknown>(), 'publication index body'))
+  const pointer = parsePluginStatePointer(await deadline(() => object.json<unknown>(), 'publication index body', budgetEndsAt))
   if (pointer.kvKey === null)
     return { value: null, revision: pointer.generation }
   if (pointer.kvKey !== await pluginStateImmutableKey(logicalKey, pointer.generation))
     throw new PluginStateMiss('publication pointer identity mismatch')
-  const value = await deadline(store.get<unknown>(pointer.kvKey, { type: 'json', cacheTtl: 30 }), 'published value')
+  const kvKey = pointer.kvKey
+  const value = await deadline(() => store.get<unknown>(kvKey, { type: 'json', cacheTtl: 30 }), 'published value', budgetEndsAt)
   if (value === null)
     throw new PluginStateMiss('published value not propagated')
   return { value, revision: pointer.generation }
@@ -89,9 +96,10 @@ export function prewarmBundles(doc: PluginStateAppDoc): { id: number, name: stri
 /**
  * Warm one app in this data center: its app document, then the bundle-name
  * and manifest documents of the bundles its channels serve. A cache entry that
- * already holds the published generation is left untouched.
+ * already holds the published generation is left untouched. Every provider
+ * read stops at `budgetEndsAt` (epoch ms), so the caller's timeout holds.
  */
-export async function prewarmPluginStateApp(c: Context, appId: string): Promise<PluginStatePrewarmResult> {
+export async function prewarmPluginStateApp(c: Context, appId: string, budgetEndsAt = Date.now() + PREWARM_APP_BUDGET_MS): Promise<PluginStatePrewarmResult> {
   const store = (c.env as { PLUGIN_STATE?: KVNamespace } | undefined)?.PLUGIN_STATE
   const pointers = (c.env as { PLUGIN_STATE_POINTERS?: R2Bucket } | undefined)?.PLUGIN_STATE_POINTERS
   if (!store || !pointers)
@@ -105,7 +113,7 @@ export async function prewarmPluginStateApp(c: Context, appId: string): Promise<
   let cached = 0
   const warm = async <T>(target: WarmTarget<T>): Promise<{ value: T | null, revision: string | null }> => {
     const request = helper.buildRequest(target.layout.path, target.params)
-    const published = await readPublication(pointers, store, target.kvKey)
+    const published = await readPublication(pointers, store, target.kvKey, budgetEndsAt)
     const value = published.value === null ? null : target.parse(published.value)
     const current = await helper.matchResponse(request, { timeoutMs: PLUGIN_STATE_CACHE.matchTimeoutMs })
     const currentRevision = current?.headers.get(PLUGIN_STATE_CACHE.revisionHeader) ?? null
