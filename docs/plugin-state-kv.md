@@ -137,9 +137,12 @@ that pointer read fails, the entry is deleted too: a cold miss is safe, a stale
 entry is not. A write still pending after 500 ms is reported as timed out, and
 the same check runs in the background once it lands, writing the newer
 generation over it when the pointer moved. A failed delete after a moved
-pointer is repaired by that newer write. Only when both the pointer read and
-the delete fail can a stale entry remain; the error says so, and the entry
-expires with its 30-second TTL, which bounds every Cache API refill.
+pointer is repaired by that newer write. A stale entry can remain only when its
+delete fails and no newer write follows: the pointer read failed, the newer KV
+value has not propagated yet, or the retries or budget ran out. The error (or,
+for a late write, the `plugin state prewarm late write not reconciled` log)
+says the entry was not removed, and it expires with its 30-second TTL, which
+bounds every Cache API refill.
 Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 Failures are only logged (`plugin state prewarmed`); devices then fill the
 cache as usual.

@@ -12,6 +12,7 @@ import type { KVNamespace, R2Bucket } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { PluginStateAppDoc } from './pluginStateFormat.ts'
 import { CacheHelper } from './cache.ts'
+import { cloudlog } from './logging.ts'
 import { PLUGIN_STATE_CACHE } from './pluginState.ts'
 import { isPluginStateGeneration, pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
 import { PluginStateMiss } from './pluginStateRegistry.ts'
@@ -168,9 +169,13 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
       // when the pointer moved, overwrite it with the newer generation.
       void backgroundTask(c, put.then(async (landed) => {
         const lateEndsAt = Date.now() + PREWARM_LATE_WRITE_CHECK_MS
-        if (landed && await reconcile(request, target.kvKey, published.revision, lateEndsAt) !== 'current')
-          await warm(target, attempt + 1, lateEndsAt)
-      }).catch(() => undefined))
+        const check = landed ? await reconcile(request, target.kvKey, published.revision, lateEndsAt) : 'current'
+        if (check !== 'current')
+          await repair(target, attempt + 1, lateEndsAt, check)
+      }).catch((error: unknown) => {
+        // The response already reported the timeout: this log is the only trace.
+        cloudlog({ requestId: c.get('requestId'), message: 'plugin state prewarm late write not reconciled', app_id: appId, document: target.layout.path, error: errorMessage(error) })
+      }))
       throw new PluginStateMiss('cache write timed out')
     }
     if (!stored)
@@ -180,14 +185,30 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     // lookup and this put could have been replaced. Such an entry comes from a
     // publication that is already visible in the strongly consistent pointer:
     // if the pointer moved past what was written, warm again with the newer one.
-    // A moved pointer is repaired by the retry's write even when the delete failed.
     const check = await reconcile(request, target.kvKey, published.revision, endsAt)
-    if (check !== 'current') {
-      if (attempt >= 2)
-        throw new PluginStateMiss(check === 'removed' ? 'publication kept moving during the prewarm' : 'publication kept moving during the prewarm; entry not removed, it expires with its TTL')
-      return warm(target, attempt + 1, endsAt)
-    }
+    if (check !== 'current')
+      return repair(target, attempt + 1, endsAt, check)
     return { value, revision: published.revision }
+  }
+
+  /**
+   * The pointer moved past a written entry. Writing the newer generation repairs
+   * it even when its delete failed ('kept'); if that write cannot happen either
+   * (retries spent, KV not propagated yet, budget gone), the error says whether
+   * the stale entry was removed.
+   */
+  const repair = async <T>(target: WarmTarget<T>, attempt: number, endsAt: number, check: 'removed' | 'kept'): Promise<{ value: T | null, revision: string | null }> => {
+    const notRemoved = '; entry not removed, it expires with its TTL'
+    if (attempt > 2)
+      throw new PluginStateMiss(`publication kept moving during the prewarm${check === 'kept' ? notRemoved : ''}`)
+    try {
+      return await warm(target, attempt, endsAt)
+    }
+    catch (error) {
+      if (check === 'kept' && !errorMessage(error).endsWith(notRemoved))
+        throw new PluginStateMiss(`${errorMessage(error).replace(/^plugin state missing: /, '')}${notRemoved}`)
+      throw error
+    }
   }
 
   /**
