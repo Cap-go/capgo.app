@@ -78,8 +78,8 @@ export function isDroppedStatsLogAction(action: string, appId: string, deviceId:
     return false
   const key = JSON.stringify([appId, deviceId.toLowerCase(), version, attemptId])
   let hash = 2166136261
-  for (let i = 0; i < key.length; i++)
-    hash = Math.imul(hash ^ key.charCodeAt(i), 16777619)
+  for (const character of key)
+    hash = Math.imul(hash ^ character.codePointAt(0)!, 16777619)
   return (hash >>> 0) % 1000 !== 0
 }
 
