@@ -111,5 +111,5 @@ SELECT throws_ok(
   'authenticated cannot read terminal_sessions'
 );
 
-SELECT tests.finish();
+SELECT * FROM finish();
 ROLLBACK;

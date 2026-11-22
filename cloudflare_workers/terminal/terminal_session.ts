@@ -1,7 +1,7 @@
 import { Files } from '@cloudflare/sandbox'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { McpAgent } from 'agents/mcp'
-import { z } from 'zod'
+import { z } from 'zod/v3'
 import {
   TERMINAL_COMMAND_TIMEOUT_MS,
   TERMINAL_IDLE_MS,
@@ -16,12 +16,29 @@ import {
   sessionAlarmAtMs,
 } from './lib/security.ts'
 
-export interface TerminalEnv {
-  TERMINAL_SESSION: DurableObjectNamespace<TerminalSession>
-  HYPERDRIVE_CAPGO_DIRECT_EU: Hyperdrive
+type McpTextResult = { content: Array<{ type: 'text', text: string }> }
+
+function registerMcpTool(
+  server: McpServer,
+  name: string,
+  description: string,
+  inputSchema: Record<string, z.ZodTypeAny>,
+  handler: (args: Record<string, string>) => Promise<McpTextResult>,
+) {
+  const register = server.registerTool as (
+    toolName: string,
+    config: { description: string, inputSchema: Record<string, z.ZodTypeAny> },
+    cb: (args: Record<string, string>) => Promise<McpTextResult>,
+  ) => void
+  register(name, { description, inputSchema }, handler)
 }
 
-export interface TerminalProps {
+export interface TerminalEnv {
+  TERMINAL_SESSION: DurableObjectNamespace<TerminalSession>
+  HYPERDRIVE_CAPGO_DIRECT_EU: { connectionString: string }
+}
+
+export interface TerminalProps extends Record<string, unknown> {
   sessionKey: string
   orgId: string
   appId: string
@@ -49,12 +66,11 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
 
     this.files = new Files(container)
 
-    this.server.registerTool(
+    registerMcpTool(
+      this.server,
       'run_command',
-      {
-        description: 'Run a shell command in the session workspace. Output is streamed to connected WebSocket clients.',
-        inputSchema: { command: z.string().min(1) },
-      },
+      'Run a shell command in the session workspace. Output is streamed to connected WebSocket clients.',
+      { command: z.string().min(1) },
       async ({ command }) => {
         assertSafeCommand(command)
         await this.ensureContainer()
@@ -104,12 +120,11 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       },
     )
 
-    this.server.registerTool(
+    registerMcpTool(
+      this.server,
       'read_file',
-      {
-        description: 'Read a file under /workspace/project.',
-        inputSchema: { path: z.string().min(1) },
-      },
+      'Read a file under /workspace/project.',
+      { path: z.string().min(1) },
       async ({ path }) => {
         const fullPath = resolveWorkspacePath(path)
         await this.ensureContainer()
@@ -122,12 +137,11 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       },
     )
 
-    this.server.registerTool(
+    registerMcpTool(
+      this.server,
       'write_file',
-      {
-        description: 'Write a file under /workspace/project.',
-        inputSchema: { path: z.string().min(1), content: z.string() },
-      },
+      'Write a file under /workspace/project.',
+      { path: z.string().min(1), content: z.string() },
       async ({ path, content }) => {
         const fullPath = resolveWorkspacePath(path)
         await this.ensureContainer()

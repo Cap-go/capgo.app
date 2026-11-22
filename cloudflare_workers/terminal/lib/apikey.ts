@@ -1,5 +1,8 @@
-import type { Hyperdrive } from '@cloudflare/workers-types'
 import { Client } from 'pg'
+
+export interface PostgresHyperdrive {
+  connectionString: string
+}
 
 export interface TerminalApiKeyContext {
   apikeyId: number
@@ -8,7 +11,7 @@ export interface TerminalApiKeyContext {
 }
 
 export async function validateApiKeyForApp(
-  hyperdrive: Hyperdrive,
+  hyperdrive: PostgresHyperdrive,
   apiKey: string,
   orgId: string,
   appId: string,
@@ -57,7 +60,7 @@ export async function validateApiKeyForApp(
 }
 
 export async function reserveTerminalSession(
-  hyperdrive: Hyperdrive,
+  hyperdrive: PostgresHyperdrive,
   input: {
     sessionKey: string
     orgId: string
@@ -101,7 +104,7 @@ export async function reserveTerminalSession(
 }
 
 export async function finishTerminalSession(
-  hyperdrive: Hyperdrive,
+  hyperdrive: PostgresHyperdrive,
   sessionKey: string,
   reason: string,
 ): Promise<number> {
