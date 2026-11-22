@@ -58,7 +58,8 @@ interface Publication {
  */
 interface Slots {
   open: number
-  waiting: (() => void)[]
+  /** Each waiter takes a handed-off slot (true) or declines it once past its deadline (false). */
+  waiting: (() => boolean)[]
 }
 
 export interface PrewarmOperations {
@@ -76,17 +77,21 @@ export function prewarmOperations(max = PREWARM_MAX_OPERATIONS): PrewarmOperatio
 
 /** Take a slot, waiting at most until `endsAt` (false: not admitted in time). */
 function acquire(slots: Slots, limit: number, endsAt: number): Promise<boolean> {
+  // Every admission checks the deadline, the free-slot path included.
+  const wait = endsAt - Date.now()
+  if (wait <= 0)
+    return Promise.resolve(false)
   if (slots.open < limit) {
     slots.open++
     return Promise.resolve(true)
   }
-  const wait = endsAt - Date.now()
-  if (wait <= 0)
-    return Promise.resolve(false)
   return new Promise((resolve) => {
     const admit = () => {
       clearTimeout(timer)
-      resolve(true)
+      // A handoff after the deadline is declined, and goes to the next waiter.
+      const admitted = Date.now() < endsAt
+      resolve(admitted)
+      return admitted
     }
     const timer = setTimeout(() => {
       const index = slots.waiting.indexOf(admit)
@@ -98,14 +103,17 @@ function acquire(slots: Slots, limit: number, endsAt: number): Promise<boolean> 
   })
 }
 
-/** Hand the slot straight to the next waiter, or free it. */
+/** Hand the slot to the next waiter still within its deadline, or free it. */
 function release(slots: Slots) {
-  const next = slots.waiting.shift()
-  if (next)
-    next()
-  else
-    slots.open--
+  for (let next = slots.waiting.shift(); next; next = slots.waiting.shift()) {
+    if (next())
+      return
+  }
+  slots.open--
 }
+
+/** Slot primitives, exported for their unit tests only. */
+export const prewarmSlotsForTests = { acquire, release }
 
 /**
  * Run one manifest load once the call has a free manifest slot. `hold` keeps
@@ -282,7 +290,14 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     const request = helper.buildRequest(target.layout.path, target.params)
     const published = await readPublication(pointers, store, target.kvKey, workEndsAt, ops)
     const value = published.value === null ? null : target.parse(published.value)
-    const current = await deadline(() => helper.probeResponse(request, Math.max(1, Math.min(PREWARM_CACHE_LOOKUP_TIMEOUT_MS, workEndsAt - Date.now()))), 'cache lookup', workEndsAt, ops)
+    // Unbounded underneath: the slot is held until cache.match really settles,
+    // even when this lookup stops waiting for it.
+    const { running: lookup } = await startOperation(ops, workEndsAt, () => helper.lookupResponse(request))
+    const lookupMs = Math.min(PREWARM_CACHE_LOOKUP_TIMEOUT_MS, workEndsAt - Date.now())
+    const looked = lookupMs > 0 ? await raceTimeout(lookup, lookupMs) : 'timeout'
+    if (looked === 'timeout')
+      void lookup.then(response => response?.body?.cancel()).catch(() => undefined)
+    const current = looked === 'timeout' ? undefined : looked
     // Unknown cache state: an existing newer entry must not be overwritten blindly.
     if (current === undefined)
       throw new PluginStateMiss('cache lookup unavailable')

@@ -173,7 +173,21 @@ export class CacheHelper {
    * not see.
    */
   async probeResponse(key: Request, timeoutMs: number): Promise<Response | null | undefined> {
-    const lookup = (async () => {
+    const lookup = this.lookupResponse(key)
+    const result = await withTimeout(lookup, timeoutMs)
+    if (result === TIMEOUT) {
+      void lookup.then(response => response?.body?.cancel()).catch(() => undefined)
+      return undefined
+    }
+    return result
+  }
+
+  /**
+   * probeResponse without a timeout: settles only when cache.match does, for
+   * callers that must account for the lookup until it really finishes.
+   */
+  lookupResponse(key: Request): Promise<Response | null | undefined> {
+    return (async () => {
       const cache = await this.ensureCache()
       if (!cache)
         return undefined
@@ -182,12 +196,6 @@ export class CacheHelper {
       this.logCacheError('Error reading cached response', error)
       return undefined
     })
-    const result = await withTimeout(lookup, timeoutMs)
-    if (result === TIMEOUT) {
-      void lookup.then(response => response?.body?.cancel()).catch(() => undefined)
-      return undefined
-    }
-    return result
   }
 
   private async matchResponseUnbound(key: Request): Promise<Response | null> {

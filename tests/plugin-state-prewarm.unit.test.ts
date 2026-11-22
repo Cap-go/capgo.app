@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app as prewarmRoute } from '../supabase/functions/_backend/plugin_runtime/private/plugin_state_prewarm.ts'
 import { resetPluginStateMemory, startPluginStateRequest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginState.ts'
 import { pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
-import { prewarmBundles, prewarmOperations, prewarmPluginStateApp, shouldReplaceCachedGeneration } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
+import { prewarmBundles, prewarmOperations, prewarmPluginStateApp, prewarmSlotsForTests, shouldReplaceCachedGeneration } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
 import { drainUpdatesCachePurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { PLUGIN_REGIONS } from '../supabase/functions/_backend/utils/pluginRegionTargets.ts'
 import { pluginStatePrewarmTargets, PrewarmNotConfigured, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
@@ -516,6 +516,49 @@ describe('plugin state prewarm (regional worker)', () => {
       error: 'plugin state missing: publication check after write unavailable; entry not removed, it expires with its TTL',
     })
     expect(cache.delete).not.toHaveBeenCalled()
+  })
+
+  it('never admits a slot past its deadline, on the free path or on a handoff', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const { acquire, release } = prewarmSlotsForTests
+    const slots = { open: 0, waiting: [] as (() => boolean)[] }
+    // A free slot is not taken once the deadline has passed.
+    expect(await acquire(slots, 1, Date.now() - 1)).toBe(false)
+    expect(slots.open).toBe(0)
+    // A waiter whose deadline passed (its timer not fired yet) declines the
+    // handed-off slot, which is then freed instead of leaking.
+    expect(await acquire(slots, 1, Date.now() + 1000)).toBe(true)
+    const late = acquire(slots, 1, Date.now() + 100)
+    vi.setSystemTime(Date.now() + 150)
+    release(slots)
+    expect(await late).toBe(false)
+    expect(slots.open).toBe(0)
+  })
+
+  it('keeps a cache lookup on its connection slot until cache.match settles', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const { env, publish } = providers()
+    const { cache } = memoryCache()
+    await publishApp(publish)
+    // The lookup gives up at 500 ms; cache.match only settles at 800 ms.
+    cache.match.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve(undefined), 800)))
+    const ops = prewarmOperations()
+    let openAtGiveUp = -1
+    const pending = onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID, Date.now() + 6000, ops)).then((result) => {
+      openAtGiveUp = ops.connections.open
+      return result
+    })
+    for (let step = 0; step < 6; step++) {
+      await new Promise(resolve => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    expect(await pending).toMatchObject({ error: 'plugin state missing: cache lookup unavailable' })
+    // Still counted while cache.match runs, released once it settles.
+    expect(openAtGiveUp).toBe(1)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(ops.connections.open).toBe(0)
   })
 
   it('does nothing while KV reads are off in the region', async () => {
