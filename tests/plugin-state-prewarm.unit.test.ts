@@ -747,7 +747,8 @@ describe('plugin state prewarm route', () => {
       open++
       maxOpen = Math.max(maxOpen, open)
       try {
-        await new Promise(resolve => setTimeout(resolve, 2))
+        // A macrotask hop keeps calls overlapping, without real milliseconds.
+        await new Promise(resolve => setImmediate(resolve))
         return await fn(...args)
       }
       finally {
@@ -1059,8 +1060,11 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     }]
     const rpc = vi.fn(async (fn: string) => ({ data: fn === 'claim_updates_cache_purge' ? claims.shift() ?? { status: 'empty' } : null, error: null }))
 
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     await drainUpdatesCachePurge(context(), rpc)
-    await vi.waitFor(() => expect(order).toContain('prewarm:com.example.snapshot'), { timeout: 3000 })
+    // The prewarm waits one second after the purge: advance it instead of sleeping.
+    await vi.advanceTimersByTimeAsync(1100)
+    await vi.waitFor(() => expect(order).toContain('prewarm:com.example.snapshot'))
     expect(order.indexOf('purge')).toBeLessThan(order.indexOf('prewarm:com.example.snapshot'))
     expect(order.filter(entry => entry.startsWith('prewarm'))).toEqual(['prewarm:com.example.snapshot'])
   })
