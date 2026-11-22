@@ -35,7 +35,9 @@ export function describePrewarmRegion(region: PrewarmRegion) {
     return 'skipped (KV reads off in this region)'
   if (region.skipped)
     return `skipped (${region.skipped})`
-  return region.cached > 0 ? `warmed ${region.cached} document${region.cached === 1 ? '' : 's'}` : 'already warm'
+  const result = region.cached > 0 ? `warmed ${region.cached} document${region.cached === 1 ? '' : 's'}` : 'already warm'
+  // No data center reported: the region is not pinned, so device requests may read other caches.
+  return region.placement ? result : `${result} (region not pinned to one data center)`
 }
 
 /**

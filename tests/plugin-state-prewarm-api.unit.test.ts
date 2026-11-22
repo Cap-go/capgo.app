@@ -20,13 +20,14 @@ function context() {
 }
 
 afterEach(() => {
+  // Undo this file's stubs first, then put back what the parent environment had.
+  vi.unstubAllEnvs()
   if (inheritedTargets === undefined)
     delete process.env.PLUGIN_REGION_TARGETS
   else
     process.env.PLUGIN_REGION_TARGETS = inheritedTargets
   vi.mocked(checkPermission).mockReset()
   vi.unstubAllGlobals()
-  vi.unstubAllEnvs()
 })
 
 describe('POST /app/:id/prewarm', () => {

@@ -565,8 +565,6 @@ export const PLUGIN_STATE_CACHE = {
   app: { path: APP_CACHE_PATH, ttlSeconds: APP_CACHE_TTL_SECONDS },
   version: { path: VERSION_CACHE_PATH, ttlSeconds: VERSION_CACHE_TTL_SECONDS },
   manifest: { path: MANIFEST_CACHE_PATH, ttlSeconds: MANIFEST_CACHE_TTL_SECONDS },
-  negativeTtlSeconds: NEGATIVE_CACHE_TTL_SECONDS,
   revisionHeader: REVISION_HEADER,
-  matchTimeoutMs: CACHE_MATCH_TIMEOUT_MS,
   putTimeoutMs: CACHE_PUT_TIMEOUT_MS,
 } as const

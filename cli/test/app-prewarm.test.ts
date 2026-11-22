@@ -10,4 +10,5 @@ test('describes what the prewarm did in each region', () => {
   expect(describePrewarmRegion({ ...base, skipped: 'disabled' })).toBe('skipped (KV reads off in this region)')
   expect(describePrewarmRegion({ ...base, skipped: 'unpublished' })).toBe('skipped (unpublished)')
   expect(describePrewarmRegion({ ...base, cached: 2, error: 'http_error' })).toBe('failed: http_error')
+  expect(describePrewarmRegion({ ...base, cached: 1, placement: null })).toBe('warmed 1 document (region not pinned to one data center)')
 })

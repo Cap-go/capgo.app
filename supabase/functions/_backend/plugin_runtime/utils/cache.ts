@@ -167,6 +167,29 @@ export class CacheHelper {
     return result
   }
 
+  /**
+   * Like matchResponse, but tells a miss (null) from a lookup that failed or
+   * timed out (undefined), for callers that must not overwrite what they could
+   * not see.
+   */
+  async probeResponse(key: Request, timeoutMs: number): Promise<Response | null | undefined> {
+    const lookup = (async () => {
+      const cache = await this.ensureCache()
+      if (!cache)
+        return undefined
+      return (await cache.match(key)) ?? null
+    })().catch((error: unknown) => {
+      this.logCacheError('Error reading cached response', error)
+      return undefined
+    })
+    const result = await withTimeout(lookup, timeoutMs)
+    if (result === TIMEOUT) {
+      void lookup.then(response => response?.body?.cancel()).catch(() => undefined)
+      return undefined
+    }
+    return result
+  }
+
   private async matchResponseUnbound(key: Request): Promise<Response | null> {
     try {
       const cache = await this.ensureCache()

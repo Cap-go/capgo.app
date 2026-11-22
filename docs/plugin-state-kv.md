@@ -101,8 +101,12 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 A regional plugin worker with an active placement hint runs in one data
 center. Check the `cf-placement` response header to confirm it, for example
 `remote-CMH` for `plugin.na.capgo.app`. A worker that returns no `cf-placement`
-header (seen for `plugin.jp.capgo.app` on 2026-11-22) may not run in one data
-center, so its prewarm may not warm the cache its devices read. The Cache API is
+header may not run in one data center, so its prewarm may not warm the cache its
+devices read. On 2026-11-22 `capgo_plugin-jp-prod` reported `placement.mode:
+targeted` (`gcp:asia-northeast1`) in its script settings but returned no
+`cf-placement` header, even on uncached paths, so the Japan prewarm is not
+relied on until that placement is active. The prewarm reports each region's
+`cf-placement` value, and `app prewarm` flags a region without one. The Cache API is
 local to the data center a worker runs in, so a placed region has a single
 plugin-state cache, keyed by the regional hostname the snippet forwards devices
 to.
@@ -121,7 +125,13 @@ the shared app, bundle-name and manifest Cache API entries device requests
 read; per-device override entries are not prewarmed. Only confirmed cache
 writes count as `cached`. An entry that already holds the published generation,
 or a newer one, is kept, so a slow prewarm never moves a cache back to older
-state.
+state. When the cache lookup fails or times out (500 ms), the document is
+reported as an error rather than written blind. A prewarmed miss gets the
+30-second document TTL, like a late refill, because it can land after a purge.
+The Cache API has no conditional put, so a newer entry written between the
+lookup and the put can still be replaced; that window is the same for every
+Cache API refill, bounded by the 30-second TTL, and the next publication's
+purge and prewarm replace it.
 Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 Failures are only logged (`plugin state prewarmed`); devices then fill the
 cache as usual.

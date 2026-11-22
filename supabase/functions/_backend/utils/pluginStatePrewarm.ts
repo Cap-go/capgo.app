@@ -59,7 +59,10 @@ async function prewarmRegion(region: PluginRegion, secret: string, appIds: strin
       return { ...base, status: response.status, error: 'http_error' }
     }
     const body = await response.json() as { placement?: string | null, results?: RegionPrewarmResult['results'] }
-    return { ...base, status: response.status, placement: body.placement ?? null, results: Array.isArray(body.results) ? body.results : [], error: null }
+    // Cloudflare sets cf-placement on responses of placed workers. Without it the
+    // region is not pinned to one data center and its prewarm may miss device caches.
+    const placement = response.headers.get('cf-placement') ?? body.placement ?? null
+    return { ...base, status: response.status, placement, results: Array.isArray(body.results) ? body.results : [], error: null }
   }
   catch (error) {
     return { ...base, error: error instanceof Error ? error.message : 'prewarm failed' }

@@ -24,6 +24,8 @@ import { getEnv } from './utils.ts'
 export const PREWARM_READ_TIMEOUT_MS = 2000
 /** Default total budget of one app when the caller sets none. */
 export const PREWARM_APP_BUDGET_MS = 6000
+/** Off the device path: a slow lookup is still worth waiting for before deciding to write. */
+const PREWARM_CACHE_LOOKUP_TIMEOUT_MS = 500
 /** Bundles warmed per app beside its app document (channel and rollout bundles). */
 export const PREWARM_MAX_BUNDLES = 8
 
@@ -133,12 +135,17 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     const request = helper.buildRequest(target.layout.path, target.params)
     const published = await readPublication(pointers, store, target.kvKey, budgetEndsAt)
     const value = published.value === null ? null : target.parse(published.value)
-    const current = await helper.matchResponse(request, { timeoutMs: PLUGIN_STATE_CACHE.matchTimeoutMs })
+    const current = await helper.probeResponse(request, PREWARM_CACHE_LOOKUP_TIMEOUT_MS)
+    // Unknown cache state: an existing newer entry must not be overwritten blindly.
+    if (current === undefined)
+      throw new PluginStateMiss('cache lookup unavailable')
     const currentRevision = current ? current.headers.get(PLUGIN_STATE_CACHE.revisionHeader) : undefined
     void current?.body?.cancel().catch(() => undefined)
     if (!shouldReplaceCachedGeneration(currentRevision, published.revision))
       return { value, revision: published.revision }
-    const stored = await helper.putJson(request, { v: value }, value === null ? PLUGIN_STATE_CACHE.negativeTtlSeconds : target.layout.ttlSeconds, {
+    // Like a late refill, a prewarm can land after a purge: a miss gets the
+    // document TTL, never the longer negative TTL of an on-time miss.
+    const stored = await helper.putJson(request, { v: value }, target.layout.ttlSeconds, {
       tags,
       timeoutMs: PLUGIN_STATE_CACHE.putTimeoutMs,
       headers: published.revision ? { [PLUGIN_STATE_CACHE.revisionHeader]: published.revision } : undefined,

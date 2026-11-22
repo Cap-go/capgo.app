@@ -19,6 +19,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // Undo this file's stubs first, then put back what the parent environment had.
+  vi.unstubAllEnvs()
   if (inheritedTargets === undefined)
     delete process.env.PLUGIN_REGION_TARGETS
   else
@@ -26,7 +28,6 @@ afterEach(() => {
   resetPluginStateMemory()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
-  vi.unstubAllEnvs()
   vi.useRealTimers()
 })
 
@@ -186,12 +187,38 @@ describe('plugin state prewarm (regional worker)', () => {
     expect(cache.put).not.toHaveBeenCalled()
   })
 
-  it('caches the miss of an unpublished app like a device request would', async () => {
+  it('caches the miss of an unpublished app for the document TTL only', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     const { env } = providers()
     const { cache } = memoryCache()
     expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toEqual({ app_id: APP_ID, revision: null, cached: 1, skipped: 'unpublished' })
     expect(cache.put).toHaveBeenCalledOnce()
+    // It can land after a purge, like a late refill: 30 s, not the 60 s negative TTL.
+    const [, stored] = cache.put.mock.calls[0] as unknown as [Request, Response]
+    expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=30')
+  })
+
+  it('does not write when the cache lookup fails or times out', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { env, publish } = providers()
+    const { cache } = memoryCache()
+    await publishApp(publish)
+    cache.match.mockRejectedValue(new Error('cache unavailable'))
+    expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toMatchObject({ cached: 0, error: 'plugin state missing: cache lookup unavailable' })
+    expect(cache.put).not.toHaveBeenCalled()
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    cache.match.mockImplementation(() => new Promise<never>(() => {}))
+    let settled = false
+    const pending = onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID)).finally(() => { settled = true })
+    for (let step = 0; step < 40 && !settled; step++) {
+      await new Promise(resolve => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(50)
+    }
+    expect(await pending).toMatchObject({ cached: 0, error: 'plugin state missing: cache lookup unavailable' })
+    expect(cache.put).not.toHaveBeenCalled()
   })
 
   it('reports a provider read that misses the prewarm budget instead of throwing', async () => {
@@ -345,6 +372,18 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     expect(results.filter(region => region.region === 'jp')).toHaveLength(3)
     expect(results.filter(region => region.region === 'jp').every(region => region.error === 'http_error' && region.status === 503)).toBe(true)
     expect(results.find(region => region.region === 'na')).toMatchObject({ status: 200, placement: 'remote-na', error: null })
+  })
+
+  it('takes the data center from the cf-placement response header Cloudflare adds to placed workers', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const placed = !url.includes('plugin.jp.')
+      return Response.json({ placement: null, results: [] }, { headers: placed ? { 'cf-placement': 'remote-CMH' } : {} })
+    }))
+    const results = await prewarmPluginStateRegions(context(), [APP_ID])
+    expect(results.find(region => region.region === 'na')?.placement).toBe('remote-CMH')
+    expect(results.find(region => region.region === 'jp')?.placement).toBeNull()
   })
 
   it('reports calls it could not start inside the total budget instead of sending them late', async () => {
