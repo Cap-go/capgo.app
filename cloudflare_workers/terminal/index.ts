@@ -12,6 +12,7 @@ import {
 } from './lib/security.ts'
 import {
   consumeTerminalWsToken,
+  finishTerminalSession,
   reserveTerminalSession,
   setTerminalWsToken,
   sha256Hex,
@@ -127,8 +128,10 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
         wsTokenHash,
         WS_TOKEN_TTL_SECONDS,
       )
-      if (!tokenStored)
+      if (!tokenStored) {
+        await finishTerminalSession(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, 'ws_token_failed')
         return Response.json({ error: 'ws_token_failed' }, { status: 500 })
+      }
 
       const mcpQuery = `session_key=${encodeURIComponent(sessionKey)}`
       const wsQuery = `ws_token=${encodeURIComponent(wsToken)}`
@@ -200,8 +203,10 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       return new Response('unauthorized', { status: 401 })
     }
 
-    const id = env.TERMINAL_SESSION.idFromName(sessionKey)
-    return env.TERMINAL_SESSION.get(id).fetch(request)
+    const agent = await getAgentByName(env.TERMINAL_SESSION, sessionKey, {
+      props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
+    })
+    return agent.fetch(request)
   }
 
   if (path.startsWith('/terminal/mcp')) {

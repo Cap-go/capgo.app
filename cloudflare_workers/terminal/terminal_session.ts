@@ -203,8 +203,10 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
         image: container.images.sandbox,
         enableInternet: false,
       })
-      if (this.env.TERMINAL_EGRESS)
+      if (this.env.TERMINAL_EGRESS) {
         await container.interceptAllOutboundHttp(this.env.TERMINAL_EGRESS)
+        await container.interceptOutboundHttps('*', this.env.TERMINAL_EGRESS)
+      }
       await container.setInactivityTimeout(TERMINAL_IDLE_MS)
     }
   }

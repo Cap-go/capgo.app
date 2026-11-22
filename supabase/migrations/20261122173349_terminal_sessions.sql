@@ -265,6 +265,7 @@ BEGIN
     AND ws_connect_token_hash = p_token_hash
     AND ws_connect_token_expires_at IS NOT NULL
     AND ws_connect_token_expires_at > now()
+    AND started_at + make_interval(mins => max_duration_minutes) > now()
   RETURNING true INTO v_ok;
   RETURN COALESCE(v_ok, false);
 END;

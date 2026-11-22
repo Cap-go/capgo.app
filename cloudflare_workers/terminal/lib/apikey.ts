@@ -52,10 +52,11 @@ export async function validateApiKeyForApp(
       `SELECT EXISTS (
         SELECT 1
         FROM public.role_bindings AS rb
+        INNER JOIN public.apps AS a ON a.id = rb.app_id
         WHERE rb.principal_type = public.rbac_principal_apikey()
           AND rb.principal_id = $1::uuid
           AND rb.scope_type = public.rbac_scope_app()
-          AND rb.app_id = $2::varchar
+          AND a.app_id = $2::varchar
           AND (rb.expires_at IS NULL OR rb.expires_at > pg_catalog.now())
       ) AS ok`,
       [row.rbac_id, appId],
