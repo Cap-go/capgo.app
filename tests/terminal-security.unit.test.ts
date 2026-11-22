@@ -63,6 +63,15 @@ describe('terminal security', () => {
     expect(capped.truncated).toBe(true)
   })
 
+  it('keeps encoded totals on a utf-8 boundary', () => {
+    const limit = 256 * 1024
+    const first = capOutputBytes('a'.repeat(limit - 1), 0)
+    const second = capOutputBytes('é', first.total)
+    expect(second.text).toBe('')
+    expect(second.total).toBe(limit - 1)
+    expect(first.total + new TextEncoder().encode(second.text).length).toBeLessThanOrEqual(limit)
+  })
+
   it('resets the output cap for each command', () => {
     const limit = 256 * 1024
     const first = capOutputBytes('a'.repeat(limit), 0)

@@ -70,17 +70,19 @@ function parseEndSessionBody(raw: unknown): string | null {
 function reserveStatus(error: string | undefined): number {
   if (error === 'concurrency_limit')
     return 429
+  if (error === 'session_ended')
+    return 410
   return 403
 }
 
 async function ensureReserved(
   hyperdrive: TerminalEnv['HYPERDRIVE_CAPGO_DIRECT_EU'],
   input: Parameters<typeof reserveTerminalSession>[1],
-): Promise<Response | { reused: boolean }> {
+): Promise<Response | { reused: boolean, created: boolean }> {
   const reserved = await reserveTerminalSession(hyperdrive, input)
   if (!reserved.ok)
     return Response.json({ error: reserved.error ?? 'reserve_failed' }, { status: reserveStatus(reserved.error) })
-  return { reused: reserved.reused === true }
+  return { reused: reserved.reused === true, created: reserved.created === true }
 }
 
 function mintWsConnectToken(): string {
@@ -126,7 +128,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       })
       if (reserved instanceof Response)
         return reserved
-      const sessionCreatedThisRequest = !reserved.reused
+      const sessionOwnedThisRequest = reserved.created
 
       const wsToken = mintWsConnectToken()
       const wsTokenHash = await sha256Hex(wsToken)
@@ -148,7 +150,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
         tokenStored = false
       }
       if (!tokenStored) {
-        if (sessionCreatedThisRequest)
+        if (sessionOwnedThisRequest)
           await finishTerminalSession(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, 'ws_token_failed')
         return Response.json({ error: 'ws_token_failed' }, { status: 500 })
       }
@@ -189,16 +191,6 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
     }
     catch (error) {
       return authErrorResponse(error)
-    }
-    try {
-      await finishTerminalSession(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, 'client_end')
-    }
-    catch (error) {
-      console.error(JSON.stringify({
-        event: 'terminal_finish_failed',
-        session_key: sessionKey,
-        message: error instanceof Error ? error.message : String(error),
-      }))
     }
     const agentName = await terminalDurableObjectName(sessionKey)
     const agent = await getAgentByName(env.TERMINAL_SESSION, agentName, {

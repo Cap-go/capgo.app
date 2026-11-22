@@ -242,7 +242,7 @@ BEGIN
       AND t.status = 'active'
       AND t.started_at + make_interval(mins => t.max_duration_minutes) > now()
   ) THEN
-    RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'reused', true);
+    RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'reused', true, 'created', false);
   END IF;
 
   PERFORM 1
@@ -260,7 +260,7 @@ BEGIN
       AND t.status = 'active'
       AND t.started_at + make_interval(mins => t.max_duration_minutes) > now()
   ) THEN
-    RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'reused', true);
+    RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'reused', true, 'created', false);
   END IF;
 
   SELECT public.terminal_count_active_sessions(p_org_id) INTO v_active;
@@ -281,7 +281,7 @@ BEGIN
     p_session_key, p_org_id, p_app_id, p_apikey_id, 'active', p_max_duration_minutes
   );
 
-  RETURN jsonb_build_object('ok', true, 'session_key', p_session_key);
+  RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'created', true, 'reused', false);
 END;
 $$;
 

@@ -8,7 +8,7 @@ import {
   TERMINAL_MAX_SESSION_MINUTES,
   TERMINAL_WORKSPACE_ROOT,
 } from './lib/constants.ts'
-import { finishTerminalSession, isTerminalSessionActive } from './lib/apikey.ts'
+import { finalizeTerminalSession } from './lib/apikey.ts'
 import {
   assertSafeCommand,
   capOutputBytes,
@@ -17,11 +17,13 @@ import {
   resolveWorkspacePath,
   teardownReasonAtAlarm,
 } from './lib/security.ts'
-import { requestHasClientMcpHeaders } from './lib/ws.ts'
 
 type McpTextResult = { content: Array<{ type: 'text', text: string }> }
 
 const SESSION_KEY_STORAGE = 'terminal_session_key'
+const SESSION_PROPS_STORAGE = 'terminal_session_props'
+const PENDING_FINISH_STORAGE = 'terminal_pending_finish'
+const PENDING_FINISH_RETRY_MS = 30_000
 
 function registerMcpTool(
   server: McpServer,
@@ -74,27 +76,37 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       throw new Error('state_readonly')
   }
 
-  override async onConnect(
-    conn: Parameters<McpAgent<TerminalEnv, TerminalAgentState, TerminalProps>['onConnect']>[0],
-    ctx: Parameters<McpAgent<TerminalEnv, TerminalAgentState, TerminalProps>['onConnect']>[1],
-  ): Promise<void> {
-    if (requestHasClientMcpHeaders(ctx.request)) {
-      conn.close(1008, 'mcp_headers_forbidden')
-      return
-    }
-    await super.onConnect(conn, ctx)
-  }
-
   async onStart(props?: TerminalProps): Promise<void> {
     if (this.state.ended)
       throw new Error('session_ended')
     const key = props?.sessionKey
     if (key) {
-      if (!await isTerminalSessionActive(this.env.HYPERDRIVE_CAPGO_DIRECT_EU, key))
-        throw new Error('session_ended')
       await this.ctx.storage.put(SESSION_KEY_STORAGE, key)
+      if (props?.orgId && props?.appId)
+        await this.ctx.storage.put(SESSION_PROPS_STORAGE, JSON.stringify(props))
     }
     await super.onStart(props)
+  }
+
+  private async restoreSessionIdentityFromStorage(): Promise<void> {
+    if (!this.props?.sessionKey) {
+      const key = await this.ctx.storage.get<string>(SESSION_KEY_STORAGE)
+      if (!key)
+        return
+      const raw = await this.ctx.storage.get<string>(SESSION_PROPS_STORAGE)
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as TerminalProps
+          if (parsed.sessionKey)
+            this.props = parsed
+          return
+        }
+        catch {
+          // fall through with key only
+        }
+      }
+      this.props = { ...this.props, sessionKey: key, orgId: this.props?.orgId ?? '', appId: this.props?.appId ?? '' }
+    }
   }
 
   private async sessionKeyForTeardown(): Promise<string | undefined> {
@@ -142,48 +154,57 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
         await this.bumpSessionAlarm()
         await this.ensureContainer()
         const container = this.ctx.container!
-        const proc = await container.exec(['sh', '-c', command], {
+        const controller = new AbortController()
+        const deadline = setTimeout(() => controller.abort(), TERMINAL_COMMAND_TIMEOUT_MS)
+        const escaped = command.replace(/'/g, `'\\''`)
+        const wrapped = `set -m; exec sh -c '${escaped}'`
+        const proc = await container.exec(['sh', '-c', wrapped], {
           cwd: TERMINAL_WORKSPACE_ROOT,
           user: '1000',
           stdout: 'pipe',
           stderr: 'combined',
-          signal: AbortSignal.timeout(TERMINAL_COMMAND_TIMEOUT_MS),
+          signal: controller.signal,
         })
         let bytes = 0
         let combined = ''
         let truncated = false
         let exitCode = -1
-        if (proc.stdout) {
-          const reader = proc.stdout.getReader()
-          const decoder = new TextDecoder()
-          try {
-            while (true) {
-              const { done, value } = await reader.read()
-              if (done)
-                break
-              const chunk = decoder.decode(value, { stream: true })
-              const capped = capOutputBytes(chunk, bytes)
-              bytes = capped.total
-              truncated = truncated || capped.truncated
-              if (capped.text) {
-                combined += capped.text
-                this.broadcast(JSON.stringify({ type: 'stdout', chunk: capped.text, truncated }))
-              }
-              if (truncated) {
-                void proc.kill?.()
-                break
+        try {
+          if (proc.stdout) {
+            const reader = proc.stdout.getReader()
+            const decoder = new TextDecoder()
+            try {
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done)
+                  break
+                const chunk = decoder.decode(value, { stream: true })
+                const capped = capOutputBytes(chunk, bytes)
+                bytes = capped.total
+                truncated = truncated || capped.truncated
+                if (capped.text) {
+                  combined += capped.text
+                  this.broadcast(JSON.stringify({ type: 'stdout', chunk: capped.text, truncated }))
+                }
+                if (truncated) {
+                  void proc.kill?.()
+                  break
+                }
               }
             }
+            finally {
+              reader.releaseLock()
+            }
           }
-          finally {
-            reader.releaseLock()
+          try {
+            exitCode = await proc.exitCode
+          }
+          catch {
+            exitCode = -1
           }
         }
-        try {
-          exitCode = await proc.exitCode
-        }
-        catch {
-          exitCode = -1
+        finally {
+          clearTimeout(deadline)
         }
         return {
           content: [{
@@ -244,6 +265,10 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
         image: container.images.sandbox,
         enableInternet: false,
       })
+      await container.exec(
+        ['sh', '-c', 'test -r /etc/cloudflare/certs/cloudflare-containers-ca.crt'],
+        { user: '0' },
+      )
       if (this.env.TERMINAL_EGRESS) {
         await container.interceptAllOutboundHttp(this.env.TERMINAL_EGRESS)
         await container.interceptOutboundHttps('*', this.env.TERMINAL_EGRESS)
@@ -253,10 +278,11 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
   }
 
   async alarm() {
-    if (!this.props?.sessionKey) {
-      const key = await this.ctx.storage.get<string>(SESSION_KEY_STORAGE)
-      if (key)
-        this.props = { ...this.props, sessionKey: key, orgId: '', appId: '' }
+    await this.restoreSessionIdentityFromStorage()
+    const pending = await this.ctx.storage.get<string>(PENDING_FINISH_STORAGE)
+    if (pending) {
+      await this.teardown(pending)
+      return
     }
     const started = this.state.startedAtMs || Date.now()
     const reason = teardownReasonAtAlarm(started, TERMINAL_MAX_SESSION_MINUTES, Date.now())
@@ -265,10 +291,17 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
 
   async teardown(reason: string) {
     this.setState({ ...this.state, ended: true })
+    await this.restoreSessionIdentityFromStorage()
     const key = await this.sessionKeyForTeardown()
+    let dbFinalized = !key
     if (key) {
       try {
-        await finishTerminalSession(this.env.HYPERDRIVE_CAPGO_DIRECT_EU, key, reason)
+        const result = await finalizeTerminalSession(this.env.HYPERDRIVE_CAPGO_DIRECT_EU, key, reason)
+        dbFinalized = result.finalized
+        if (!dbFinalized) {
+          await this.ctx.storage.put(PENDING_FINISH_STORAGE, reason)
+          await this.ctx.storage.setAlarm(Date.now() + PENDING_FINISH_RETRY_MS)
+        }
       }
       catch (error) {
         console.error(JSON.stringify({
@@ -277,6 +310,9 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
           reason,
           message: error instanceof Error ? error.message : String(error),
         }))
+        await this.ctx.storage.put(PENDING_FINISH_STORAGE, reason)
+        await this.ctx.storage.setAlarm(Date.now() + PENDING_FINISH_RETRY_MS)
+        dbFinalized = false
       }
     }
     try {
@@ -285,7 +321,9 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
         await container.destroy()
     }
     finally {
-      await this.ctx.storage.deleteAll()
+      if (dbFinalized) {
+        await this.ctx.storage.deleteAll()
+      }
     }
   }
 }

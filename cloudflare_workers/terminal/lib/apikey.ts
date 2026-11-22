@@ -112,11 +112,11 @@ export async function reserveTerminalSession(
     maxDurationMinutes: number
     maxConcurrency: number
   },
-): Promise<{ ok: boolean, error?: string, reused?: boolean }> {
+): Promise<{ ok: boolean, error?: string, reused?: boolean, created?: boolean }> {
   const client = new Client({ connectionString: hyperdrive.connectionString })
   await client.connect()
   try {
-    const result = await client.query<{ result: { ok: boolean, error?: string, reused?: boolean } }>(
+    const result = await client.query<{ result: { ok: boolean, error?: string, reused?: boolean, created?: boolean } }>(
       `SELECT public.terminal_session_reserve(
       $1::text, $2::uuid, $3::text, $4::bigint, $5::integer, $6::integer
     ) AS result`,
@@ -132,7 +132,11 @@ export async function reserveTerminalSession(
     const payload = result.rows[0]?.result
     if (!payload?.ok)
       return { ok: false, error: payload?.error ?? 'reserve_failed' }
-    return { ok: true, reused: payload.reused === true }
+    return {
+      ok: true,
+      reused: payload.reused === true,
+      created: payload.created === true,
+    }
   }
   finally {
     await client.end().catch(() => {})
@@ -201,11 +205,11 @@ export async function isTerminalSessionActive(
   }
 }
 
-export async function finishTerminalSession(
+export async function finalizeTerminalSession(
   hyperdrive: PostgresHyperdrive,
   sessionKey: string,
   reason: string,
-): Promise<number> {
+): Promise<{ billedMinutes: number, finalized: boolean }> {
   const client = new Client({ connectionString: hyperdrive.connectionString })
   await client.connect()
   try {
@@ -213,9 +217,20 @@ export async function finishTerminalSession(
       'SELECT public.terminal_session_finish($1::text, $2::text) AS minutes',
       [sessionKey, reason],
     )
-    return result.rows[0]?.minutes ?? 0
+    const billedMinutes = result.rows[0]?.minutes ?? 0
+    const stillActive = await isTerminalSessionActive(hyperdrive, sessionKey)
+    return { billedMinutes, finalized: !stillActive }
   }
   finally {
     await client.end().catch(() => {})
   }
+}
+
+export async function finishTerminalSession(
+  hyperdrive: PostgresHyperdrive,
+  sessionKey: string,
+  reason: string,
+): Promise<number> {
+  const { billedMinutes } = await finalizeTerminalSession(hyperdrive, sessionKey, reason)
+  return billedMinutes
 }

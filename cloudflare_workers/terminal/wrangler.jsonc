@@ -29,12 +29,7 @@
   "durable_objects": {
     "bindings": [{ "name": "TERMINAL_SESSION", "class_name": "TerminalSession" }]
   },
-  "exports": {
-    "TerminalSession": {
-      "type": "durable-object",
-      "storage": "sqlite"
-    }
-  },
+  "migrations": [{ "tag": "terminal-session-v1", "new_sqlite_classes": ["TerminalSession"] }],
   "env": {
     "prod": {
       "name": "capgo_terminal-prod",
@@ -60,6 +55,7 @@
       "durable_objects": {
         "bindings": [{ "name": "TERMINAL_SESSION", "class_name": "TerminalSession" }]
       },
+      "migrations": [{ "tag": "terminal-session-v1", "new_sqlite_classes": ["TerminalSession"] }],
       "vars": { "ENV_NAME": "capgo_terminal-prod" },
       "hyperdrive": [
         {

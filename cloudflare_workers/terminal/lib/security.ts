@@ -61,10 +61,12 @@ export function capOutputBytes(chunk: string, bytesSoFar: number): { text: strin
   if (next.length <= room)
     return { text: chunk, total: bytesSoFar + next.length, truncated: false }
   const slice = utf8BytePrefix(next, room)
+  const text = new TextDecoder().decode(slice)
+  const encoded = encoder.encode(text)
   return {
-    text: new TextDecoder().decode(slice),
-    total: bytesSoFar + slice.length,
-    truncated: slice.length < next.length,
+    text,
+    total: bytesSoFar + encoded.length,
+    truncated: encoded.length < next.length,
   }
 }
 
