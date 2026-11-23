@@ -91,6 +91,16 @@ describe('build status Builder checklist persistence', () => {
     expect(mocks.checklist).not.toHaveBeenCalled()
   })
 
+  it('returns unauthorized without app_id when no build matches the job_id', async () => {
+    mocks.rlsQuery.mockResolvedValue({ rows: [] })
+
+    await expect(getBuildStatus(context(), { job_id: 'unknown-job' } as any, { key: 'api-key' } as any))
+      .rejects
+      .toMatchObject({ status: 400, cause: { error: 'unauthorized' } })
+    expect(mocks.permission).not.toHaveBeenCalled()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
   it('still persists when HTTP query has persist=false', async () => {
     await getBuildStatus(context(), { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' }, { key: 'api-key' } as any)
     expect(mocks.adminQuery).toHaveBeenCalled()
