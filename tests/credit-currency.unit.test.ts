@@ -51,3 +51,20 @@ it.concurrent.each(['active', 'canceled'])('quotes credits using the saved curre
   } as unknown as Stripe
   expect((await getCreditQuote(stripe, saved.id, 'price_example')).currency).toBe(status === 'active' ? 'eur' : 'usd')
 })
+
+it.concurrent.each([
+  { currency: 'aud', usd: 700, local: 1000, expected: 143 },
+  { currency: 'aud', usd: 1400, local: 2000, expected: 143 },
+  { currency: 'ils', usd: 1400, local: 4400, expected: 314 },
+  { currency: 'zar', usd: 1400, local: 23000, expected: 1643 },
+  { currency: 'jpy', usd: 1400, local: 2100, expected: 150 },
+])('rounds converted $currency credit prices to whole minor units for Checkout', async ({ currency, usd, local, expected }) => {
+  const retrieve = vi.fn(async (id: string) => id === 'price_credit'
+    ? { ...price, product: 'prod_credit_us', currency_options: {} }
+    : { active: true, currency: 'usd', unit_amount: usd, currency_options: { [currency]: { unit_amount: local } } })
+  const stripe = { subscriptions: { list: async () => ({ data: [] }) }, customers: { retrieve: async () => customer(currency) }, prices: { retrieve } } as unknown as Stripe
+  const quote = await getCreditQuote(stripe, 'cus_example', 'price_credit', {} as any)
+  expect(quote.unitAmount).toBe(expected)
+  expect(Number.isInteger(quote.unitAmount)).toBe(true)
+  expect(quote.priceData).toMatchObject({ currency, product: 'prod_credit_us', unit_amount_decimal: String(expected) })
+})
