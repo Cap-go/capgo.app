@@ -12,6 +12,7 @@ import {
   terminalDurableObjectName,
 } from './lib/security.ts'
 import { handleTerminalMcpWhenSessionActive } from './lib/mcp_active.ts'
+import { validateTerminalMcpPostBody, type TerminalMcpPrecheckedPost } from './lib/mcp_serve.ts'
 import {
   consumeTerminalWsToken,
   finishTerminalSession,
@@ -27,14 +28,26 @@ import { TerminalSession, type TerminalEnv } from './terminal_session.ts'
 const WS_TOKEN_TTL_SECONDS = 300
 
 function parseSessionKeyParts(sessionKey: string): { orgId: string, appId: string } | null {
-  const parts = sessionKey.split(':')
-  if (parts.length < 3)
+  const parsed = parseMcpSessionKey(sessionKey)
+  if (!parsed)
     return null
-  const orgId = parts[0]
-  const appId = parts[1]
-  if (!orgId || !appId)
+  return { orgId: parsed.orgId, appId: parsed.appId }
+}
+
+function parseMcpSessionKey(sessionKey: string): { orgId: string, appId: string, sessionKey: string } | null {
+  const trimmed = sessionKey.trim()
+  const parts = trimmed.split(':')
+  if (parts.length !== 3)
     return null
-  return { orgId, appId }
+  const orgId = parts[0]?.trim()
+  const appId = parts[1]?.trim()
+  const sessionId = parts[2]?.trim()
+  if (!orgId || !appId || !sessionId || sessionId.length > 128)
+    return null
+  const canonical = buildSessionKey(orgId, appId, sessionId)
+  if (canonical !== trimmed)
+    return null
+  return { orgId, appId, sessionKey: canonical }
 }
 
 function parseStartSessionBody(
@@ -231,34 +244,45 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv, ctx: Exec
     const apiKey = extractApiKey(request)
     if (!apiKey)
       return Response.json({ error: 'missing_apikey' }, { status: 401 })
-    const sessionKey = url.searchParams.get('session_key')
+    const rawSessionKey = url.searchParams.get('session_key')
       || request.headers.get('X-Capgo-Terminal-Session')
-    if (!sessionKey)
+    if (!rawSessionKey)
       return Response.json({ error: 'missing_session_key' }, { status: 400 })
-    const parts = parseSessionKeyParts(sessionKey)
-    if (!parts)
+    const parsedKey = parseMcpSessionKey(rawSessionKey)
+    if (!parsedKey)
       return Response.json({ error: 'invalid_session_key' }, { status: 400 })
+    const { sessionKey, orgId, appId } = parsedKey
+    let precheckedPost: TerminalMcpPrecheckedPost | undefined
+    if (request.method === 'POST') {
+      const checked = await validateTerminalMcpPostBody(request)
+      if (checked instanceof Response)
+        return checked
+      precheckedPost = checked
+    }
     try {
-      const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, parts.orgId, parts.appId)
+      const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, orgId, appId)
       const reserved = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
         sessionKey,
-        orgId: parts.orgId,
-        appId: parts.appId,
+        orgId,
+        appId,
         apikeyId: key.apikeyId,
         maxDurationMinutes: TERMINAL_MAX_SESSION_MINUTES,
         maxConcurrency: TERMINAL_MAX_CONCURRENCY_PER_ORG,
       })
       if (reserved instanceof Response)
         return reserved
+      return handleTerminalMcpWhenSessionActive(request, env, {
+        sessionKey,
+        orgId,
+        appId,
+      }, ctx, {
+        sessionOwnedThisRequest: reserved.created,
+        precheckedPost,
+      })
     }
     catch (error) {
       return authErrorResponse(error)
     }
-    return handleTerminalMcpWhenSessionActive(request, env, {
-      sessionKey,
-      orgId: parts.orgId,
-      appId: parts.appId,
-    }, ctx)
   }
 
   if (path === '/terminal/health')

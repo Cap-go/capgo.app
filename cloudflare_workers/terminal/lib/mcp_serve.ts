@@ -21,6 +21,43 @@ export { mcpRequestIncludesInitialize } from './mcp_rpc.ts'
 
 const MAXIMUM_MESSAGE_SIZE_BYTES = 4 * 1024 * 1024
 
+export type TerminalMcpPrecheckedPost = {
+  bodyText: string
+  rawBody: unknown
+}
+
+export async function validateTerminalMcpPostBody(
+  request: Request,
+): Promise<Response | TerminalMcpPrecheckedPost> {
+  const declaredLength = Number.parseInt(request.headers.get('content-length') ?? '0', 10)
+  if (declaredLength > MAXIMUM_MESSAGE_SIZE_BYTES) {
+    return Response.json({
+      jsonrpc: '2.0',
+      error: { code: -32_000, message: `Request body too large. Maximum size is ${MAXIMUM_MESSAGE_SIZE_BYTES} bytes` },
+      id: null,
+    }, { status: 413 })
+  }
+  const bodyText = await request.text()
+  if (new TextEncoder().encode(bodyText).byteLength > MAXIMUM_MESSAGE_SIZE_BYTES) {
+    return Response.json({
+      jsonrpc: '2.0',
+      error: { code: -32_000, message: `Request body too large. Maximum size is ${MAXIMUM_MESSAGE_SIZE_BYTES} bytes` },
+      id: null,
+    }, { status: 413 })
+  }
+  try {
+    const rawBody = JSON.parse(bodyText)
+    return { bodyText, rawBody }
+  }
+  catch {
+    return Response.json({
+      jsonrpc: '2.0',
+      error: { code: -32_700, message: 'Parse error: Invalid JSON' },
+      id: null,
+    }, { status: 400 })
+  }
+}
+
 let terminalMcpHttp: ReturnType<typeof TerminalSession.serve> | null = null
 
 function terminalMcpHttpHandler() {
@@ -44,6 +81,7 @@ export async function handleTerminalMcpRequest(
   env: TerminalEnv,
   session: TerminalMcpSession,
   ctx: ExecutionContext,
+  precheckedPost?: TerminalMcpPrecheckedPost,
 ): Promise<Response> {
   const terminalEnv: TerminalEnv = {
     ...env,
@@ -58,32 +96,18 @@ export async function handleTerminalMcpRequest(
     const cleaned = new Request(request.url, { method: request.method, headers })
     return terminalMcpHttpHandler().fetch(cleaned, terminalEnv, mcpServeContext(session, ctx))
   }
-  const declaredLength = Number.parseInt(request.headers.get('content-length') ?? '0', 10)
-  if (declaredLength > MAXIMUM_MESSAGE_SIZE_BYTES) {
-    return Response.json({
-      jsonrpc: '2.0',
-      error: { code: -32_000, message: `Request body too large. Maximum size is ${MAXIMUM_MESSAGE_SIZE_BYTES} bytes` },
-      id: null,
-    }, { status: 413 })
-  }
-  const bodyText = await request.text()
-  if (new TextEncoder().encode(bodyText).byteLength > MAXIMUM_MESSAGE_SIZE_BYTES) {
-    return Response.json({
-      jsonrpc: '2.0',
-      error: { code: -32_000, message: `Request body too large. Maximum size is ${MAXIMUM_MESSAGE_SIZE_BYTES} bytes` },
-      id: null,
-    }, { status: 413 })
-  }
+  let bodyText: string
   let rawBody: unknown
-  try {
-    rawBody = JSON.parse(bodyText)
+  if (precheckedPost) {
+    bodyText = precheckedPost.bodyText
+    rawBody = precheckedPost.rawBody
   }
-  catch {
-    return Response.json({
-      jsonrpc: '2.0',
-      error: { code: -32_700, message: 'Parse error: Invalid JSON' },
-      id: null,
-    }, { status: 400 })
+  else {
+    const checked = await validateTerminalMcpPostBody(request)
+    if (checked instanceof Response)
+      return checked
+    bodyText = checked.bodyText
+    rawBody = checked.rawBody
   }
 
   const pinned = await terminalMcpSessionHeaderId(session.sessionKey)
