@@ -18,45 +18,30 @@
     },
     "api": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.1",
         "sha": "209e4b45dbade1412f18fa605a7ae5569dc96955",
         "runId": "45248300648",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "files": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.1",
         "sha": "209e4b45dbade1412f18fa605a7ae5569dc96955",
         "runId": "45248300648",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "translation": {
       "success": {
-        "tag": "capgo-22.66.2",
-        "sha": "32a44e81c146123313bdd27bff801cb78b2db6ed",
-        "runId": "45047164477",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.1",
         "sha": "209e4b45dbade1412f18fa605a7ae5569dc96955",
         "runId": "45248300648",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_eu": {
       "success": {
