@@ -49,8 +49,13 @@ export async function handleTerminalMcpRequest(
     ...env,
     TERMINAL_SESSION: await wrapMcpStreamableNamespace(env.TERMINAL_SESSION, session.sessionKey),
   }
-  if (request.method !== 'POST')
-    return terminalMcpHttpHandler().fetch(request, terminalEnv, mcpServeContext(session))
+  if (request.method !== 'POST') {
+    const headers = new Headers(request.headers)
+    for (const name of TERMINAL_CLIENT_MCP_HEADERS)
+      headers.delete(name)
+    const cleaned = new Request(request.url, { method: request.method, headers })
+    return terminalMcpHttpHandler().fetch(cleaned, terminalEnv, mcpServeContext(session))
+  }
   const declaredLength = Number.parseInt(request.headers.get('content-length') ?? '0', 10)
   if (declaredLength > MAXIMUM_MESSAGE_SIZE_BYTES) {
     return Response.json({
