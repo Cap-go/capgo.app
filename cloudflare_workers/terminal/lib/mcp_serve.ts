@@ -50,9 +50,11 @@ export async function handleTerminalMcpRequest(
     TERMINAL_SESSION: await wrapMcpStreamableNamespace(env.TERMINAL_SESSION, session.sessionKey),
   }
   if (request.method !== 'POST') {
+    const pinned = await terminalMcpSessionHeaderId(session.sessionKey)
     const headers = new Headers(request.headers)
     for (const name of TERMINAL_CLIENT_MCP_HEADERS)
       headers.delete(name)
+    headers.set('mcp-session-id', pinned)
     const cleaned = new Request(request.url, { method: request.method, headers })
     return terminalMcpHttpHandler().fetch(cleaned, terminalEnv, mcpServeContext(session))
   }

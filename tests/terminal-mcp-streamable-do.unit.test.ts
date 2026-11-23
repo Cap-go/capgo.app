@@ -167,4 +167,50 @@ describe('terminal mcp agents.serve durable object', () => {
     )
     expect(ended.status).toBe(410)
   }, 90_000)
+
+  it('DELETE strips client mcp-session-id and routes with pinned id', async () => {
+    const { handleTerminalMcpRequest } = await import('../cloudflare_workers/terminal/lib/mcp_serve.ts')
+    const { terminalMcpSessionHeaderId } = await import('../cloudflare_workers/terminal/lib/security.ts')
+
+    const env = await server.getWorker().getEnv() as import('../cloudflare_workers/terminal/terminal_session.ts').TerminalEnv
+    const sessionKey = buildSessionKey('00000000-0000-4000-8000-000000000012', 'com.test.mcpdo.app', 'sess-do-del')
+    const session = {
+      sessionKey,
+      orgId: '00000000-0000-4000-8000-000000000012',
+      appId: 'com.test.mcpdo.app',
+    }
+    const pinned = await terminalMcpSessionHeaderId(sessionKey)
+
+    const initResponse = await handleTerminalMcpRequest(
+      new Request('https://api.capgo.app/terminal/mcp', {
+        method: 'POST',
+        headers: mcpHeaders(),
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-03-26',
+            capabilities: {},
+            clientInfo: { name: 'vitest', version: '1' },
+          },
+        }),
+      }),
+      env,
+      session,
+    )
+    expect(initResponse.status).toBe(200)
+    await initResponse.text()
+
+    const deleteResponse = await handleTerminalMcpRequest(
+      new Request('https://api.capgo.app/terminal/mcp', {
+        method: 'DELETE',
+        headers: mcpHeaders('client-chosen-session-id-should-not-route'),
+      }),
+      env,
+      session,
+    )
+    expect(pinned).not.toBe('client-chosen-session-id-should-not-route')
+    expect(deleteResponse.status).toBeLessThan(500)
+  }, 60_000)
 })
