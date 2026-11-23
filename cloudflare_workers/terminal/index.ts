@@ -11,8 +11,7 @@ import {
   buildSessionKey,
   terminalDurableObjectName,
 } from './lib/security.ts'
-import { inactiveTerminalMcpResponse } from './lib/mcp_gate.ts'
-import { handleTerminalMcpRequest } from './lib/mcp_serve.ts'
+import { handleTerminalMcpWhenSessionActive } from './lib/mcp_active.ts'
 import {
   consumeTerminalWsToken,
   finishTerminalSession,
@@ -251,13 +250,11 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       })
       if (reserved instanceof Response)
         return reserved
-      if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey))
-        return inactiveTerminalMcpResponse()
     }
     catch (error) {
       return authErrorResponse(error)
     }
-    return handleTerminalMcpRequest(request, env, {
+    return handleTerminalMcpWhenSessionActive(request, env, {
       sessionKey,
       orgId: parts.orgId,
       appId: parts.appId,
