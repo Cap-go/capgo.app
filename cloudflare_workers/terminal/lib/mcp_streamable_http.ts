@@ -18,6 +18,35 @@ const MAXIMUM_MESSAGE_SIZE_BYTES = 4 * 1024 * 1024
 const KEEPALIVE_INTERVAL_MS = 25_000
 const KEEPALIVE_FRAME = ': keepalive\n\n'
 
+async function readBoundedJsonBody(
+  request: Request,
+): Promise<{ ok: true, raw: unknown } | { ok: false, response: Response }> {
+  const bodyText = await request.text()
+  if (new TextEncoder().encode(bodyText).byteLength > MAXIMUM_MESSAGE_SIZE_BYTES) {
+    return {
+      ok: false,
+      response: Response.json({
+        jsonrpc: '2.0',
+        error: { code: -32_000, message: `Request body too large. Maximum size is ${MAXIMUM_MESSAGE_SIZE_BYTES} bytes` },
+        id: null,
+      }, { status: 413 }),
+    }
+  }
+  try {
+    return { ok: true, raw: JSON.parse(bodyText) }
+  }
+  catch {
+    return {
+      ok: false,
+      response: Response.json({
+        jsonrpc: '2.0',
+        error: { code: -32_700, message: 'Parse error: Invalid JSON' },
+        id: null,
+      }, { status: 400 }),
+    }
+  }
+}
+
 type McpWorker = {
   fetch: (request: Request, env: TerminalEnv, ctx: TerminalMcpContext) => Promise<Response>
 }
@@ -102,17 +131,10 @@ export function createTerminalStreamingHttpHandler(
       }
 
       let sessionId = request.headers.get('mcp-session-id')
-      let rawMessage: unknown
-      try {
-        rawMessage = await request.json()
-      }
-      catch {
-        return Response.json({
-          jsonrpc: '2.0',
-          error: { code: -32_700, message: 'Parse error: Invalid JSON' },
-          id: null,
-        }, { status: 400 })
-      }
+      const parsedBody = await readBoundedJsonBody(request)
+      if (!parsedBody.ok)
+        return parsedBody.response
+      const rawMessage = parsedBody.raw
 
       const arrayMessage = Array.isArray(rawMessage) ? rawMessage : [rawMessage]
       for (const msg of arrayMessage) {

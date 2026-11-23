@@ -62,6 +62,16 @@ function mockNamespace() {
   }
 }
 
+function bridgeJsonRpcPayload(agent: { fetch: ReturnType<typeof vi.fn> }): unknown[] {
+  const bridgeReq = agent.fetch.mock.calls.at(-1)?.[0] as Request | undefined
+  if (!bridgeReq)
+    throw new Error('missing_bridge_request')
+  const header = bridgeReq.headers.get('cf-mcp-message')
+  if (!header)
+    throw new Error('missing_cf_mcp_message')
+  return JSON.parse(Buffer.from(header, 'base64').toString('utf-8')) as unknown[]
+}
+
 function mcpHeaders(sessionId?: string): HeadersInit {
   const headers: Record<string, string> = {
     accept: 'application/json, text/event-stream',
@@ -109,6 +119,8 @@ describe('terminal mcp streamable http', () => {
     )
 
     expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('text/event-stream')
+    expect(bridgeJsonRpcPayload(agent)).toEqual([expect.objectContaining({ method: 'initialize', id: 1 })])
     expect(response.headers.get('mcp-session-id')).toMatch(/^[a-f0-9]{64}$/)
     expect(getAgentByNameMock).toHaveBeenCalledWith(
       ns,
@@ -147,6 +159,8 @@ describe('terminal mcp streamable http', () => {
     )
 
     expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('text/event-stream')
+    expect(bridgeJsonRpcPayload(agent)).toEqual([expect.objectContaining({ method: 'tools/list', id: 2 })])
     expect(getAgentByNameMock).toHaveBeenCalledWith(ns, `streamable-http:${pinned}`, expect.anything())
   })
 

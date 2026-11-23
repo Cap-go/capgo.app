@@ -43,6 +43,13 @@ export async function handleTerminalMcpRequest(
     }, { status: 413 })
   }
   const bodyText = await request.text()
+  if (new TextEncoder().encode(bodyText).byteLength > MAXIMUM_MESSAGE_SIZE_BYTES) {
+    return Response.json({
+      jsonrpc: '2.0',
+      error: { code: -32_000, message: `Request body too large. Maximum size is ${MAXIMUM_MESSAGE_SIZE_BYTES} bytes` },
+      id: null,
+    }, { status: 413 })
+  }
   let rawBody: unknown
   try {
     rawBody = JSON.parse(bodyText)
