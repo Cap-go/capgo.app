@@ -201,6 +201,16 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
                   break
                 }
               }
+              const tail = decoder.decode()
+              if (tail) {
+                const capped = capOutputBytes(tail, bytes)
+                bytes = capped.total
+                truncated = truncated || capped.truncated
+                if (capped.text) {
+                  combined += capped.text
+                  this.broadcast(JSON.stringify({ type: 'stdout', chunk: capped.text, truncated }))
+                }
+              }
             }
             finally {
               reader.releaseLock()
@@ -275,10 +285,13 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
         image: container.images.sandbox,
         enableInternet: false,
       })
-      await container.exec(
+      const certCheck = await container.exec(
         ['sh', '-c', 'test -r /etc/cloudflare/certs/cloudflare-containers-ca.crt'],
         { user: '0' },
       )
+      const certExit = await certCheck.exitCode
+      if (certExit !== 0)
+        throw new Error('container_ca_cert_unavailable')
       if (this.env.TERMINAL_EGRESS) {
         await container.interceptAllOutboundHttp(this.env.TERMINAL_EGRESS)
         await container.interceptOutboundHttps('*', this.env.TERMINAL_EGRESS)

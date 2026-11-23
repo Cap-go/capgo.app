@@ -8,8 +8,14 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createTestHarness, type TestHarness } from 'wrangler'
+import type { ExecutionContext } from '@cloudflare/workers-types'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { buildSessionKey } from '../cloudflare_workers/terminal/lib/security.ts'
+
+const noopExecutionContext = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+} as unknown as ExecutionContext
 
 const ROOT = resolve(import.meta.dirname, '..')
 
@@ -122,6 +128,7 @@ describe('terminal mcp agents.serve durable object', () => {
       }),
       env,
       session,
+      noopExecutionContext,
     )
     expect(initResponse.status).toBe(200)
     const init = await readSseJson(initResponse)
@@ -147,6 +154,7 @@ describe('terminal mcp agents.serve durable object', () => {
       }),
       env,
       session,
+      noopExecutionContext,
     )
     expect(listResponse.status).toBe(200)
     const listed = await readSseJson(listResponse)
@@ -169,6 +177,7 @@ describe('terminal mcp agents.serve durable object', () => {
       }),
       env,
       session,
+      noopExecutionContext,
     )
     expect(ended.status).toBe(410)
   }, 90_000)
@@ -203,6 +212,7 @@ describe('terminal mcp agents.serve durable object', () => {
       }),
       env,
       session,
+      noopExecutionContext,
     )
     expect(initResponse.status).toBe(200)
     await initResponse.text()
@@ -214,6 +224,7 @@ describe('terminal mcp agents.serve durable object', () => {
       }),
       env,
       session,
+      noopExecutionContext,
     )
     expect(pinned).not.toBe('client-chosen-session-id-should-not-route')
     expect(deleteResponse.status).toBeLessThan(500)

@@ -94,7 +94,7 @@ function mintWsConnectToken(): string {
     .replace(/=+$/, '')
 }
 
-async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<Response> {
+async function handleTerminalFetch(request: Request, env: TerminalEnv, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url)
   const path = normalizeTerminalPath(url.pathname)
 
@@ -258,7 +258,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       sessionKey,
       orgId: parts.orgId,
       appId: parts.appId,
-    })
+    }, ctx)
   }
 
   if (path === '/terminal/health')
@@ -269,7 +269,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
 
 export default {
   async fetch(request: Request, env: TerminalEnv, ctx: ExecutionContext): Promise<Response> {
-    return handleTerminalFetch(request, env)
+    return handleTerminalFetch(request, env, ctx)
   },
 } satisfies ExportedHandler<TerminalEnv>
 

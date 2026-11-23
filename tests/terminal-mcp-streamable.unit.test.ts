@@ -1,3 +1,4 @@
+import type { ExecutionContext } from '@cloudflare/workers-types'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 beforeAll(() => {
@@ -21,6 +22,11 @@ vi.mock('@cloudflare/sandbox', () => ({
   Files: class {},
 }))
 import { buildSessionKey } from '../cloudflare_workers/terminal/lib/security.ts'
+
+const noopExecutionContext = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+} as unknown as ExecutionContext
 
 const getAgentByNameMock = vi.fn()
 const isTerminalSessionActiveMock = vi.hoisted(() => vi.fn(async () => true))
@@ -134,6 +140,7 @@ describe('terminal mcp streamable http', () => {
         orgId: '00000000-0000-4000-8000-000000000001',
         appId: 'com.test.app',
       },
+      noopExecutionContext,
     )
     expect(response.status).toBe(200)
     expect(response.headers.get('mcp-session-id')).toMatch(/^[a-f0-9]{64}$/)
@@ -167,6 +174,7 @@ describe('terminal mcp streamable http', () => {
         orgId: '00000000-0000-4000-8000-000000000001',
         appId: 'com.test.app',
       },
+      noopExecutionContext,
     )
     expect(initResponse.status).toBe(200)
 
@@ -182,6 +190,7 @@ describe('terminal mcp streamable http', () => {
         orgId: '00000000-0000-4000-8000-000000000001',
         appId: 'com.test.app',
       },
+      noopExecutionContext,
     )
     expect(ended.status).toBe(410)
     expect(isTerminalSessionActiveMock).toHaveBeenCalledTimes(2)

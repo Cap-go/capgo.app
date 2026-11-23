@@ -1,3 +1,4 @@
+import type { ExecutionContext } from '@cloudflare/workers-types'
 import type { TerminalEnv } from '../terminal_session.ts'
 import { isTerminalSessionActive } from './apikey.ts'
 import { authErrorResponse } from './errors.ts'
@@ -8,6 +9,7 @@ export async function handleTerminalMcpWhenSessionActive(
   request: Request,
   env: TerminalEnv,
   session: TerminalMcpSession,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   try {
     if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, session.sessionKey))
@@ -16,5 +18,5 @@ export async function handleTerminalMcpWhenSessionActive(
   catch (error) {
     return authErrorResponse(error)
   }
-  return handleTerminalMcpRequest(request, env, session)
+  return handleTerminalMcpRequest(request, env, session, ctx)
 }

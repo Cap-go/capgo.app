@@ -28,22 +28,22 @@ function terminalMcpHttpHandler() {
   return terminalMcpHttp
 }
 
-function mcpServeContext(session: TerminalMcpSession): TerminalMcpServeContext {
+function mcpServeContext(session: TerminalMcpSession, ctx: ExecutionContext): TerminalMcpServeContext {
   return {
+    ...ctx,
     props: {
       sessionKey: session.sessionKey,
       orgId: session.orgId,
       appId: session.appId,
     },
-    waitUntil: () => {},
-    passThroughOnException: () => {},
-  } as unknown as TerminalMcpServeContext
+  } as TerminalMcpServeContext
 }
 
 export async function handleTerminalMcpRequest(
   request: Request,
   env: TerminalEnv,
   session: TerminalMcpSession,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   const terminalEnv: TerminalEnv = {
     ...env,
@@ -56,7 +56,7 @@ export async function handleTerminalMcpRequest(
       headers.delete(name)
     headers.set('mcp-session-id', pinned)
     const cleaned = new Request(request.url, { method: request.method, headers })
-    return terminalMcpHttpHandler().fetch(cleaned, terminalEnv, mcpServeContext(session))
+    return terminalMcpHttpHandler().fetch(cleaned, terminalEnv, mcpServeContext(session, ctx))
   }
   const declaredLength = Number.parseInt(request.headers.get('content-length') ?? '0', 10)
   if (declaredLength > MAXIMUM_MESSAGE_SIZE_BYTES) {
@@ -90,9 +90,11 @@ export async function handleTerminalMcpRequest(
   const headers = new Headers(request.headers)
   for (const name of TERMINAL_CLIENT_MCP_HEADERS)
     headers.delete(name)
-  if (!mcpRequestIncludesInitialize(rawBody))
+  if (mcpRequestIncludesInitialize(rawBody))
+    headers.delete('mcp-session-id')
+  else
     headers.set('mcp-session-id', pinned)
 
   const routed = new Request(request.url, { method: request.method, headers, body: bodyText })
-  return terminalMcpHttpHandler().fetch(routed, terminalEnv, mcpServeContext(session))
+  return terminalMcpHttpHandler().fetch(routed, terminalEnv, mcpServeContext(session, ctx))
 }
