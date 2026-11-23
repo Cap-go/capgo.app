@@ -1,5 +1,6 @@
 import type { TerminalEnv } from '../terminal_session.ts'
 import { isTerminalSessionActive } from './apikey.ts'
+import { authErrorResponse } from './errors.ts'
 import { inactiveTerminalMcpResponse } from './mcp_gate.ts'
 import { handleTerminalMcpRequest, type TerminalMcpSession } from './mcp_serve.ts'
 
@@ -8,7 +9,12 @@ export async function handleTerminalMcpWhenSessionActive(
   env: TerminalEnv,
   session: TerminalMcpSession,
 ): Promise<Response> {
-  if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, session.sessionKey))
-    return inactiveTerminalMcpResponse()
+  try {
+    if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, session.sessionKey))
+      return inactiveTerminalMcpResponse()
+  }
+  catch (error) {
+    return authErrorResponse(error)
+  }
   return handleTerminalMcpRequest(request, env, session)
 }
