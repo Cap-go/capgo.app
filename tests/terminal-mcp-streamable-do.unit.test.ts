@@ -128,7 +128,11 @@ describe('terminal mcp agents.serve durable object', () => {
     const pinned = await terminalMcpSessionHeaderId(sessionKey)
     expect(init.sessionId).toBe(pinned)
     expect(initResponse.headers.has('mcp-session-id')).toBe(true)
-    expect(init.payload).toMatchObject({ jsonrpc: '2.0', id: 1 })
+    expect(init.payload).toMatchObject({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { protocolVersion: expect.any(String) },
+    })
 
     const listResponse = await handleTerminalMcpRequest(
       new Request('https://api.capgo.app/terminal/mcp', {
@@ -153,7 +157,8 @@ describe('terminal mcp agents.serve durable object', () => {
 
     const agentName = await terminalDurableObjectName(sessionKey)
     const agent = await getAgentByName(env.TERMINAL_SESSION, agentName, { props: session })
-    await agent.fetch(new Request('https://do/terminal/end', { method: 'POST' }))
+    const endResponse = await agent.fetch(new Request('https://do/terminal/end', { method: 'POST' }))
+    expect(endResponse.status).toBe(200)
     sessionActive.value = false
 
     const ended = await handleTerminalMcpWhenSessionActive(

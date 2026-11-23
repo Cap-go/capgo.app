@@ -87,8 +87,10 @@ export async function readTextWithByteCap(response: Response): Promise<{ text: s
       bytes = capped.total
       truncated = truncated || capped.truncated
       text += capped.text
-      if (truncated)
+      if (truncated) {
+        await reader.cancel().catch(() => {})
         break
+      }
     }
     const flush = decoder.decode()
     if (flush) {

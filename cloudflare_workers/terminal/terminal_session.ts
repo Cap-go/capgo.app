@@ -283,8 +283,8 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
         await container.interceptAllOutboundHttp(this.env.TERMINAL_EGRESS)
         await container.interceptOutboundHttps('*', this.env.TERMINAL_EGRESS)
       }
-      await container.setInactivityTimeout(TERMINAL_IDLE_MS)
     }
+    await container.setInactivityTimeout(TERMINAL_IDLE_MS)
   }
 
   async alarm() {
