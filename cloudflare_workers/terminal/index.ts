@@ -240,7 +240,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv, ctx: Exec
     return agent.fetch(stripClientMcpHeaders(request))
   }
 
-  if (path.startsWith('/terminal/mcp')) {
+  if (path === '/terminal/mcp') {
     const apiKey = extractApiKey(request)
     if (!apiKey)
       return Response.json({ error: 'missing_apikey' }, { status: 401 })
