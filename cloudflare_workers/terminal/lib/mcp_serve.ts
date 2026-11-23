@@ -1,20 +1,14 @@
-import type { TerminalEnv } from '../terminal_session.ts'
+import type { ExecutionContext } from '@cloudflare/workers-types'
+import { TerminalSession, type TerminalEnv, type TerminalProps } from '../terminal_session.ts'
+import { wrapMcpStreamableNamespace } from './agent_routing.ts'
 import { terminalMcpSessionHeaderId } from './security.ts'
-import { createTerminalStreamingHttpHandler, type TerminalMcpContext } from './mcp_streamable_http.ts'
 import { TERMINAL_CLIENT_MCP_HEADERS } from './ws.ts'
 import { mcpRequestIncludesInitialize } from './mcp_rpc.ts'
 
 export { terminalMcpSessionHeaderId } from './security.ts'
 
-type TerminalMcpHttpWorker = {
-  fetch: (request: Request, env: TerminalEnv, ctx: TerminalMcpContext) => Promise<Response>
-}
-
-let terminalMcpHttp: TerminalMcpHttpWorker | null = null
-
-function terminalMcpHttpHandler(): TerminalMcpHttpWorker {
-  terminalMcpHttp ??= createTerminalStreamingHttpHandler('/terminal/mcp', 'TERMINAL_SESSION')
-  return terminalMcpHttp
+export type TerminalMcpServeContext = ExecutionContext & {
+  props?: TerminalProps
 }
 
 export type TerminalMcpSession = {
@@ -27,13 +21,36 @@ export { mcpRequestIncludesInitialize } from './mcp_rpc.ts'
 
 const MAXIMUM_MESSAGE_SIZE_BYTES = 4 * 1024 * 1024
 
+let terminalMcpHttp: ReturnType<typeof TerminalSession.serve> | null = null
+
+function terminalMcpHttpHandler() {
+  terminalMcpHttp ??= TerminalSession.serve('/terminal/mcp', { binding: 'TERMINAL_SESSION' })
+  return terminalMcpHttp
+}
+
+function mcpServeContext(session: TerminalMcpSession): TerminalMcpServeContext {
+  return {
+    props: {
+      sessionKey: session.sessionKey,
+      orgId: session.orgId,
+      appId: session.appId,
+    },
+    waitUntil: () => {},
+    passThroughOnException: () => {},
+  }
+}
+
 export async function handleTerminalMcpRequest(
   request: Request,
   env: TerminalEnv,
   session: TerminalMcpSession,
 ): Promise<Response> {
+  const terminalEnv: TerminalEnv = {
+    ...env,
+    TERMINAL_SESSION: await wrapMcpStreamableNamespace(env.TERMINAL_SESSION, session.sessionKey),
+  }
   if (request.method !== 'POST')
-    return terminalMcpHttpHandler().fetch(request, env, { props: { sessionKey: session.sessionKey, orgId: session.orgId, appId: session.appId } })
+    return terminalMcpHttpHandler().fetch(request, terminalEnv, mcpServeContext(session))
   const declaredLength = Number.parseInt(request.headers.get('content-length') ?? '0', 10)
   if (declaredLength > MAXIMUM_MESSAGE_SIZE_BYTES) {
     return Response.json({
@@ -70,12 +87,5 @@ export async function handleTerminalMcpRequest(
     headers.set('mcp-session-id', pinned)
 
   const routed = new Request(request.url, { method: request.method, headers, body: bodyText })
-  const ctx: TerminalMcpContext = {
-    props: {
-      sessionKey: session.sessionKey,
-      orgId: session.orgId,
-      appId: session.appId,
-    },
-  }
-  return terminalMcpHttpHandler().fetch(routed, env, ctx)
+  return terminalMcpHttpHandler().fetch(routed, terminalEnv, mcpServeContext(session))
 }

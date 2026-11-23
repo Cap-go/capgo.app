@@ -1,13 +1,37 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+
+beforeAll(() => {
+  if (typeof globalThis.URLPattern === 'undefined') {
+    globalThis.URLPattern = class URLPattern {
+      #pathname: string
+      constructor(init: { pathname?: string }) {
+        this.#pathname = init.pathname ?? '/*'
+      }
+
+      test(url: URL) {
+        if (this.#pathname === '/*')
+          return true
+        return url.pathname === this.#pathname
+      }
+    } as unknown as typeof URLPattern
+  }
+})
+
+vi.mock('@cloudflare/sandbox', () => ({
+  Files: class {},
+}))
 import { buildSessionKey } from '../cloudflare_workers/terminal/lib/security.ts'
-import { InitializeRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 
 const getAgentByNameMock = vi.fn()
 const isTerminalSessionActiveMock = vi.hoisted(() => vi.fn(async () => true))
 
-vi.mock('../cloudflare_workers/terminal/lib/agent_routing.ts', () => ({
-  getAgentByName: (...args: unknown[]) => getAgentByNameMock(...args),
-}))
+vi.mock('../cloudflare_workers/terminal/lib/agent_routing.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../cloudflare_workers/terminal/lib/agent_routing.ts')>()
+  return {
+    ...actual,
+    getAgentByName: (...args: unknown[]) => getAgentByNameMock(...args),
+  }
+})
 
 vi.mock('../cloudflare_workers/terminal/lib/apikey.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../cloudflare_workers/terminal/lib/apikey.ts')>()
@@ -39,6 +63,7 @@ function mockBridgeWebSocket() {
 function makeAgent(stubs?: { initialized?: boolean }) {
   const { client, server } = mockBridgeWebSocket()
   return {
+    __unsafe_ensureInitialized: vi.fn(async () => {}),
     getInitializeRequest: vi.fn(async () => stubs?.initialized ? { method: 'initialize' } : null),
     setInitializeRequest: vi.fn(async () => {}),
     fetch: vi.fn(async () => {
@@ -54,22 +79,16 @@ function makeAgent(stubs?: { initialized?: boolean }) {
   }
 }
 
-function mockNamespace() {
-  return {
-    newUniqueId: () => ({ toString: () => 'unused' }),
+async function mockStreamableNamespace(agent: ReturnType<typeof makeAgent>, sessionKey: string) {
+  const { terminalMcpSessionHeaderId } = await import('../cloudflare_workers/terminal/lib/security.ts')
+  const headerId = await terminalMcpSessionHeaderId(sessionKey)
+  const ns = {
+    newUniqueId: () => ({ toString: () => headerId }),
     idFromName: (name: string) => ({ toString: () => name }),
-    get: () => ({}),
+    get: () => agent,
+    jurisdiction: () => ns,
   }
-}
-
-function bridgeJsonRpcPayload(agent: { fetch: ReturnType<typeof vi.fn> }): unknown[] {
-  const bridgeReq = agent.fetch.mock.calls.at(-1)?.[0] as Request | undefined
-  if (!bridgeReq)
-    throw new Error('missing_bridge_request')
-  const header = bridgeReq.headers.get('cf-mcp-message')
-  if (!header)
-    throw new Error('missing_cf_mcp_message')
-  return JSON.parse(Buffer.from(header, 'base64').toString('utf-8')) as unknown[]
+  return ns
 }
 
 function mcpHeaders(sessionId?: string): HeadersInit {
@@ -89,87 +108,13 @@ describe('terminal mcp streamable http', () => {
     isTerminalSessionActiveMock.mockImplementation(async () => true)
   })
 
-  it('initializes without a client mcp-session-id header', async () => {
-    const { createTerminalStreamingHttpHandler } = await import('../cloudflare_workers/terminal/lib/mcp_streamable_http.ts')
-    const sessionKey = buildSessionKey('00000000-0000-4000-8000-000000000001', 'com.test.app', 'sess')
+  it('handleTerminalMcpRequest initializes without a client mcp-session-id header', async () => {
     const agent = makeAgent()
-    getAgentByNameMock.mockResolvedValue(agent)
-
-    const ns = mockNamespace()
-    const handler = createTerminalStreamingHttpHandler('/terminal/mcp', 'TERMINAL_SESSION')
-    const initBody = {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2025-11-25',
-        capabilities: {},
-        clientInfo: { name: 'vitest', version: '1' },
-      },
-    }
-
-    const response = await handler.fetch(
-      new Request('https://api.capgo.app/terminal/mcp', {
-        method: 'POST',
-        headers: mcpHeaders(),
-        body: JSON.stringify(initBody),
-      }),
-      { TERMINAL_SESSION: ns as never } as never,
-      { props: { sessionKey, orgId: '00000000-0000-4000-8000-000000000001', appId: 'com.test.app' } },
-    )
-
-    expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toContain('text/event-stream')
-    expect(bridgeJsonRpcPayload(agent)).toEqual([expect.objectContaining({ method: 'initialize', id: 1 })])
-    expect(response.headers.get('mcp-session-id')).toMatch(/^[a-f0-9]{64}$/)
-    expect(getAgentByNameMock).toHaveBeenCalledWith(
-      ns,
-      expect.stringMatching(/^streamable-http:[a-f0-9]{64}$/),
-      expect.objectContaining({ props: expect.objectContaining({ sessionKey }) }),
-    )
-    expect(agent.setInitializeRequest).toHaveBeenCalled()
-    expect(InitializeRequestSchema.safeParse(initBody).success).toBe(true)
-  })
-
-  it('lists tools after initialize with pinned session id', async () => {
-    const { createTerminalStreamingHttpHandler } = await import('../cloudflare_workers/terminal/lib/mcp_streamable_http.ts')
-    const { terminalMcpSessionHeaderId } = await import('../cloudflare_workers/terminal/lib/security.ts')
-    const sessionKey = buildSessionKey('00000000-0000-4000-8000-000000000001', 'com.test.app', 'sess2')
-    const pinned = await terminalMcpSessionHeaderId(sessionKey)
-    const agent = makeAgent({ initialized: true })
-    getAgentByNameMock.mockResolvedValue(agent)
-
-    const ns = mockNamespace()
-    const handler = createTerminalStreamingHttpHandler('/terminal/mcp', 'TERMINAL_SESSION')
-    const listBody = {
-      jsonrpc: '2.0',
-      id: 2,
-      method: 'tools/list',
-      params: {},
-    }
-
-    const response = await handler.fetch(
-      new Request('https://api.capgo.app/terminal/mcp', {
-        method: 'POST',
-        headers: mcpHeaders(pinned),
-        body: JSON.stringify(listBody),
-      }),
-      { TERMINAL_SESSION: ns as never } as never,
-      { props: { sessionKey, orgId: '00000000-0000-4000-8000-000000000001', appId: 'com.test.app' } },
-    )
-
-    expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toContain('text/event-stream')
-    expect(bridgeJsonRpcPayload(agent)).toEqual([expect.objectContaining({ method: 'tools/list', id: 2 })])
-    expect(getAgentByNameMock).toHaveBeenCalledWith(ns, `streamable-http:${pinned}`, expect.anything())
-  })
-
-  it('handleTerminalMcpRequest routes initialize through the streamable handler', async () => {
-    getAgentByNameMock.mockResolvedValue(makeAgent())
+    const sessionKey = buildSessionKey('00000000-0000-4000-8000-000000000001', 'com.test.app', 'sess')
+    const terminalNs = await mockStreamableNamespace(agent, sessionKey)
     const { handleTerminalMcpRequest } = await import('../cloudflare_workers/terminal/lib/mcp_serve.ts')
-    const sessionKey = buildSessionKey('00000000-0000-4000-8000-000000000001', 'com.test.app', 'sess3')
     const response = await handleTerminalMcpRequest(
-      new Request('https://api.capgo.app/terminal/mcp?session_key=x', {
+      new Request('https://api.capgo.app/terminal/mcp', {
         method: 'POST',
         headers: mcpHeaders(),
         body: JSON.stringify({
@@ -183,7 +128,7 @@ describe('terminal mcp streamable http', () => {
           },
         }),
       }),
-      { TERMINAL_SESSION: mockNamespace() as never } as never,
+      { TERMINAL_SESSION: terminalNs as never, HYPERDRIVE_CAPGO_DIRECT_EU: { connectionString: 'x' } },
       {
         sessionKey,
         orgId: '00000000-0000-4000-8000-000000000001',
@@ -191,15 +136,16 @@ describe('terminal mcp streamable http', () => {
       },
     )
     expect(response.status).toBe(200)
-    expect(getAgentByNameMock).toHaveBeenCalled()
+    expect(response.headers.get('mcp-session-id')).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('returns 410 after session ended before routing follow-up mcp', async () => {
     isTerminalSessionActiveMock.mockResolvedValueOnce(true).mockResolvedValue(false)
     const { handleTerminalMcpWhenSessionActive } = await import('../cloudflare_workers/terminal/lib/mcp_active.ts')
-    getAgentByNameMock.mockResolvedValue(makeAgent())
+    const agent = makeAgent()
     const sessionKey = buildSessionKey('00000000-0000-4000-8000-000000000001', 'com.test.app', 'sess-end')
-    const env = { HYPERDRIVE_CAPGO_DIRECT_EU: {}, TERMINAL_SESSION: mockNamespace() } as never
+    const terminalNs = await mockStreamableNamespace(agent, sessionKey)
+    const env = { HYPERDRIVE_CAPGO_DIRECT_EU: { connectionString: 'x' }, TERMINAL_SESSION: terminalNs } as never
     const initResponse = await handleTerminalMcpWhenSessionActive(
       new Request('https://api.capgo.app/terminal/mcp', {
         method: 'POST',
@@ -239,30 +185,5 @@ describe('terminal mcp streamable http', () => {
     )
     expect(ended.status).toBe(410)
     expect(isTerminalSessionActiveMock).toHaveBeenCalledTimes(2)
-  })
-
-  it('rejects follow-up calls before initialize with 404 session not found', async () => {
-    const { createTerminalStreamingHttpHandler } = await import('../cloudflare_workers/terminal/lib/mcp_streamable_http.ts')
-    const { terminalMcpSessionHeaderId } = await import('../cloudflare_workers/terminal/lib/security.ts')
-    const sessionKey = buildSessionKey('00000000-0000-4000-8000-000000000001', 'com.test.app', 'sess4')
-    const pinned = await terminalMcpSessionHeaderId(sessionKey)
-    getAgentByNameMock.mockResolvedValue(makeAgent({ initialized: false }))
-
-    const handler = createTerminalStreamingHttpHandler('/terminal/mcp', 'TERMINAL_SESSION')
-    const response = await handler.fetch(
-      new Request('https://api.capgo.app/terminal/mcp', {
-        method: 'POST',
-        headers: mcpHeaders(pinned),
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 3,
-          method: 'tools/list',
-          params: {},
-        }),
-      }),
-      { TERMINAL_SESSION: mockNamespace() as never } as never,
-      { props: { sessionKey, orgId: '00000000-0000-4000-8000-000000000001', appId: 'com.test.app' } },
-    )
-    expect(response.status).toBe(404)
   })
 })

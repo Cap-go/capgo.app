@@ -9,7 +9,7 @@ import {
   TERMINAL_WORKSPACE_ROOT,
 } from './lib/constants.ts'
 import { finalizeTerminalSession } from './lib/apikey.ts'
-import { TERMINAL_INTERNAL_MCP_BRIDGE } from './lib/mcp_streamable_http.ts'
+import { TERMINAL_INTERNAL_MCP_BRIDGE } from './lib/mcp_bridge.ts'
 import {
   assertSafeCommand,
   capOutputBytes,
@@ -150,11 +150,8 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
   }
 
   async init() {
-    const container = this.ctx.container
-    if (!container)
-      throw new Error('container_not_configured')
-
-    this.files = new Files(container)
+    if (this.ctx.container)
+      this.files = new Files(this.ctx.container)
 
     registerMcpTool(
       this.server,

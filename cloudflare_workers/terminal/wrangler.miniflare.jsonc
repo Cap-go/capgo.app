@@ -1,0 +1,18 @@
+{
+  "name": "capgo_terminal_miniflare",
+  "logpush": false,
+  "compatibility_date": "2026-11-10",
+  "main": "./index.ts",
+  "compatibility_flags": ["nodejs_compat", "nodejs_compat_populate_process_env"],
+  "durable_objects": {
+    "bindings": [{ "name": "TERMINAL_SESSION", "class_name": "TerminalSession" }]
+  },
+  "migrations": [{ "tag": "terminal-miniflare-v1", "new_sqlite_classes": ["TerminalSession"] }],
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
+      "id": "00000000-0000-0000-0000-000000000001",
+      "localConnectionString": "postgres://user:password@127.0.0.1:5432/postgres"
+    }
+  ]
+}

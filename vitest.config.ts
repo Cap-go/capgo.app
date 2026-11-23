@@ -49,6 +49,8 @@ export default defineConfig(({ mode }) => ({
       '@capgo/cli/sdk': path.resolve(cwd(), 'cli/src/sdk.ts'),
       '~/': `${path.resolve(cwd(), 'src')}/`,
       '@capgo/capacitor-notifications': path.resolve(cwd(), 'packages/capacitor-notifications/src/index.ts'),
+      'cloudflare:workers': path.resolve(cwd(), 'tests/stubs/cloudflare-workers.ts'),
+      'cloudflare:email': path.resolve(cwd(), 'tests/stubs/cloudflare-email.ts'),
     },
   },
   test: {
@@ -78,7 +80,7 @@ export default defineConfig(({ mode }) => ({
     // points at a stale Vue 3.5.40, so store updates never reach components.
     server: {
       deps: {
-        inline: ['pinia', 'vue-i18n', 'vue-router', 'vue-sonner', '@vueuse/core', '@vueuse/shared', '@vue/devtools-api'],
+        inline: ['pinia', 'vue-i18n', 'vue-router', 'vue-sonner', '@vueuse/core', '@vueuse/shared', '@vue/devtools-api', 'agents', '@cloudflare/sandbox'],
       },
     },
   },
