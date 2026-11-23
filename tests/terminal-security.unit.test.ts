@@ -180,6 +180,14 @@ describe('terminal security', () => {
     expect(stripped.headers.has('cf-mcp-message')).toBe(false)
   })
 
+  it('returns 410 for inactive terminal mcp sessions', async () => {
+    const { inactiveTerminalMcpResponse } = await import('../cloudflare_workers/terminal/lib/mcp_gate.ts')
+    const response = inactiveTerminalMcpResponse()
+    expect(response.status).toBe(410)
+    const body = await response.json() as { error?: string }
+    expect(body.error).toBe('session_not_active')
+  })
+
   it('maps session_key to stable mcp-session-id', async () => {
     const key = buildSessionKey('org', 'com.app', 'sess')
     const a = await terminalMcpSessionHeaderId(key)

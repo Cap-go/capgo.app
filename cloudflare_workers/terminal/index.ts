@@ -1,4 +1,4 @@
-import { getAgentByName } from 'agents'
+import { getAgentByName } from './lib/agent_routing.ts'
 import { TERMINAL_MAX_CONCURRENCY_PER_ORG, TERMINAL_MAX_SESSION_MINUTES } from './lib/constants.ts'
 import { authErrorResponse } from './lib/errors.ts'
 import { handleTerminalEgress } from './lib/egress_proxy.ts'
@@ -11,6 +11,7 @@ import {
   buildSessionKey,
   terminalDurableObjectName,
 } from './lib/security.ts'
+import { inactiveTerminalMcpResponse } from './lib/mcp_gate.ts'
 import { handleTerminalMcpRequest } from './lib/mcp_serve.ts'
 import {
   consumeTerminalWsToken,
@@ -251,7 +252,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv): Promise<
       if (reserved instanceof Response)
         return reserved
       if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey))
-        return Response.json({ error: 'session_not_active' }, { status: 410 })
+        return inactiveTerminalMcpResponse()
     }
     catch (error) {
       return authErrorResponse(error)

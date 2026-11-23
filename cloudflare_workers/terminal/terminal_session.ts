@@ -9,6 +9,7 @@ import {
   TERMINAL_WORKSPACE_ROOT,
 } from './lib/constants.ts'
 import { finalizeTerminalSession } from './lib/apikey.ts'
+import { TERMINAL_INTERNAL_MCP_BRIDGE } from './lib/mcp_streamable_http.ts'
 import {
   assertSafeCommand,
   capOutputBytes,
@@ -17,6 +18,7 @@ import {
   resolveWorkspacePath,
   teardownReasonAtAlarm,
 } from './lib/security.ts'
+import { requestHasClientMcpHeaders } from './lib/ws.ts'
 
 type McpTextResult = { content: Array<{ type: 'text', text: string }> }
 
@@ -74,6 +76,17 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
   validateStateChange(_nextState: TerminalAgentState, source: unknown): void {
     if (source !== 'server')
       throw new Error('state_readonly')
+  }
+
+  override async onConnect(
+    conn: Parameters<McpAgent<TerminalEnv, TerminalAgentState, TerminalProps>['onConnect']>[0],
+    ctx: Parameters<McpAgent<TerminalEnv, TerminalAgentState, TerminalProps>['onConnect']>[1],
+  ): Promise<void> {
+    if (requestHasClientMcpHeaders(ctx.request) && ctx.request.headers.get(TERMINAL_INTERNAL_MCP_BRIDGE) !== '1') {
+      conn.close(1008, 'mcp_headers_forbidden')
+      return
+    }
+    await super.onConnect(conn, ctx)
   }
 
   async onStart(props?: TerminalProps): Promise<void> {
