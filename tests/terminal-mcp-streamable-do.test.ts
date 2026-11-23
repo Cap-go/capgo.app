@@ -97,10 +97,7 @@ describe('terminal mcp agents.serve durable object', () => {
     const { getAgentByName } = await import('../cloudflare_workers/terminal/lib/agent_routing.ts')
     const { terminalMcpSessionHeaderId, terminalDurableObjectName } = await import('../cloudflare_workers/terminal/lib/security.ts')
 
-    const env = await server.getWorker().getEnv() as {
-      TERMINAL_SESSION: DurableObjectNamespace
-      HYPERDRIVE_CAPGO_DIRECT_EU: { connectionString: string }
-    }
+    const env = await server.getWorker().getEnv() as import('../cloudflare_workers/terminal/terminal_session.ts').TerminalEnv
     const sessionKey = buildSessionKey('00000000-0000-4000-8000-000000000011', 'com.test.mcpdo.app', 'sess-do-1')
     const session = {
       sessionKey,

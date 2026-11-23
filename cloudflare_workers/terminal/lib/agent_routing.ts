@@ -11,13 +11,13 @@ function stubWithMcpBridge(stub: DurableObjectStub) {
   return new Proxy(stub, {
     get(target, prop, receiver) {
       if (prop === 'fetch') {
-        return (request: Request, ...rest: unknown[]) => {
+        return (request: Request, input?: RequestInit) => {
           if (requestHasClientMcpHeaders(request)) {
             const headers = new Headers(request.headers)
             headers.set(TERMINAL_INTERNAL_MCP_BRIDGE, '1')
-            return fetch(new Request(request, { headers }), ...rest)
+            return fetch(new Request(request, { headers }), input)
           }
-          return fetch(request, ...rest)
+          return fetch(request, input)
         }
       }
       return Reflect.get(target, prop, receiver)
@@ -57,6 +57,10 @@ export async function getAgentByName(
   if (props?.sessionKey)
     agentName = await terminalDurableObjectName(props.sessionKey)
 
-  const stub = await agentsGetAgentByName(namespace, agentName, options)
+  const stub = await agentsGetAgentByName(
+    namespace as Parameters<typeof agentsGetAgentByName>[0],
+    agentName,
+    options,
+  )
   return stubWithMcpBridge(stub)
 }

@@ -37,7 +37,7 @@ function mcpServeContext(session: TerminalMcpSession): TerminalMcpServeContext {
     },
     waitUntil: () => {},
     passThroughOnException: () => {},
-  }
+  } as unknown as TerminalMcpServeContext
 }
 
 export async function handleTerminalMcpRequest(
