@@ -37,11 +37,11 @@ function parseSessionKeyParts(sessionKey: string): { orgId: string, appId: strin
 function parseMcpSessionKey(sessionKey: string): { orgId: string, appId: string, sessionKey: string } | null {
   const trimmed = sessionKey.trim()
   const parts = trimmed.split(':')
-  if (parts.length !== 3)
+  if (parts.length < 3)
     return null
   const orgId = parts[0]?.trim()
   const appId = parts[1]?.trim()
-  const sessionId = parts[2]?.trim()
+  const sessionId = parts.slice(2).join(':').trim()
   if (!orgId || !appId || !sessionId || sessionId.length > 128)
     return null
   const canonical = buildSessionKey(orgId, appId, sessionId)
@@ -66,7 +66,7 @@ function parseStartSessionBody(
   if (typeof sessionId !== 'string' || !sessionId.trim())
     return null
   const trimmedSessionId = sessionId.trim()
-  if (trimmedSessionId.length > 128)
+  if (trimmedSessionId.length > 128 || trimmedSessionId.includes(':'))
     return null
   return { orgId: orgId.trim(), appId: appId.trim(), sessionId: trimmedSessionId }
 }
@@ -253,14 +253,15 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv, ctx: Exec
       return Response.json({ error: 'invalid_session_key' }, { status: 400 })
     const { sessionKey, orgId, appId } = parsedKey
     let precheckedPost: TerminalMcpPrecheckedPost | undefined
-    if (request.method === 'POST') {
-      const checked = await validateTerminalMcpPostBody(request)
-      if (checked instanceof Response)
-        return checked
-      precheckedPost = checked
-    }
+    let sessionOwnedThisRequest = false
     try {
       const key = await validateApiKeyForApp(env.HYPERDRIVE_CAPGO_DIRECT_EU, apiKey, orgId, appId)
+      if (request.method === 'POST') {
+        const checked = await validateTerminalMcpPostBody(request)
+        if (checked instanceof Response)
+          return checked
+        precheckedPost = checked
+      }
       const reserved = await ensureReserved(env.HYPERDRIVE_CAPGO_DIRECT_EU, {
         sessionKey,
         orgId,
@@ -271,16 +272,29 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv, ctx: Exec
       })
       if (reserved instanceof Response)
         return reserved
-      return handleTerminalMcpWhenSessionActive(request, env, {
+      sessionOwnedThisRequest = reserved.created
+      return await handleTerminalMcpWhenSessionActive(request, env, {
         sessionKey,
         orgId,
         appId,
       }, ctx, {
-        sessionOwnedThisRequest: reserved.created,
+        sessionOwnedThisRequest,
         precheckedPost,
       })
     }
     catch (error) {
+      if (sessionOwnedThisRequest) {
+        try {
+          await finishTerminalSession(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, 'ws_token_failed')
+        }
+        catch (finishError) {
+          console.error(JSON.stringify({
+            event: 'terminal_mcp_handler_finish_failed',
+            session_key: sessionKey,
+            message: finishError instanceof Error ? finishError.message : String(finishError),
+          }))
+        }
+      }
       return authErrorResponse(error)
     }
   }
