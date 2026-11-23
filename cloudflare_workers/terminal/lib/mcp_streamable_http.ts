@@ -7,6 +7,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import type { TerminalEnv, TerminalProps } from '../terminal_session.ts'
 import { terminalMcpSessionHeaderId } from './security.ts'
+import { mcpRequestIncludesInitialize } from './mcp_rpc.ts'
 import { TERMINAL_CLIENT_MCP_HEADERS } from './ws.ts'
 
 export const TERMINAL_INTERNAL_MCP_BRIDGE = 'x-capgo-terminal-mcp-bridge'
@@ -60,7 +61,7 @@ function matchesMcpPath(basePath: string, pathname: string): boolean {
     return true
   if (basePath.endsWith('/*'))
     return pathname === basePath.slice(0, -2) || pathname.startsWith(`${basePath.slice(0, -2)}/`)
-  return pathname === basePath
+  return pathname === basePath || pathname === `${basePath}/`
 }
 
 export function createTerminalStreamingHttpHandler(
@@ -124,23 +125,24 @@ export function createTerminalStreamingHttpHandler(
         }
       }
       const messages = arrayMessage.map(msg => JSONRPCMessageSchema.parse(msg))
+      const hasInitialize = mcpRequestIncludesInitialize(rawMessage)
       const maybeInitializeRequest = messages.find(msg => InitializeRequestSchema.safeParse(msg).success)
 
-      if (maybeInitializeRequest && sessionId) {
+      if (hasInitialize && sessionId) {
         return Response.json({
           jsonrpc: '2.0',
           error: { code: -32_600, message: 'Invalid Request: Initialization requests must not include a sessionId' },
           id: null,
         }, { status: 400 })
       }
-      if (maybeInitializeRequest && messages.length > 1) {
+      if (hasInitialize && messages.length > 1) {
         return Response.json({
           jsonrpc: '2.0',
           error: { code: -32_600, message: 'Invalid Request: Only one initialization request is allowed' },
           id: null,
         }, { status: 400 })
       }
-      if (!maybeInitializeRequest && !sessionId) {
+      if (!hasInitialize && !sessionId) {
         return Response.json({
           jsonrpc: '2.0',
           error: { code: -32_000, message: 'Bad Request: Mcp-Session-Id header is required' },
@@ -220,6 +222,9 @@ export function createTerminalStreamingHttpHandler(
           }
           catch (error) {
             console.error(JSON.stringify({ event: 'terminal_mcp_sse_forward_error', message: String(error) }))
+            clearInterval(keepAlive)
+            ws?.close()
+            void writer.close().catch(() => {})
           }
         }
         onMessage().catch(console.error)
