@@ -55,6 +55,8 @@ export default defineConfig(({ mode }) => ({
   },
   test: {
     include: ['tests/*.test.ts'],
+    // Miniflare harness + wrangler dry-run; runs on vitest.config.cloudflare.ts shards only.
+    exclude: ['tests/terminal-mcp-streamable-do.test.ts'],
     setupFiles: ['./tests/happy-dom-storage.setup.ts'],
     environment: 'node',
     watch: false,

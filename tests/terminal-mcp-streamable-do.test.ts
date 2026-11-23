@@ -2,6 +2,8 @@
  * agents@0.34.0 McpAgent.serve streamable handler against a real Miniflare DO.
  * Worker is built with wrangler.miniflare.jsonc (no container image). Sandbox I/O
  * is not exercised on tools/list after init() tool registration.
+ *
+ * Runs in the Cloudflare Workers vitest shard, not the fast `tests/*.unit.test.ts` job.
  */
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -54,6 +56,14 @@ async function readSseJson(response: Response): Promise<{ sessionId: string | nu
 describe('terminal mcp agents.serve durable object', () => {
   let server: TestHarness
   let prebuiltDir: string
+  let terminalModules: {
+    handleTerminalMcpRequest: typeof import('../cloudflare_workers/terminal/lib/mcp_serve.ts').handleTerminalMcpRequest
+    handleTerminalMcpWhenSessionActive: typeof import('../cloudflare_workers/terminal/lib/mcp_active.ts').handleTerminalMcpWhenSessionActive
+    getAgentByName: typeof import('../cloudflare_workers/terminal/lib/agent_routing.ts').getAgentByName
+    terminalMcpSessionHeaderId: typeof import('../cloudflare_workers/terminal/lib/security.ts').terminalMcpSessionHeaderId
+    terminalDurableObjectName: typeof import('../cloudflare_workers/terminal/lib/security.ts').terminalDurableObjectName
+  }
+  let env: import('../cloudflare_workers/terminal/terminal_session.ts').TerminalEnv
 
   beforeAll(async () => {
     if (typeof globalThis.URLPattern === 'undefined') {
@@ -71,12 +81,25 @@ describe('terminal mcp agents.serve durable object', () => {
       } as unknown as typeof URLPattern
     }
     sessionActive.value = true
+    const [mcpServe, mcpActive, agentRouting, security] = await Promise.all([
+      import('../cloudflare_workers/terminal/lib/mcp_serve.ts'),
+      import('../cloudflare_workers/terminal/lib/mcp_active.ts'),
+      import('../cloudflare_workers/terminal/lib/agent_routing.ts'),
+      import('../cloudflare_workers/terminal/lib/security.ts'),
+    ])
+    terminalModules = {
+      handleTerminalMcpRequest: mcpServe.handleTerminalMcpRequest,
+      handleTerminalMcpWhenSessionActive: mcpActive.handleTerminalMcpWhenSessionActive,
+      getAgentByName: agentRouting.getAgentByName,
+      terminalMcpSessionHeaderId: security.terminalMcpSessionHeaderId,
+      terminalDurableObjectName: security.terminalDurableObjectName,
+    }
+
     prebuiltDir = mkdtempSync(join(tmpdir(), 'capgo-terminal-mcp-do-'))
     const build = spawnSync('bunx', [
       'wrangler', 'deploy',
       '--config', 'cloudflare_workers/terminal/wrangler.miniflare.jsonc',
       '--dry-run',
-      '--minify',
       `--outdir=${prebuiltDir}`,
     ], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
     if (build.status !== 0)
@@ -89,7 +112,8 @@ describe('terminal mcp agents.serve durable object', () => {
       }],
     })
     await server.listen()
-  }, 180_000)
+    env = await server.getWorker().getEnv() as import('../cloudflare_workers/terminal/terminal_session.ts').TerminalEnv
+  }, 120_000)
 
   afterAll(async () => {
     await server?.close()
@@ -97,13 +121,15 @@ describe('terminal mcp agents.serve durable object', () => {
       rmSync(prebuiltDir, { recursive: true, force: true })
   })
 
-  it('initialize without client mcp-session-id, tools/list, 410 after session end', async () => {
-    const { handleTerminalMcpRequest } = await import('../cloudflare_workers/terminal/lib/mcp_serve.ts')
-    const { handleTerminalMcpWhenSessionActive } = await import('../cloudflare_workers/terminal/lib/mcp_active.ts')
-    const { getAgentByName } = await import('../cloudflare_workers/terminal/lib/agent_routing.ts')
-    const { terminalMcpSessionHeaderId, terminalDurableObjectName } = await import('../cloudflare_workers/terminal/lib/security.ts')
+  it('streamable MCP: init, tools/list, 410 after end, DELETE pins session id', async () => {
+    const {
+      handleTerminalMcpRequest,
+      handleTerminalMcpWhenSessionActive,
+      getAgentByName,
+      terminalMcpSessionHeaderId,
+      terminalDurableObjectName,
+    } = terminalModules
 
-    const env = await server.getWorker().getEnv() as import('../cloudflare_workers/terminal/terminal_session.ts').TerminalEnv
     const sessionKey = buildSessionKey('00000000-0000-4000-8000-000000000011', 'com.test.mcpdo.app', 'sess-do-1')
     const session = {
       sessionKey,
@@ -180,28 +206,23 @@ describe('terminal mcp agents.serve durable object', () => {
       noopExecutionContext,
     )
     expect(ended.status).toBe(410)
-  }, 90_000)
 
-  it('DELETE strips client mcp-session-id and routes with pinned id', async () => {
-    const { handleTerminalMcpRequest } = await import('../cloudflare_workers/terminal/lib/mcp_serve.ts')
-    const { terminalMcpSessionHeaderId } = await import('../cloudflare_workers/terminal/lib/security.ts')
-
-    const env = await server.getWorker().getEnv() as import('../cloudflare_workers/terminal/terminal_session.ts').TerminalEnv
-    const sessionKey = buildSessionKey('00000000-0000-4000-8000-000000000012', 'com.test.mcpdo.app', 'sess-do-del')
-    const session = {
-      sessionKey,
+    sessionActive.value = true
+    const delSessionKey = buildSessionKey('00000000-0000-4000-8000-000000000012', 'com.test.mcpdo.app', 'sess-do-del')
+    const delSession = {
+      sessionKey: delSessionKey,
       orgId: '00000000-0000-4000-8000-000000000012',
       appId: 'com.test.mcpdo.app',
     }
-    const pinned = await terminalMcpSessionHeaderId(sessionKey)
+    const delPinned = await terminalMcpSessionHeaderId(delSessionKey)
 
-    const initResponse = await handleTerminalMcpRequest(
+    const delInit = await handleTerminalMcpRequest(
       new Request('https://api.capgo.app/terminal/mcp', {
         method: 'POST',
         headers: mcpHeaders(),
         body: JSON.stringify({
           jsonrpc: '2.0',
-          id: 1,
+          id: 10,
           method: 'initialize',
           params: {
             protocolVersion: '2025-03-26',
@@ -211,11 +232,11 @@ describe('terminal mcp agents.serve durable object', () => {
         }),
       }),
       env,
-      session,
+      delSession,
       noopExecutionContext,
     )
-    expect(initResponse.status).toBe(200)
-    await initResponse.text()
+    expect(delInit.status).toBe(200)
+    await delInit.text()
 
     const deleteResponse = await handleTerminalMcpRequest(
       new Request('https://api.capgo.app/terminal/mcp', {
@@ -223,10 +244,10 @@ describe('terminal mcp agents.serve durable object', () => {
         headers: mcpHeaders('client-chosen-session-id-should-not-route'),
       }),
       env,
-      session,
+      delSession,
       noopExecutionContext,
     )
-    expect(pinned).not.toBe('client-chosen-session-id-should-not-route')
+    expect(delPinned).not.toBe('client-chosen-session-id-should-not-route')
     expect(deleteResponse.status).toBeLessThan(500)
-  }, 60_000)
+  }, 120_000)
 })
