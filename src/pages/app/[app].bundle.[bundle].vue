@@ -5,7 +5,6 @@ import type { LinkedChannel } from '~/services/bundleLinkedChannels'
 import type { ChannelPromotionTarget } from '~/services/channelPromotion'
 import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
-import { parse } from '@std/semver'
 import { computedAsync } from '@vueuse/core'
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -31,6 +30,7 @@ import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageErr
 import { useConsole } from '~/services/console'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
+import { resolveMinUpdateVersionCommit } from '~/services/minUpdateVersion'
 import { bundleChannelCompatibility } from '~/services/nativePackageCompatibility'
 import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { openVersion } from '~/services/versions'
@@ -53,6 +53,7 @@ const channels = ref<(Database['public']['Tables']['channels']['Row'])[]>([])
 const channel = ref<(Database['public']['Tables']['channels']['Row'])>()
 const version_meta = ref<Database['public']['Tables']['app_versions_meta']['Row']>()
 const showBundleMetadataInput = ref<boolean>(false)
+const minUpdateVersionRow = ref<{ reset: () => void } | null>(null)
 const hasManifest = ref<boolean>(false)
 const showChecksumTooltip = ref(false)
 const metadataLink = ref('')
@@ -636,49 +637,48 @@ function hideString(str: string) {
   return `${first}...${last}`
 }
 
-async function saveCustomId(input: string) {
-  if (!id.value)
+async function saveCustomId(input: string | undefined) {
+  if (!id.value || !version.value)
     return
 
   if (!canEditBundleMetadata.value) {
     toast.error(t('no-permission'))
+    minUpdateVersionRow.value?.reset()
     return
   }
 
-  if (input.length === 0) {
-    const { error: errorNull } = await capgo
-      .from('app_versions')
-      .update({
-        min_update_version: null,
-      })
-      .eq('id', id.value)
-
-    if (errorNull) {
-      console.log('Cannot set min update version to null', errorNull)
-      return
-    }
-
-    toast.success(t('updated-min-version'))
+  const commit = resolveMinUpdateVersionCommit(input, version.value.min_update_version)
+  if (commit.kind === 'noop') {
+    minUpdateVersionRow.value?.reset()
     return
   }
-
-  if (!parse(input)) {
+  if (commit.kind === 'empty') {
+    // Never write an empty value: it blocks pushes on version_number channels.
+    toast.error(t('min-update-version-required'))
+    minUpdateVersionRow.value?.reset()
+    return
+  }
+  if (commit.kind === 'invalid') {
     toast.error(t('invalid-version'))
+    minUpdateVersionRow.value?.reset()
     return
   }
 
   const { error } = await capgo
     .from('app_versions')
     .update({
-      min_update_version: input,
+      min_update_version: commit.value,
     })
     .eq('id', id.value)
 
   if (error) {
     console.log('Cannot set min update version', error)
+    toast.error(t('cannot-update-min-version'))
+    minUpdateVersionRow.value?.reset()
     return
   }
 
+  version.value = { ...version.value, min_update_version: commit.value }
   toast.success(t('updated-min-version'))
 }
 
@@ -959,12 +959,13 @@ async function deleteBundle() {
                 <!-- Min update version -->
                 <InfoRow
                   v-if="showBundleMetadataInput" id="metadata-bundle"
+                  ref="minUpdateVersionRow"
                   :label="t('min-update-version')" editable
+                  :value="version.min_update_version ?? ''"
+                  :placeholder="t('min-update-version-placeholder')"
                   :readonly="!canEditBundleMetadata"
-                  @click="guardMinAutoUpdate" @update:value="(saveCustomId as any)" @keydown="preventInputChangePerm"
-                >
-                  {{ version.min_update_version }}
-                </InfoRow>
+                  @click="guardMinAutoUpdate" @update:value="saveCustomId" @keydown="preventInputChangePerm"
+                />
 
                 <InfoRow v-if="channels && channels.length > 0 && version && channels.some(c => c.version === version!.id)" :label="t('channel')">
                   <div class="flex flex-wrap justify-end w-full gap-3">

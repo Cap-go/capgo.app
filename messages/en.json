@@ -4784,5 +4784,8 @@
   "serving-region-status-checking": "Checking your settings...",
   "serving-region-status-unsaved": "Save to apply your changes.",
   "custom-domain-verifying": "Your domain is being verified. We'll check automatically.",
-  "serving-region-save-error": "Couldn't save these changes. Please try again."
+  "serving-region-save-error": "Couldn't save these changes. Please try again.",
+  "cannot-update-min-version": "Cannot update the minimal update version",
+  "min-update-version-placeholder": "e.g. 1.0.0",
+  "min-update-version-required": "Minimal update version cannot be empty, kept the current value"
 }

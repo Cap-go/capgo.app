@@ -5039,5 +5039,8 @@
   "serving-region-status-checking": "Plain customer-facing status for saved regional settings. Distinguish unsaved changes, checking, applying, confirmed up-to-date, and unable to confirm. Never tell the customer to publish, deploy or activate a policy.",
   "serving-region-status-unsaved": "Plain customer-facing status for saved regional settings. Distinguish unsaved changes, checking, applying, confirmed up-to-date, and unable to confirm. Never tell the customer to publish, deploy or activate a policy.",
   "custom-domain-verifying": "Status displayed while the custom domain and certificate are still being verified automatically. Do not promise a fixed completion time.",
-  "serving-region-save-error": "Customer-facing error when regional settings fail to save. Keep this short and do not expose database errors or internal publication details."
+  "serving-region-save-error": "Customer-facing error when regional settings fail to save. Keep this short and do not expose database errors or internal publication details.",
+  "cannot-update-min-version": "Used in Capgo web console areas: pages/app. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "min-update-version-placeholder": "Used in Capgo web console areas: pages/app. Role: input placeholder. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "min-update-version-required": "Used in Capgo web console areas: pages/app. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
