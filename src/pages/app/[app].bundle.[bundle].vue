@@ -54,7 +54,7 @@ const channel = ref<(Database['public']['Tables']['channels']['Row'])>()
 const version_meta = ref<Database['public']['Tables']['app_versions_meta']['Row']>()
 const showBundleMetadataInput = ref<boolean>(false)
 const minUpdateVersionRow = ref<{ reset: () => void } | null>(null)
-const savingMinUpdateVersionId = ref<number | null>(null)
+const savingMinUpdateVersionIds = ref(new Set<number>())
 const hasManifest = ref<boolean>(false)
 const showChecksumTooltip = ref(false)
 const metadataLink = ref('')
@@ -668,9 +668,9 @@ async function saveCustomId(input: string | undefined) {
   // One save at a time per bundle: the field is read only until this one finishes,
   // so no newer draft or out of order response can race it.
   const savedId = id.value
-  if (savingMinUpdateVersionId.value === savedId)
+  if (savingMinUpdateVersionIds.value.has(savedId))
     return
-  savingMinUpdateVersionId.value = savedId
+  savingMinUpdateVersionIds.value.add(savedId)
   let error: unknown = null
   try {
     const result = await capgo
@@ -685,8 +685,7 @@ async function saveCustomId(input: string | undefined) {
     error = failure
   }
   finally {
-    if (savingMinUpdateVersionId.value === savedId)
-      savingMinUpdateVersionId.value = null
+    savingMinUpdateVersionIds.value.delete(savedId)
   }
 
   if (error) {
@@ -984,7 +983,7 @@ async function deleteBundle() {
                   :label="t('min-update-version')" editable
                   :value="version.min_update_version ?? ''"
                   :placeholder="t('min-update-version-placeholder')"
-                  :readonly="!canEditBundleMetadata || savingMinUpdateVersionId === version.id"
+                  :readonly="!canEditBundleMetadata || savingMinUpdateVersionIds.has(version.id)"
                   @click="guardMinAutoUpdate" @update:value="saveCustomId" @keydown="preventInputChangePerm"
                 />
 
