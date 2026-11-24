@@ -54,6 +54,7 @@ const channel = ref<(Database['public']['Tables']['channels']['Row'])>()
 const version_meta = ref<Database['public']['Tables']['app_versions_meta']['Row']>()
 const showBundleMetadataInput = ref<boolean>(false)
 const minUpdateVersionRow = ref<{ reset: () => void } | null>(null)
+const savingMinUpdateVersionId = ref<number | null>(null)
 const hasManifest = ref<boolean>(false)
 const showChecksumTooltip = ref(false)
 const metadataLink = ref('')
@@ -664,13 +665,29 @@ async function saveCustomId(input: string | undefined) {
     return
   }
 
+  // One save at a time per bundle: the field is read only until this one finishes,
+  // so no newer draft or out of order response can race it.
   const savedId = id.value
-  const { error } = await capgo
-    .from('app_versions')
-    .update({
-      min_update_version: commit.value,
-    })
-    .eq('id', savedId)
+  if (savingMinUpdateVersionId.value === savedId)
+    return
+  savingMinUpdateVersionId.value = savedId
+  let error: unknown = null
+  try {
+    const result = await capgo
+      .from('app_versions')
+      .update({
+        min_update_version: commit.value,
+      })
+      .eq('id', savedId)
+    error = result.error
+  }
+  catch (failure) {
+    error = failure
+  }
+  finally {
+    if (savingMinUpdateVersionId.value === savedId)
+      savingMinUpdateVersionId.value = null
+  }
 
   if (error) {
     console.log('Cannot set min update version', error)
@@ -967,7 +984,7 @@ async function deleteBundle() {
                   :label="t('min-update-version')" editable
                   :value="version.min_update_version ?? ''"
                   :placeholder="t('min-update-version-placeholder')"
-                  :readonly="!canEditBundleMetadata"
+                  :readonly="!canEditBundleMetadata || savingMinUpdateVersionId === version.id"
                   @click="guardMinAutoUpdate" @update:value="saveCustomId" @keydown="preventInputChangePerm"
                 />
 

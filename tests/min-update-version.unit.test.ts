@@ -175,6 +175,31 @@ describe('min update version field', () => {
     expect(writes).toEqual(['1.3.0'])
   })
 
+  it('does not commit while the field is read only (save in flight or no permission)', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const onUpdate = vi.fn()
+    const app = createApp({
+      render: () => h(InfoRow, {
+        'label': 'Minimal update version',
+        'editable': true,
+        'readonly': true,
+        'value': '1.2.3',
+        'onUpdate:value': onUpdate,
+      }),
+    })
+    app.mount(container)
+    mounted.push(() => {
+      app.unmount()
+      container.remove()
+    })
+    await nextTick()
+    const input = container.querySelector('input') as HTMLInputElement
+    expect(input.readOnly).toBe(true)
+    await typeAndBlur(input, '')
+    expect(onUpdate).not.toHaveBeenCalled()
+  })
+
   it('reverts an invalid semver without writing', async () => {
     const { input, writes } = await mountField('1.2.3')
     await typeAndBlur(input, 'abc')
