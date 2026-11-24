@@ -405,13 +405,17 @@ async function acceptDiscount(c: Context, ctx: InAppBillingContext, offer: Accep
  */
 async function grantOfferCredits(c: Context, offer: AcceptRow) {
   return await withPg(c, pg => withPgTransaction(pg, async (tx) => {
-    const { rows } = await tx.query<{ credit_grant_id: string | null }>(
-      'SELECT credit_grant_id::text FROM public.cancel_save_offers WHERE id = $1 FOR UPDATE',
+    const { rows } = await tx.query<{ credit_grant_id: string | null, outcome: string }>(
+      'SELECT credit_grant_id::text, outcome FROM public.cancel_save_offers WHERE id = $1 FOR UPDATE',
       [offer.id],
     )
     const existing = rows[0]?.credit_grant_id
     if (existing)
       return existing
+    // Grant only while this accept still holds the customer's one save: a concurrent
+    // cancel may have declined or released the offer since it was reserved.
+    if (rows[0]?.outcome !== 'accepting')
+      throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
     const notes = 'Cancel flow: credits instead of the monthly plan'
     const sourceRef = JSON.stringify({ cancelSaveOfferId: offer.id })
     const { rows: grant } = await tx.query<{ id: string }>(
