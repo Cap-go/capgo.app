@@ -64,7 +64,7 @@ function mount() {
       const artifact = columns.find(col => col.key === 'artifact')
       return h('div', [
         h('button', { 'data-test': `row-${elem.id}`, 'onClick': () => columns[0].onClick(elem) }),
-        artifact.renderFunction(elem),
+        h('div', { 'data-test': `artifact-${elem.id}`, 'onClick': () => artifact.onClick?.(elem) }, [artifact.renderFunction(elem)]),
       ])
     })]),
   }))
@@ -120,6 +120,9 @@ describe('builds table after a successful build', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: {} }), { status: 200 })))
     const host = mount()
     await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-not-saved"]')).not.toBeNull())
+    // The saved-build cell opens the build like the rest of the row.
+    ;(host.querySelector('[data-test="saved-build-not-saved"]') as HTMLElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="live"]')).not.toBeNull())
   })
 
   it('refreshes by itself while a build runs, and stops once none does', async () => {

@@ -25,6 +25,7 @@ const offline = '9d302f51-4e72-41bd-af66-3ea1805d44f7'
 describe('simulator card refresh', () => {
   afterEach(() => {
     clearSimulatorSessions()
+    simulatorConfigured.value = null
     vi.unstubAllGlobals()
     vi.useRealTimers()
   })
@@ -87,7 +88,24 @@ describe('simulator card refresh', () => {
     })
     expect(container.textContent).not.toContain('start-ios-simulator')
     app.unmount()
-    simulatorConfigured.value = null
+  })
+
+  it('shows only the explanation when a start is refused for a missing simulator host', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => init?.method === 'POST'
+      ? new Response(JSON.stringify({ error: 'simulator_not_configured', message: 'Simulator host missing' }), { status: 503 })
+      : new Response(JSON.stringify({ data: [], idle_minutes: 5, max_minutes: 40, configured: true }), { status: 200 })))
+    const container = document.createElement('div')
+    const app = createApp(SimulatorSessionCard, { appId })
+    app.mount(container)
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('start-ios-simulator')
+    })
+    ;(Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('start-ios-simulator')) as HTMLButtonElement).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-test="simulator-not-configured"]')).not.toBeNull()
+    })
+    expect(container.textContent).not.toContain('Simulator host missing')
+    app.unmount()
   })
 
   it('keeps checking after the last stop until the list shows its build time', async () => {

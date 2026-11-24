@@ -21,6 +21,7 @@ import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { forgetSimulator, noteSimulatorStartError, rememberSimulator, simulatorConfigured, simulatorEpoch } from '~/services/simulatorSessions'
 import { sendEvent } from '~/services/tracking'
+import { isBuildSucceeded } from '~/services/buildLiveStream'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 import { getAppGettingStartedPath } from '~/utils/onboardingRedirect'
@@ -369,7 +370,7 @@ function getStatusColor(status: string): string {
 }
 
 async function loadSavedOutputs(builds: Element[], current: () => boolean, silent = false) {
-  const jobIds = builds.filter(build => build.status === 'succeeded' && build.builder_job_id).map(build => build.builder_job_id as string)
+  const jobIds = builds.filter(build => isBuildSucceeded(build.status) && build.builder_job_id).map(build => build.builder_job_id as string)
   const key = jobIds.join(',')
   // Auto-refresh only asks the builder again when a build newly succeeded.
   if (silent && key === savedOutputsKey)
@@ -701,6 +702,7 @@ columns.value = [
   {
     label: t('saved-build'),
     key: 'artifact',
+    onClick: openBuild,
     mobile: true,
     class: 'min-w-56',
     renderFunction: savedBuildCell,

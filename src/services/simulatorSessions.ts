@@ -10,9 +10,12 @@ export interface RunningSimulator {
 export const simulatorConfigured = ref<boolean | null>(null)
 
 // A start refused for a missing simulator host also settles it, before any list answered.
+// Returns true when the refusal means the server has no simulator host.
 export function noteSimulatorStartError(payload: { error?: string } | undefined) {
-  if (payload?.error === 'simulator_not_configured')
-    simulatorConfigured.value = false
+  if (payload?.error !== 'simulator_not_configured')
+    return false
+  simulatorConfigured.value = false
+  return true
 }
 
 const sessionsByApp = reactive<Record<string, RunningSimulator[]>>({})

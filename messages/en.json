@@ -4552,7 +4552,7 @@
   "saved-build-expired": "This saved build has expired.",
   "saved-build-expired-short": "Expired",
   "saved-build-expired-hint": "Saved builds can be downloaded for a limited time. Run a new build to get a fresh file.",
-  "saved-build-not-saved": "Store upload or expired",
+  "saved-build-not-saved": "Not downloadable",
   "saved-build-not-saved-hint": "This build went to the store, or its saved file is no longer kept. Open the build for details.",
   "simulator-not-configured-hint": "Simulators are not available on this Capgo server.",
   "build-row-open": "Open build details",

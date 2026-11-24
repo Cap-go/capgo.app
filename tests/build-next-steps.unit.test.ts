@@ -29,6 +29,10 @@ describe('savedBuildState', () => {
     expect(savedBuildState(build, undefined, NOW)).toBe('not-saved')
   })
 
+  it.each(['released', 'completed'])('treats a %s build as a success', (status) => {
+    expect(savedBuildState({ status }, undefined, NOW)).toBe('not-saved')
+  })
+
   it('shows nothing for builds that did not succeed', () => {
     expect(savedBuildState({ status: 'failed' }, undefined, NOW)).toBe('none')
     expect(savedBuildState({ status: 'running' }, undefined, NOW)).toBe('none')
@@ -43,6 +47,14 @@ describe('latestSucceededBuild', () => {
       { id: 'b', status: 'succeeded', created_at: '2026-11-16T10:00:00Z' },
     ]
     expect(latestSucceededBuild(builds)).toBe(builds[2])
+  })
+
+  it('counts released builds as successes', () => {
+    const builds = [
+      { status: 'succeeded', created_at: '2026-11-15T10:00:00Z' },
+      { status: 'released', created_at: '2026-11-16T10:00:00Z' },
+    ]
+    expect(latestSucceededBuild(builds)).toBe(builds[1])
   })
 
   it('returns nothing before the first success', () => {
