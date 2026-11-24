@@ -55,9 +55,9 @@ const version_meta = ref<Database['public']['Tables']['app_versions_meta']['Row'
 const showBundleMetadataInput = ref<boolean>(false)
 const minUpdateVersionRow = ref<{ reset: () => void } | null>(null)
 const savingMinUpdateVersionIds = ref(new Set<number>())
-let versionLoadGeneration = 0
-// Saved value for a bundle that was still loading when its save finished.
-let pendingMinUpdateVersion: { id: number, value: string } | null = null
+// Last successful min update version save, so a bundle load that overlapped it cannot bring back the old value.
+let minUpdateSaveSeq = 0
+const lastMinUpdateSaves = new Map<number, { value: string, seq: number }>()
 const hasManifest = ref<boolean>(false)
 const showChecksumTooltip = ref(false)
 const metadataLink = ref('')
@@ -591,7 +591,7 @@ async function openBundleMetadataDialog() {
 async function getVersion() {
   if (!id.value)
     return
-  const loadGeneration = ++versionLoadGeneration
+  const saveSeqAtStart = minUpdateSaveSeq
   try {
     const { data } = await capgo
       .from('app_versions')
@@ -604,18 +604,14 @@ async function getVersion() {
       .select()
       .eq('id', id.value)
       .single()
-    // A newer load (route change) started while this one was in flight.
-    if (loadGeneration !== versionLoadGeneration)
-      return
     if (!data) {
       console.error('no version found')
       return
     }
-    // A min update version save finished while this bundle was loading: its read may predate the write.
-    if (pendingMinUpdateVersion?.id === data.id) {
-      data.min_update_version = pendingMinUpdateVersion.value
-      pendingMinUpdateVersion = null
-    }
+    // A min update version save finished while this load was in flight: the read may predate the write.
+    const overlappingSave = lastMinUpdateSaves.get(data.id)
+    if (overlappingSave && overlappingSave.seq > saveSeqAtStart)
+      data.min_update_version = overlappingSave.value
     if (dataVersionsMeta)
       version_meta.value = dataVersionsMeta
 
@@ -708,11 +704,10 @@ async function saveCustomId(input: string | undefined) {
     return
   }
 
+  lastMinUpdateSaves.set(savedId, { value: commit.value, seq: ++minUpdateSaveSeq })
   // The user may have opened another bundle while the save was in flight.
   if (version.value?.id === savedId)
     version.value = { ...version.value, min_update_version: commit.value }
-  else if (id.value === savedId)
-    pendingMinUpdateVersion = { id: savedId, value: commit.value }
   toast.success(t('updated-min-version'))
 }
 
