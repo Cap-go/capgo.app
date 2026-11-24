@@ -110,7 +110,9 @@ Join the [discord](https://discord.gg/VnYRvBfgA6) to get help.
 
 ## Forks and branding
 
-The license in this repository covers the code only. It grants no rights
+This CLI, like the rest of the repository, is licensed under the
+[GNU Affero General Public License v3.0 (AGPL-3.0)](https://github.com/Cap-go/capgo.app/blob/main/LICENSE).
+That license covers the code only. It grants no rights
 to the Capgo name, wordmark, logos, or branding. Public forks, custom builds, and
 hosted or self-hosted services presented to others must use their own name and
 branding and make clear they are not Capgo and not endorsed by Capgo. Private

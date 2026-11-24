@@ -4,7 +4,7 @@
   "version": "8.110.0",
   "description": "A CLI to upload to capgo servers",
   "author": "Martin martin@capgo.app",
-  "license": "Apache 2.0",
+  "license": "AGPL-3.0-only",
   "homepage": "https://github.com/Cap-go/capgo/tree/main/cli#readme",
   "repository": {
     "type": "git",

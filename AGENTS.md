@@ -5,15 +5,14 @@ when working with code in this repository.
 
 ## Forks and branding
 
-The [AGPL-3.0](LICENSE) license in `LICENSE` (and any component's own license,
-for example in `cli/`) covers the code only. It grants no rights to the Capgo
-name, wordmark, logos, or other branding, which Digital Shift OU owns. If you
-are building a public fork, a derivative project, or a hosted or self-hosted
-service presented to others from this code, rebrand it: replace the Capgo
-name, logos, icons, and domains with the project's own, and make clear it is
-not Capgo and not endorsed by Capgo.
-Private internal self-hosting and truthful plain-text attribution are fine. See
-[TRADEMARK.md](TRADEMARK.md).
+All code in this repository is licensed under the [AGPL-3.0](LICENSE). That
+license covers the code only. It grants no rights to the Capgo name, wordmark,
+logos, or other branding, which Digital Shift OU owns. If you are building a
+public fork, a derivative project, or a hosted or self-hosted service presented
+to others from this code, rebrand it: replace the Capgo name, logos, icons, and
+domains with the project's own, and make clear it is not Capgo and not endorsed
+by Capgo. Private internal self-hosting and truthful plain-text attribution are
+fine. See [TRADEMARK.md](TRADEMARK.md).
 
 ## Admin dashboard
 

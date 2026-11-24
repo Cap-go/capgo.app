@@ -7,7 +7,7 @@
     "cli",
     "packages/*"
   ],
-  "license": "GPL-3.0",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "generate:mcp-skills": "bun scripts/generate-mcp-skills.ts",
     "check:mcp-skills": "bun scripts/generate-mcp-skills.ts --check",

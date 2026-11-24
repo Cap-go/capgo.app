@@ -594,18 +594,16 @@ on stores.
 
 ## License
 
-The code in this repository is covered by the license in [LICENSE](./LICENSE),
-the GNU Affero General Public License v3.0 (AGPL-3.0), unless a component
-carries its own license (for example `cli/`). The `LICENSE` file is the
-authoritative license text.
+All code in this repository, including the `cli/` workspace, is licensed under
+the [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE). The
+`LICENSE` file is the authoritative license text.
 
 ## Trademarks and forks
 
-The AGPL-3.0 license (and any component's own license, for example in `cli/`)
-covers **only the code** (source and works built from it). It does not grant any
-rights to Digital Shift OU's trademarks, branding, or trade dress, including the
-**Capgo** name, wordmark, logos, and application icons. This has always been the
-case; this section only makes it explicit.
+The AGPL-3.0 license covers **only the code** (source and works built from it).
+It does not grant any rights to Digital Shift OU's trademarks, branding, or
+trade dress, including the **Capgo** name, wordmark, logos, and application
+icons. This has always been the case; this section only makes it explicit.
 
 If you fork, redistribute, host, or build on Capgo's source code:
 
