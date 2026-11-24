@@ -1171,6 +1171,7 @@
   "bundle-offers-by-version": "Update offers by bundle",
   "bundle-offers-devices-link": "Open Devices",
   "bundle-offers-help": "Share of daily update offers. Devices already on the offered bundle get no offer, so this is not what devices run.",
+  "bundle-offers-total": "Total offers",
   "bundle-offers-unit": "offers",
   "bundle-not-compatible-with-channel": "Bundle not compatible with channel",
   "bundle-not-found": "Bundle not found",

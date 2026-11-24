@@ -769,7 +769,7 @@ const chartOptions = computed<ChartOptions<'line'>>(() => {
   const hasMultipleDatasets = (processedChartData.value?.datasets.length ?? 0) > 1
   // Dates come from the range actually shown (billing period or the 1-30 day
   // window); the tooltip's fallback assumes a 30-day window.
-  const tooltipOptions = createTooltipConfig(hasMultipleDatasets, props.accumulated, currentRange.value?.startDate ?? false, hasMultipleDatasets ? tooltipClickHandler.value : undefined, isNativeUsage.value ? undefined : t('bundle-offers-unit'))
+  const tooltipOptions = createTooltipConfig(hasMultipleDatasets, props.accumulated, currentRange.value?.startDate ?? false, hasMultipleDatasets ? tooltipClickHandler.value : undefined, isNativeUsage.value ? undefined : t('bundle-offers-total'))
 
   const pluginOptions = {
     legend: {

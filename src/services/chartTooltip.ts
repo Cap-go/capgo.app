@@ -125,7 +125,7 @@ function getDatasetBaseValue(
  * @param dateStartOrUseBillingPeriod Either a Date for billing start, or boolean for mode
  * @param clickHandler Optional click handler for interactive tooltip items
  */
-export function createCustomTooltip(context: TooltipContext, isAccumulated: boolean = false, hasMultipleDatasets: boolean = true, dateStartOrUseBillingPeriod?: Date | boolean, clickHandler?: TooltipClickHandler, countUnit: string = 'devices') {
+export function createCustomTooltip(context: TooltipContext, isAccumulated: boolean = false, hasMultipleDatasets: boolean = true, dateStartOrUseBillingPeriod?: Date | boolean, clickHandler?: TooltipClickHandler, totalCountLabel: string = 'Total devices') {
   const { chart, tooltip } = context
   const { canvas } = chart
   const isDark = useDark()
@@ -285,7 +285,7 @@ export function createCustomTooltip(context: TooltipContext, isAccumulated: bool
       totalEl.style.borderBottom = `1px solid ${isDark.value ? 'rgba(75, 85, 99, 0.3)' : 'rgba(209, 213, 219, 0.3)'}`
       totalEl.style.color = totalColor
       totalEl.textContent = hasCountValues
-        ? `Total ${countUnit}: ${formatNumberValue(Math.round(totalCount))}`
+        ? `${totalCountLabel}: ${formatNumberValue(Math.round(totalCount))}`
         : `Total: ${formatTooltipValue(totalValue)}`
       container.appendChild(totalEl)
     }
@@ -680,13 +680,13 @@ export const todayLinePlugin = {
  * @param clickHandler Optional click handler for interactive tooltip items
  * @returns Chart.js tooltip configuration object
  */
-export function createTooltipConfig(hasMultipleDatasets: boolean, isAccumulated: boolean = false, dateStartOrUseBillingPeriod?: Date | boolean, clickHandler?: TooltipClickHandler, countUnit?: string) {
+export function createTooltipConfig(hasMultipleDatasets: boolean, isAccumulated: boolean = false, dateStartOrUseBillingPeriod?: Date | boolean, clickHandler?: TooltipClickHandler, totalCountLabel?: string) {
   return {
     mode: 'index' as const,
     intersect: false,
     position: 'nearest' as const,
     // Always use custom tooltip for consistent design across single and multi-app views
-    external: (context: TooltipContext) => createCustomTooltip(context, isAccumulated, hasMultipleDatasets, dateStartOrUseBillingPeriod, clickHandler, countUnit),
+    external: (context: TooltipContext) => createCustomTooltip(context, isAccumulated, hasMultipleDatasets, dateStartOrUseBillingPeriod, clickHandler, totalCountLabel),
     enabled: false, // Always disable default tooltip since we use custom
     callbacks: {
       title(tooltipItems: ChartTooltipItem<any>[]) {
