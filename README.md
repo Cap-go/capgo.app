@@ -167,8 +167,9 @@ If you're self-hosting, the key pieces live in a few top-level directories:
 - `docs/` - Extra documentation and guides
 - `android/`, `ios/` - Capacitor native projects (mobile builds)
 
-Self-hosting and forking are welcome, but the license covers the source code
-only. Public forks and hosted services must use their own name and branding; see
+Self-hosting and forking are welcome, but the license covers the code only.
+Public forks and services presented to others must use their own name and
+branding; see
 [Trademarks and forks](#trademarks-and-forks).
 
 Quick self-hosting path:
@@ -593,14 +594,15 @@ on stores.
 
 ## License
 
-The source code in this repository is licensed under the
-[GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE), unless a
-component carries its own license (for example `cli/`).
+The code in this repository is covered by the license in [LICENSE](./LICENSE),
+the GNU Affero General Public License v3.0 (AGPL-3.0), unless a component
+carries its own license (for example `cli/`). The `LICENSE` file is the
+authoritative license text.
 
 ## Trademarks and forks
 
 The AGPL-3.0 license (and any component's own license, for example in `cli/`)
-applies **only to the source code**. It does not grant any
+covers **only the code** (source and works built from it). It does not grant any
 rights to Digital Shift OU's trademarks, branding, or trade dress, including the
 **Capgo** name, wordmark, logos, and application icons. This has always been the
 case; this section only makes it explicit.
