@@ -41,22 +41,24 @@ ALTER TABLE public.cancel_save_offers
 COMMENT ON TABLE public.cancel_save_offers IS
   'Offers shown in the cancel flow (a discount, or credits instead of the monthly plan) and their outcome (offered, accepting, accepted, declined). Written by private/stripe_billing with the service role only.';
 
--- Historical repair. Between 2026-11-16 and 2026-11-24 three accepts failed before
--- Stripe applied any discount (the save coupon was never created in Stripe), and the
--- rows stayed 'accepting' forever. That blocked any later offer for those customers
--- and kept them out of every series of the admin chart. Stripe shows no discount on
--- any of the three subscriptions (checked 2026-11-24):
---   2309f0e5…: the customer canceled 5 s after the failed accept (Stripe
---              canceled_at 2026-11-17 18:11:19 UTC), so it is a decline.
---   67a77f36…, d5939775…: still active and never canceled, so no answer.
-UPDATE public.cancel_save_offers
-SET outcome = 'declined', responded_at = '2026-11-17 18:11:19+00'
-WHERE id = '2309f0e5-bd7c-48f2-8a07-1de9ec4c62aa'
-  AND outcome = 'accepting'
-  AND discount_start IS NULL;
+-- Historical repair. Before this change, an accept that failed before Stripe applied
+-- the discount could leave its offer 'accepting' forever. That blocked any later
+-- offer for the customer and kept the row out of every series of the admin chart.
+-- Such a row has no discount (discount_start) and, before this migration, no grant.
+-- If the customer canceled afterwards (stripe_info.canceled_at, synced from Stripe),
+-- they canceled anyway: declined, keeping the time they answered. Otherwise the
+-- customer never got the offer applied and kept paying: back to no answer.
+UPDATE public.cancel_save_offers AS o
+SET outcome = 'declined'
+FROM public.stripe_info AS si
+WHERE si.customer_id = o.customer_id
+  AND si.canceled_at IS NOT NULL
+  AND o.outcome = 'accepting'
+  AND o.discount_start IS NULL
+  AND o.credit_grant_id IS NULL;
 
 UPDATE public.cancel_save_offers
 SET outcome = 'offered', responded_at = NULL
-WHERE id IN ('67a77f36-5660-4e4a-a669-2ed02582fd6a', 'd5939775-9c67-4666-becb-c7a1868eae32')
-  AND outcome = 'accepting'
-  AND discount_start IS NULL;
+WHERE outcome = 'accepting'
+  AND discount_start IS NULL
+  AND credit_grant_id IS NULL;

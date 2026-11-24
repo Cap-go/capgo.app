@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { Pool } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { getPostgresClient } from './test-utils.ts'
+import { getPostgresClient, USER_ID } from './test-utils.ts'
 
 // Accepting a credits offer against real Postgres, with Stripe mocked: when the
 // cancellation fails after the grant committed, the offer stays reserved, another
@@ -29,6 +29,9 @@ const SUBSCRIPTION_ID = 'sub_cancel_credits_test'
 const { acceptCancelSaveOffer } = await import('../supabase/functions/_backend/utils/cancel_save_offer.ts')
 
 const customerId = `cus_${randomUUID()}`
+// A dedicated org: the grant flips its has_usage_credits flag, which must not
+// touch the seeded orgs other suites read in parallel.
+const orgId = randomUUID()
 const c = { get: () => 'req_test' } as unknown as Context<any>
 // A monthly, active, undiscounted subscription: eligible for a first grant.
 const ctx = {
@@ -50,7 +53,6 @@ const ctx = {
 } as any
 
 let pool: Pool
-let orgId: string
 let offerA: string
 let offerB: string
 
@@ -73,10 +75,16 @@ async function offer(id: string) {
 beforeAll(async () => {
   pool = await getPostgresClient()
   mocks.pool = pool
-  const { rows: org } = await pool.query<{ id: string }>(
-    `SELECT id::text FROM public.orgs WHERE id NOT IN (SELECT org_id FROM public.usage_credit_grants) ORDER BY created_at, id LIMIT 1`,
+  await pool.query(
+    `INSERT INTO public.stripe_info (customer_id, status, product_id)
+     SELECT $1, 'succeeded', stripe_id FROM public.plans ORDER BY price_m LIMIT 1`,
+    [customerId],
   )
-  orgId = org[0].id
+  await pool.query(
+    `INSERT INTO public.orgs (id, created_by, name, management_email, customer_id, has_usage_credits)
+     VALUES ($1::uuid, $2::uuid, 'Cancel Credits Test Org', 'cancel-credits@example.com', $3, false)`,
+    [orgId, USER_ID, customerId],
+  )
   // Two offers shown to the same customer (for example two open dialogs).
   const insert = () => pool.query<{ id: string }>(
     `INSERT INTO public.cancel_save_offers
@@ -98,6 +106,10 @@ afterAll(async () => {
     await pool.query('DELETE FROM public.usage_credit_transactions WHERE grant_id = $1', [id])
     await pool.query('DELETE FROM public.usage_credit_grants WHERE id = $1', [id])
   }
+  await pool.query('DELETE FROM public.usage_credit_transactions WHERE org_id = $1::uuid', [orgId])
+  await pool.query('DELETE FROM public.usage_credit_grants WHERE org_id = $1::uuid', [orgId])
+  await pool.query('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
+  await pool.query('DELETE FROM public.stripe_info WHERE customer_id = $1', [customerId])
   await pool.end()
 })
 
