@@ -886,6 +886,39 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.locator('[data-test="cancel-save-offer"]').waitFor()
     },
   },
+  {
+    slug: 'org-billing-cancel-founder',
+    path: '/settings/organization/billing',
+    auth: true,
+    prepare: async (page) => {
+      await page.route('**/private/sso/check-enforcement', route => route.fulfill({ json: { allowed: true } }))
+      await page.route('**/private/stripe_past_due', route => route.fulfill({ json: { past_due: false, invoice: null } }))
+      await page.route('**/private/stripe_billing/overview', route => route.fulfill({ json: {
+        publishableKey: '',
+        card: { id: 'pm_visual', brand: 'visa', last4: '4242', expMonth: 4, expYear: 2030 },
+        backupCard: null,
+        subscription: { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: new Date(Date.now() + 18 * 86400000).toISOString() },
+        invoices: [],
+        openInvoice: null,
+        trialPlan: null,
+      } }))
+      // A customer missing a feature: the discount stays, and a call with the founder is offered next to it.
+      await page.route('**/private/stripe_billing/cancel-offer', route => route.fulfill({ json: {
+        offer: { id: '00000000-0000-4000-8000-000000000003', type: 'discount', percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' },
+      } }))
+      await page.goto('/settings/organization/billing')
+      await page.locator('[data-test="billing-cancel"]').click()
+      await page.locator('[data-test="cancel-reason-missing_features"]').click()
+      await page.locator('[data-test="cancel-plan-confirm"]').click()
+      await page.locator('[data-test="cancel-loss-reminder"]')
+        .or(page.locator('[data-test="cancel-save-offer"]'))
+        .first()
+        .waitFor()
+      if (await page.locator('[data-test="cancel-loss-reminder"]').isVisible())
+        await page.locator('[data-test="cancel-loss-continue"]').click()
+      await page.locator('[data-test="cancel-save-offer"]').waitFor()
+    },
+  },
   { slug: 'account-settings', path: '/settings/account', auth: true },
   { slug: 'account-notifications', path: '/settings/account/notifications', auth: true },
   {

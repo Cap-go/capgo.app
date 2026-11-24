@@ -11,7 +11,7 @@ import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import BillingModal from '~/components/billing/BillingModal.vue'
-import { acceptCancelSaveOffer, CANCEL_REASONS, cancelSubscriptionWithReason, formatStripeAmount, getCancelSaveOffer } from '~/services/stripe'
+import { acceptCancelSaveOffer, CANCEL_REASONS, cancelSubscriptionWithReason, formatStripeAmount, FOUNDER_CALL_REASONS, FOUNDER_CALL_URL, getCancelSaveOffer } from '~/services/stripe'
 
 const props = defineProps<{
   orgId: string
@@ -33,6 +33,8 @@ const isAccepting = ref(false)
 // undefined until checked; null when the customer is not eligible.
 const offer = ref<CancelSaveOffer | null | undefined>(undefined)
 const showLossReminder = ref(false)
+// Set once the offer was checked and the reason calls for a talk with the founder.
+const showFounderCall = ref(false)
 const lossHeading = ref<HTMLElement | null>(null)
 const MAX_COMMENT = 1000
 const lossItems = ['ota', 'channels', 'builds', 'support'] as const
@@ -72,7 +74,8 @@ async function loadOfferOrCancel() {
         return null
       })
       showLossReminder.value = false
-      if (offer.value)
+      showFounderCall.value = FOUNDER_CALL_REASONS.includes(reason.value)
+      if (offer.value || showFounderCall.value)
         return
     }
     await cancelPlan(reason.value)
@@ -154,7 +157,7 @@ async function acceptOffer() {
         </button>
       </div>
     </div>
-    <div v-else-if="offer" data-test="cancel-save-offer" :data-offer-type="offer.type">
+    <div v-else-if="offer || showFounderCall" data-test="cancel-save-offer" :data-offer-type="offer?.type ?? 'founder_call'">
       <div v-if="creditsOffer" class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
         <p class="text-base font-semibold text-blue-900 dark:text-blue-100">
           {{ t('billing-cancel-credits-title') }}
@@ -176,12 +179,23 @@ async function acceptOffer() {
           {{ t('billing-cancel-offer-desc', { discounted: discountedPrice, full: monthlyPrice, months: discountOffer.durationMonths }) }}
         </p>
       </div>
+      <div v-if="showFounderCall" class="rounded-lg border border-slate-200 p-4 dark:border-slate-700" :class="{ 'mt-4': offer }" data-test="cancel-founder-call">
+        <p class="text-base font-semibold text-slate-900 dark:text-white">
+          {{ t('billing-cancel-founder-title') }}
+        </p>
+        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
+          {{ t('billing-cancel-founder-desc') }}
+        </p>
+        <a :href="FOUNDER_CALL_URL" target="_blank" rel="noopener" class="d-btn d-btn-sm d-btn-outline mt-3" data-test="cancel-founder-book">
+          {{ t('billing-cancel-founder-book') }}
+        </a>
+      </div>
       <div class="mt-6 flex flex-wrap justify-end gap-2">
         <button type="button" class="d-btn d-btn-ghost" :disabled="busy" data-test="cancel-offer-decline" @click="submit">
           <span v-if="isSubmitting" class="d-loading d-loading-spinner d-loading-sm" />
           {{ t('billing-cancel-offer-decline') }}
         </button>
-        <button type="button" class="d-btn d-btn-primary" :disabled="busy" data-test="cancel-offer-accept" @click="acceptOffer">
+        <button v-if="offer" type="button" class="d-btn d-btn-primary" :disabled="busy" data-test="cancel-offer-accept" @click="acceptOffer">
           <span v-if="isAccepting" class="d-loading d-loading-spinner d-loading-sm" />
           {{ creditsOffer ? t('billing-cancel-credits-accept', { credits: creditsOffer.credits }) : t('billing-cancel-offer-accept', { percent: discountOffer?.percentOff }) }}
         </button>

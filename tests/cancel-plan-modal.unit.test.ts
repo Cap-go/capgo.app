@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('vue-sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 vi.mock('../src/services/stripe', () => ({
-  CANCEL_REASONS: ['too_expensive', 'other'],
+  CANCEL_REASONS: ['too_expensive', 'missing_features', 'other'],
+  FOUNDER_CALL_REASONS: ['missing_features'],
+  FOUNDER_CALL_URL: 'https://book.capgo.app/meet-martin',
   getCancelSaveOffer: mocks.getCancelSaveOffer,
   cancelSubscriptionWithReason: mocks.cancelSubscriptionWithReason,
   acceptCancelSaveOffer: mocks.acceptCancelSaveOffer,
@@ -52,8 +54,8 @@ function shell() {
   return document.body
 }
 
-async function pickReason() {
-  const input = shell().querySelector('[data-test="cancel-reason-too_expensive"] input') as HTMLInputElement
+async function pickReason(value = 'too_expensive') {
+  const input = shell().querySelector(`[data-test="cancel-reason-${value}"] input`) as HTMLInputElement
   input.click()
   await nextTick()
 }
@@ -160,5 +162,40 @@ describe('CancelPlanModal loss reminder', () => {
     await vi.waitFor(() => expect(onSaved).toHaveBeenCalledOnce())
     expect(mocks.acceptCancelSaveOffer).toHaveBeenCalledWith('org_test', 'offer_2', 'only one app now')
     expect(mocks.cancelSubscriptionWithReason).not.toHaveBeenCalled()
+  })
+
+  it('offers a call with the founder instead of canceling at once', async () => {
+    mocks.getCancelSaveOffer.mockResolvedValue({ offer: null })
+    mocks.cancelSubscriptionWithReason.mockResolvedValue({ subscription: null })
+    const { onCanceled } = mountModal()
+    await pickReason('missing_features')
+    await submitReason()
+    ;(shell().querySelector('[data-test="cancel-loss-continue"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(shell().querySelector('[data-test="cancel-founder-call"]')).toBeTruthy())
+    expect((shell().querySelector('[data-test="cancel-founder-book"]') as HTMLAnchorElement).href).toBe('https://book.capgo.app/meet-martin')
+    expect(shell().querySelector('[data-test="cancel-offer-accept"]')).toBeNull()
+    expect(mocks.cancelSubscriptionWithReason).not.toHaveBeenCalled()
+    ;(shell().querySelector('[data-test="cancel-offer-decline"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(onCanceled).toHaveBeenCalledOnce())
+  })
+
+  it('shows the founder call next to an offer', async () => {
+    mocks.getCancelSaveOffer.mockResolvedValue({ offer })
+    mountModal()
+    await pickReason('missing_features')
+    await submitReason()
+    ;(shell().querySelector('[data-test="cancel-loss-continue"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(shell().querySelector('[data-test="cancel-founder-call"]')).toBeTruthy())
+    expect(shell().querySelector('[data-test="cancel-offer-accept"]')).toBeTruthy()
+  })
+
+  it('does not offer the founder call for price reasons', async () => {
+    mocks.getCancelSaveOffer.mockResolvedValue({ offer })
+    mountModal()
+    await pickReason()
+    await submitReason()
+    ;(shell().querySelector('[data-test="cancel-loss-continue"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(shell().querySelector('[data-test="cancel-save-offer"]')).toBeTruthy())
+    expect(shell().querySelector('[data-test="cancel-founder-call"]')).toBeNull()
   })
 })

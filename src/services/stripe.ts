@@ -319,6 +319,11 @@ export const CANCEL_REASONS = [
 
 export type CancelReason = typeof CANCEL_REASONS[number]
 
+// Reasons a conversation can solve better than a price: the cancel flow offers a call
+// with the founder before canceling.
+export const FOUNDER_CALL_REASONS: readonly CancelReason[] = ['missing_features', 'switched_service', 'too_complex', 'low_quality', 'customer_service']
+export const FOUNDER_CALL_URL = 'https://book.capgo.app/meet-martin'
+
 export interface IntentSecret {
   clientSecret: string
   publishableKey: string
