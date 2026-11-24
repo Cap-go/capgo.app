@@ -553,7 +553,9 @@ async function saveBundleMetadata() {
     return false
   }
 
-  version.value = data
+  // Merge only the fields this handler writes, so a min update version saved meanwhile is kept.
+  if (version.value?.id === data.id)
+    version.value = { ...version.value, link: data.link, comment: data.comment }
   toast.success(t('bundle-metadata-updated'))
   return true
 }
