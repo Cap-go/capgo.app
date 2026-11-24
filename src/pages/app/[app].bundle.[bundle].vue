@@ -687,7 +687,9 @@ async function saveCustomId(input: string | undefined) {
         min_update_version: commit.value,
       })
       .eq('id', savedId)
-    error = result.error
+      .select('id')
+    // A no match or RLS filtered update returns no row and no error: treat it as a failed save.
+    error = result.error ?? (result.data?.length ? null : new Error('min_update_version update matched no bundle row'))
   }
   catch (failure) {
     error = failure
