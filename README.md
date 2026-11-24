@@ -594,11 +594,13 @@ on stores.
 ## License
 
 The source code in this repository is licensed under the
-[GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE).
+[GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE), unless a
+component carries its own license (for example `cli/`).
 
 ## Trademarks and forks
 
-The AGPL-3.0 license applies **only to the source code**. It does not grant any
+The AGPL-3.0 license (and any component's own license, for example in `cli/`)
+applies **only to the source code**. It does not grant any
 rights to Digital Shift OU's trademarks, branding, or trade dress, including the
 **Capgo** name, wordmark, logos, and application icons. This has always been the
 case; this section only makes it explicit.
@@ -606,8 +608,10 @@ case; this section only makes it explicit.
 If you fork, redistribute, host, or build on Capgo's source code:
 
 - **Use your own name and branding.** Replace the Capgo name, wordmark, logos,
-  and application icons in any public fork, redistributed build, hosted or
-  self-hosted service, website, package, or app store listing.
+  and application icons in any public fork, redistributed build, hosted
+  service, or self-hosted service presented to others, website, package, or app
+  store listing. Truthful, plain-text attribution is allowed as described in
+  [TRADEMARK.md](./TRADEMARK.md). Private internal self-hosting is fine.
 - **Make it clear that your project is not Capgo.** State clearly that your
   project is unofficial and not affiliated with or endorsed by Capgo or Digital
   Shift OU.

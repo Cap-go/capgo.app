@@ -2,6 +2,8 @@
 
 The [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE) in this repository applies **only to the source code**. It does not grant any rights to Digital Shift OU's trademarks, service marks, trade names, trade dress, or branding.
 
+Some components carry their own license file or package metadata (for example [`cli/`](./cli/)). Check each component's license for the terms that apply to its code. Whichever license applies, it covers source code only and grants no trademark or branding rights.
+
 This is not a policy change. Digital Shift OU has always owned and been able to enforce its rights in the Capgo name and branding. This file documents that explicitly so that people, and the coding agents working for them, get it right when they create forks or derivative projects.
 
 ## Protected marks and brand assets

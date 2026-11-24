@@ -12,11 +12,13 @@ community looks forward to your contributions. 🎉
 ## Forks and branding
 
 You are welcome to fork the source code under the
-[GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE). That license
-covers the source code only, not the **Capgo** name, wordmark, logos, or
-branding. Any public fork, hosted service, or derivative project must use its
-own name and branding and make it clear that it is not Capgo and not endorsed
-by Capgo. Truthful, plain-text attribution is fine; see
+[GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE) in `LICENSE`, or
+under a component's own license where it has one (for example `cli/`). Those
+licenses cover the source code only, not the **Capgo** name, wordmark, logos,
+or branding. Any public fork, hosted service presented to others, or
+derivative project must use its own name and branding and make it clear that
+it is not Capgo and not endorsed by Capgo. Private internal self-hosting is
+fine. Truthful, plain-text attribution is fine; see
 [TRADEMARK.md](./TRADEMARK.md).
 
 ## Admin dashboard changes
