@@ -45,20 +45,23 @@ COMMENT ON TABLE public.cancel_save_offers IS
 -- the discount could leave its offer 'accepting' forever. That blocked any later
 -- offer for the customer and kept the row out of every series of the admin chart.
 -- Such a row has no discount (discount_start) and, before this migration, no grant.
--- If the customer canceled afterwards (stripe_info.canceled_at, synced from Stripe),
+-- Only rows answered over an hour ago: an accept running during the deploy is left alone.
+-- If the customer canceled after answering (stripe_info.canceled_at, synced from Stripe),
 -- they canceled anyway: declined, keeping the time they answered. Otherwise the
 -- customer never got the offer applied and kept paying: back to no answer.
 UPDATE public.cancel_save_offers AS o
 SET outcome = 'declined'
 FROM public.stripe_info AS si
 WHERE si.customer_id = o.customer_id
-  AND si.canceled_at IS NOT NULL
+  AND si.canceled_at >= o.responded_at
   AND o.outcome = 'accepting'
   AND o.discount_start IS NULL
-  AND o.credit_grant_id IS NULL;
+  AND o.credit_grant_id IS NULL
+  AND o.responded_at < now() - interval '1 hour';
 
 UPDATE public.cancel_save_offers
 SET outcome = 'offered', responded_at = NULL
 WHERE outcome = 'accepting'
   AND discount_start IS NULL
-  AND credit_grant_id IS NULL;
+  AND credit_grant_id IS NULL
+  AND responded_at < now() - interval '1 hour';
