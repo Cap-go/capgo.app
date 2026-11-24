@@ -35,16 +35,12 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
 }))
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
-const APP_ID = 'com.example.app'
 const ORG_ID = '22222222-2222-4222-8222-222222222222'
+const APP_ID = 'com.example.app'
 
 // Direct Postgres: the owner_org lookup returns the org, every delete succeeds.
 const pgClient = {
-  query: vi.fn(async (text: string) => {
-    if (text.includes('SELECT owner_org FROM public.apps'))
-      return { rows: [{ row: { owner_org: ORG_ID } }] }
-    return { rows: [] as unknown[] }
-  }),
+  query: vi.fn(async (_text: string): Promise<{ rows: { row: { owner_org: string } }[] }> => ({ rows: [] })),
 }
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -81,6 +77,7 @@ function file(name: string) {
 describe('app delete storage cleanup', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    pgClient.query.mockImplementation(async text => ({ rows: text.includes('SELECT owner_org FROM public.apps') ? [{ row: { owner_org: ORG_ID } }] : [] }))
     mocks.checkPermission.mockResolvedValue(true)
     mocks.deleteObjectsWithPrefix.mockResolvedValue(0)
     mocks.remove.mockResolvedValue({ data: [], error: null })
@@ -145,6 +142,20 @@ describe('app delete storage cleanup', () => {
     expect(response.status).toBe(200)
     expect(mocks.expireSimulatorSessions).toHaveBeenCalledWith(expect.anything(), ORG_ID)
     expect(order).toEqual(['settle', 'delete app'])
+    expect(pgClient.query.mock.calls.filter(([text]) => text.includes('SELECT owner_org FROM public.apps'))).toHaveLength(1)
+  })
+
+  it('still deletes the app when the simulator owner lookup fails', async () => {
+    pgClient.query.mockImplementation(async (text) => {
+      if (text.includes('SELECT owner_org FROM public.apps'))
+        throw new Error('temporary lookup failure')
+      return { rows: [] }
+    })
+    const response = await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
+    expect(response.status).toBe(200)
+    expect(mocks.expireSimulatorSessions).not.toHaveBeenCalled()
+    expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'error settling simulator sessions' }))
+    expect(pgClient.query).toHaveBeenCalledWith('DELETE FROM public.apps WHERE app_id = $1', [APP_ID])
   })
 
   it('still deletes the app when simulator settlement fails', async () => {

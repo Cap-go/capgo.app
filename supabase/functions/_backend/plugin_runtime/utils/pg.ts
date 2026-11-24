@@ -26,7 +26,7 @@ import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness.ts'
 import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isReplicaTooFarBehind, REPLICA_LAG_QUERY, replicationLagSecondsFromQueryRow, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
-import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
+import { shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
 import type { VersionManifestRow } from './version_manifest_sql.ts'
 import { completeVersionManifest, versionManifestRowsSql } from './version_manifest_sql.ts'
@@ -461,11 +461,11 @@ function getLocalReadOnlyDatabaseURL(c: Context): string | null {
   return fixSupabaseHost(getEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL'))
 }
 
-export function getDatabaseURL(c: Context, readOnly = false): string {
+export function getDatabaseURL(c: Context, readOnly = false, preferredReadRegion?: ServingRegion): string {
   const policy = requestServingPolicy(c)
   if (!readOnly && policy && isRestrictedServingPolicy(policy))
     throw quickError(503, 'serving_region_unavailable', 'Legacy server storage is unavailable with regional serving restrictions')
-  const dbRegion = getClientDbRegionSB(c)
+  const dbRegion = readOnly ? preferredReadRegion ?? getClientDbRegionSB(c) : getClientDbRegionSB(c)
 
   // For read-only queries, use region to avoid Network latency
   if (readOnly) {
@@ -478,7 +478,8 @@ export function getDatabaseURL(c: Context, readOnly = false): string {
       return localReadOnlyDatabaseURL
   }
 
-  if (readOnly && shouldRequireReadReplica(c)) {
+  // Read routing fails closed in every runtime, including direct/Deno entrypoints.
+  if (readOnly) {
     throw new Error('Read replica is required for this endpoint')
   }
 
@@ -527,7 +528,7 @@ function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
  *
  * Non-Hyperdrive (local/direct/pooler): `Pool` + explicit `closeClient`/`end()`.
  */
-export async function getPgClient(c: Context, readOnly = false): Promise<PluginPgClient> {
+export async function getPgClient(c: Context, readOnly = false, preferredReadRegion?: ServingRegion): Promise<PluginPgClient> {
   if (isPluginStateServed(c)) {
     // A request answered from the KV plugin state reached Postgres: a query
     // the state does not cover. Strict mode (tests) fails it.
@@ -535,7 +536,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
       throw new PluginStateMiss('strict mode: database connection requested by a request served from KV')
     cloudlog({ requestId: c.get('requestId'), message: 'plugin state request opened a database connection', path: c.req.path })
   }
-  const dbUrl = getDatabaseURL(c, readOnly)
+  const dbUrl = getDatabaseURL(c, readOnly, preferredReadRegion)
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')

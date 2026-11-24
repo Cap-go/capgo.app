@@ -2,7 +2,7 @@
 
 Apps request a unique nonempty subset of the nine existing backend regions:
 EU, NA, SA, OC, AS_INDIA, AS_JAPAN, HK, AF and ME. Existing/new apps default
-to all nine and Route. Both fields remain optional in the public update API;
+to all nine. Both fields remain optional in the public update API;
 omitting them preserves saved settings. Existing app.update_settings RLS and
 API permissions apply, including the onboarding-only mutation guard. The builtin
 CHECK expression validates each changed app row over at most nine input elements; it
@@ -13,11 +13,13 @@ reads no tables and adds no lookup to RLS or unfiltered request queries.
 After explicit deployment activation, the public plugin handlers for updates, manifest sizes, stats and every
 channel_self method resolve a small policy document before app status,
 snapshot, payload caches or regional database access. Deprecated plugin aliases
-and the shared Deno handlers use the same gate. Block compares trusted ingress
-colo groupings with the list, independently of the Worker hostname. Unknown
-ingress fails unavailable. Route accepts other ingress regions and chooses an
-allowed database backend within the current Worker; it does not attest the
-physical location of Worker execution.
+and the shared Deno handlers use the same gate. Every subset compares trusted ingress colo groupings with the list, independently
+of the Worker hostname. Devices in a deselected region are denied, including
+saved legacy `route` policies. Unknown ingress fails unavailable for a restricted
+policy. The legacy mode column/API is retained for compatibility; it can no
+longer bypass region deselection. The customer UI has only region checkboxes,
+with all nine selected by default, and automatic saved/applied status from #4180.
+It does not attest the physical location of Worker execution.
 
 Replica selection is checked at the actual connection-string boundary.
 Missing/lagging allowed replicas cannot escape to EU, a disabled binding or the
@@ -27,25 +29,115 @@ queries instead of the globally published KV payload cohort. Hyperdrive caching
 and PostgreSQL replication are unchanged. Global edge/control metadata and
 channel override stores are not physical residency controls.
 
-This is **not a storage residency feature**. Database replication remains global.
-Capgo-hosted zip and delta files, shared R2 storage and their existing cache
-layer remain global. All current regional files hostnames target the same files
-Worker; selecting a hostname would not regionalize it. Legacy unscoped file
-paths have no trustworthy app policy index. Direct signed storage URLs can
-outlive a policy change, and external_url belongs to another provider.
-Authenticated console/admin/preview/download-link operations are outside this
-plugin policy. No regional guarantee is added to any download URL.
+## Bundle delivery and storage limits
+
+The files Worker's uncached ingress reads the same current policy before its
+managed `CachedFiles` entrypoint, deletion markers, inner Cache API, R2 or
+storage fallback. The shared file handler repeats the gate for direct Deno and
+legacy `/private/files/read/attachments/` routes. App identity comes from the
+validated storage key `orgs/<org>/apps/<app>/...`, never a query parameter or
+hostname. Native, regional and custom hosts use the same gate. Existing alias
+candidate rules cannot cross app/organization boundaries. GET, implicit HEAD,
+range and old URLs all undergo admission again. A preview hostname combined
+with an attachment path is rejected before policy or cache access. Memoized
+admission is bound to the app identity as well as the Request; a second app
+cannot reuse the first app's admission.
+
+Public preview URLs also check policy before their managed cache. Apps with
+actual region deselections cannot use previews, whose current metadata lane
+and external download payload cannot meet these boundaries. All-nine policies
+retain previews and external offers with either legacy mode; a hidden saved
+Block mode is not itself a delivery exclusion. Unknown/unscoped legacy keys
+fail unavailable while enforcement is enabled: there is no primary lookup,
+manifest scan or permissive app guess. This is an intentional compatibility
+limit that must be inventoried before activation.
+
+Enforcing builds return `private, no-store` to download clients, including on
+all-region apps so a future tightening cannot be bypassed by a newly populated
+client cache. Server-side byte caches remain usable after admission. Enforcing builds use server-configured `PLUGIN_FILE_DOWNLOAD_BASE_URL` for zip
+and manifest URLs, including from custom API-only domains. Missing/invalid file
+ingress configuration fails unavailable. Worker source configuration supplies
+the matching native file ingress for each environment; Deno must receive the
+same setting before activation. Deno no longer issues direct presigned GET URLs
+in enforcing builds. Apps with actual region deselections do
+not receive new `external_url` bundle offers, because an external provider
+cannot apply our later policy changes. All-region apps retain normal update eligibility. Disabled-build URLs and
+cache behavior are preserved.
+
+The shared Cache API zip handler checks indexed deletion evidence on an allowed
+replica in enforcing builds. Files workers prefer EU only when policy permits
+it, and the selector still rejects missing/lagging allowed bindings without
+primary fallback. The source files-Worker production and alpha configs reuse
+the nine replica bindings of the matching plugin Worker. Preproduction has no
+replica and needs a genuine allowed replica binding before activation; its
+direct/primary binding must not be relabeled as a replica. No provider
+configuration is changed by this source edit.
+
+The enforcing deletion query stays a single cacheable SELECT. It does not open
+a transaction or bypass Hyperdrive caching, so replica lag and the ordinary
+query-cache lifetime still apply to deletion evidence. Route/configuration
+failures return unavailable before serving bytes. Actual transient database
+errors still fail open, as required. Because replica evidence can lag a
+committed deletion, it only gates serving: a cache hit never restores a
+missing R2 object from it, so a lagging replica cannot write a deleted object
+back. Disabled builds retain the legacy primary deletion
+connection/transaction path, and only that path restores a live cached file
+to R2. The restoration receives an invoked promise and its own body branch
+before the client starts consuming the response. Deleted markers and positive
+deletion evidence still prevent restoration.
+
+Activation prerequisites for this path: a cached zip of a just-deleted bundle
+stays downloadable until the replica and Hyperdrive's query cache see the
+deletion (/updates stops offering it as soon as the plugin state syncs), and
+the replica lookup has no server-side statement bound of its own. Confirm the
+replica role's `statement_timeout` (or accept these bounds) before setting the
+reader epoch.
+
+The policy read admits a request. A tightening does not stop an in-flight
+response, remove bytes already downloaded, or revoke a response already held
+in a client cache. Direct presigned storage URLs issued by older builds, public
+storage endpoints and external provider URLs are outside Capgo's ingress and
+cannot be revoked by Worker logic. Before activation, stop old URL issuance,
+wait for outstanding signed links to expire, retire/deny any public storage
+bypass, and verify every native/custom/legacy route reaches enforcing ingress.
+External URLs need provider-side access controls or migration to hosted bundles.
+Until those conditions are proved, do not promise complete old-URL prevention
+or activate this feature. No production/provider verification is performed here.
+
+This is **update delivery control, not physical replication selection or storage
+residency**. PostgreSQL replication and shared storage are unchanged. KV's
+[standard data location](https://developers.cloudflare.com/kv/reference/data-location/)
+uses central stores and global caching. New namespace jurisdictions constrain
+durable storage only; Cloudflare explicitly allows caches outside them. They
+cannot be retrofitted or set per app to our arbitrary nine-region set. Denying
+reads does not prove deletion or prohibit physical replicas. R2
+[location hints](https://developers.cloudflare.com/r2/reference/data-location/)
+are best effort. R2 jurisdictions are bucket-level guarantees chosen at creation,
+not arbitrary per-object region sets. The shared buckets in this repository are
+not converted to jurisdictional buckets by this change. Any physical-residency
+requirement needs a separate provider/storage architecture and migration.
+Cloudflare's [R2 consistency contract](https://developers.cloudflare.com/r2/reference/consistency/)
+is why live policy reads use R2 instead of eventually consistent KV.
+
+The Cloudflare docs above were checked on 2026-11-18. PR #4152 provides the policy
+publisher, admission and database guards. PR #4180 is merged at this baseline and
+provides automatic customer status. This change extends those controls to deny
+excluded ingress even for legacy Route settings and to gate hosted downloads;
+it does not duplicate the status/domain work or depend on the separate EU
+background-source fix.
 
 ## Publication and activation
 
 The database columns are requested settings. Once deployment enforcement is
 enabled, they become effective at the successful conditional R2 write of sr1:<app_id> in the existing pointer bucket.
-A save does not acknowledge activation. Settings show this distinction and let
-the user compare the published document with their choices. Publication failure
-leaves the previous policy effective and the requested change pending.
-Status checks use the console environment's configured policy gateway and CSP.
-Only the latest check can update the displayed status; changing the app or form
-invalidates a check that is still in flight.
+A save does not acknowledge activation. The console only offers these controls
+after the service reports that they are available. Once available, it checks
+saved settings automatically and shows a short applying/up-to-date status.
+Unsaved edits are never presented as applied. Publication failure leaves the
+previous policy effective and the requested change pending. Status checks use
+the console environment's configured policy gateway and CSP, with bounded
+retries and request timeouts. Only the latest check can update the displayed
+status; changing the app or saved settings cancels an older check.
 
 A dedicated durable policy queue is drained by the existing sync handler and
 existing periodic plugin_state_sync_tick. It operates independently of the
@@ -72,7 +164,7 @@ supplied fields fail validation.
 
 The linearization point is the policy read of each request. Requests admitted
 before a tightening may complete; this does not revoke an in-flight request or
-a previously issued download URL. A receipt never substitutes for a current
+a previously issued direct storage URL. Hosted file URLs recheck policy on each request. A receipt never substitutes for a current
 policy read.
 
 The snippet makes one uncached policy-only preflight before all learned,
@@ -107,8 +199,9 @@ snippet serving, including warm on-prem/plan/synthetic answers. No policy read,
 gateway fetch, signing key, new binding or primary lookup is added to those
 request paths. Request headers, envclient, environment strings and KV misses
 cannot enable the feature. The policy gateway reports active:false without
-reading R2; the console reports requested settings as pending. Saving Block or
-a smaller Route set does not activate it.
+reading R2; the console hides unavailable regional controls. Existing requested
+settings remain stored for later activation. Saving Block or a smaller Route
+set through the API does not activate it.
 
 private.settings is the source of truth for deployment epochs. Hot paths use
 its immutable deployment artifact, never a database query or an eventually
@@ -175,9 +268,16 @@ After activation, a cached snippet answer needs one strong policy read; a Worker
 snippet request needs a second independent policy read. No plugin request
 queries the primary to discover its policy. Per-request R2 work is constant,
 independent of device/bundle/manifest count. Full 2M–50M requests/day load,
-regional ingress attestation and the coordinated deployment transition require
-staging validation before readiness acknowledgement. The configured gateway
-(EU in production) is a control-plane dependency; a gateway outage fails closed. A later
+including hosted file traffic, regional ingress attestation and the coordinated
+deployment transition require
+staging validation before readiness acknowledgement. Each file request adds a current-policy R2 read before its byte cache. A cold
+loopback invocation may perform a second read; it must fail closed if the
+ingress identity cannot be preserved. A 5k-file delta bundle therefore requires
+at least 5k policy reads across its downloads. This cost and latency must be
+measured with representative concurrency before activation. No primary database
+lookup or cached-policy shortcut is introduced.
+
+The configured gateway (EU in production) is a control-plane dependency; a gateway outage fails closed. A later
 multi-gateway policy-only fallback must preserve the same subrequest budget.
 
 R2 consistency contract:

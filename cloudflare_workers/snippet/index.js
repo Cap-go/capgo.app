@@ -222,7 +222,13 @@ function matchesEndpoint(pathname, endpoint) {
   return pathname === endpoint || pathname.startsWith(`${endpoint}/`)
 }
 
+function policyEndpointPath(pathname) {
+  // Activated releases gate deprecated aliases before any learned answer or retry.
+  return servingRegionReaderEpoch ? pathname.replace(/^\/plugin(?=\/)/, '') : pathname
+}
+
 function getEndpointName(pathname) {
+  pathname = policyEndpointPath(pathname)
   if (matchesEndpoint(pathname, '/updates'))
     return 'updates'
   if (matchesEndpoint(pathname, '/stats'))
@@ -233,7 +239,7 @@ function getEndpointName(pathname) {
 }
 
 function isCacheableEndpoint(pathname) {
-  return ONPREM_CACHEABLE_ENDPOINTS.some(ep => matchesEndpoint(pathname, ep))
+  return ONPREM_CACHEABLE_ENDPOINTS.some(ep => matchesEndpoint(policyEndpointPath(pathname), ep))
 }
 
 function getRetryAfterSeconds(headers, responseBody) {
@@ -844,7 +850,7 @@ export default {
             throw new Error('Invalid policy')
           servingPolicy = parseServingPolicy(doc.policy.regions, doc.policy.mode)
           forwardedHeaders.set('x-capgo-serving-ingress', doc.receipt)
-          if (servingPolicy.mode === 'block') {
+          if (isRestrictedServingPolicy(servingPolicy)) {
             const ingress = trustedIngressRegion(request.cf?.colo)
             if (!ingress)
               throw new Error('Unknown ingress')

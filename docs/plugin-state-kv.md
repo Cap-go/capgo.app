@@ -7,7 +7,7 @@ logic. Stats collection and device channel writes retain their existing sinks.
 
 The database remains the source of truth. Statement triggers enqueue changed
 apps, bundle names, manifests, and device overrides. The API worker reads the
-primary on this write path, writes immutable KV documents, and conditionally
+EU read replica on this write path, writes immutable KV documents, and conditionally
 publishes pointers to them in R2. It then queues the app's Cache API purge.
 Plugin requests never rebuild state from the primary.
 
@@ -22,8 +22,15 @@ Cache lookup and cached-body streaming each have their own 50 ms deadline.
 A stalled body is cancelled without waiting for cancellation to finish, and
 the reader tries the current publication instead. Pointer lookup and JSON
 decoding share a 50 ms deadline; the subsequent KV
-value read has its own 50 ms deadline. A timeout discards the late result and
-falls back to the existing replica path. Each request may load at most 16
+value read has its own 50 ms deadline. A timeout falls back to the existing
+replica path for that request, but the late read keeps going in the background
+(at most 2 seconds per provider read) and stores its result in the Cache API
+like an on-time read. A late miss gets the 30-second document TTL instead of
+the 60-second negative TTL, because a late put can land after a publication
+purge. Without this refill, a location where R2 always
+answers after 50 ms would never warm up. Each isolate runs at most one refill
+per document; while it runs, other requests for that document skip the
+provider reads and use the replica immediately. Each request may load at most 16
 distinct document keys, with at most four concurrent document loads. Oversized
 stats or manifest-key fanout uses the existing batched replica query instead.
 Build timestamps are not cache identities: two publications can have the same
@@ -96,15 +103,124 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 [KV consistency](https://developers.cloudflare.com/kv/concepts/how-kv-works/),
 [KV limits](https://developers.cloudflare.com/kv/platform/limits/).
 
+## Prewarm
+
+A regional plugin worker with an active placement hint runs in one data
+center. Check the `cf-placement` response header to confirm it, for example
+`remote-CMH` for `plugin.na.capgo.app`. A worker that returns no `cf-placement`
+header may not run in one data center, so its prewarm may not warm the cache its
+devices read. On 2026-11-22 `capgo_plugin-jp-prod` reported `placement.mode:
+targeted` (`gcp:asia-northeast1`) in its script settings but returned no
+`cf-placement` header, even on uncached paths, so the Japan prewarm is not
+relied on until that placement is active. The prewarm reports each region's
+`cf-placement` value. Only `remote-XXX` shows the call ran in the worker's
+placement data center: the API worker is placed in `aws:eu-west-2`, so
+`local-XXX` means a regional call stayed where it arrived. The `plugin state
+prewarmed` log lists regions without a `remote-` value under `unplaced`, the
+public endpoint returns `pinned`, and `app prewarm` flags them.
+
+The Cache API is local to the data center a worker runs in, so a placed region
+has a single plugin-state cache. Cache keys include the request hostname. The
+snippet forwards each device request to the regional hostname
+(`fetch(workerUrl + path)`), and the regional worker sees that hostname: on
+2026-11-22, all sampled live requests on `capgo_plugin-na-prod` (144) and
+`capgo_plugin-eu-prod` (105) had the URL and `Host` `plugin.na.capgo.app` and
+`plugin.eu.capgo.app`. The prewarm calls the same hostnames, so its keys match
+the device keys.
+
+### Fan-out
+
+After the purge queue (`triggers/updates_cache_purge.ts`) purges a
+`plugin_state` batch, the API worker waits one second for the purge to reach
+every data center. It then posts the batch's app ids, 10 per call, to
+`https://plugin.<region>.capgo.app/plugin_state/prewarm` with the API secret
+and `redirect: 'manual'`, so a redirect never carries the secret elsewhere.
+Workers allow six open connections per invocation, and the drain also holds
+its database socket and sends Cloudflare purge calls, so prewarm calls take at
+most three slots per invocation. Overlapping prewarm runs of one drain share
+them; another invocation has its own, so a cancelled invocation cannot stall
+it. A call's 8-second timeout starts only once it holds a slot. A run has a 20-second total budget that must still cover
+the 8-second call timeout, so calls that cannot start within 12 seconds of
+their run are reported as `budget_exhausted` instead of sent. A region that answers HTTP 200 without an
+app's outcome is reported as `missing_result`.
+
+### Regional call
+
+Each regional worker reads the app document, plus the bundle-name and manifest
+documents of the bundles its channels serve (at most 8 bundles). Each provider
+read waits up to 2 seconds. The whole call has a 6-second budget and at most
+900 provider and cache operations, shared by every app and retry: this
+feature's own budget, which bounds the work of a call however often a
+publication moves. R2, KV and Cache API calls count
+toward the six simultaneous connections of an invocation, so a call runs at
+most five at once; each read's 2-second timer starts once it holds a slot, and
+waiting for one still ends at the call budget. Manifests, which can approach
+4 MiB each, load at most two at a time per call across all its apps (a
+manifest keeps its slot until its cache write, and any late check or repair of
+that write, settles, since a pending write still holds its payload), and
+bundle documents are dropped as soon as they are cached. This bounds one call's
+manifest memory to about two documents; the 128 MiB limit applies to the whole
+isolate, which may handle other requests at the same time. Reads and writes stop 300 ms
+before the budget ends, leaving that time for cleanup deletes; apps that cannot
+start before then are reported as `budget`, and no write starts once the budget
+is spent. It writes the shared app, bundle-name and manifest Cache API entries
+device requests read; per-device override entries are not prewarmed. `cached`
+counts the distinct keys whose write this call made and reconciled at the
+published generation, each once; entries that already held it are kept and not
+counted. Cloudflare's `cache.put` does not confirm storage, so `cached` counts
+accepted writes: confirming each one with a read-back would cost another
+operation per document from the shared budget and still only prove the entry
+existed at that instant.
+Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
+
+### Ordering and its limits
+
+The lookup before a write keeps any entry that already holds the published
+generation or a newer one. When the lookup fails or times out (500 ms), the
+document is reported as an error rather than written blind. A prewarmed miss
+gets the 30-second document TTL, like a late refill, because it can land after
+a purge.
+
+The Cache API has no conditional put, so after each write the prewarm reads
+the R2 pointer again. A newer entry that the put could have replaced comes from
+a publication that is already visible there. When the pointer has moved past
+the written generation, the prewarm deletes its entry and writes the newer one,
+at most two retries. A failed delete is repaired by that newer write. A delete
+still pending at the budget is not waited on, and no repair starts then,
+because the pending delete could remove it later. When the pointer read fails,
+the entry is deleted too: a cold miss is safe, a stale entry is not. A write
+still pending after 500 ms is reported as timed out, and the same check runs in
+the background once it lands, with its own 2-second budget.
+
+A stale entry written by the prewarm can remain only when its delete fails or
+is still pending and no newer write follows: the pointer read failed, the newer
+KV value has not propagated yet, or the retries, operations or budget ran out.
+When the cache lookup itself fails, the prewarm writes nothing and leaves
+whatever the cache already holds, which expires with its TTL like any entry. The error (or,
+for a late write, the `plugin state prewarm late write not reconciled` log)
+says so, and the entry expires with its 30-second TTL, which bounds every
+Cache API refill. Failures are only logged (`plugin state prewarmed`); devices
+then fill the cache as usual.
+
+### Targets and the CLI
+
+Production uses the region list in `utils/pluginRegionTargets.ts`. Other
+environments prewarm only when `PLUGIN_REGION_TARGETS` is set, so local and CI
+runs do not use production hostnames by default; explicitly configured targets
+are used as provided, and an invalid value disables the prewarm.
+`npx @capgo/cli@latest app prewarm <appId>` (`POST /app/:id/prewarm`,
+`app.upload_bundle` permission) runs the same fan-out on demand and prints each
+region's data center and result.
+
 ## Controls
 
-| Setting | Scope | Default and purpose |
-| --- | --- | --- |
-| `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | `private.settings` | Disabled. Set to `true` to enqueue changes and run backfill. |
-| `PLUGIN_STATE_KV` | Plugin Worker runtime | Off. Accepts `off`, `on`, or a percentage such as `1%`. Sampling is stable by app and device across endpoints. |
-| `PLUGIN_STATE_KV_AUTHORITATIVE` | Plugin Worker runtime | False. Trust published app-deletion pointers only after verifying complete coverage. Unpublished app pointers always use replicas. Leave false during rollout. |
-| `PLUGIN_STATE_KV_STRICT` | Plugin Worker runtime | False. Tests enable it to reject database reads that escape a KV session. |
-| `PLUGIN_STATE_TIMING` | Plugin Worker runtime | Off. Accepts the same percentage syntax and samples both response paths. |
+| Setting                           | Scope                 | Default and purpose                                                                                                                                            |
+| --------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | `private.settings`    | Disabled. Set to `true` to enqueue changes and run backfill.                                                                                                   |
+| `PLUGIN_STATE_KV`                 | Plugin Worker runtime | Off. Accepts `off`, `on`, or a percentage such as `1%`. Sampling is stable by app and device across endpoints.                                                 |
+| `PLUGIN_STATE_KV_AUTHORITATIVE`   | Plugin Worker runtime | False. Trust published app-deletion pointers only after verifying complete coverage. Unpublished app pointers always use replicas. Leave false during rollout. |
+| `PLUGIN_STATE_KV_STRICT`          | Plugin Worker runtime | False. Tests enable it to reject database reads that escape a KV session.                                                                                      |
+| `PLUGIN_STATE_TIMING`             | Plugin Worker runtime | Off. Accepts the same percentage syntax and samples both response paths.                                                                                       |
 
 Set read/timing shares with the internal per-environment commands:
 
@@ -165,7 +281,7 @@ fits one immutable KV document. Tests cover that size and a separate
 1,001-manifest pagination check that resumes across invocations. These are
 local checks, not a production throughput benchmark.
 
-Source reads use at most four concurrent primary transactions per drain.
+Source reads use at most four concurrent EU replica transactions per drain.
 Queue claims, acknowledgements, garbage-collection progress and explicit repair
 enqueue calls also use separate short read-write transactions. These functions
 mutate queue state even though they are invoked with `SELECT`; allowing
@@ -402,24 +518,85 @@ from the source. Do not assume that daily app refresh or a successful unrelated
 publication repaired non-app dependencies. Failed archive entries require an
 explicit repair; do not reset poison-job retry budgets automatically each day.
 
-Source snapshots use fresh, bounded internal repeatable-read transactions on
-the primary, after which provider I/O runs with the transaction released. This
-is background publication, not a device request or a request-path Hyperdrive
-cache bypass. Gate primary load before increasing writer/backfill work.
+Source snapshots use bounded internal repeatable-read transactions on EU,
+then release the transaction before provider I/O. Every source transaction
+checks its durable primary claim barrier against `read_replica_commit_marker`
+in that same snapshot. A claim reserves a strictly increasing marker value
+in its primary control transaction after observing committed producer rows.
+The existing heartbeat preserves this ordering even if the primary clock moves
+backward. One marker write is needed per newly claimed payload batch, policy
+claim, or new inventory pass; deferrals reuse their durable barrier. All ten source tables must also
+be streaming in the marker's subscription; a heartbeat alone does not prove
+initial table-copy completion. Missing markers, unready subscriptions, replica
+lag, connection errors, or missing EU bindings defer publication without a
+primary source fallback or completion ACK. Deferral preserves the exact barrier
+and cursor and refunds the unused publication attempt; actual publication
+failures still have at most five attempts. Full continuations carry the barrier
+forward. Independently published keys can still settle on a later deferral.
+
+Parallel work retains every failure. A provider write failure consumes its
+publication attempt even if another worker loses the source snapshot. Only a
+pure source/deadline/capacity stop defers unfinished payload work; serving-policy
+capacity failures after provider I/O still consume an attempt. Source loss
+inside a full scan retains the original full cursor instead of acknowledging a
+replacement continuation. Ordinary capacity yields may advance proven pages.
+
+When full history work also carries a current app or device change, it reserves
+app-key publication capacity and time before scanning. The reservation covers a
+pointer GET, immutable KV PUT and five CAS/GET pairs within the shared 800-operation
+cap. A yielded scan publishes the bounded current snapshot before acknowledging
+that change; a terminal scan writes only its complete snapshot. If that refresh
+cannot complete, current work and the original full cursor remain queued.
+Queued serving policies run before inventory. Inventory errors are reported
+separately and leave their cursor unchanged without aborting queued publication.
+
+Backfill and policy inventory page `apps(app_id)` on EU, at most 25 and 100
+identities per wake respectively. Primary merges bounded bookkeeping identities
+for deleted apps, then atomically commits enqueue and cursor progress with a
+compare-and-swap check. The periodic database tick performs only control-plane
+work. An explicit `enqueue_plugin_state_full_sync(NULL)` now requests this
+asynchronous inventory and returns zero immediately; explicit app lists retain
+their synchronous enqueue behavior. Only an explicit repair can refresh poison
+budgets or restore archived exact keys. Normal backfill preserves the archive.
+Repeated explicit repairs reuse a never-claimed fresh full job. Claim coordination
+serializes this check with claims; an already claimed or source-deferred job keeps
+its durable barrier and cannot absorb a newer repair request. Archived exact-key
+restoration still runs when a fresh full job is reused.
+
+The API worker's prod and alpha environments reuse the existing
+`HYPERDRIVE_CAPGO_READ_EU` resource used by plugin workers, under the dedicated
+`HYPERDRIVE_CAPGO_READ_PLUGIN_STATE_EU` binding. This leaves unrelated API
+read helpers on their existing routes. Preprod has no EU
+publisher binding and fails closed because its legacy plugin read resource
+points to a development primary. Local/CI must explicitly configure
+`LOCAL_READ_REPLICA_SUPABASE_DB_URL` in a `*-local` runtime; only that fixture
+mode omits the logical-subscription readiness check. No request-path cache
+bypass or shared Hyperdrive cache change is involved.
 
 Timing logs have `message=plugin_state_request_timing`, the path, method,
 response source, status, Cloudflare colo, duration in milliseconds, and sampling
 basis points. Sampled requests also record `r2_pointer_reads`,
 `r2_pointer_ms`, `r2_pointer_timeouts`, `kv_value_reads`, `kv_value_ms`, and
-`kv_value_timeouts`.
+`kv_value_timeouts`. A sampled request whose read finishes in the background
+also logs `message=plugin_state_refill` with the document path, `outcome`
+(`cached` once the write is confirmed; `not_cached` when the best-effort cache
+write failed; `write_pending` when it was still unconfirmed after 2 seconds,
+in which case it is not cancelled and may still land; or `failed` when the
+read itself failed), colo, and the full provider read time in `duration_ms`.
+A refill waits for its own write rather than the 200 ms request write timeout,
+since it already runs in the background.
+Use it to size the request deadlines: the request metrics stop at the deadline.
 The durations and operation counts are per-request totals for each provider;
 cache hits contribute zero provider operations. Gate rollout on R2 time,
 timeout rate, and Class B operation counts separately from KV latency and reads,
 including cold documents and replica fallbacks. Keep the KV value `cacheTtl`
 at 30 seconds until negative-lookup caching and propagation are verified.
 These logs measure Worker wall time, not network RTT. `X-Plugin-State`
-identifies KV, misses, errors, and fallbacks; requests rejected before state
-selection need not carry it.
+identifies KV, misses, errors, and fallbacks; `cold` marks an app document
+that was not cached at this location and is being refilled in the background.
+Compare warm `kv` requests against the database cohort, and track the
+`cold` share separately; requests rejected before state selection need not
+carry it.
 
 ## Verification and benchmark
 

@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import type { BillingCard, BillingInvoice, BillingOverview, BillingSubscription } from '~/services/stripe'
+import type { BillingCard, BillingOverview, BillingSubscription } from '~/services/stripe'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import IconDownload from '~icons/heroicons/arrow-down-tray'
 import IconCard from '~icons/heroicons/credit-card'
 import IconExclamationTriangle from '~icons/heroicons/exclamation-triangle'
 import IconShieldCheck from '~icons/heroicons/shield-check'
+import BillingInvoiceEmails from '~/components/billing/BillingInvoiceEmails.vue'
+import BillingInvoices from '~/components/billing/BillingInvoices.vue'
 import BillingProfileSection from '~/components/billing/BillingProfileSection.vue'
 import BillingSubscriptionDiscounts from '~/components/billing/BillingSubscriptionDiscounts.vue'
 import CancelPlanModal from '~/components/billing/CancelPlanModal.vue'
@@ -68,6 +69,7 @@ const trialPlanDate = computed(() => trialPlan.value ? formatLocalDate(trialPlan
 const canStartTrialPlanNow = computed(() => !!trialPlan.value && !!card.value && !subscription.value)
 const trialDaysLeft = computed(() => currentOrganization.value?.trial_left ?? 0)
 const openInvoiceAmount = computed(() => openInvoice.value ? formatStripeAmount(openInvoice.value.amountDue, openInvoice.value.currency) : '')
+const openInvoiceProcessing = computed(() => !!openInvoice.value?.paymentProcessing)
 
 const subscriptionLine = computed(() => {
   const sub = subscription.value
@@ -78,21 +80,13 @@ const subscriptionLine = computed(() => {
     return t('billing-currency-renews-in', { currency: sub.pendingCurrency.toUpperCase(), date: endDate })
   if (sub.cancelAtPeriodEnd || sub.cancelAt)
     return t('billing-subscription-ends', { date: endDate })
-  if (sub.status === 'past_due' || sub.status === 'unpaid')
+  if ((sub.status === 'past_due' || sub.status === 'unpaid') && !openInvoiceProcessing.value)
     return t('billing-subscription-past-due')
   return endDate ? t('billing-subscription-renews', { date: endDate }) : t('billing-subscription-active')
 })
 
 function brandLabel(value: BillingCard) {
   return value.brand.charAt(0).toUpperCase() + value.brand.slice(1)
-}
-
-function invoiceStatusClass(status: BillingInvoice['status']) {
-  if (status === 'paid')
-    return 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300'
-  if (status === 'open')
-    return 'bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-200'
-  return 'bg-slate-50 text-slate-600 ring-slate-500/20 dark:bg-slate-500/10 dark:text-slate-300'
 }
 
 async function loadOverview() {
@@ -197,6 +191,11 @@ async function payNow() {
     const result = await payOpenInvoice(orgId.value)
     if (result.status === 'paid') {
       toast.success(t('billing-invoice-paid'))
+      await Promise.all([loadOverview(), refreshOrganization()])
+      return
+    }
+    if (result.status === 'processing') {
+      toast.info(result.message || t('billing-invoice-payment-processing'))
       await Promise.all([loadOverview(), refreshOrganization()])
       return
     }
@@ -379,7 +378,19 @@ onMounted(async () => {
 
       <template v-else-if="overview">
         <section
-          v-if="openInvoice"
+          v-if="openInvoice && openInvoiceProcessing"
+          class="rounded-xl border border-sky-300 bg-sky-50 p-5 text-sky-950 dark:border-sky-700/60 dark:bg-sky-950/40 dark:text-sky-100"
+          data-test="billing-open-invoice-processing"
+        >
+          <p class="text-sm font-semibold">
+            {{ t('billing-open-invoice-processing-title') }}
+          </p>
+          <p class="mt-1 text-xs text-sky-900/80 dark:text-sky-200/80">
+            {{ t('billing-open-invoice-processing-detail') }}
+          </p>
+        </section>
+        <section
+          v-else-if="openInvoice"
           class="flex flex-col gap-3 rounded-xl border border-amber-300 bg-amber-50 p-5 text-amber-950 sm:flex-row sm:items-center sm:justify-between dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-100"
           data-test="billing-open-invoice"
         >
@@ -558,34 +569,9 @@ onMounted(async () => {
 
         <BillingProfileSection :key="`${orgId}:${overview?.subscription?.cancelAtPeriodEnd}:${overview?.subscription?.cancelAt}`" :org-id="orgId" @changed="loadOverview" @denied="permissionModal = 'org.update_billing'" />
 
-        <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60" data-test="billing-invoices">
-          <h2 class="border-b border-slate-100 px-5 py-4 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:border-white/10 dark:text-slate-400">
-            {{ t('billing-invoices-heading') }}
-          </h2>
-          <p v-if="!invoices.length" class="px-5 py-6 text-sm text-slate-600 dark:text-slate-300">
-            {{ t('billing-no-invoices') }}
-          </p>
-          <ul v-else class="divide-y divide-slate-100 dark:divide-white/10">
-            <li v-for="invoice in invoices" :key="invoice.id" class="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 text-sm">
-              <span class="w-28 shrink-0 text-slate-900 dark:text-white">{{ formatLocalDate(invoice.created) }}</span>
-              <span class="min-w-0 flex-1 truncate text-slate-500 dark:text-slate-400">{{ invoice.number ?? invoice.id }}</span>
-              <span class="w-24 text-right font-medium text-slate-900 tabular-nums dark:text-white">{{ formatStripeAmount(invoice.total, invoice.currency) }}</span>
-              <span class="inline-flex w-24 justify-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset" :class="invoiceStatusClass(invoice.status)">
-                {{ t(`billing-invoice-status-${invoice.status ?? 'void'}`) }}
-              </span>
-              <a
-                v-if="invoice.pdfUrl"
-                :href="invoice.pdfUrl"
-                class="d-btn d-btn-ghost d-btn-xs gap-1"
-                :aria-label="t('billing-download-invoice')"
-                download
-              >
-                <IconDownload class="h-4 w-4" />
-                PDF
-              </a>
-            </li>
-          </ul>
-        </section>
+        <BillingInvoiceEmails :key="orgId" :org-id="orgId" @denied="permissionModal = 'org.update_billing'" />
+
+        <BillingInvoices :key="orgId" :org-id="orgId" :invoices="invoices" />
       </template>
     </div>
 

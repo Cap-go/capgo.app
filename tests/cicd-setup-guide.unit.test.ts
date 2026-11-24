@@ -276,13 +276,14 @@ describe('CI/CD guide pipelines', () => {
     const azure = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'azure', platforms: ['ios'] }).content)
     expect(azure.stages[1].jobs[0].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '$(CAPGO_PREVIEW_TOKEN)', CAPGO_STORE_SUBMIT_REVIEW: 'false' })
     const gitlab = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'gitlab', platforms: ['ios'] }).content)
-    expect(gitlab['capgo-ios-preview'].script.at(-1)).toBe('CAPGO_STORE_SUBMIT_REVIEW=false CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform ios --use-stored-credentials')
+    expect(gitlab['capgo-ios-preview'].script.at(-1)).toBe('CAPGO_STORE_SUBMIT_REVIEW=false CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform ios --use-stored-credentials --output-upload')
   })
 
-  it('builds installable Android previews and TestFlight iOS previews for pull requests', () => {
+  it('keeps pull request previews in Capgo and sends iOS to TestFlight', () => {
     const jobs = buildCiJobs({ ...base, product: 'builder', strategy: 'pull_request', provider: 'circleci' })
     expect(jobs.find(job => job.id === 'android-preview')?.command).toBe('npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
-    expect(jobs.find(job => job.id === 'ios-preview')?.command).toBe('npx @capgo/cli@latest build request com.example.app --platform ios --use-stored-credentials')
+    expect(jobs.find(job => job.id === 'ios-preview')?.command).toBe('npx @capgo/cli@latest build request com.example.app --platform ios --use-stored-credentials --output-upload')
+    expect(jobs.find(job => job.id === 'ios-release')?.command).toBe('npx @capgo/cli@latest build request com.example.app --platform ios --use-stored-credentials')
     // Native previews use a separate key restricted to approved, trusted code.
     expect(jobs.filter(job => job.trigger.kind === 'pull_request').map(job => job.secret)).toEqual(['CAPGO_PREVIEW_TOKEN', 'CAPGO_PREVIEW_TOKEN'])
     expect(jobs.filter(job => job.trigger.kind === 'push').map(job => job.secret)).toEqual(['CAPGO_TOKEN', 'CAPGO_TOKEN'])

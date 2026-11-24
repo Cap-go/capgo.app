@@ -1,5 +1,6 @@
 import type { Stripe } from '@stripe/stripe-js'
 import type { BillingCurrencyPreview, BillingCurrencyState, BillingDetails, BillingProfile, BillingTaxId } from '../../supabase/functions/shared/billing-profile'
+import type { InvoiceDocument } from '../../supabase/functions/shared/invoice-document'
 import { loadStripe } from '@stripe/stripe-js'
 import { toast } from 'vue-sonner'
 import { i18n } from '~/modules/i18n'
@@ -233,6 +234,7 @@ interface PastDueInvoice {
 export interface PastDueStatus {
   past_due: boolean
   invoice: PastDueInvoice | null
+  payment_processing?: boolean
 }
 
 export async function getPastDueStatus(orgId: string): Promise<PastDueStatus | null> {
@@ -270,7 +272,6 @@ export interface BillingInvoice {
   amountDue: number
   currency: string
   status: 'draft' | 'open' | 'paid' | 'uncollectible' | 'void' | null
-  pdfUrl: string | null
 }
 
 // The onboarding plan that starts (and is first charged) when the free trial ends.
@@ -301,7 +302,7 @@ export interface BillingOverview {
   backupCard: BillingCard | null
   subscription: BillingSubscription | null
   invoices: BillingInvoice[]
-  openInvoice: { id: string, amountDue: number, currency: string } | null
+  openInvoice: { id: string, amountDue: number, currency: string, paymentProcessing?: boolean } | null
   trialPlan: TrialPlan | null
 }
 
@@ -326,6 +327,7 @@ export interface IntentSecret {
 type PayInvoiceResponse
   = | { status: 'paid' }
     | { status: 'requires_action', clientSecret: string, publishableKey: string }
+    | { status: 'processing', message: string }
     | { status: 'requires_payment_method', message: string }
 
 export type PayInvoiceResult = Exclude<PayInvoiceResponse, { status: 'requires_action' }>
@@ -430,6 +432,8 @@ export async function payOpenInvoice(orgId: string): Promise<PayInvoiceResult> {
   if (!stripe)
     return { status: 'requires_payment_method', message: i18n.global.t('billing-stripe-load-error') }
   const { error, paymentIntent } = await stripe.handleNextAction({ clientSecret: result.clientSecret })
+  if (paymentIntent?.status === 'processing')
+    return { status: 'processing', message: i18n.global.t('billing-invoice-payment-processing') }
   if (error || paymentIntent?.status !== 'succeeded')
     return { status: 'requires_payment_method', message: error?.message ?? i18n.global.t('billing-payment-failed') }
   return { status: 'paid' }
@@ -476,6 +480,18 @@ export interface BillingDiscounts {
 
 export function getBillingDiscounts(orgId: string) {
   return callBilling<BillingDiscounts>('discounts', { orgId })
+}
+
+export function getInvoiceDocument(orgId: string, invoiceId: string) {
+  return callBilling<InvoiceDocument>('invoice-document', { orgId, invoiceId })
+}
+
+export function getInvoiceEmailPreferences(orgId: string) {
+  return callBilling<import('../../supabase/functions/shared/invoice-email').InvoiceEmailPreferences>('invoice-email', { orgId })
+}
+
+export function updateInvoiceEmailPreferences(orgId: string, preferences: { enabled: boolean, recipients: string[] }) {
+  return callBilling<{ enabled: boolean, recipients: string[] }>('invoice-email/update', { orgId, preferences })
 }
 
 export function getBillingCurrencyState(orgId: string) {

@@ -409,8 +409,8 @@ async function submit(form: {
   try {
     await updateServingRegions()
   }
-  catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
+  catch {
+    toast.error(t('serving-region-save-error'))
   }
 
   try {
@@ -1765,7 +1765,14 @@ async function transferAppOwnership() {
                   :label="t('block-provider-infra-requests')"
                   :help="t('block-provider-infra-requests-help')"
                 />
-                <AppServingRegions v-model:regions="servingRegionsInput" v-model:mode="servingRegionModeInput" :disabled="!canUpdateSettings" :app-id="props.appId" />
+                <AppServingRegions
+                  v-model:regions="servingRegionsInput"
+                  v-model:mode="servingRegionModeInput"
+                  :disabled="!canUpdateSettings"
+                  :app-id="props.appId"
+                  :saved-regions="appRef?.serving_regions ?? DEFAULT_SERVING_REGIONS"
+                  :saved-mode="appRef?.serving_region_mode ?? 'route'"
+                />
                 <details
                   id="device-data-collection"
                   class="pt-2 group"
@@ -1869,7 +1876,7 @@ async function transferAppOwnership() {
           </section>
         </div>
         <footer class="px-6 pb-6">
-          <button type="submit" class="d-btn d-btn-primary min-w-20" :disabled="isLoading || isDeletingApp">
+          <button type="submit" class="d-btn d-btn-primary min-w-20" :disabled="isLoading || isDeletingApp || !canUpdateSettings">
             <Spinner v-if="isLoading" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
             <span v-else>{{ t('save') }}</span>
           </button>

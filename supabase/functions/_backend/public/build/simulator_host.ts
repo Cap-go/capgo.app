@@ -63,6 +63,22 @@ export function deviceStopTime(device: EmulatorSessionData | undefined, now = Da
   return new Date(Number.isFinite(finished) ? Math.min(finished, now) : now).toISOString()
 }
 
+export function simulatorMaxSessionStopIso(
+  openedAt: string | Date | null,
+  maxDurationMinutes = SIMULATOR_MAX_MINUTES,
+  now = Date.now(),
+): string | undefined {
+  if (!openedAt)
+    return undefined
+  const opened = openedAt instanceof Date ? openedAt.getTime() : Date.parse(openedAt)
+  if (!Number.isFinite(opened))
+    return undefined
+  const capAt = opened + Math.max(1, maxDurationMinutes) * 60_000
+  if (now < capAt)
+    return undefined
+  return new Date(capAt).toISOString()
+}
+
 export async function queryWrite<T extends object>(c: Context, sql: string, params: unknown[]): Promise<T[]> {
   let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
   let client: PgQueryClient | null = null
@@ -131,8 +147,14 @@ export async function recordStoppedSimulatorDevices(c: Context, orgId: string): 
   try {
     // Bounded by simulator_sessions_owner_active_idx: at most the org's builder slots. A cached
     // read: a stale row only costs one host lookup, and rememberDeviceStop keeps the first stop.
-    const running = await queryRead<{ id: string, emulator_id: string }>(c, `
-      SELECT id, emulator_id
+    const running = await queryRead<{
+      id: string
+      emulator_id: string
+      started_at: Date | null
+      created_at: Date
+      max_duration_minutes: number
+    }>(c, `
+      SELECT id, emulator_id, started_at, created_at, max_duration_minutes
       FROM public.simulator_sessions
       WHERE owner_org = $1
         AND status IN ('new', 'queued', 'starting', 'in-progress')
@@ -140,14 +162,50 @@ export async function recordStoppedSimulatorDevices(c: Context, orgId: string): 
         AND device_stopped_at IS NULL
     `, [orgId])
     await Promise.all(running.map(async (row) => {
+      let stopAt: string | undefined
       try {
+        const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_MINUTES
+        const openedAt = row.started_at ?? row.created_at
+        // Ask the host first so an idle stop is never replaced by the cap.
         const found = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${encodeURIComponent(row.emulator_id)}`, 'GET', undefined, DEVICE_CHECK_TIMEOUT_MS)
-        const stoppedAt = deviceStopTime(found.data)
-        if (stoppedAt)
-          await rememberDeviceStop(c, row.id, stoppedAt)
+        const responseNow = Date.now()
+        const maxStop = simulatorMaxSessionStopIso(openedAt, maxMinutes, responseNow)
+        const hostStop = deviceStopTime(found.data, responseNow)
+        if (hostStop) {
+          const maxMs = maxStop ? Date.parse(maxStop) : Number.NaN
+          const hostMs = Date.parse(hostStop)
+          stopAt = Number.isFinite(maxMs) && Number.isFinite(hostMs) && hostMs > maxMs ? maxStop! : hostStop
+        }
+        else if (maxStop) {
+          stopAt = maxStop
+        }
+        if (stopAt)
+          await rememberDeviceStop(c, row.id, stopAt)
       }
       catch (error) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator device check failed', sessionId: row.id, error })
+        if (stopAt) {
+          try {
+            await rememberDeviceStop(c, row.id, stopAt)
+          }
+          catch (writeError) {
+            cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator stop write failed', sessionId: row.id, error: writeError })
+          }
+        }
+        else {
+          const maxMinutes = Number(row.max_duration_minutes) || SIMULATOR_MAX_MINUTES
+          const maxStop = simulatorMaxSessionStopIso(row.started_at ?? row.created_at, maxMinutes, Date.now())
+          if (maxStop) {
+            try {
+              await rememberDeviceStop(c, row.id, maxStop)
+            }
+            catch (writeError) {
+              cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator max stop write failed', sessionId: row.id, error: writeError })
+            }
+          }
+          else {
+            cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator device check failed', sessionId: row.id, error })
+          }
+        }
       }
     }))
   }

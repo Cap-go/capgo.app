@@ -1033,6 +1033,16 @@
     {
       "default": null,
       "generated": "",
+      "identity": "",
+      "name": "bundle_alert_enabled",
+      "notNull": false,
+      "position": 40,
+      "table": "channels",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "generated": "",
       "identity": "d",
       "name": "id",
       "notNull": true,

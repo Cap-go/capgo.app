@@ -9,6 +9,7 @@ import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { s3 } from '../utils/s3.ts'
 import { backgroundTask } from '../utils/utils.ts'
+import { finalizeDeletedAppStorageHourly } from './cron_stat_app.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -181,6 +182,25 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
   }
 
   const pass = readCleanupPass(await parseBody<unknown>(c).catch(() => null))
+
+  // Storage is billed in GB-hours: record the hours since the last stats refresh up to the
+  // deletion (the trigger event's time, not this handler's clock). cron_stat_app no longer
+  // refreshes the app once it is gone, so a failure fails the job and the queue retries it. It runs
+  // before the storage pass is claimed (a retry would otherwise find the pass running and skip it),
+  // and it is idempotent. Follow-up storage passes were already finalized.
+  if (pass === 0) {
+    const pg = await getPgClient(c)
+    try {
+      await finalizeDeletedAppStorageHourly(c, pg, record, c.get('webhookOccurredAt'))
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'error finalizing deleted app storage hours', error, app_id: record.app_id })
+      throw error
+    }
+    finally {
+      closeClient(c, pg)
+    }
+  }
 
   // Persist the pass before this message is acknowledged: a database error here fails the
   // request, so the queue retries it; once claimed, a pass that dies is requeued by the sweeper.

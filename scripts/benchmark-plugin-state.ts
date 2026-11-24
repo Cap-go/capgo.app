@@ -147,6 +147,7 @@ const syncResult = z.object({ claims: z.number(), failed: z.number() })
 
 export async function syncPluginState(appIds: string[] = []) {
   for (let round = 0; round < 100; round++) {
+    await executeSQL('SELECT public.touch_read_replica_commit_marker()')
     const response = await localRequest(CLOUDFLARE_API_URL, '/triggers/plugin_state_sync', 'POST', {
       drain: true,
       ...(round === 0 && appIds.length > 0 ? { apps: appIds } : {}),

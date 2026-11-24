@@ -139,6 +139,8 @@ export interface ChannelDeviceOverrideIds {
    * report no default_channel are served this channel, so they count here.
    */
   defaultForPlatforms?: ChannelDevicePlatform[]
+  /** The app has more overrides than the capped lists hold, so some are missing. */
+  truncated?: boolean
 }
 
 export type ChannelDevicePlatform = 'ios' | 'android' | 'electron'

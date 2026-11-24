@@ -3,7 +3,7 @@ import type { TableColumn, TableSort } from '~/components/comp_def'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { confirmAndRollbackChannel, readChannelRollbackContext } from '~/services/channelRollback'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { createHistoryContextLoader } from '~/services/historyContext'
@@ -114,26 +114,12 @@ async function fetchCurrentVersion(isCurrent: () => boolean = () => true): Promi
   if (!props.channelId)
     return true
 
-  try {
-    const { data, error } = await capgo
-      .from('channels')
-      .select('version')
-      .eq('id', props.channelId)
-      .single()
-
-    if (error) {
-      console.error('Error fetching current version:', error)
-      return false
-    }
-
-    if (isCurrent())
-      currentVersionId.value = data.version
-    return true
-  }
-  catch (error) {
-    console.error('Error fetching current version:', error)
+  const context = await readChannelRollbackContext(props.channelId)
+  if (!context)
     return false
-  }
+  if (isCurrent())
+    currentVersionId.value = context.versionId
+  return true
 }
 
 // Check if an entry's bundle is the current version
@@ -401,11 +387,13 @@ async function fetchHistory(options: { refreshCurrentVersion?: boolean } = {}) {
 async function handleRollback(item: HistoryEntry) {
   if (!item.bundle?.id || !props.channelId)
     return
+  // The table can switch channel while a dialog is open: everything below
+  // stays bound to the channel the user confirmed.
+  const appId = props.appId
+  const channelId = props.channelId
+  const stillSameChannel = () => props.channelId === channelId && props.appId === appId
 
-  const canRollback = await checkPermissions('channel.rollback_bundle', {
-    appId: props.appId,
-    channelId: props.channelId,
-  })
+  const canRollback = await checkPermissions('channel.rollback_bundle', { appId, channelId })
   if (!canRollback) {
     toast.error(t('no-permission'))
     return
@@ -416,43 +404,19 @@ async function handleRollback(item: HistoryEntry) {
     return
   }
 
-  dialogStore.openDialog({
-    title: t('rollback-to-version'),
-    description: t('confirm-rollback-desc'),
-    buttons: [
-      {
-        text: t('confirm'),
-        role: 'primary',
-        handler: async () => {
-          try {
-            const { error } = await capgo
-              .from('channels')
-              .update({ version: item.bundle!.id })
-              .eq('id', props.channelId)
-
-            if (error) {
-              console.error('Error rolling back version:', error)
-              toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
-              return
-            }
-
-            toast.success(t('rollback-success'))
-            currentVersionId.value = item.bundle!.id
-            fetchHistory()
-          }
-          catch (error) {
-            console.error('Error rolling back version:', error)
-            toast.error(t(channelUpdatePackageErrorKey(error) ?? 'error-rollback'))
-          }
-        },
-      },
-      {
-        text: t('cancel'),
-        role: 'cancel',
-      },
-    ],
+  const bundle = item.bundle
+  // Same impact confirm as setting a bundle: who gets it and why the others won't.
+  const rolledBack = await confirmAndRollbackChannel({
+    appId,
+    channelId,
+    bundle: { id: bundle.id, name: bundle.name },
+    stillSameChannel,
+    viewDependencies: path => router.push(path),
   })
-  await dialogStore.onDialogDismiss()
+  if (!rolledBack)
+    return
+  currentVersionId.value = bundle.id
+  fetchHistory()
 }
 
 watch([() => props.channelId, () => props.appId], () => {

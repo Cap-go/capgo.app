@@ -318,13 +318,18 @@ SELECT
         'daily_mau should have correct policies'
     );
 
--- Test daily_storage policies
+-- Test daily_storage_hourly policies
 SELECT
     policies_are(
         'public',
-        'daily_storage',
-        ARRAY['Allow read for auth (read+)'],
-        'daily_storage should have correct policies'
+        'daily_storage_hourly',
+        ARRAY[
+            'Allow read for auth (read+)',
+            'Deny delete on daily_storage_hourly',
+            'Deny insert on daily_storage_hourly',
+            'Deny update on daily_storage_hourly'
+        ],
+        'daily_storage_hourly should have correct policies'
     );
 
 -- Test daily_version policies

@@ -51,10 +51,7 @@ async function prepareSecurityUpdatesEmailPreferences(page: Page, viewport: { wi
 async function prepareIncompatibleAlertSection(page: Page, viewport: { width: number, height: number }) {
   await page.setViewportSize(viewport)
   await dismissRemindMeLater(page)
-  // Before the change the select does not exist, so center the default upload channel field it sits under.
-  const target = process.env.VISUAL_DIFF_PHASE === 'after'
-    ? page.locator('#bundle-incompatible-alert')
-    : page.locator('input[name="default_upload_channel"]')
+  const target = page.locator('#bundle-incompatible-alert')
   try {
     await target.waitFor({ state: 'visible', timeout: process.env.VISUAL_DIFF_PHASE === 'after' ? 120_000 : 15_000 })
     await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
@@ -72,6 +69,8 @@ export interface VisualDiffRoute {
   auth?: boolean
   /** Override default visual-diff login credentials. */
   authCredentials?: { email: string, password: string }
+  /** Install deterministic fixtures before login or route navigation starts. */
+  beforeNavigate?: (page: Page) => Promise<void>
   /** Optional deterministic UI setup before the screenshot is captured. */
   prepare?: (page: Page) => Promise<void>
 }
@@ -397,16 +396,27 @@ function visualTrialPlanOptions() {
 async function prepareServingRegions(page: Page, width: number) {
   await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
   await dismissRemindMeLater(page)
-  const target = process.env.VISUAL_DIFF_PHASE === 'after'
-    ? page.locator('[data-test="serving-regions"]')
+  const controls = page.locator('[data-test="serving-regions"]')
+  const target = process.env.VISUAL_DIFF_PHASE === 'after' || await controls.isVisible()
+    ? controls
     : page.locator('input[name="block_provider_infra_requests"]')
   await target.waitFor({ state: 'visible', timeout: 120_000 })
   await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
 }
 
+async function mockAvailableServingRegions(page: Page) {
+  await page.route('**/serving_policy/**', route => route.fulfill({
+    json: {
+      app_id: 'com.demo.app',
+      active: true,
+      policy: { regions: ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME'], mode: 'route' },
+    },
+  }))
+}
+
 export const visualDiffRoutes: VisualDiffRoute[] = [
-  { slug: 'serving-regions-desktop', path: '/app/com.demo.app/settings', auth: true, prepare: page => prepareServingRegions(page, 1280) },
-  { slug: 'serving-regions-mobile', path: '/app/com.demo.app/settings', auth: true, prepare: page => prepareServingRegions(page, 390) },
+  { slug: 'serving-regions-desktop', path: '/app/com.demo.app/settings', auth: true, beforeNavigate: mockAvailableServingRegions, prepare: page => prepareServingRegions(page, 1280) },
+  { slug: 'serving-regions-mobile', path: '/app/com.demo.app/settings', auth: true, beforeNavigate: mockAvailableServingRegions, prepare: page => prepareServingRegions(page, 390) },
   {
     slug: 'builds-empty',
     path: '/app/com.demo.app/builds',
@@ -1077,6 +1087,18 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     auth: true,
     prepare: async (page) => {
       await prepareIncompatibleAlertSection(page, { width: 390, height: 844 })
+    },
+  },
+  {
+    slug: 'channel-incompatible-alert',
+    path: '/app/com.demo.app/channel/1',
+    auth: true,
+    prepare: async (page) => {
+      await dismissRemindMeLater(page)
+      const target = process.env.VISUAL_DIFF_PHASE === 'after'
+        ? page.getByRole('combobox', { name: 'Incompatible bundle alerts' })
+        : page.getByText('Disable auto downgrade under native', { exact: true })
+      await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
     },
   },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },

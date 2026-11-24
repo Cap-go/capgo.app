@@ -64,10 +64,10 @@ describe('device version counts channel scope', () => {
 
   it.concurrent('counts devices without a reported channel on platforms where the channel is the public default', () => {
     expect(buildDeviceChannelScopeCF('production', { into: [], elsewhere: [], defaultForPlatforms: ['ios', 'android'] }))
-      .toBe('(default_channel = \'production\' OR (default_channel = \'\' AND platform IN (1, 0)))')
+      .toBe('(default_channel = \'production\' OR (default_channel = \'\' AND platform IN (1.0, 0.0)))')
 
     const scope = buildDeviceChannelScopeCF('production', { into: ['in-1'], elsewhere: ['out-1'], defaultForPlatforms: ['electron'] })
-    expect(scope).toBe('(((default_channel = \'production\' OR (default_channel = \'\' AND platform IN (2))) AND lower(device_id) NOT IN (\'out-1\')) OR lower(device_id) IN (\'in-1\'))')
+    expect(scope).toBe('(((default_channel = \'production\' OR (default_channel = \'\' AND platform IN (2.0))) AND lower(device_id) NOT IN (\'out-1\')) OR lower(device_id) IN (\'in-1\'))')
 
     expect(buildDeviceVersionCountsCFQuery('com.app', 'production')).toContain('argMax(double1, timestamp) AS platform')
   })

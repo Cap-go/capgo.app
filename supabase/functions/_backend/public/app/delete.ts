@@ -77,13 +77,13 @@ async function removeSupabaseStorageFolder(
 const APIKEY_DELETE_TABLES = ['app_versions_meta', 'channel_devices', 'channels', 'devices'] as const
 
 // Internal tables that need the service connection. Keep daily_mau / daily_bandwidth /
-// daily_build_time: they stay billable through deleted_apps for the rest of the cycle
+// daily_build_time / daily_storage_hourly: they stay billable through deleted_apps for the rest of the cycle
 // (anti-fraud, so deleting and recreating an app cannot reset usage).
 // delete_old_deleted_apps purges them after 35 days, same as the dashboard deletion path.
 // An app_id recreated in that window, even by another org, shares these rows on purpose;
 // see docs/billing-usage-retention.md. App deletion is already authorized, so app-scoped
 // org_users cleanup is internal; deploy_history has a "Deny delete" policy.
-const ADMIN_DELETE_TABLES = ['daily_version', 'version_usage', 'bandwidth_usage', 'storage_usage', 'device_usage', 'daily_storage', 'stats', 'org_users', 'deploy_history'] as const
+const ADMIN_DELETE_TABLES = ['daily_version', 'version_usage', 'bandwidth_usage', 'storage_usage', 'device_usage', 'stats', 'org_users', 'deploy_history'] as const
 
 // Each delete used to be its own PostgREST request whose error was ignored; a savepoint
 // keeps that isolation for statements sharing the API-key transaction.
@@ -114,7 +114,10 @@ async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, 
       client,
       'SELECT owner_org FROM public.apps WHERE app_id = $1',
       [appId],
-    )).catch(() => null)
+    )).catch((error) => {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'error settling simulator sessions', error, app_id: appId })
+      return null
+    })
 
     // Legacy per-user Supabase storage folder used by older CLI uploads.
     // The `apps` bucket stores objects under {user_id}/{app_id}/...

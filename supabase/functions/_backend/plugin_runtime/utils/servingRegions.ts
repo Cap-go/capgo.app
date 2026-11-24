@@ -38,6 +38,11 @@ export function parseServingPolicy(regions: unknown, mode: unknown): ServingPoli
   }
 }
 
+/** Delivery exclusions depend only on deselections, not the legacy routing mode. */
+export function hasServingRegionExclusions(policy: ServingPolicy) {
+  return policy.regions.length !== SERVING_REGIONS.length
+}
+
 export function isRestrictedServingPolicy(policy: ServingPolicy) {
   return policy.regions.length !== SERVING_REGIONS.length || policy.mode !== 'route'
 }

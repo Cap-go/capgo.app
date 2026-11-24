@@ -1,3 +1,4 @@
+import { getInvoiceEmailPreferences, updateInvoiceEmailPreferences } from '../utils/invoice_email.ts'
 import { changeBillingCurrency, getBillingCurrencyState, getCurrencyTransitionPreview } from '../utils/stripe_billing_currency.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
@@ -5,6 +6,7 @@ import type { Permission } from '../utils/rbac.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { Hono } from 'hono/tiny'
 import { acceptCancelSaveOffer, declineCancelSaveOffer, parseOfferId, prepareCancelSaveOffer } from '../utils/cancel_save_offer.ts'
+import { getInvoiceDocument } from '../utils/invoice_document.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
@@ -269,6 +271,28 @@ app.post('/invoice-payment-intent', middlewareAuth, async (c) => {
   if (!secret)
     throw simpleError('no_open_invoice', 'No open invoice to pay')
   return c.json(secret)
+})
+
+app.post('/invoice-document', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { invoiceId?: unknown }>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.read_invoices')
+  if (!await checkPermission(c, 'org.read_billing', { orgId: body.orgId }))
+    throw simpleError('not_authorized', 'Not authorized')
+  c.header('Cache-Control', 'private, no-store')
+  return c.json(await getInvoiceDocument(ctx, body.invoiceId))
+})
+
+app.post('/invoice-email', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody>(c)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.read_billing')
+  c.header('Cache-Control', 'private, no-store')
+  return c.json(await getInvoiceEmailPreferences(c, body.orgId!, ctx))
+})
+
+app.post('/invoice-email/update', middlewareAuth, async (c) => {
+  const body = await parseBody<OrgBody & { preferences?: unknown }>(c)
+  await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  return c.json(await updateInvoiceEmailPreferences(c, body.orgId!, body.preferences))
 })
 
 app.post('/currency', middlewareAuth, async (c) => {

@@ -603,6 +603,20 @@ function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
   return false
 }
 
+/** Background snapshot builders must explicitly select EU, regardless of ingress.
+ * Only an explicit local test replica URL may replace the EU binding. */
+export function getEUReadReplicaDatabaseURL(c: Context): string {
+  const binding = c.env?.HYPERDRIVE_CAPGO_READ_PLUGIN_STATE_EU?.connectionString
+  if (binding) {
+    setDatabaseSource(c, 'HYPERDRIVE_CAPGO_READ_PLUGIN_STATE_EU')
+    return binding
+  }
+  const local = getLocalReadOnlyDatabaseURL(c)
+  if (local)
+    return local
+  throw new Error('EU read replica is required for plugin state source reads')
+}
+
 /**
  * Create a DB client for this request.
  *
@@ -615,8 +629,9 @@ function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
  *
  * Non-Hyperdrive (local/direct/pooler): `Pool` + explicit `closeClient`/`end()`.
  */
-export async function getPgClient(c: Context, readOnly = false): Promise<PgClient> {
-  const dbUrl = getDatabaseURL(c, readOnly)
+export async function getPgClient(c: Context, access: boolean | 'eu-replica' = false): Promise<PgClient> {
+  const readOnly = access !== false
+  const dbUrl = access === 'eu-replica' ? getEUReadReplicaDatabaseURL(c) : getDatabaseURL(c, readOnly)
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')

@@ -294,6 +294,8 @@ export interface DeletePayload<T extends keyof Database['public']['Tables']> {
   schema: string
   record: null
   old_record: Database['public']['Tables'][T]['Row']
+  /** When the row was deleted, set by trigger_http_queue_post_to_function. */
+  occurred_at?: string
 }
 
 export function supabaseClient(c: Context, jwt: string) {
@@ -1293,13 +1295,14 @@ export async function trackMetaSB(
   app_id: string,
   version_id: number,
   size: number,
+  at?: string | null,
 ): Promise<{ data: boolean | null, error: unknown | null }> {
-  cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size })
+  cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size, at })
   try {
     const data = await scalarRpc<boolean>(
       c,
-      'SELECT public.upsert_version_meta(p_app_id => $1::varchar, p_version_id => $2::bigint, p_size => $3::bigint) AS result',
-      [app_id, version_id, size],
+      'SELECT public.upsert_version_meta(p_app_id => $1::varchar, p_version_id => $2::bigint, p_size => $3::bigint, p_timestamp => $4::timestamptz) AS result',
+      [app_id, version_id, size, at ?? null],
     )
     return { data, error: null }
   }
@@ -1401,7 +1404,7 @@ export function trackLogsSB(c: Context, app_id: string, device_id: string, actio
   }, 'trackLogsSB error')
 }
 
-type UsageRpc = 'read_device_usage' | 'read_bandwidth_usage' | 'read_storage_usage' | 'read_version_usage'
+type UsageRpc = 'read_device_usage' | 'read_bandwidth_usage' | 'read_version_usage'
 type UsageRpcRows<F extends UsageRpc> = Database['public']['Functions'][F]['Returns']
 
 /**
@@ -1428,10 +1431,6 @@ export function readDeviceUsageSB(c: Context, app_id: string, period_start: stri
 
 export function readBandwidthUsageSB(c: Context, app_id: string, period_start: string, period_end: string) {
   return readUsageRpc(c, 'read_bandwidth_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
-}
-
-export function readStatsStorageSB(c: Context, app_id: string, period_start: string, period_end: string) {
-  return readUsageRpc(c, 'read_storage_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 }
 
 export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string, options: { throwOnError?: boolean } = {}): Promise<VersionUsage[]> {
@@ -1595,7 +1594,11 @@ export async function readChannelDeviceOverrideIdsSB(c: Context, app_id: string,
       limit: MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS,
     })
   }
-  return { into: partitioned.into, elsewhere: partitioned.elsewhere }
+  return {
+    into: partitioned.into,
+    elsewhere: partitioned.elsewhere,
+    truncated: partitioned.truncated || rows.length > CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT,
+  }
 }
 
 const CHANNEL_DEVICE_PLATFORMS: ChannelDevicePlatform[] = ['ios', 'android', 'electron']
@@ -1626,9 +1629,16 @@ export function pickChannelDefaultPlatforms(rows: PublicChannelRow[], channel: V
 
 /**
  * Platforms where `channel` is the public default, read from the app's public
- * channels. Returns none on error so counts fall back to reported channels.
+ * channels. Returns none on error so counts fall back to reported channels,
+ * unless `throwOnError` is set: callers that cache the result (channel impact)
+ * must not read a failed lookup as "default for no platform".
  */
-export async function readChannelDefaultPlatformsSB(c: Context, app_id: string, channel: VersionUsageChannel | string): Promise<ChannelDevicePlatform[]> {
+export async function readChannelDefaultPlatformsSB(
+  c: Context,
+  app_id: string,
+  channel: VersionUsageChannel | string,
+  options: { throwOnError?: boolean } = {},
+): Promise<ChannelDevicePlatform[]> {
   try {
     const rows = await withAdminPg(c, pg => queryJson<PublicChannelRow>(
       pg,
@@ -1642,6 +1652,8 @@ export async function readChannelDefaultPlatformsSB(c: Context, app_id: string, 
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading public channels for device counts', app_id, error })
+    if (options.throwOnError)
+      throw error
     return []
   }
 }

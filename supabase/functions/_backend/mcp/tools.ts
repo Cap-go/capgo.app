@@ -763,7 +763,7 @@ const appTools: McpTool[] = [
       block_provider_infra_requests: z.boolean().optional().describe('Block update requests coming from cloud provider infrastructure'),
       build_timeout_seconds: z.number().int().min(300).max(21600).optional().describe('Native cloud build timeout in seconds.'),
       default_upload_channel: z.string().min(1).optional().describe('Existing channel that CLI uploads use when no channel is supplied. Omit to retain the saved upload channel.'),
-      bundle_incompatible_alert: z.enum(['default', 'all']).optional().describe('Which channels email members when an incompatible bundle goes live. default = only the default upload channel. all = every channel.'),
+      bundle_incompatible_alert: z.enum(['default', 'all']).optional().describe('App-wide incompatible bundle email setting. default covers default download channels for any platform. all covers every channel. Individual channels can override this setting.'),
       device_data_collection: deviceDataCollection.optional(),
       ios_store_url: z.string().nullable().optional().describe('App Store listing URL for this app. Use null to clear it.'),
       android_store_url: z.string().nullable().optional().describe('Google Play listing URL for this app. Use null to clear it.'),
@@ -1088,7 +1088,8 @@ const statsTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_get_app_statistics,
     title: 'App statistics',
     description: 'Daily MAU, storage, bandwidth and build time for an app.'
-      + ' Returns data as dated usage records with mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.',
+      + ' Returns data as dated usage records with mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.'
+      + ' Storage is billed in GB-hours: storage_byte_hours / 2^30 is GB-hours.',
     input: { appId, ...statsRange },
     annotations: READ,
     refine: statsRangeLimit,
@@ -1111,7 +1112,7 @@ const statsTools: McpTool[] = [
     title: 'Account statistics',
     description: 'Daily usage summed across apps accessible to this connection\'s API key; a scoped key may return only part of the account usage.'
       + ' Returns data as dated totals for mau, storage, storage_byte_hours, bandwidth and build_time_seconds; metrics accumulate unless noAccumulate is true.'
-      + ' When records share a date, storage_byte_hours is retained from the first record, not summed.',
+      + ' Storage is billed in GB-hours: storage_byte_hours / 2^30 is GB-hours.',
     input: statsRange,
     annotations: READ,
     refine: statsRangeLimit,

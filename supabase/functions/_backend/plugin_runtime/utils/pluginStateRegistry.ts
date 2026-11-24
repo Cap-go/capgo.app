@@ -8,6 +8,9 @@ export class PluginStateMiss extends Error {
   }
 }
 
+/** The document is not cached here yet and its provider read missed the request deadline. */
+export class PluginStateColdMiss extends PluginStateMiss {}
+
 export function isPluginStateMiss(error: unknown): error is Error {
   // Drizzle wraps query failures in DrizzleQueryError.cause. Preserve the
   // fallback marker through that wrapper instead of returning an empty success.

@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   userId: 'user_example' as string | null,
   org: vi.fn(), permission: vi.fn(), context: vi.fn(),
-  previewCurrency: vi.fn(), currency: vi.fn(), changeCurrency: vi.fn(), discounts: vi.fn(), profile: vi.fn(), update: vi.fn(), add: vi.fn(), remove: vi.fn(),
+  previewCurrency: vi.fn(), currency: vi.fn(), changeCurrency: vi.fn(),
+  emailPreferences: vi.fn(), saveEmailPreferences: vi.fn(), invoice: vi.fn(), discounts: vi.fn(), profile: vi.fn(), update: vi.fn(), add: vi.fn(), remove: vi.fn(),
 }))
 vi.mock('../supabase/functions/_backend/utils/hono_jwt.ts', () => ({
   middlewareAuth: async (c: any, next: () => Promise<void>) => {
@@ -26,9 +27,14 @@ vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile.ts', () => 
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_profile_sync.ts', () => ({ syncBillingProfile: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_currency.ts', () => ({ getCurrencyTransitionPreview: mocks.previewCurrency, getBillingCurrencyState: mocks.currency, changeBillingCurrency: mocks.changeCurrency }))
 vi.mock('../supabase/functions/_backend/utils/stripe_billing_discounts.ts', () => ({ getBillingDiscounts: mocks.discounts }))
+vi.mock('../supabase/functions/_backend/utils/invoice_document.ts', async (importOriginal) => ({ ...await importOriginal<typeof import('../supabase/functions/_backend/utils/invoice_document.ts')>(), getInvoiceDocument: mocks.invoice }))
+vi.mock('../supabase/functions/_backend/utils/invoice_email.ts', () => ({ getInvoiceEmailPreferences: mocks.emailPreferences, updateInvoiceEmailPreferences: mocks.saveEmailPreferences }))
 const { app } = await import('../supabase/functions/_backend/private/stripe_billing')
 app.onError((_err, c) => c.json({ error: 'rejected' }, 400))
 const operations = [
+  { path: 'invoice-email', permission: 'org.read_billing', action: mocks.emailPreferences },
+  { path: 'invoice-email/update', permission: 'org.update_billing', action: mocks.saveEmailPreferences },
+  { path: 'invoice-document', permission: 'org.read_invoices', action: mocks.invoice },
   { path: 'currency/preview', permission: 'org.update_billing', action: mocks.previewCurrency },
   { path: 'currency', permission: 'org.read_billing', action: mocks.currency },
   { path: 'currency/update', permission: 'org.update_billing', action: mocks.changeCurrency },
@@ -71,6 +77,10 @@ describe.each(operations)('$path authorization', ({ path, permission, action }) 
   it('uses the server-resolved customer and account, ignoring client-supplied replacements', async () => {
     expect((await request(path, { customerId: 'cus_other', billingAccount: 'ee', taxIdId: 'txi_example' })).status).toBe(200)
     expect(mocks.context).toHaveBeenCalledWith(expect.anything(), 'cus_resolved')
+    if (path.startsWith('invoice-email')) {
+      expect(action.mock.calls[0][1]).toBe('org_example')
+      return
+    }
     expect(action.mock.calls[0][['discounts', 'currency', 'currency/update', 'currency/preview'].includes(path) ? 1 : 0]).toEqual({ customerId: 'cus_resolved', billingAccount: 'us' })
   })
 })
@@ -78,4 +88,22 @@ describe.each(operations)('$path authorization', ({ path, permission, action }) 
 it('does not expose promotion-code mutation on the billing API', async () => {
   expect((await request('promotion-code', { code: 'EXAMPLE20' })).status).toBe(404)
   expect(mocks.context).not.toHaveBeenCalled()
+})
+
+it('marks invoice data private and uncacheable', async () => {
+  const response = await request('invoice-document', { invoiceId: 'in_example' })
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+})
+
+it('requires current billing read permission in addition to invoice read permission for every invoice download', async () => {
+  mocks.permission.mockImplementation((_c, permission) => permission === 'org.read_invoices')
+  expect((await request('invoice-document', { invoiceId: 'in_example' })).status).toBe(400)
+  expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'org.read_billing', { orgId: 'org_example' })
+  expect(mocks.invoice).not.toHaveBeenCalled()
+})
+it('ignores caller-supplied addresses, tax IDs, country and customer replacements', async () => {
+  const response = await request('invoice-document', { invoiceId: 'in_example', customerId: 'cus_other', address: { line1: 'Untrusted address', country: 'FR' }, taxIds: [{ type: 'eu_vat', value: 'FR00000000000' }] })
+  expect(response.status).toBe(200)
+  expect(mocks.invoice).toHaveBeenCalledWith({ customerId: 'cus_resolved', billingAccount: 'us' }, 'in_example')
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store')
 })
