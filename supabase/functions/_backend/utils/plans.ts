@@ -13,7 +13,6 @@ import { syncSubscriptionData } from './stripe.ts'
 import {
   getCurrentPlanNameOrg,
   getOrgExtraMau,
-  getPlanUsageAndFit,
   getPlanUsageAndFitUncached,
   getPlanUsagePercent,
   getTotalStats,
@@ -563,14 +562,6 @@ export async function handleTrialOrg(c: Context, orgId: string, org: any, drizzl
   return false // Not a trial
 }
 
-// Calculate plan status and usage
-export async function calculatePlanStatus(c: Context, orgId: string) {
-  const planUsage = await getPlanUsageAndFit(c, orgId)
-  const { is_good_plan, total_percent, mau_percent, bandwidth_percent, storage_percent, build_time_percent } = planUsage
-  const percentUsage = normalizePlanUsage({ total_percent, mau_percent, bandwidth_percent, storage_percent, build_time_percent })
-  return { is_good_plan, percentUsage }
-}
-
 export async function calculatePlanStatusFresh(c: Context, orgId: string) {
   try {
     const planUsage = await getPlanUsageAndFitUncached(c, orgId)
@@ -778,8 +769,8 @@ export async function syncSubscriptionAndEvents(c: Context, orgId: string, drizz
     return // Trial handled, exit early
   }
 
-  // Calculate plan status and usage for notifications
-  const { is_good_plan, percentUsage } = await calculatePlanStatus(c, orgId)
+  // Fresh calculation (same as cron_stat_org) because this path persists is_good_plan.
+  const { is_good_plan, percentUsage } = await calculatePlanStatusFresh(c, orgId)
 
   // Handle notifications and events
   const result = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
