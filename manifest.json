@@ -18,17 +18,12 @@
     },
     "api": {
       "success": {
-        "tag": "capgo-22.67.1",
-        "sha": "209e4b45dbade1412f18fa605a7ae5569dc96955",
-        "runId": "45248300648",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "files": {
       "success": {
@@ -41,143 +36,93 @@
     },
     "translation": {
       "success": {
-        "tag": "capgo-22.67.1",
-        "sha": "209e4b45dbade1412f18fa605a7ae5569dc96955",
-        "runId": "45248300648",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_eu": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_as": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_us": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_sa": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_oc": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_af": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_me": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_hk": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_jp": {
       "success": {
-        "tag": "capgo-22.67.0",
-        "sha": "14e8151d381a144b43b78fb9dc8cce2513c4d8cd",
-        "runId": "45068193710",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.67.2",
         "sha": "1ba2ebb716d64d12ffe67b979423ea2c35880ddd",
         "runId": "45384259169",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "gotrue": {
       "success": {
