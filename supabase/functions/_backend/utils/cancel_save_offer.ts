@@ -440,6 +440,11 @@ async function grantOfferCredits(c: Context, offer: AcceptRow) {
 async function acceptCredits(c: Context, ctx: InAppBillingContext, offer: AcceptRow, comment?: string): Promise<{ credits: number }> {
   const credits = Number(offer.credits)
   try {
+    // A first grant needs the subscription to still qualify, as when the offer was
+    // shown (active, not ending, monthly, no discount). A grant-backed retry only
+    // finishes the cancellation, so it skips this check.
+    if (!offer.credit_grant_id && !getSaveableMonthlyAmount(await retrieveSubscription(ctx, offer.subscription_id)))
+      throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
     await grantOfferCredits(c, offer)
     // The monthly plan stops at period end; the credits take over from there.
     await scheduleSubscriptionCancel(c, ctx, offer.reason, comment)
