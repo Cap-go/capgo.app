@@ -785,4 +785,19 @@ export async function syncSubscriptionAndEvents(c: Context, orgId: string, drizz
   const result = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
   if (result.exceededFlags)
     await updateExceededFlags(org.customer_id, result.exceededFlags, drizzleClient)
+  // Persist the credit-adjusted eligibility too, so can_use_more does not lag until the next stats run.
+  await updateFinalIsGoodPlan(org, result.finalIsGoodPlan, drizzleClient)
+}
+
+async function updateFinalIsGoodPlan(org: any, finalIsGoodPlan: boolean, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<void> {
+  if (!org.customer_id)
+    return
+  await drizzleClient.execute(sql`
+    UPDATE public.stripe_info
+    SET is_good_plan = ${finalIsGoodPlan}
+    WHERE customer_id = ${org.customer_id}
+      AND product_id IS NOT DISTINCT FROM ${org.stripe_info?.product_id ?? null}
+      AND price_id IS NOT DISTINCT FROM ${org.stripe_info?.price_id ?? null}
+      AND is_good_plan IS DISTINCT FROM ${finalIsGoodPlan}
+  `)
 }
