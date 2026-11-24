@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(48);
+SELECT plan(51);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user('apikey_v2_scope_owner', 'apikey_v2_scope_owner@test.local');
@@ -956,6 +956,33 @@ SELECT ok(
     WHERE m->>'message' LIKE '%@capgo/cli@latest%'
   ),
   'malformed CLI version with a valid prefix is ignored'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '8.89.0-..')) AS m
+    WHERE m->>'message' LIKE '%@capgo/cli@latest%'
+  ),
+  'invalid semver 8.89.0-.. is ignored'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '08.89.0')) AS m
+    WHERE m->>'message' LIKE '%@capgo/cli@latest%'
+  ),
+  'invalid semver 08.89.0 is ignored'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '8.89.0-01')) AS m
+    WHERE m->>'message' LIKE '%@capgo/cli@latest%'
+  ),
+  'invalid semver 8.89.0-01 is ignored'
 );
 
 SELECT ok(

@@ -73,9 +73,10 @@ BEGIN
     ));
   END IF;
 
-  -- Only well-formed semver is compared. Prereleases of 8.90.1 are already
-  -- API-only builds, so only the release core is compared.
-  IF cli_version ~ '^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+  -- Only valid semver (semver.org regex, cores capped at 9 digits for the int
+  -- cast) is compared. Prereleases of 8.90.1 are already API-only builds, so
+  -- only the release core is compared.
+  IF cli_version ~ '^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})(-(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$'
     AND string_to_array(substring(cli_version from '^\d+\.\d+\.\d+'), '.')::int[] < ARRAY[8, 90, 1]
   THEN
     messages := array_append(messages, jsonb_build_object(
