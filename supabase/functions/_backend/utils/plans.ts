@@ -623,6 +623,9 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
         groups: { organization: orgId },
       }).catch()
     }
+    // A paying build-only org gets both the onboarding nudge and its usage-threshold alerts.
+    if (is_good_plan && checksPlanUsage)
+      await userIsAtPlanUsage(c, orgId, percentUsage, drizzleClient)
   }
   else if (is_good_plan && checksPlanUsage) {
     await userIsAtPlanUsage(c, orgId, percentUsage, drizzleClient)

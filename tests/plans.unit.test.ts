@@ -350,6 +350,21 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
       }),
     )
   })
+
+  it.concurrent('sends both the onboarding nudge and the usage alert to a paying build-only org', async () => {
+    const { handleOrgNotificationsAndEvents } = await import('../supabase/functions/_backend/utils/plans.ts')
+    // "onboarding" in the id makes the org not onboarded and onboarding-needed.
+    const orgId = 'org-onboarding-build-only-usage'
+    await handleOrgNotificationsAndEvents(createContext(), payingOrg(), orgId, true, {
+      total_percent: 71,
+      mau_percent: 0,
+      bandwidth_percent: 0,
+      storage_percent: 0,
+      build_time_percent: 71,
+    }, {} as any)
+    expect(sendNotifToOrgMembersOnceMock).toHaveBeenCalledWith(expect.anything(), 'user:need_onboarding', 'onboarding', expect.anything(), orgId, orgId, expect.anything())
+    expect(sendNotifToOrgMembersMock).toHaveBeenCalledWith(expect.anything(), 'user:usage_70_percent_of_plan', 'usage_limit', expect.anything(), orgId, orgId, '0 0 1 * *', expect.anything(), 'admins_and_billing')
+  })
 })
 
 describe('checkPlanStatusOnly failures', () => {
