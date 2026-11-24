@@ -91,7 +91,8 @@ When a hosted MCP poll sees a job still `running` past the app's configured time
 - 🔋 Supports Android and iOS
 - ⚡️ Capacitor 8/7/6/5 support
 - 🌐 **Open Source**: Source code licensed under GNU AFFERO GENERAL PUBLIC LICENSE
-  (forks must use their own branding, see [Trademarks and forks](#trademarks-and-forks))
+  (public forks must use their own branding; private internal self-hosting is
+  fine, see [Trademarks and forks](#trademarks-and-forks))
 - 🌐 **Open Source Backend**: Self install
   [our backend](https://github.com/Cap-go/capgo) in your infra
 
