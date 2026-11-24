@@ -189,6 +189,7 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
     const { rows: unfinished } = await pg.query<OfferRow>(
       `SELECT ${OFFER_COLUMNS} FROM public.cancel_save_offers
        WHERE customer_id = $1 AND subscription_id = $2 AND credit_grant_id IS NOT NULL
+         AND outcome IN ('offered', 'accepting')
        ORDER BY created_at DESC LIMIT 1`,
       [ctx.customerId, subscriptionId],
     )
@@ -447,7 +448,7 @@ async function acceptCredits(c: Context, ctx: InAppBillingContext, offer: Accept
       throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
     await grantOfferCredits(c, offer)
     // The monthly plan stops at period end; the credits take over from there.
-    await scheduleSubscriptionCancel(c, ctx, offer.reason, comment)
+    await scheduleSubscriptionCancel(c, ctx, offer.reason, comment, offer.subscription_id)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save credits failed', customerId: ctx.customerId, offerId: offer.id, error })
@@ -476,9 +477,12 @@ export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext
   const offer = await reserveOffer(c, ctx.customerId, offerId)
   if (!offer || offer.outcome === 'offered' || offer.outcome === 'declined')
     throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
-  // Already saved: a retry after a lost response returns the recorded result. An
-  // accepted credits offer goes through again instead: the grant is reused and the
-  // cancellation is scheduled again, which is a no-op when it already is.
+  // Already saved: a retry after a lost response returns the recorded result. A
+  // credits offer is written 'accepted' only once its cancellation is scheduled, so
+  // nothing is left to do (and a plan resumed since must not be canceled again). An
+  // 'accepting' offer that already holds a grant goes on to finish its cancellation.
+  if (offer.outcome === 'accepted' && offer.offer_type === 'credits')
+    return { type: 'credits', credits: Number(offer.credits) }
   if (offer.outcome === 'accepted' && offer.offer_type === 'discount' && offer.discount_end)
     return { type: 'discount', discountEnd: offer.discount_end }
 

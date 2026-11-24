@@ -114,27 +114,31 @@ afterAll(async () => {
 })
 
 describe('credits offer accept after a failed cancellation', () => {
-  it('keeps the reservation and the single grant when Stripe fails after the grant', async () => {
+  it('keeps one grant reserved, rejects a second offer, and finishes on retry', async () => {
+    // 1. The grant commits, then Stripe fails: the offer stays reserved with its grant.
     mocks.cancel.mockRejectedValueOnce(new Error('stripe unavailable'))
     await expect(acceptCancelSaveOffer(c, ctx, offerA, 'only one app')).rejects.toThrow('stripe unavailable')
     expect(await grantCount()).toBe(1)
-    const a = await offer(offerA)
-    expect(a.outcome).toBe('accepting')
-    expect(a.credit_grant_id).not.toBeNull()
-  })
+    const reserved = await offer(offerA)
+    expect(reserved.outcome).toBe('accepting')
+    expect(reserved.credit_grant_id).not.toBeNull()
 
-  it('rejects another offer of the same customer without granting again', async () => {
+    // 2. Another offer of the same customer cannot reserve or grant again.
     await expect(acceptCancelSaveOffer(c, ctx, offerB)).rejects.toThrow('no longer available')
     expect(await grantCount()).toBe(1)
     expect((await offer(offerB)).outcome).toBe('offered')
-  })
 
-  it('finishes on retry with the same grant', async () => {
-    const before = (await offer(offerA)).credit_grant_id
+    // 3. The retry reuses the grant and cancels the subscription the offer checked.
     mocks.cancel.mockResolvedValueOnce(null)
     await expect(acceptCancelSaveOffer(c, ctx, offerA, 'only one app')).resolves.toEqual({ type: 'credits', credits: 14 })
-    expect(mocks.cancel).toHaveBeenLastCalledWith(c, ctx, 'unused', 'only one app')
+    expect(mocks.cancel).toHaveBeenLastCalledWith(c, ctx, 'unused', 'only one app', SUBSCRIPTION_ID)
     expect(await grantCount()).toBe(1)
-    expect(await offer(offerA)).toEqual({ outcome: 'accepted', credit_grant_id: before })
+    expect(await offer(offerA)).toEqual({ outcome: 'accepted', credit_grant_id: reserved.credit_grant_id })
+
+    // 4. Replaying the accepted offer returns the result without canceling again.
+    const cancels = mocks.cancel.mock.calls.length
+    await expect(acceptCancelSaveOffer(c, ctx, offerA)).resolves.toEqual({ type: 'credits', credits: 14 })
+    expect(mocks.cancel.mock.calls.length).toBe(cancels)
+    expect(await grantCount()).toBe(1)
   })
 })
