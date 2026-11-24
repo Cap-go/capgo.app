@@ -474,6 +474,41 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
         await page.locator('[data-test="builder-step-start_setup"][data-status="done"]').waitFor({ state: 'attached' })
     },
   })),
+  // Builder-only setup at desktop size: before any platform starts, then with iOS started.
+  ...[
+    { slug: 'onboarding-builder-method-waiting', started: null },
+    { slug: 'onboarding-builder-method-ios-progress', started: 'ios' as const },
+  ].map(({ slug, started }): VisualDiffRoute => ({
+    slug,
+    path: '/apps',
+    auth: true,
+    prepare: async (page) => {
+      const onboarding = { setup: {
+        todo_list_version: 4,
+        builder_todo_list_version: '1',
+        paths: ['builder'],
+        selected_path: 'builder',
+        // The base only lists steps for a selected platform.
+        selected_builder_platform: started,
+        source: 'manual',
+        outcome: 'in_progress',
+        steps: { builder: Object.fromEntries((['ios', 'android'] as const).map(platform => [platform, Object.fromEntries(BUILDER_STEP_IDS[platform].map(id => [id, { status: platform === started && id === 'start_setup' ? 'done' : 'pending' }]))])) },
+      } }
+      await routeConsoleQuery(page, 'apps', async (route, query) => {
+        const matchesApp = query.operations.some(op => op.method === 'eq' && op.args[0] === 'app_id' && op.args[1] === 'com.demo.app')
+        await forwardConsoleQuery(route, (row: any) => row?.app_id === 'com.demo.app' || (matchesApp && row?.onboarding !== undefined)
+          ? { ...row, need_onboarding: true, onboarding }
+          : row)
+      })
+      await routeConsoleQuery(page, 'verify_getting_started', route => route.fulfill(consoleQueryJson(onboarding)))
+      await page.route('**/private/onboarding_progress', route => route.fulfill({ json: { onboarding, hasChannel: false, checkErrors: [] } }))
+      await page.setViewportSize({ width: 1440, height: 900 })
+      await page.goto('/app/com.demo.app/getting-started')
+      await page.locator('[data-test="builder-checklist"]').waitFor()
+      if (started)
+        await page.locator('[data-test="builder-step-start_setup"][data-status="done"]').waitFor({ state: 'attached' })
+    },
+  })),
   // Out-of-order setup: a later step is done while an earlier one is still open.
   ...[
     { slug: 'onboarding-ota-passed-over-step', path: 'ota' as const },
