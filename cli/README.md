@@ -108,6 +108,14 @@ The most complete [documentation is here](https://capgo.app/docs/).
 
 Join the [discord](https://discord.gg/VnYRvBfgA6) to get help.
 
+## Forks and branding
+
+The license in this repository covers the source code only. It grants no rights
+to the Capgo name, wordmark, logos, or branding. Public forks, custom builds, and
+hosted or self-hosted services must use their own name and branding and make
+clear they are not Capgo and not endorsed by Capgo. See
+[TRADEMARK.md](https://github.com/Cap-go/capgo.app/blob/main/TRADEMARK.md).
+
 
 ## Dynamic monorepos
 

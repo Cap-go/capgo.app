@@ -3,6 +3,16 @@
 This file provides guidance to AI agents (Claude Code, Cursor, Copilot, etc.)
 when working with code in this repository.
 
+## Forks and branding
+
+The [AGPL-3.0](LICENSE) license covers this repository's source code only. It
+grants no rights to the Capgo name, wordmark, logos, or other branding, which
+Digital Shift OU owns. If you are building a fork, a derivative project, or a
+hosted or self-hosted service from this code for anyone other than Capgo,
+rebrand it: replace the Capgo name, logos, icons, and domains with the
+project's own, and make clear it is not Capgo and not endorsed by Capgo. See
+[TRADEMARK.md](TRADEMARK.md).
+
 ## Admin dashboard
 
 The admin dashboard lives in [`Cap-go/capgo_admin_dashboard`](https://github.com/Cap-go/capgo_admin_dashboard) and reads the Capgo database read-only; Capgo carries no admin code.

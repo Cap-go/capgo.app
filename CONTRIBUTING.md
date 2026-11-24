@@ -9,6 +9,16 @@ the relevant section before making your contribution. It will make it a lot
 easier for us maintainers and smooth out the experience for all involved. The
 community looks forward to your contributions. 🎉
 
+## Forks and branding
+
+You are welcome to fork the source code under the
+[GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE). That license
+covers the source code only, not the **Capgo** name, wordmark, logos, or
+branding. Any public fork, hosted service, or derivative project must use its
+own name and branding and make it clear that it is not Capgo and not endorsed
+by Capgo. Truthful, plain-text attribution is fine; see
+[TRADEMARK.md](./TRADEMARK.md).
+
 ## Admin dashboard changes
 
 The admin dashboard lives in the private
