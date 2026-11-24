@@ -218,6 +218,23 @@ describe('builds table after a successful build', () => {
     await vi.waitFor(() => expect(host.querySelector('[data-test="build-detail-simulator"]')).not.toBeNull())
   })
 
+  it('keeps refreshing an opened build the listing leaves out until its row ends', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    mocks.builds = [{ ...running, platform: 'ios' }]
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: mocks.builds[0].status === 'succeeded' ? { job_2: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } } : {} }), { status: 200 })))
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    ;(host.querySelector('[data-test="row-b2"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="live"]')).not.toBeNull())
+    // The stream reports success while the row still says running, and a search hides the build.
+    mocks.listed = []
+    ;(host.querySelector('[data-test="live-finish"]') as HTMLButtonElement).click()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    mocks.builds = [{ ...running, platform: 'ios', status: 'succeeded' }]
+    vi.advanceTimersByTime(10_000)
+    await vi.waitFor(() => expect(host.querySelector('[data-test="build-detail-simulator"]')).not.toBeNull())
+  })
+
   it('offers the simulator when the row ends after the build view saw the success', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     const queued = { ...running, platform: 'ios', status: 'pending', builder_job_id: null }

@@ -217,15 +217,17 @@ async function getData(silent = false) {
     const opened = openedBuild.value
     let outside: Element | null = null
     if (opened && !builds.some(build => build.id === opened.id)) {
-      const { data: row } = await capgo.from('build_requests').select('*').eq('id', opened.id).maybeSingle()
+      const { data: row, error: rowError } = await capgo.from('build_requests').select('*').eq('id', opened.id).maybeSingle()
       if (!isCurrent())
         return
+      if (rowError)
+        console.error('Error fetching the opened build:', rowError)
       outside = row
     }
     openedOutside.value = outside
     elements.value = builds
     // A running build re-arms saved-output recovery for the moment it ends.
-    if (builds.some(build => isBuildActive(build.status)))
+    if (builds.some(build => isBuildActive(build.status)) || isBuildActive(outside?.status))
       outputsFailures.value = 0
     total.value = count || 0
     if (isCurrent())
@@ -288,6 +290,7 @@ async function reload() {
   savedOutputsKey = ''
   outputsFailures.value = 0
   openedBuild.value = null
+  openedOutside.value = null
   nextStepsDismissed.value = isBuildNextStepsDismissed(props.appId)
   platformBuildCounts.value = { ios: 0, android: 0 }
   canEnableBuilder.value = false
@@ -571,6 +574,7 @@ function openBuild(elem: Element) {
 
 function closeBuild() {
   openedBuild.value = null
+  openedOutside.value = null
   void getData(true)
 }
 
@@ -583,6 +587,7 @@ function detailSimulator() {
 
 function retryBuild() {
   openedBuild.value = null
+  openedOutside.value = null
   addOne()
 }
 
@@ -617,7 +622,8 @@ function dismissNextSteps() {
   nextStepsDismissed.value = true
 }
 
-const hasActiveBuild = computed(() => elements.value.some(build => isBuildActive(build.status)))
+// The opened build counts even when the listing leaves it out: its row still has to end.
+const hasActiveBuild = computed(() => elements.value.some(build => isBuildActive(build.status)) || isBuildActive(openedOutside.value?.status))
 
 function stopAutoRefresh() {
   clearInterval(refreshTimer)
