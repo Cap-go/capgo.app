@@ -1180,7 +1180,7 @@ watch(
                 <h2 class="text-base font-semibold leading-tight text-slate-900 dark:text-white">
                   {{ t(titleKey) }}
                 </h2>
-                <p v-if="!isNativeUsage" class="mt-0.5 text-xs leading-snug text-slate-500 dark:text-slate-400" :title="t('bundle-offers-help-detail')" data-testid="bundle-offers-help">
+                <p v-if="!isNativeUsage" class="mt-0.5 text-xs leading-snug text-slate-500 dark:text-slate-400" data-testid="bundle-offers-help">
                   {{ t('bundle-offers-help') }}
                   <RouterLink v-if="activeAppId" :to="`/app/${activeAppId}/devices`" class="font-medium text-blue-600 hover:underline dark:text-blue-400">
                     {{ t('bundle-offers-devices-link') }}

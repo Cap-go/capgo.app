@@ -1091,7 +1091,6 @@
   "bundle-offers-by-version": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-offers-devices-link": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-offers-help": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "bundle-offers-help-detail": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-offers-unit": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-range-placeholder": "Used in Capgo web console areas: components/tables. Role: input placeholder. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "bundle-summary-live-on": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
