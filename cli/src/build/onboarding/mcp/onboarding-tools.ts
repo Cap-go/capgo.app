@@ -24,6 +24,9 @@ import { defaultExportPath, exportCredentialsToEnv } from '../env-export.js'
 import { generateWorkflow } from '../workflow-generator.js'
 import { writeWorkflowFile } from '../workflow-writer.js'
 import { readScopedMcpCredentialFile } from './scoped-credential-path.js'
+import { createStartSetupReporter } from './start-setup-report.js'
+import { resolveOwnerOrgId } from '../../../analytics/org-resolver.js'
+import { trackBuilderOnboardingAction } from '../telemetry.js'
 import { fetchUserInfo, revokeToken, runOAuthFlow, startOAuthFlow } from '../android/oauth-google.js'
 import open from 'open'
 
@@ -521,6 +524,15 @@ export function registerOnboardingTools(server: McpRegistrar, getSdk: () => Capg
   // Rebuilt when the MCP project dir changes (client roots / capgo_set_project_dir), so a
   // user-scoped install follows the agent's project instead of the dir it was spawned in.
   const getDeps = depsOverride ? () => depsOverride : memoizeByCwd(() => buildDeps(getSdk))
+  // Tests inject deps; only the real server reports setup starts to Capgo.
+  const reportStartSetup = depsOverride
+    ? async () => {}
+    : createStartSetupReporter({
+        getApiKey: () => findSavedKeySilent() || undefined,
+        getAppId: () => getDeps().getAppId(),
+        resolveOrgId: (apikey, appId) => resolveOwnerOrgId(apikey, appId),
+        track: trackBuilderOnboardingAction,
+      })
 
   server.registerTool(
     'start_capgo_builder_onboarding',
@@ -530,6 +542,7 @@ export function registerOnboardingTools(server: McpRegistrar, getSdk: () => Capg
     },
     async (args: { platform?: 'ios' | 'android' }) => {
       const result = await runStart(getDeps(), args.platform)
+      void reportStartSetup(result)
       return { content: [{ type: 'text' as const, text: renderResult(result) }] }
     },
   )
@@ -542,6 +555,7 @@ export function registerOnboardingTools(server: McpRegistrar, getSdk: () => Capg
     },
     async (args: OnboardingNextStepInput) => {
       const result = await runAdvance(getDeps(), args)
+      void reportStartSetup(result)
       return { content: [{ type: 'text' as const, text: renderResult(result) }] }
     },
   )

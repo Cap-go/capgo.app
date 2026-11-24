@@ -27,6 +27,7 @@ export type OnboardingInteractionEvent
     | 'onboarding_profile_saved'
     | 'onboarding_profile_save_failed'
     | 'onboarding_development_environment_selected'
+    | 'onboarding_builder_method_selected'
     | 'onboarding_organization_import_opened'
     | 'onboarding_organization_import_submitted'
     | 'onboarding_organization_import_succeeded'
@@ -135,6 +136,7 @@ export type OnboardingInteractionProperties = Partial<OnboardingChannelEventProp
   existing_app?: boolean
   invitation_count?: number
   intent?: OnboardingIntent
+  method?: 'ai' | 'terminal'
   starting_out?: boolean
 }
 
