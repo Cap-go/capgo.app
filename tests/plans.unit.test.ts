@@ -518,4 +518,20 @@ describe('userAbovePlan overage billing cycle', () => {
       orgId, orgId, '0 0 * * 1', expect.anything(), 'admins_and_billing',
     )
   })
+
+  it('warns paying build-only orgs that never uploaded a bundle', async () => {
+    // "onboarding" in the id makes isOnboardedOrg false, like an org with native builds but no bundle.
+    const orgId = 'org-onboarding-build-only-paying'
+    rpcMock.mockImplementation((name: string) => ({
+      single: vi.fn(async () => ({ data: name === 'get_cycle_info_org'
+        ? { subscription_anchor_start: '2026-10-01T00:00:00Z', subscription_anchor_end: '2026-11-01T00:00:00Z' }
+        : name === 'find_best_plan_v3' ? 'Maker' : { overage_unpaid: 500 }, error: null })),
+    }))
+    const { handleOrgNotificationsAndEvents } = await import('../supabase/functions/_backend/utils/plans.ts')
+    const result = await handleOrgNotificationsAndEvents(createContext(), payingOrg(), orgId, false, ZERO_USAGE, replayDrizzle as any)
+    expect(result.finalIsGoodPlan).toBe(false)
+    expect(result.exceededFlags?.mau_exceeded).toBe(true)
+    expect(orgNotificationCalls(sendNotifToOrgMembersMock, orgId)).toHaveLength(1)
+    expect(sendNotifToOrgMembersOnceMock).not.toHaveBeenCalledWith(expect.anything(), 'user:need_onboarding', expect.anything(), expect.anything(), orgId, orgId, expect.anything())
+  })
 })

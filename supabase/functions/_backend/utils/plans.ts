@@ -590,6 +590,9 @@ export async function calculatePlanStatusFresh(c: Context, orgId: string) {
 export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgId: string, is_good_plan: boolean, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<PlanNotificationResult> {
   const is_onboarded = await isOnboardedOrg(c, orgId)
   const is_onboarding_needed = await isOnboardingNeeded(c, orgId)
+  // Paying orgs that only use native builds never upload a bundle, so they are never
+  // "onboarded"; they still need over-plan detection, upgrade emails and the console banner.
+  const checksPlanUsage = is_onboarded || hasActivePlanEntitlement(org)
 
   let finalIsGoodPlan = is_good_plan
   let exceededFlags: PlanExceededFlags | null = null
@@ -599,7 +602,7 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
     finalIsGoodPlan = !result.needsUpgrade
     exceededFlags = result.exceededFlags
   }
-  else if (!is_good_plan && is_onboarded) {
+  else if (!is_good_plan && checksPlanUsage) {
     const result = await userAbovePlan(c, org, orgId, is_good_plan, drizzleClient)
     finalIsGoodPlan = !result.needsUpgrade
     exceededFlags = result.exceededFlags
@@ -621,7 +624,7 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
       }).catch()
     }
   }
-  else if (is_good_plan && is_onboarded) {
+  else if (is_good_plan && checksPlanUsage) {
     await userIsAtPlanUsage(c, orgId, percentUsage, drizzleClient)
   }
 
