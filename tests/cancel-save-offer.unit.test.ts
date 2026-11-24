@@ -1,6 +1,6 @@
 import type Stripe from 'stripe'
 import { describe, expect, it } from 'vitest'
-import { creditsForMonthlyAmount, getSaveableMonthlyAmount, offerTypeFor } from '../supabase/functions/_backend/utils/cancel_save_offer.ts'
+import { creditsForPlanPrice, getSaveableMonthlyAmount, offerTypeFor, planProductIds } from '../supabase/functions/_backend/utils/cancel_save_offer.ts'
 
 function item(unitAmount: number, interval: 'month' | 'year' = 'month', options: { quantity?: number, usageType?: 'licensed' | 'metered', intervalCount?: number } = {}) {
   return {
@@ -43,21 +43,30 @@ describe('getSaveableMonthlyAmount', () => {
 })
 
 describe('offer by cancel reason', () => {
-  it('offers credits worth one month to customers who barely use the plan', () => {
-    expect(offerTypeFor('unused', 2900, 'usd')).toBe('credits')
-    expect(offerTypeFor('other', 1400, 'eur')).toBe('credits')
-    expect(creditsForMonthlyAmount(2900, 'usd')).toBe(29)
-    expect(creditsForMonthlyAmount(1450, 'EUR')).toBe(15)
+  it('offers credits worth the plan\'s monthly dollar price to customers who barely use it', () => {
+    expect(creditsForPlanPrice(14)).toBe(14)
+    expect(creditsForPlanPrice('39')).toBe(39)
+    expect(offerTypeFor('unused', 14)).toBe('credits')
+    expect(offerTypeFor('other', 39)).toBe('credits')
   })
 
   it('offers the discount for every other reason', () => {
     for (const reason of ['too_expensive', 'missing_features', 'switched_service', 'too_complex', 'low_quality', 'customer_service'] as const)
-      expect(offerTypeFor(reason, 2900, 'usd')).toBe('discount')
+      expect(offerTypeFor(reason, 14)).toBe('discount')
   })
 
-  it('falls back to the discount when the currency cannot become dollar credits', () => {
-    expect(creditsForMonthlyAmount(700, 'brl')).toBeNull()
-    expect(creditsForMonthlyAmount(1500, 'jpy')).toBeNull()
-    expect(offerTypeFor('unused', 700, 'brl')).toBe('discount')
+  it('falls back to the discount when the plan price is unknown', () => {
+    expect(creditsForPlanPrice(null)).toBeNull()
+    expect(creditsForPlanPrice(0)).toBeNull()
+    expect(offerTypeFor('unused', null)).toBe('discount')
+  })
+
+  it('finds the plan from its licensed items only', () => {
+    const plan = item(1400)
+    const usage = item(0, 'month', { usageType: 'metered' })
+    Object.assign(plan.price, { product: 'prod_plan' })
+    Object.assign(usage.price, { product: 'prod_usage' })
+    const sub = subscription({}, [plan, usage])
+    expect(planProductIds(sub)).toEqual(['prod_plan'])
   })
 })

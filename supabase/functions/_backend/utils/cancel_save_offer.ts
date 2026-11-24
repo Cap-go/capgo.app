@@ -25,9 +25,6 @@ export const CANCEL_SAVE_OFFER_DURATION_MONTHS = 3
 export const CANCEL_SAVE_COUPON_ID = `capgo_cancel_save_${CANCEL_SAVE_OFFER_PERCENT_OFF}_${CANCEL_SAVE_OFFER_DURATION_MONTHS}m`
 // Reasons where using less, not paying less, is the problem.
 const CREDITS_REASONS: readonly CancelFeedback[] = ['unused', 'other']
-// One credit costs one US dollar. These currencies are close enough to the dollar
-// (and use cents) for one month of the plan to become the same number of credits.
-const CREDITS_CURRENCIES = new Set(['usd', 'eur', 'gbp', 'chf', 'cad', 'aud', 'nzd', 'sgd'])
 export const CANCEL_SAVE_CREDITS_EXPIRY_MONTHS = 12
 // A reopened cancel dialog reuses the unanswered offer instead of counting a new one.
 const OFFER_REUSE_HOURS = 24
@@ -85,19 +82,27 @@ function toOffer(row: OfferRow): CancelSaveOffer {
   }
 }
 
-/** Credits worth one month of the plan, or null when the currency does not map to dollars. */
-export function creditsForMonthlyAmount(amount: number, currency: string): number | null {
-  if (!CREDITS_CURRENCIES.has(currency.toLowerCase()))
-    return null
-  const credits = Math.ceil(amount / 100)
-  return credits > 0 ? credits : null
+/**
+ * Credits worth one month of the plan. One credit costs one US dollar, so this is
+ * the plan's monthly list price in dollars (plans.price_m), whatever currency the
+ * customer pays in. Null when the plan is unknown.
+ */
+export function creditsForPlanPrice(priceM: number | string | null | undefined): number | null {
+  const credits = Math.ceil(Number(priceM))
+  return Number.isFinite(credits) && credits > 0 ? credits : null
 }
 
 /** Which offer fits the reason, falling back to the discount when credits cannot be priced. */
-export function offerTypeFor(reason: CancelFeedback, monthlyAmount: number, currency: string): CancelSaveOfferType {
-  if (CREDITS_REASONS.includes(reason) && creditsForMonthlyAmount(monthlyAmount, currency) !== null)
-    return 'credits'
-  return 'discount'
+export function offerTypeFor(reason: CancelFeedback, credits: number | null): CancelSaveOfferType {
+  return CREDITS_REASONS.includes(reason) && credits !== null ? 'credits' : 'discount'
+}
+
+/** Stripe products of the plan items (not metered usage), to find the Capgo plan. */
+export function planProductIds(subscription: Stripe.Subscription): string[] {
+  return subscription.items.data
+    .filter(item => item.price.recurring?.usage_type !== 'metered')
+    .map(item => typeof item.price.product === 'string' ? item.price.product : item.price.product?.id)
+    .filter((id): id is string => !!id)
 }
 
 /**
@@ -171,11 +176,11 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
   const subscriptionId = await getActiveSubscriptionId(c, ctx.customerId)
   if (!subscriptionId)
     return null
-  const saveable = getSaveableMonthlyAmount(await retrieveSubscription(ctx, subscriptionId))
+  const subscription = await retrieveSubscription(ctx, subscriptionId)
+  const saveable = getSaveableMonthlyAmount(subscription)
   if (!saveable)
     return null
-  const offerType = offerTypeFor(reason, saveable.amount, saveable.currency)
-  const credits = offerType === 'credits' ? creditsForMonthlyAmount(saveable.amount, saveable.currency) : null
+  const products = planProductIds(subscription)
 
   return await withPg(c, async (pg) => {
     // Credits granted on this subscription while it still renews (saveable above:
@@ -197,6 +202,17 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
     )
     if (org[0]?.has_usage_credits)
       return null
+
+    let planCredits: number | null = null
+    if (CREDITS_REASONS.includes(reason) && products.length > 0) {
+      const { rows: plan } = await pg.query<{ price_m: string | number }>(
+        'SELECT price_m FROM public.plans WHERE stripe_id = ANY($1::text[]) OR stripe_id_us = ANY($1::text[]) ORDER BY price_m DESC LIMIT 1',
+        [products],
+      )
+      planCredits = creditsForPlanPrice(plan[0]?.price_m)
+    }
+    const offerType = offerTypeFor(reason, planCredits)
+    const credits = offerType === 'credits' ? planCredits : null
 
     // The subscription has no discount (checked above), so an old reservation never
     // reached Stripe: give it back instead of blocking this customer forever.

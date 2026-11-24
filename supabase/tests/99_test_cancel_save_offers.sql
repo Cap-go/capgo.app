@@ -1,9 +1,19 @@
 BEGIN;
 
-SELECT plan(12);
+SELECT plan(13);
 
+-- A seeded org without credits, picked deterministically, so the has_usage_credits
+-- assertion below can only pass because of the grant made here.
 CREATE TEMP TABLE test_org ON COMMIT DROP AS
-SELECT id FROM public.orgs ORDER BY created_at LIMIT 1;
+SELECT id FROM public.orgs
+WHERE id NOT IN (SELECT org_id FROM public.usage_credit_grants)
+ORDER BY created_at, id
+LIMIT 1;
+
+SELECT ok(
+    NOT COALESCE((SELECT has_usage_credits FROM public.orgs WHERE id = (SELECT id FROM test_org)), false),
+    'the test org starts without credits'
+);
 
 -- A discount offer, as before: coupon, percent and duration, no credits.
 SELECT lives_ok(
