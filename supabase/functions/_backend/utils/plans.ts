@@ -763,10 +763,12 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
 export async function syncSubscriptionAndEvents(c: Context, orgId: string, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<void> {
   if (!isStripeConfigured(c))
     return
-  const org = await getOrgWithCustomerInfo(c, orgId)
+  const staleOrg = await getOrgWithCustomerInfo(c, orgId)
 
   // Sync subscription data with Stripe
-  await syncOrgSubscriptionData(c, org)
+  await syncOrgSubscriptionData(c, staleOrg)
+  // Reload so trial and plan-entitlement checks see the freshly synced stripe_info.
+  const org = await getOrgWithCustomerInfo(c, orgId)
 
   // Handle trial organizations
   if (await handleTrialOrg(c, orgId, org, drizzleClient)) {
