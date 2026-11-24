@@ -16,7 +16,22 @@ vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
     },
   }),
 }))
-vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({ getSubscriptionData: mocks.subscription, planProductIdOrFilter: (productId: string) => `stripe_id.eq.${productId},stripe_id_us.eq.${productId}` }))
+const stripeMocks = vi.hoisted(() => ({
+  findLatestOpenSubscriptionInvoice: vi.fn(),
+  isOpenSubscriptionInvoicePaymentProcessing: vi.fn(),
+  isStripeConfiguredForAccount: vi.fn(() => true),
+}))
+vi.mock('../supabase/functions/_backend/utils/stripe_billing.ts', () => ({
+  isStripeConfiguredForAccount: stripeMocks.isStripeConfiguredForAccount,
+  normalizeBillingAccount: (account: string | null) => account ?? 'ee',
+}))
+vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
+  getSubscriptionData: mocks.subscription,
+  planProductIdOrFilter: (productId: string) => `stripe_id.eq.${productId},stripe_id_us.eq.${productId}`,
+  findLatestOpenSubscriptionInvoice: stripeMocks.findLatestOpenSubscriptionInvoice,
+  getStripe: vi.fn(() => ({})),
+  isOpenSubscriptionInvoicePaymentProcessing: stripeMocks.isOpenSubscriptionInvoicePaymentProcessing,
+}))
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({ cloudlog: vi.fn(), cloudlogErr: vi.fn() }))
 const context = { get: () => 'request-id' } as unknown as Context
 const paidPlan = { status: 'succeeded', is_good_plan: true, product_id: 'enterprise-product', subscription_id: 'subscription-id', paid_at: '2026-01-01T00:00:00Z', past_due_at: null }
@@ -24,10 +39,12 @@ const paidPlan = { status: 'succeeded', is_good_plan: true, product_id: 'enterpr
 beforeEach(() => {
   vi.resetAllMocks()
   mocks.subscription.mockResolvedValue({ ok: true, data: { status: 'active', productId: 'enterprise-product' } })
+  stripeMocks.findLatestOpenSubscriptionInvoice.mockResolvedValue(null)
+  stripeMocks.isOpenSubscriptionInvoicePaymentProcessing.mockResolvedValue(false)
 })
-function billing(info: Partial<Omit<typeof paidPlan, 'paid_at' | 'past_due_at'> & { paid_at: string | null, past_due_at: string | null }>, plan = 'Enterprise') {
+function billing(info: Partial<Omit<typeof paidPlan, 'paid_at' | 'past_due_at'> & { paid_at: string | null, past_due_at: string | null, billing_account?: string | null }>, plan = 'Enterprise') {
   mocks.single.mockResolvedValueOnce({ data: { customer_id: 'customer-id' } })
-    .mockResolvedValueOnce({ data: { ...paidPlan, ...info } })
+    .mockResolvedValueOnce({ data: { ...paidPlan, billing_account: 'ee', ...info } })
     .mockResolvedValueOnce({ data: { name: plan } })
 }
 
@@ -76,6 +93,44 @@ describe('paid Enterprise feature gating', () => {
   })
 })
 
+
+describe('past-due renewal payment processing exemption', () => {
+  it('allows requirePaidPlan when renewal payment is processing', async () => {
+    billing({ past_due_at: '2026-01-02T00:00:00Z' })
+    mocks.subscription.mockResolvedValueOnce({ ok: true, data: { status: 'past_due', productId: 'enterprise-product' } })
+    stripeMocks.findLatestOpenSubscriptionInvoice.mockResolvedValueOnce({
+      id: 'in_1',
+      parent: { subscription_details: { subscription: 'subscription-id' } },
+    })
+    stripeMocks.isOpenSubscriptionInvoicePaymentProcessing.mockResolvedValueOnce(true)
+    await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).resolves.toBeUndefined()
+  })
+
+  it('rejects requirePaidPlan when open invoice belongs to another subscription', async () => {
+    billing({ past_due_at: '2026-01-02T00:00:00Z' })
+    mocks.subscription.mockResolvedValueOnce({ ok: true, data: { status: 'past_due', productId: 'enterprise-product' } })
+    stripeMocks.findLatestOpenSubscriptionInvoice.mockResolvedValueOnce({
+      id: 'in_1',
+      parent: { subscription_details: { subscription: 'other-subscription' } },
+    })
+    stripeMocks.isOpenSubscriptionInvoicePaymentProcessing.mockResolvedValueOnce(true)
+    await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).rejects.toMatchObject({ status: 403 })
+    expect(stripeMocks.isOpenSubscriptionInvoicePaymentProcessing).not.toHaveBeenCalled()
+  })
+
+  it('rejects requirePaidPlan when past due without processing payment', async () => {
+    billing({ past_due_at: '2026-01-02T00:00:00Z' })
+    stripeMocks.findLatestOpenSubscriptionInvoice.mockResolvedValueOnce({ id: 'in_1' })
+    stripeMocks.isOpenSubscriptionInvoicePaymentProcessing.mockResolvedValueOnce(false)
+    await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('rejects requirePaidPlan when renewal processing lookup fails', async () => {
+    billing({ past_due_at: '2026-01-02T00:00:00Z' })
+    stripeMocks.findLatestOpenSubscriptionInvoice.mockRejectedValueOnce(new Error('stripe unavailable'))
+    await expect(requirePaidPlan(context, 'org-id', 'AI recommendations')).rejects.toMatchObject({ status: 403 })
+  })
+})
 
 describe('paid AI feature gating', () => {
   it.each(['Solo', 'Maker', 'Team', 'Enterprise'])('allows paid %s plans', async (name) => {

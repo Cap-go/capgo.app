@@ -51,10 +51,7 @@ async function prepareSecurityUpdatesEmailPreferences(page: Page, viewport: { wi
 async function prepareIncompatibleAlertSection(page: Page, viewport: { width: number, height: number }) {
   await page.setViewportSize(viewport)
   await dismissRemindMeLater(page)
-  // Before the change the select does not exist, so center the default upload channel field it sits under.
-  const target = process.env.VISUAL_DIFF_PHASE === 'after'
-    ? page.locator('#bundle-incompatible-alert')
-    : page.locator('input[name="default_upload_channel"]')
+  const target = page.locator('#bundle-incompatible-alert')
   try {
     await target.waitFor({ state: 'visible', timeout: process.env.VISUAL_DIFF_PHASE === 'after' ? 120_000 : 15_000 })
     await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
@@ -1095,6 +1092,18 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     auth: true,
     prepare: async (page) => {
       await prepareIncompatibleAlertSection(page, { width: 390, height: 844 })
+    },
+  },
+  {
+    slug: 'channel-incompatible-alert',
+    path: '/app/com.demo.app/channel/1',
+    auth: true,
+    prepare: async (page) => {
+      await dismissRemindMeLater(page)
+      const target = process.env.VISUAL_DIFF_PHASE === 'after'
+        ? page.getByRole('combobox', { name: 'Incompatible bundle alerts' })
+        : page.getByText('Disable auto downgrade under native', { exact: true })
+      await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
     },
   },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },

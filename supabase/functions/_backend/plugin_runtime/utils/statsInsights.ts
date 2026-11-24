@@ -3,6 +3,8 @@ import type { StatsInsightsResult } from './types.ts'
 export interface StatsInsightRawSummary {
   total?: unknown
   device_count?: unknown
+  sample_rate_min?: unknown
+  sample_rate_max?: unknown
   action_count?: unknown
 }
 
@@ -10,6 +12,8 @@ export interface StatsInsightRawAction {
   action?: unknown
   total?: unknown
   device_count?: unknown
+  sample_rate_min?: unknown
+  sample_rate_max?: unknown
   version_count?: unknown
   first_seen?: unknown
   last_seen?: unknown
@@ -28,6 +32,8 @@ export interface StatsInsightRawVersion {
   version_name?: unknown
   total?: unknown
   device_count?: unknown
+  sample_rate_min?: unknown
+  sample_rate_max?: unknown
   last_seen?: unknown
 }
 

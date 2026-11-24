@@ -113,8 +113,8 @@ export async function readCappedBytes(stream: ReadableStream<Uint8Array>, maxByt
 const SIMULATOR_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const SAVED_IPA_MAX_BYTES = 512 * 1024 * 1024
 const SAVED_IPA_TRANSFER_MS = 60_000
-// Upload, install and first launch of the app on an emulated device.
-const SAVED_IPA_INSTALL_MS = 180_000
+// Allow a cold device to finish its three-minute boot window before the install and launch window.
+const SAVED_IPA_INSTALL_MS = 360_000
 
 export function savedIpaContentLength(header: string | null): number | undefined {
   if (!header)
@@ -273,11 +273,22 @@ export function canFinishSimulatorStop(input: { remoteStatus: number | null, bil
   return true
 }
 
+export function simulatorArtifactUrl(publicUrl: string, builderUrl: string) {
+  const url = new URL(publicUrl)
+  // Worker subrequests to the API hostname do not traverse its public builder route.
+  if (/^\/builder_download_direct_artefact\/[^/]+$/.test(url.pathname)) {
+    const direct = new URL(url.pathname + url.search, builderUrl)
+    direct.searchParams.set('target', 'simulator')
+    return direct.href
+  }
+  return publicUrl
+}
+
 async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string, sessionUrl: string, accessKey: string) {
   const saved = (await savedOutputsForJobs(c, principal, appId, ownerOrg, [jobId]))[jobId]
   if (saved?.kind !== 'ios_ipa')
     throw new Error('This build has no saved iOS app.')
-  const file = await fetch(saved.url, { signal: AbortSignal.timeout(SAVED_IPA_TRANSFER_MS) })
+  const file = await fetch(simulatorArtifactUrl(saved.url, getEnv(c, 'BUILDER_URL')), { signal: AbortSignal.timeout(SAVED_IPA_TRANSFER_MS) })
   if (!file.ok || !file.body) {
     await file.body?.cancel()
     throw new Error('The saved build could not be downloaded.')

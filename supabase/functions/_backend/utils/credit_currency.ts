@@ -44,7 +44,8 @@ export async function getCreditQuote(stripe: Stripe, customerId: string, priceId
       const local = reference.currency === wanted ? reference.unit_amount : reference.currency_options?.[wanted]?.unit_amount
       if (reference.active && price.currency === 'usd' && usd && local) {
         const base = resolveCreditQuote(price, { ...customer, currency: 'usd' })
-        const unitAmount = Number((base.unitAmount * local / usd).toFixed(12))
+        // Stripe Checkout payment mode rejects sub-minor-unit amounts, so charge whole minor units.
+        const unitAmount = Math.round(base.unitAmount * local / usd)
         const quote = resolveCreditQuote({ ...price, currency_options: { ...price.currency_options, [wanted]: { unit_amount: null, unit_amount_decimal: String(unitAmount) } } } as Stripe.Price, { ...customer, currency: wanted })
         return { ...quote, priceData: { currency: wanted, product, unit_amount_decimal: String(unitAmount) as unknown as Stripe.Decimal, ...(price.tax_behavior === 'inclusive' || price.tax_behavior === 'exclusive' ? { tax_behavior: price.tax_behavior } : {}) } }
       }

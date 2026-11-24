@@ -77,6 +77,7 @@ declare module 'vue' {
     ChangelogTypeBadge: typeof import('./components/changelog/ChangelogTypeBadge.vue')['default']
     ChangelogUpdateBadge: typeof import('./components/changelog/ChangelogUpdateBadge.vue')['default']
     ChannelAccessPanel: typeof import('./components/permissions/ChannelAccessPanel.vue')['default']
+    ChannelChangeDialog: typeof import('./components/channel/ChannelChangeDialog.vue')['default']
     ChannelConsoleAssignMockup: typeof import('./components/dashboard/ChannelConsoleAssignMockup.vue')['default']
     ChannelConsoleAssignOnboarding: typeof import('./components/dashboard/ChannelConsoleAssignOnboarding.vue')['default']
     ChannelCreateOnboarding: typeof import('./components/dashboard/ChannelCreateOnboarding.vue')['default']

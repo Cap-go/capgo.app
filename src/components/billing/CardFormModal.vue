@@ -29,6 +29,7 @@ const isLoading = ref(true)
 const isSubmitting = ref(false)
 const isComplete = ref(false)
 const errorMessage = ref('')
+const infoMessage = ref('')
 let elements: StripeElements | null = null
 let publishableKey = ''
 let disposed = false
@@ -74,12 +75,16 @@ onMounted(async () => {
     paymentElement.on('change', (event) => {
       isComplete.value = event.complete
       errorMessage.value = ''
+      infoMessage.value = ''
     })
     paymentElement.mount(container.value)
   }
   catch (error) {
     console.error('Cannot load card form', error)
-    errorMessage.value = t('billing-stripe-load-error')
+    if (props.mode === 'invoice' && await getCapgoApiErrorCode(error) === 'invoice_payment_processing')
+      infoMessage.value = t('billing-invoice-payment-processing')
+    else
+      errorMessage.value = t('billing-stripe-load-error')
   }
   finally {
     isLoading.value = false
@@ -100,6 +105,7 @@ async function submit() {
     return
   isSubmitting.value = true
   errorMessage.value = ''
+  infoMessage.value = ''
   try {
     // Cards finish in place (3DS included); redirect methods come back to this page.
     const confirmParams = { return_url: globalThis.location.href }
@@ -153,7 +159,10 @@ async function submit() {
         <span class="d-loading d-loading-spinner d-loading-lg text-blue-500" />
       </div>
       <div ref="container" class="min-h-[1px]" data-test="billing-payment-element" />
-      <p v-if="errorMessage" class="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-300" role="alert" data-test="billing-card-error">
+      <p v-if="infoMessage" class="mt-4 rounded-lg bg-sky-50 p-3 text-sm text-sky-800 dark:bg-sky-500/10 dark:text-sky-200" role="status" data-test="billing-card-info">
+        {{ infoMessage }}
+      </p>
+      <p v-else-if="errorMessage" class="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-300" role="alert" data-test="billing-card-error">
         {{ errorMessage }}
       </p>
       <p class="mt-4 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">

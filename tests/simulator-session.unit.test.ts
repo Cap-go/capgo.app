@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, ipaUploadStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, SIMULATOR_STOPPED_MESSAGE, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorListItem, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, ipaUploadStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, SIMULATOR_STOPPED_MESSAGE, simulatorArtifactUrl, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorListItem, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
 import { deviceStopTime } from '../supabase/functions/_backend/public/build/simulator_host.ts'
 
 describe('simulator sessions', () => {
+  it('downloads saved IPA tokens from the builder origin and preserves other artifact URLs', () => {
+    const builder = 'https://builder.example.com'
+    expect(simulatorArtifactUrl('https://api.example.com/builder_download_direct_artefact/test-token', builder))
+      .toBe('https://builder.example.com/builder_download_direct_artefact/test-token?target=simulator')
+    const external = 'https://storage.example.com/archive.ipa?signature=test'
+    expect(simulatorArtifactUrl(external, builder)).toBe(external)
+  })
+
   it('asks the device host for one session tied to the Capgo org', () => {
     expect(emulatorSessionCreateBody({
       appId: 'ee.forgr.capgo',

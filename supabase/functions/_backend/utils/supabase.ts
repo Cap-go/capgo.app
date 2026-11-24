@@ -1594,7 +1594,11 @@ export async function readChannelDeviceOverrideIdsSB(c: Context, app_id: string,
       limit: MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS,
     })
   }
-  return { into: partitioned.into, elsewhere: partitioned.elsewhere }
+  return {
+    into: partitioned.into,
+    elsewhere: partitioned.elsewhere,
+    truncated: partitioned.truncated || rows.length > CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT,
+  }
 }
 
 const CHANNEL_DEVICE_PLATFORMS: ChannelDevicePlatform[] = ['ios', 'android', 'electron']
@@ -1625,9 +1629,16 @@ export function pickChannelDefaultPlatforms(rows: PublicChannelRow[], channel: V
 
 /**
  * Platforms where `channel` is the public default, read from the app's public
- * channels. Returns none on error so counts fall back to reported channels.
+ * channels. Returns none on error so counts fall back to reported channels,
+ * unless `throwOnError` is set: callers that cache the result (channel impact)
+ * must not read a failed lookup as "default for no platform".
  */
-export async function readChannelDefaultPlatformsSB(c: Context, app_id: string, channel: VersionUsageChannel | string): Promise<ChannelDevicePlatform[]> {
+export async function readChannelDefaultPlatformsSB(
+  c: Context,
+  app_id: string,
+  channel: VersionUsageChannel | string,
+  options: { throwOnError?: boolean } = {},
+): Promise<ChannelDevicePlatform[]> {
   try {
     const rows = await withAdminPg(c, pg => queryJson<PublicChannelRow>(
       pg,
@@ -1641,6 +1652,8 @@ export async function readChannelDefaultPlatformsSB(c: Context, app_id: string, 
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading public channels for device counts', app_id, error })
+    if (options.throwOnError)
+      throw error
     return []
   }
 }

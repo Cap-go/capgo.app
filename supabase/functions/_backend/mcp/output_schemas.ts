@@ -34,7 +34,7 @@ const app = z
     bundle_incompatible_alert: z
       .enum(['default', 'all'])
       .optional()
-      .describe('Which channels email members when an incompatible bundle goes live. default = only the default upload channel. all = every channel.'),
+      .describe('App-wide incompatible bundle email setting. default covers default download channels for any platform. all covers every channel. Individual channels can override this setting.'),
     need_onboarding: z
       .boolean()
       .optional()

@@ -7,10 +7,10 @@ import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, shallow
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import IconDownload from '~icons/heroicons/arrow-down-tray'
+import IconDevice from '~icons/heroicons/device-phone-mobile'
 import IconEye from '~icons/heroicons/eye'
-import IconDownload from '~icons/lucide/download'
 import IconRocket from '~icons/lucide/rocket'
-import IconSmartphone from '~icons/lucide/smartphone'
 import IconX from '~icons/lucide/x'
 import BuilderIntroduction from '~/components/dashboard/BuilderIntroduction.vue'
 import BuildLiveProgress from '~/components/dashboard/BuildLiveProgress.vue'
@@ -19,7 +19,7 @@ import { dismissBuildNextSteps, isBuildActive, isBuildNextStepsDismissed, latest
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { noteSimulatorStartError, rememberSimulator, simulatorConfigured, simulatorEpoch } from '~/services/simulatorSessions'
+import { forgetSimulator, noteSimulatorStartError, rememberSimulator, simulatorConfigured, simulatorEpoch } from '~/services/simulatorSessions'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
@@ -444,12 +444,29 @@ async function openSavedBuild(jobId: string) {
     const url = payload.data?.url || ''
     if (payload.data?.id && epoch === simulatorEpoch())
       rememberSimulator(appId, { id: payload.data.id, url })
+    if (payload.data?.install_error) {
+      tab?.close()
+      toast.error(payload.data.install_error)
+      const id = payload.data.id
+      if (id) {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 10_000)
+        void fetch(`${defaultApiHost}/private/simulator/${id}/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
+          body: JSON.stringify({ app_id: appId }),
+          signal: controller.signal,
+        }).then((response) => {
+          if (response.ok && epoch === simulatorEpoch())
+            forgetSimulator(appId, id)
+        }).catch(() => { /* Keep the session available for a manual stop. */ }).finally(() => clearTimeout(timeout))
+      }
+      return
+    }
     if (url && tab)
       tab.location.replace(url)
     else
       tab?.close()
-    if (payload.data?.install_error)
-      toast.error(payload.data.install_error)
   }
   catch (error) {
     tab?.close()
@@ -505,7 +522,9 @@ function savedBuildCell(elem: Element) {
   if (canOpenInSimulator(elem)) {
     children.push(h('button', {
       'type': 'button',
-      'class': 'd-btn d-btn-xs d-btn-outline shrink-0',
+      'title': t('open-in-simulator'),
+      'aria-label': opening ? t('simulator-starting') : t('open-in-simulator'),
+      'class': 'd-btn d-btn-xs d-btn-outline d-btn-square shrink-0',
       'disabled': opening,
       'data-test': 'saved-build-simulator',
       'onClick': (event: Event) => {
@@ -513,9 +532,9 @@ function savedBuildCell(elem: Element) {
         track('Build Next Step Clicked', { action: 'simulator', source: 'table' })
         void openSavedBuild(jobId)
       },
-    }, opening ? t('simulator-starting') : t('open-in-simulator')))
+    }, [opening ? h('span', { class: 'd-loading d-loading-spinner d-loading-xs' }) : h(IconDevice, { class: 'size-4' })]))
   }
-  return h('div', { class: 'flex items-center gap-2' }, children)
+  return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
 }
 
 function track(event: string, tags: Record<string, string>) {
@@ -770,7 +789,7 @@ watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
             data-test="build-detail-simulator"
             @click="detailSimulator"
           >
-            <IconSmartphone class="h-4 w-4" />
+            <IconDevice class="h-4 w-4" />
             {{ openingJobs.includes(openedRow?.builder_job_id ?? '') ? t('simulator-starting') : t('open-in-simulator') }}
           </button>
           <p v-else-if="openedRow && hasCurrentIpa(openedRow)" class="self-center text-sm text-slate-500 dark:text-slate-400" data-test="build-detail-simulator-unavailable">
@@ -822,7 +841,7 @@ watch(() => showSetupFlow.value || !!openedBuild.value, (newValue) => {
               data-test="build-next-steps-simulator"
               @click="nextStepSimulator"
             >
-              <IconSmartphone class="w-4 h-4" />
+              <IconDevice class="w-4 h-4" />
               {{ openingJobs.includes(nextStepsBuild.builder_job_id ?? '') ? t('simulator-starting') : t('build-next-steps-simulator') }}
             </button>
           </div>

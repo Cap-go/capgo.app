@@ -494,7 +494,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
 
           // Verify stats entry. Intermediate download progress is intentionally
           // not stored (see isDroppedStatsLogAction in plugin_stats.ts).
-          if (isDroppedStatsLogAction(action)) {
+          if (isDroppedStatsLogAction(action, appId, uuid, version.name)) {
             let count: number | null = 0
             let statsError: { code?: string } | null = null
             for (let attempt = 0; attempt < 8; attempt++) {

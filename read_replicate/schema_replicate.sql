@@ -257,6 +257,7 @@ CREATE TABLE public.channels (
     auto_pause_last_checked_at timestamp with time zone,
     update_package public.channel_update_package DEFAULT 'all'::public.channel_update_package NOT NULL,
     paused_at timestamp with time zone,
+    bundle_alert_enabled boolean,
     CONSTRAINT channels_auto_pause_action_check CHECK ((auto_pause_action = ANY (ARRAY['pause'::text, 'rollback'::text, 'notify'::text]))),
     CONSTRAINT channels_auto_pause_confidence_check CHECK (((auto_pause_confidence > (0)::numeric) AND (auto_pause_confidence < (1)::numeric))),
     CONSTRAINT channels_auto_pause_cooldown_minutes_check CHECK (((auto_pause_cooldown_minutes >= 0) AND (auto_pause_cooldown_minutes <= 10080))),

@@ -22,7 +22,7 @@ test.describe('App overview', () => {
     await expect(page.locator('[data-testid="release-live"]')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Installs', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Active bundle', exact: true })).toHaveCount(0)
-    await expect(page.getByRole('heading', { name: 'Active bundle' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Update offers by bundle' })).toBeVisible()
 
     // The whole summary fits above the fold.
     const lastPanel = page.locator('[data-testid="update-delivery-latency"]')

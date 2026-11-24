@@ -108,4 +108,48 @@ describe('conditional plan status writes', () => {
       client.release()
     }
   })
+
+  it('skips stripe_info writes when billing guard does not match the row', async () => {
+    const pool = await getPostgresClient()
+    const client = await pool.connect()
+    try {
+      const drizzleClient = getDrizzleClient(client, { logger: false })
+      const org = { customer_id: customerId }
+      const result = {
+        exceededFlags: {
+          bandwidth_exceeded: false,
+          build_time_exceeded: false,
+          mau_exceeded: false,
+          storage_exceeded: false,
+        },
+        finalIsGoodPlan: true,
+      }
+      const usage = {
+        bandwidth_percent: 0,
+        build_time_percent: 0,
+        mau_percent: 0,
+        storage_percent: 0,
+        total_percent: 0,
+      }
+      const before = await client.query<{ build_time_exceeded: boolean, row_version: string }>(`
+        SELECT build_time_exceeded, xmin::text AS row_version
+        FROM public.stripe_info
+        WHERE customer_id = $1
+      `, [customerId])
+      await updatePlanStatus(org, result, false, usage, drizzleClient, {
+        productId: 'prod_stale_guard',
+        priceId: 'price_stale_guard',
+      })
+      const after = await client.query<{ build_time_exceeded: boolean, row_version: string }>(`
+        SELECT build_time_exceeded, xmin::text AS row_version
+        FROM public.stripe_info
+        WHERE customer_id = $1
+      `, [customerId])
+      expect(after.rows[0]?.build_time_exceeded).toBe(before.rows[0]?.build_time_exceeded)
+      expect(after.rows[0]?.row_version).toBe(before.rows[0]?.row_version)
+    }
+    finally {
+      client.release()
+    }
+  })
 })

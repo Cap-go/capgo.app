@@ -9,14 +9,14 @@ import { servingPolicyStatusBaseUrl } from './servingPolicyGateway.ts'
 import { getEnv } from './utils.ts'
 
 export interface ServingPolicyDocument { f: 1, app_id: string, generation: string, policy: ServingPolicy }
-const policies = new WeakMap<Request, ServingPolicy>()
+const policies = new WeakMap<Request, { appId: string, policy: ServingPolicy }>()
 const ingressHeader = 'x-capgo-serving-ingress'
 // snippet/index.js bounds active routing by MAX_SUBREQUESTS * TIMEOUT_MS,
 // including policy transit, complete cache operations, and all worker attempts.
 const ingressReceiptLifetimeMs = 5 * 3000
 
 export function requestServingPolicy(c: Context) {
-  return policies.get(c.req.raw)
+  return policies.get(c.req.raw)?.policy
 }
 
 export function parseServingPolicyDocument(value: unknown, appId: string): ServingPolicyDocument {
@@ -136,12 +136,16 @@ export async function enforceServingPolicy(c: Context, appId: string) {
   if (!servingRegionReaderEpoch)
     return
   // Shared handlers can call the gate twice without a second store read.
-  if (policies.has(c.req.raw))
+  const admitted = policies.get(c.req.raw)
+  if (admitted) {
+    if (admitted.appId !== appId)
+      throw quickError(503, 'serving_policy_unavailable', 'Serving policy app identity mismatch')
     return
+  }
   let policy: ServingPolicy
   try {
     policy = (await readServingPolicy(c, appId)).policy
-    if (policy.mode === 'block') {
+    if (isRestrictedServingPolicy(policy)) {
       const ingress = await ingressRegion(c, appId)
       if (!ingress)
         throw new Error('Trusted ingress unavailable')
@@ -154,7 +158,7 @@ export async function enforceServingPolicy(c: Context, appId: string) {
       throw error
     throw quickError(503, 'serving_policy_unavailable', 'Regional serving policy temporarily unavailable')
   }
-  policies.set(c.req.raw, policy)
+  policies.set(c.req.raw, { appId, policy })
   if (isRestrictedServingPolicy(policy))
     c.header('X-Serving-Regions', policy.regions.join(','))
 }

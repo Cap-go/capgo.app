@@ -2,13 +2,13 @@
 import { computed, onScopeDispose, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { z } from 'zod'
-import { compareServingRegions, parseServingPolicy } from '../../../supabase/functions/_backend/plugin_runtime/utils/servingRegions'
+import { compareServingRegions, parseServingPolicy, SERVING_REGIONS } from '../../../supabase/functions/_backend/plugin_runtime/utils/servingRegions'
 
 const props = defineProps<{ disabled: boolean, appId: string, savedRegions: string[], savedMode: string }>()
 const regions = defineModel<string[]>('regions', { required: true })
 const mode = defineModel<string>('mode', { required: true })
 const { t } = useI18n()
-const options = ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME']
+const options = SERVING_REGIONS
 const verification = ref<'checking' | 'active' | 'pending' | 'unavailable'>('checking')
 const available = ref(false)
 const retryDelays = [2000, 5000, 10000, 20000, 30000]
@@ -118,6 +118,9 @@ onScopeDispose(() => {
     <p id="serving-region-scope" class="text-sm text-neutral-600 dark:text-neutral-400">
       {{ t('serving-regions-help') }}
     </p>
+    <p class="text-sm text-neutral-600 dark:text-neutral-400">
+      {{ t('serving-regions-storage-help') }}
+    </p>
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-describedby="serving-region-scope">
       <label v-for="region in options" :key="region" class="flex items-center gap-2 text-sm">
         <input v-model="regions" type="checkbox" :value="region" class="d-checkbox d-checkbox-sm" :name="`serving-region-${region}`">
@@ -127,13 +130,6 @@ onScopeDispose(() => {
     <p v-if="empty" role="alert" class="text-sm text-red-600">
       {{ t('serving-regions-required') }}
     </p>
-    <label class="block text-sm">
-      <span class="block mb-2 font-medium">{{ t('serving-region-outside') }}</span>
-      <select v-model="mode" name="serving_region_mode" class="w-full d-select d-select-bordered" :aria-label="t('serving-region-outside')">
-        <option value="route">{{ t('serving-region-route') }}</option>
-        <option value="block">{{ t('serving-region-block') }}</option>
-      </select>
-    </label>
     <output class="block text-sm" aria-live="polite">
       {{ t(unsaved ? 'serving-region-status-unsaved' : `serving-region-status-${verification}`) }}
     </output>

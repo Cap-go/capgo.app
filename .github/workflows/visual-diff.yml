@@ -46,7 +46,7 @@ jobs:
     needs: check
     if: needs.check.outputs.requested == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     name: Generate visual diff report
     permissions:
       contents: read
@@ -82,8 +82,7 @@ jobs:
         run: ln -sfn supabase/templates templates
 
       - name: Run visual diff pipeline
-        # Each route captures in its own browser and login (~25 s), before and after: the full set
-        # now runs about 30 minutes. The job budget (45) keeps room for setup and the report.
+        # Full before/after captures can exceed 30 minutes. Reserve time for artifact upload and reporting.
         timeout-minutes: 40
         run: |
           bun scripts/visual-diff.ts run \
@@ -102,7 +101,7 @@ jobs:
           retention-days: 14
 
       - name: Comment visual diff summary on PR
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/github-script@v8
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

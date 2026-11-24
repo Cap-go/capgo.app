@@ -5,7 +5,7 @@ import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { getLatestOpenSubscriptionInvoice } from '../utils/stripe.ts'
+import { findLatestOpenSubscriptionInvoice, getLatestOpenSubscriptionInvoice, getStripe, isOpenSubscriptionInvoicePaymentProcessing, isStripeConfiguredForAccount, shouldBlockPastDueForProcessingPayment, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { normalizeBillingAccount } from '../utils/stripe_billing.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
@@ -17,6 +17,7 @@ interface PastDueBody {
 interface PastDueResponse {
   past_due: boolean
   invoice: OpenSubscriptionInvoiceSummary | null
+  payment_processing?: boolean
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -78,7 +79,35 @@ app.post('/', middlewareAuth, async (c) => {
   if (!stripeInfo?.past_due_at && stripeInfo?.status !== 'failed')
     return c.json(notPastDue)
 
-  const invoice = await getLatestOpenSubscriptionInvoice(c, org.customer_id, normalizeBillingAccount(stripeInfo.billing_account))
+  const billingAccount = normalizeBillingAccount(stripeInfo.billing_account)
+  let openInvoice: Awaited<ReturnType<typeof findLatestOpenSubscriptionInvoice>> = null
+  let paymentProcessing = false
+  let paymentProcessingUnknown = false
+  if (isStripeConfiguredForAccount(c, billingAccount)) {
+    try {
+      openInvoice = await findLatestOpenSubscriptionInvoice(c, org.customer_id, billingAccount)
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'stripe_past_due open invoice', orgId: body.orgId, customerId: org.customer_id, error })
+    }
+    if (openInvoice?.id) {
+      try {
+        paymentProcessing = await isOpenSubscriptionInvoicePaymentProcessing(getStripe(c, billingAccount), openInvoice.id)
+      }
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'stripe_past_due payment intent', orgId: body.orgId, customerId: org.customer_id, invoiceId: openInvoice.id, error })
+        paymentProcessingUnknown = true
+      }
+    }
+  }
+  if (paymentProcessingUnknown)
+    return c.json({ past_due: false, invoice: openInvoice ? toOpenSubscriptionInvoiceSummary(openInvoice) : null, payment_processing: true })
+  if (shouldBlockPastDueForProcessingPayment(paymentProcessing))
+    return c.json({ past_due: false, invoice: openInvoice ? toOpenSubscriptionInvoiceSummary(openInvoice) : null, payment_processing: true })
+
+  const invoice = openInvoice
+    ? toOpenSubscriptionInvoiceSummary(openInvoice)
+    : await getLatestOpenSubscriptionInvoice(c, org.customer_id, billingAccount)
   // A failed one-off charge (credits) leaves no open subscription invoice: not past due.
   if (!stripeInfo.past_due_at && !invoice)
     return c.json(notPastDue)

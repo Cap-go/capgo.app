@@ -63,6 +63,7 @@ watch([orgId, () => !!stripeEnabled.value], async ([id, enabled]) => {
 }, { immediate: true })
 
 const invoice = computed(() => pastDue.value?.invoice ?? null)
+const showProcessingBanner = computed(() => !!pastDue.value?.payment_processing)
 const showBanner = computed(() => !!pastDue.value?.past_due)
 
 const formattedAmount = computed(() => invoice.value ? formatStripeAmount(invoice.value.amount_due, invoice.value.currency) : '')
@@ -81,12 +82,24 @@ async function onPaid() {
 
 // Retry with the saved card first; fall back to entering a new card in place.
 async function retryPayment() {
+  const requestOrgId = orgId.value
   isPaying.value = true
   try {
-    const result = await payOpenInvoice(orgId.value)
+    const result = await payOpenInvoice(requestOrgId)
+    if (requestOrgId !== orgId.value)
+      return
     if (result.status === 'paid') {
       toast.success(t('billing-invoice-paid'))
       await onPaid()
+      return
+    }
+    if (result.status === 'processing') {
+      pastDue.value = {
+        past_due: false,
+        invoice: invoice.value,
+        payment_processing: true,
+      }
+      toast.info(result.message || t('billing-invoice-payment-processing'))
       return
     }
     toast.error(result.message || t('billing-payment-failed'))
@@ -125,7 +138,25 @@ async function onCardSaved() {
 
 <template>
   <aside
-    v-if="showBanner"
+    v-if="showProcessingBanner"
+    class="relative z-20 flex w-full shrink-0 border-b border-sky-300 bg-sky-50 px-4 py-2.5 text-sky-950 sm:px-6 dark:border-sky-700/60 dark:bg-sky-950/60 dark:text-sky-100"
+    role="status"
+    data-test="past-due-banner-processing"
+  >
+    <div class="flex min-w-0 items-center gap-3">
+      <IconExclamationTriangle class="h-5 w-5 shrink-0 text-sky-600 dark:text-sky-400" aria-hidden="true" />
+      <div class="min-w-0">
+        <p class="text-sm font-semibold">
+          {{ t('past-due-banner-processing-message') }}
+        </p>
+        <p class="text-xs text-sky-900/80 dark:text-sky-200/80">
+          {{ t('past-due-banner-processing-detail') }}
+        </p>
+      </div>
+    </div>
+  </aside>
+  <aside
+    v-else-if="showBanner"
     class="relative z-20 flex w-full shrink-0 flex-col gap-2 border-b border-amber-300 bg-amber-50 px-4 py-2.5 text-amber-950 sm:flex-row sm:items-center sm:justify-between sm:px-6 dark:border-amber-700/60 dark:bg-amber-950/60 dark:text-amber-100"
     role="alert"
     data-test="past-due-banner"

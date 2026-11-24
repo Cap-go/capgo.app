@@ -325,6 +325,22 @@ await test('drive loop: app id taken by another account → human_gate conflict 
   eq(r.kind, 'human_gate')
   eq(r.state, 'app-id-conflict')
   ok(/com\.acme\.app/.test(r.human.instruction), 'should suggest alternates based on the id')
+  ok(/plugins\.CapgoBuilder\.capgoBuilderAppId/.test(r.human.instruction), 'must name the Capgo-only setting')
+  ok(/Do not change the native appId/.test(r.human.instruction), 'must say the native bundle id stays')
+  ok(/native bundle ID stays unchanged/.test(r.summary), 'must not invent a native id')
+  ok(!/native bundle ID stays "com\.acme\.app"/.test(r.summary), 'the Capgo id is not the native bundle id')
+})
+
+await test('drive loop: a known native id is named separately from the taken Capgo id', async () => {
+  const deps = appPhaseDeps({
+    isAppRegistered: async () => false,
+    registerApp: async () => ({ ok: false, alreadyExists: true, error: 'already exists' }),
+    getNativeAppId: async () => 'com.example.native',
+  })
+  const r = await runStart(deps)
+  ok(/Capgo app ID "com\.acme\.app"/.test(r.summary))
+  ok(/native bundle ID stays "com\.example\.native"/.test(r.summary))
+  ok(!/native bundle ID stays "com\.acme\.app"/.test(r.summary))
 })
 
 await test('drive loop: registration hard-fails → error result', async () => {
