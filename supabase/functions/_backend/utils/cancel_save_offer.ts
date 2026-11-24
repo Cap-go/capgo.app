@@ -222,6 +222,7 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
            AND created_at > now() - make_interval(hours => $6::int)
          ORDER BY created_at DESC LIMIT 1
        )
+         AND outcome = 'offered'
        RETURNING ${OFFER_COLUMNS}`,
       [ctx.customerId, subscriptionId, reason, saveable.amount, saveable.currency, OFFER_REUSE_HOURS, offerType, credits],
     )

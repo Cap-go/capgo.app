@@ -8,7 +8,9 @@
 -- Credits given by the cancel flow are a grant of their own, never a purchase.
 ALTER TABLE public.usage_credit_grants DROP CONSTRAINT usage_credit_grants_source_check;
 ALTER TABLE public.usage_credit_grants
-  ADD CONSTRAINT usage_credit_grants_source_check CHECK (source IN ('manual', 'stripe_top_up', 'cancel_save_offer'));
+  ADD CONSTRAINT usage_credit_grants_source_check CHECK (source IN ('manual', 'stripe_top_up', 'cancel_save_offer')) NOT VALID;
+-- NOT VALID: the new list is a superset of the old one, so existing rows already pass
+-- and the table is not scanned under the ACCESS EXCLUSIVE lock. New writes are checked.
 
 ALTER TABLE public.cancel_save_offers
   ADD COLUMN offer_type text NOT NULL DEFAULT 'discount' CHECK (offer_type IN ('discount', 'credits')),
