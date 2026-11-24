@@ -73,8 +73,10 @@ BEGIN
     ));
   END IF;
 
-  IF substring(cli_version from '^\d{1,9}\.\d{1,9}\.\d{1,9}') IS NOT NULL
-    AND string_to_array(substring(cli_version from '^\d{1,9}\.\d{1,9}\.\d{1,9}'), '.')::int[] < ARRAY[8, 90, 1]
+  -- Only well-formed semver is compared. Prereleases of 8.90.1 are already
+  -- API-only builds, so only the release core is compared.
+  IF cli_version ~ '^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+    AND string_to_array(substring(cli_version from '^\d+\.\d+\.\d+'), '.')::int[] < ARRAY[8, 90, 1]
   THEN
     messages := array_append(messages, jsonb_build_object(
       'message', 'Your @capgo/cli (' || cli_version || ') is outdated and will stop working in 2027.\nUpdate it: npm i -D @capgo/cli@latest (or pnpm/yarn/bun add -D @capgo/cli@latest), then commit your lockfile.\nPinned in CI? Bump the version there too. The latest CLI supports Capacitor 5 to 8.',
