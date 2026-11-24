@@ -20,6 +20,16 @@ describe('bundle upload reporting', () => {
 
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain('99.0.0')
+    expect(warnings[0]).toMatch(/Run: \S+ \S+ -D @capgo\/cli@latest/)
+  })
+
+  it('only flags a CLI strictly older than the latest release', async () => {
+    const { isCliOutdated } = await import('../cli/src/api/update')
+
+    expect(isCliOutdated('8.90.0', '8.108.2')).toBe(true)
+    expect(isCliOutdated('8.108.2', '8.108.2')).toBe(false)
+    expect(isCliOutdated('8.109.0-alpha.1', '8.108.2')).toBe(false)
+    expect(isCliOutdated('8.90.0', '')).toBe(false)
   })
 
   it('routes manifest warnings through the active upload reporter', async () => {
