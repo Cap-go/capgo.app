@@ -23,9 +23,15 @@ const computedValue = reactive({ value: props.value })
 // phones: drop them under the label, left-aligned, with any control kept at the end.
 const isLongText = computed(() => !!props.stacked || (!props.editable && (props.value?.length ?? 0) > 40))
 const rowInput = ref(props.value ?? '')
-// Keep the input in sync with the stored value (after a save or a reload).
-watch(() => props.value, (value) => {
-  rowInput.value = value ?? ''
+// Last value handed to the parent, so a save that lands later does not wipe a newer draft.
+let submitted: string | null = null
+// Keep the input in sync with the stored value (after a save or a reload), unless the
+// user already typed something newer than both the previous value and the submitted one.
+watch(() => props.value, (value, previous) => {
+  const draft = rowInput.value
+  if (draft === (previous ?? '') || draft === submitted)
+    rowInput.value = value ?? ''
+  submitted = null
 })
 
 // Put the input back to the stored value, for a parent that rejects the commit.
@@ -38,7 +44,17 @@ function reset() {
 function commit() {
   if (props.readonly || rowInput.value === (props.value ?? ''))
     return
+  submitted = rowInput.value
   emit('update:value', rowInput.value)
+}
+
+function onEnter(event: KeyboardEvent) {
+  // Enter that confirms an IME composition must not commit the field.
+  if (event.isComposing || event.keyCode === 229)
+    return
+  event.preventDefault()
+  const input = event.target as HTMLInputElement
+  input.blur()
 }
 
 defineExpose({ reset })
@@ -72,7 +88,7 @@ defineExpose({ reset })
           class="block py-1.5 px-2.5 w-full text-sm text-gray-900 bg-white rounded-md border border-gray-300 shadow-sm transition-colors md:w-1/2 placeholder:text-gray-400 dark:placeholder:text-gray-500 dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:focus:border-blue-400 dark:focus:ring-blue-400/30 read-only:cursor-not-allowed read-only:bg-gray-50 dark:read-only:bg-gray-900"
           :readonly="!!props.readonly"
           @blur="commit"
-          @keydown.enter.prevent="($event.target as HTMLInputElement).blur()"
+          @keydown.enter="onEnter"
         >
         <span v-else> {{ computedValue.value }} </span>
         <div style="margin-left: 0">

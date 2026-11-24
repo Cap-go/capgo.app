@@ -116,6 +116,65 @@ describe('min update version field', () => {
     expect(input.value).toBe('1.3.0')
   })
 
+  it('keeps a newer draft typed while an earlier save is still pending', async () => {
+    const storedValue = ref<string>('1.2.3')
+    const writes: string[] = []
+    let finishSave: (() => void) | undefined
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const app = createApp({
+      render: () => h(InfoRow, {
+        'label': 'Minimal update version',
+        'editable': true,
+        'value': storedValue.value,
+        'onUpdate:value': (value: string) => {
+          writes.push(value)
+          finishSave = () => {
+            storedValue.value = value
+          }
+        },
+      }),
+    })
+    app.mount(container)
+    mounted.push(() => {
+      app.unmount()
+      container.remove()
+    })
+    await nextTick()
+    const input = container.querySelector('input') as HTMLInputElement
+
+    await typeAndBlur(input, '1.3.0')
+    expect(writes).toEqual(['1.3.0'])
+    input.focus()
+    input.value = '1.4.0'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    finishSave?.()
+    await nextTick()
+    expect(storedValue.value).toBe('1.3.0')
+    expect(input.value).toBe('1.4.0')
+
+    input.dispatchEvent(new Event('blur'))
+    await nextTick()
+    expect(writes).toEqual(['1.3.0', '1.4.0'])
+  })
+
+  it('commits on Enter but not on an Enter that confirms an IME composition', async () => {
+    const { input, onUpdate, writes } = await mountField('1.2.3')
+    input.focus()
+    input.value = '1.3.0'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true }))
+    await nextTick()
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(input)
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    await nextTick()
+    expect(writes).toEqual(['1.3.0'])
+  })
+
   it('reverts an invalid semver without writing', async () => {
     const { input, writes } = await mountField('1.2.3')
     await typeAndBlur(input, 'abc')

@@ -664,21 +664,25 @@ async function saveCustomId(input: string | undefined) {
     return
   }
 
+  const savedId = id.value
   const { error } = await capgo
     .from('app_versions')
     .update({
       min_update_version: commit.value,
     })
-    .eq('id', id.value)
+    .eq('id', savedId)
 
   if (error) {
     console.log('Cannot set min update version', error)
     toast.error(t('cannot-update-min-version'))
-    minUpdateVersionRow.value?.reset()
+    if (version.value?.id === savedId)
+      minUpdateVersionRow.value?.reset()
     return
   }
 
-  version.value = { ...version.value, min_update_version: commit.value }
+  // The user may have opened another bundle while the save was in flight.
+  if (version.value?.id === savedId)
+    version.value = { ...version.value, min_update_version: commit.value }
   toast.success(t('updated-min-version'))
 }
 
