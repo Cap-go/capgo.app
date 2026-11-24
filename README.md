@@ -90,7 +90,9 @@ When a hosted MCP poll sees a job still `running` past the app's configured time
 - 📊 View your deployment statistics
 - 🔋 Supports Android and iOS
 - ⚡️ Capacitor 8/7/6/5 support
-- 🌐 **Open Source**: Licensed under GNU AFFERO GENERAL PUBLIC LICENSE
+- 🌐 **Open Source**: Source code licensed under GNU AFFERO GENERAL PUBLIC LICENSE
+  (public forks must use their own branding; private internal self-hosting is
+  fine, see [Trademarks and forks](#trademarks-and-forks))
 - 🌐 **Open Source Backend**: Self install
   [our backend](https://github.com/Cap-go/capgo) in your infra
 
@@ -165,6 +167,11 @@ If you're self-hosting, the key pieces live in a few top-level directories:
 - `playwright/` - Frontend E2E tests
 - `docs/` - Extra documentation and guides
 - `android/`, `ios/` - Capacitor native projects (mobile builds)
+
+Self-hosting and forking are welcome, but the license covers the code only.
+Public forks and services presented to others must use their own name and
+branding; see
+[Trademarks and forks](#trademarks-and-forks).
 
 Quick self-hosting path:
 
@@ -585,3 +592,29 @@ bun mobile
 
 And you will see the generated files in the `dist` directory, ready to be served
 on stores.
+
+## License
+
+All code in this repository, including the `cli/` workspace, is licensed under
+the [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE). The
+`LICENSE` file is the authoritative license text.
+
+## Trademarks and forks
+
+The AGPL-3.0 license covers **only the code** (source and works built from it).
+It does not grant any rights to Digital Shift OU's trademarks, branding, or
+trade dress, including the **Capgo** name, wordmark, logos, and application
+icons. This has always been the case; this section only makes it explicit.
+
+If you fork, redistribute, host, or build on Capgo's source code:
+
+- **Use your own name and branding.** Replace the Capgo name, wordmark, logos,
+  and application icons in any public fork, redistributed build, hosted
+  service, or self-hosted service presented to others, website, package, or app
+  store listing. Truthful, plain-text attribution is allowed as described in
+  [TRADEMARK.md](./TRADEMARK.md). Private internal self-hosting is fine.
+- **Make it clear that your project is not Capgo.** State clearly that your
+  project is unofficial and not affiliated with or endorsed by Capgo or Digital
+  Shift OU.
+
+See [TRADEMARK.md](./TRADEMARK.md) for the full trademark and branding policy.

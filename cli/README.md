@@ -108,6 +108,17 @@ The most complete [documentation is here](https://capgo.app/docs/).
 
 Join the [discord](https://discord.gg/VnYRvBfgA6) to get help.
 
+## Forks and branding
+
+This CLI, like the rest of the repository, is licensed under the
+[GNU Affero General Public License v3.0 (AGPL-3.0)](https://github.com/Cap-go/capgo.app/blob/main/LICENSE).
+That license covers the code only. It grants no rights
+to the Capgo name, wordmark, logos, or branding. Public forks, custom builds, and
+hosted or self-hosted services presented to others must use their own name and
+branding and make clear they are not Capgo and not endorsed by Capgo. Private
+internal self-hosting and truthful plain-text attribution are fine. See
+[TRADEMARK.md](https://github.com/Cap-go/capgo.app/blob/main/TRADEMARK.md).
+
 
 ## Dynamic monorepos
 

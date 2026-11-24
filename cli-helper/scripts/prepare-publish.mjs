@@ -62,5 +62,8 @@ for (const arch of ['arm64', 'x64']) {
   cpSync(ascKeyAppSrc, ascDest, { recursive: true })
   chmodSync(join(ascDest, 'Contents', 'MacOS', 'CapgoAscKeyHelper'), 0o755)
 
+  // Ship the repository AGPL-3.0 license text with each published package.
+  cpSync(join(root, '..', 'LICENSE'), join(pkgDir, 'LICENSE'))
+
   console.log(`Prepared ${manifest.name}@${version} (keychain + ASC key helper)`)
 }

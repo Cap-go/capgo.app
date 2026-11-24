@@ -104,6 +104,7 @@ codedb.snapshot
 cli-helper/dist/
 cli-helper/npm/*/CapgoKeychainHelper.app
 cli-helper/npm/*/CapgoAscKeyHelper.app
+cli-helper/npm/*/LICENSE
 .tinbase/
 .context/
 
