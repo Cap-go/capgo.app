@@ -55,6 +55,6 @@ WHERE id = '2309f0e5-bd7c-48f2-8a07-1de9ec4c62aa'
 
 UPDATE public.cancel_save_offers
 SET outcome = 'offered', responded_at = NULL
-WHERE outcome = 'accepting'
-  AND discount_start IS NULL
-  AND responded_at < now() - interval '1 hour';
+WHERE id IN ('67a77f36-5660-4e4a-a669-2ed02582fd6a', 'd5939775-9c67-4666-becb-c7a1868eae32')
+  AND outcome = 'accepting'
+  AND discount_start IS NULL;

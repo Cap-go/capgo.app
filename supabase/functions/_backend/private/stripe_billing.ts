@@ -5,7 +5,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { Hono } from 'hono/tiny'
-import { acceptCancelSaveOffer, declineCancelSaveOffer, parseOfferId, prepareCancelSaveOffer } from '../utils/cancel_save_offer.ts'
+import { acceptCancelSaveOffer, completeCreditsOfferAfterCancel, declineCancelSaveOffer, parseOfferId, prepareCancelSaveOffer } from '../utils/cancel_save_offer.ts'
 import { getInvoiceDocument } from '../utils/invoice_document.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
@@ -251,7 +251,10 @@ app.post('/cancel', middlewareAuth, async (c) => {
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
   if (offerId)
     await declineCancelSaveOffer(c, ctx, offerId)
-  return c.json({ subscription: await scheduleSubscriptionCancel(c, ctx, feedback, comment) })
+  const subscription = await scheduleSubscriptionCancel(c, ctx, feedback, comment)
+  if (offerId)
+    await completeCreditsOfferAfterCancel(c, ctx, offerId)
+  return c.json({ subscription })
 })
 
 app.post('/resume', middlewareAuth, async (c) => {

@@ -178,6 +178,18 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
   const credits = offerType === 'credits' ? creditsForMonthlyAmount(saveable.amount, saveable.currency) : null
 
   return await withPg(c, async (pg) => {
+    // Credits granted on this subscription while it still renews (saveable above:
+    // active, not canceling) mean the switch never finished. Offer it again so
+    // accepting completes the cancellation, without a second grant.
+    const { rows: unfinished } = await pg.query<OfferRow>(
+      `SELECT ${OFFER_COLUMNS} FROM public.cancel_save_offers
+       WHERE customer_id = $1 AND subscription_id = $2 AND credit_grant_id IS NOT NULL
+       ORDER BY created_at DESC LIMIT 1`,
+      [ctx.customerId, subscriptionId],
+    )
+    if (unfinished[0])
+      return toOffer(unfinished[0])
+
     // Credits already cover pay-as-you-go: neither offer adds anything.
     const { rows: org } = await pg.query<{ has_usage_credits: boolean | null }>(
       'SELECT has_usage_credits FROM public.orgs WHERE id = $1',
@@ -305,8 +317,9 @@ async function reserveOffer(c: Context, customerId: string, offerId: string): Pr
 
 async function releaseOffer(c: Context, customerId: string, offerId: string) {
   await withPg(c, pg => pg.query(
+    // Never once credits are granted: that save stays reserved until it completes.
     `UPDATE public.cancel_save_offers SET outcome = 'offered', responded_at = NULL
-     WHERE id = $1 AND customer_id = $2 AND outcome = 'accepting'`,
+     WHERE id = $1 AND customer_id = $2 AND outcome = 'accepting' AND credit_grant_id IS NULL`,
     [offerId, customerId],
   )).catch((error) => {
     // prepareCancelSaveOffer frees it later once it is stale.
@@ -405,20 +418,18 @@ async function grantOfferCredits(c: Context, offer: AcceptRow) {
 
 async function acceptCredits(c: Context, ctx: InAppBillingContext, offer: AcceptRow, comment?: string): Promise<{ credits: number }> {
   const credits = Number(offer.credits)
-  let granted = !!offer.credit_grant_id
   try {
     await grantOfferCredits(c, offer)
-    granted = true
     // The monthly plan stops at period end; the credits take over from there.
     await scheduleSubscriptionCancel(c, ctx, offer.reason, comment)
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save credits failed', customerId: ctx.customerId, offerId: offer.id, granted, error })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save credits failed', customerId: ctx.customerId, offerId: offer.id, error })
     // Once the credits are granted the offer keeps the customer's one save
     // reserved: a retry finishes the cancellation without granting again, and no
     // other offer can grant a second time.
-    if (!granted)
-      await releaseOffer(c, ctx.customerId, offer.id)
+    // releaseOffer keeps the reservation once a grant exists.
+    await releaseOffer(c, ctx.customerId, offer.id)
     throw error
   }
   await withPg(c, pg => pg.query(
@@ -439,13 +450,11 @@ export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext
   const offer = await reserveOffer(c, ctx.customerId, offerId)
   if (!offer || offer.outcome === 'offered' || offer.outcome === 'declined')
     throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
-  // Already saved: a retry after a lost response returns the recorded result.
-  if (offer.outcome === 'accepted') {
-    if (offer.offer_type === 'credits')
-      return { type: 'credits', credits: Number(offer.credits) }
-    if (offer.discount_end)
-      return { type: 'discount', discountEnd: offer.discount_end }
-  }
+  // Already saved: a retry after a lost response returns the recorded result. An
+  // accepted credits offer goes through again instead: the grant is reused and the
+  // cancellation is scheduled again, which is a no-op when it already is.
+  if (offer.outcome === 'accepted' && offer.offer_type === 'discount' && offer.discount_end)
+    return { type: 'discount', discountEnd: offer.discount_end }
 
   let activeSubscriptionId: string | null
   try {
@@ -472,22 +481,36 @@ export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext
 /**
  * Records that the customer canceled anyway. Never blocks the cancellation. An
  * offer left 'accepting' by a failed accept, with nothing applied, counts as declined.
- * Credits granted before a failed accept are kept, and the cancel that follows
- * completes that switch, so it counts as accepted.
+ * An offer whose credits were already granted is left alone: see completeCreditsOfferAfterCancel.
  */
 export async function declineCancelSaveOffer(c: Context, ctx: InAppBillingContext, offerId: string) {
   try {
     await withPg(c, pg => pg.query(
-      `UPDATE public.cancel_save_offers
-       SET outcome = CASE WHEN credit_grant_id IS NOT NULL THEN 'accepted' ELSE 'declined' END,
-         responded_at = COALESCE(responded_at, now())
-       WHERE id = $1 AND customer_id = $2
+      `UPDATE public.cancel_save_offers SET outcome = 'declined', responded_at = COALESCE(responded_at, now())
+       WHERE id = $1 AND customer_id = $2 AND credit_grant_id IS NULL
          AND (outcome = 'offered' OR (outcome = 'accepting' AND discount_start IS NULL))`,
       [offerId, ctx.customerId],
     ))
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save offer decline not recorded', customerId: ctx.customerId, error })
+  }
+}
+
+/**
+ * Called once a plain cancel has been scheduled: credits granted by an accept that
+ * failed before canceling now have their switch completed, so the offer is accepted.
+ */
+export async function completeCreditsOfferAfterCancel(c: Context, ctx: InAppBillingContext, offerId: string) {
+  try {
+    await withPg(c, pg => pg.query(
+      `UPDATE public.cancel_save_offers SET outcome = 'accepted', responded_at = COALESCE(responded_at, now())
+       WHERE id = $1 AND customer_id = $2 AND credit_grant_id IS NOT NULL AND outcome IN ('offered', 'accepting')`,
+      [offerId, ctx.customerId],
+    ))
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save credits completion not recorded', customerId: ctx.customerId, offerId, error })
   }
 }
 

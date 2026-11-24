@@ -15,7 +15,7 @@ function body(route: Route) {
   return route.request().postDataJSON() as Record<string, unknown>
 }
 
-async function openCancelDialog(page: Page, offer: (route: Route) => Promise<void>, reason = 'too_expensive') {
+async function openCancelDialog(page: Page, offer: (route: Route) => Promise<void>, reason = 'too_expensive', comment = '') {
   const calls: { path: string, body: Record<string, unknown> }[] = []
   let offerAccepted = false
   await page.route('**/private/config', route => route.fulfill(json({ stripeEnabled: true })))
@@ -40,8 +40,9 @@ async function openCancelDialog(page: Page, offer: (route: Route) => Promise<voi
   })
   await page.route('**/private/stripe_billing/cancel-offer/accept', async (route) => {
     calls.push({ path: 'accept', body: body(route) })
-    offerAccepted = true
     const credits = body(route).offerId === CREDITS_OFFER_ID
+    // Only the discount shows up as a discount on the subscription.
+    offerAccepted = !credits
     await route.fulfill(json(credits
       ? { type: 'credits', credits: 29, subscription: { ...activeSubscription, cancelAtPeriodEnd: true } }
       : { type: 'discount', discountEnd: new Date(Date.now() + 90 * 86400000).toISOString(), subscription: activeSubscription }))
@@ -63,6 +64,8 @@ async function openCancelDialog(page: Page, offer: (route: Route) => Promise<voi
   await dismissSupportPrompt(page)
   await page.locator('[data-test="billing-cancel"]').click({ timeout: 30000 })
   await page.locator(`[data-test="cancel-reason-${reason}"]`).click()
+  if (comment)
+    await page.locator('[data-test="cancel-comment"]').fill(comment)
   await page.locator('[data-test="cancel-plan-confirm"]').click()
   return calls
 }
@@ -92,16 +95,20 @@ test.describe('Cancel plan save offer', () => {
 
   test('a customer who barely uses the plan can switch to credits', async ({ page }) => {
     const credits = (route: Route) => route.fulfill(json({ offer: { id: CREDITS_OFFER_ID, type: 'credits', credits: 29, monthlyAmount: 2900, currency: 'usd' } }))
-    const calls = await openCancelDialog(page, credits, 'unused')
+    const calls = await openCancelDialog(page, credits, 'unused', 'only one app left')
     await continuePastLoss(page)
     const offer = page.locator('[data-test="cancel-save-offer"]')
     await expect(offer).toHaveAttribute('data-offer-type', 'credits')
-    await expect(offer).toContainText('29')
-    await page.locator('[data-test="cancel-offer-accept"]').click()
+    await expect(offer).toContainText('Switch to credits instead of canceling')
+    const accept = page.locator('[data-test="cancel-offer-accept"]')
+    await expect(accept).toHaveText('Switch and get 29 credits')
+    await accept.click()
     await expect(offer).toBeHidden()
+    // The plan now ends at period end, and no discount was applied.
+    await expect(page.locator('[data-test="billing-subscription"] [data-test="billing-discounts"]')).toHaveCount(0)
     expect(calls.map(call => call.path)).toEqual(['cancel-offer', 'accept'])
     expect(calls[0].body).toMatchObject({ reason: 'unused' })
-    expect(calls[1].body).toMatchObject({ offerId: CREDITS_OFFER_ID })
+    expect(calls[1].body).toMatchObject({ offerId: CREDITS_OFFER_ID, comment: 'only one app left' })
   })
 
   test('declining the offer cancels and records the offer', async ({ page }) => {
