@@ -405,15 +405,20 @@ async function grantOfferCredits(c: Context, offer: AcceptRow) {
 
 async function acceptCredits(c: Context, ctx: InAppBillingContext, offer: AcceptRow, comment?: string): Promise<{ credits: number }> {
   const credits = Number(offer.credits)
+  let granted = !!offer.credit_grant_id
   try {
     await grantOfferCredits(c, offer)
+    granted = true
     // The monthly plan stops at period end; the credits take over from there.
     await scheduleSubscriptionCancel(c, ctx, offer.reason, comment)
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save credits failed', customerId: ctx.customerId, offerId: offer.id, error })
-    // The grant (if any) stays linked to the offer, so a retry finishes without granting twice.
-    await releaseOffer(c, ctx.customerId, offer.id)
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save credits failed', customerId: ctx.customerId, offerId: offer.id, granted, error })
+    // Once the credits are granted the offer keeps the customer's one save
+    // reserved: a retry finishes the cancellation without granting again, and no
+    // other offer can grant a second time.
+    if (!granted)
+      await releaseOffer(c, ctx.customerId, offer.id)
     throw error
   }
   await withPg(c, pg => pg.query(
@@ -467,13 +472,17 @@ export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext
 /**
  * Records that the customer canceled anyway. Never blocks the cancellation. An
  * offer left 'accepting' by a failed accept, with nothing applied, counts as declined.
+ * Credits granted before a failed accept are kept, and the cancel that follows
+ * completes that switch, so it counts as accepted.
  */
 export async function declineCancelSaveOffer(c: Context, ctx: InAppBillingContext, offerId: string) {
   try {
     await withPg(c, pg => pg.query(
-      `UPDATE public.cancel_save_offers SET outcome = 'declined', responded_at = now()
+      `UPDATE public.cancel_save_offers
+       SET outcome = CASE WHEN credit_grant_id IS NOT NULL THEN 'accepted' ELSE 'declined' END,
+         responded_at = COALESCE(responded_at, now())
        WHERE id = $1 AND customer_id = $2
-         AND (outcome = 'offered' OR (outcome = 'accepting' AND discount_start IS NULL AND credit_grant_id IS NULL))`,
+         AND (outcome = 'offered' OR (outcome = 'accepting' AND discount_start IS NULL))`,
       [offerId, ctx.customerId],
     ))
   }
