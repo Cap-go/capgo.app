@@ -134,8 +134,11 @@ async function start(platform: 'ios' | 'android') {
     const payload = await response.json().catch(() => undefined) as { data?: { id?: string, url?: string }, message?: string, error?: string } | undefined
     if (!response.ok) {
       // A missing simulator host is explained by the hint that replaces the start buttons.
-      if (noteSimulatorStartError(payload))
+      if (noteSimulatorStartError(payload)) {
+        // A list sent before this refusal must not bring the start buttons back.
+        listRequest++
         return
+      }
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-start'))
     }
     const id = payload?.data?.id

@@ -37,7 +37,7 @@ export async function savedOutputsForJobs(c: Context, principal: RlsPrincipal, a
   const owned = await withRlsContext(c, principal, async client => (await client.query<{ builder_job_id: string, platform: string }>(
     `SELECT builder_job_id, platform
      FROM public.build_requests
-     WHERE app_id = $1 AND owner_org = $2 AND status = 'succeeded' AND builder_job_id = ANY($3::text[])`,
+     WHERE app_id = $1 AND owner_org = $2 AND status IN ('succeeded', 'released', 'completed') AND builder_job_id = ANY($3::text[])`,
     [appId, ownerOrg, ids],
   )).rows)
   const outputs: Record<string, SavedBuildOutput> = {}

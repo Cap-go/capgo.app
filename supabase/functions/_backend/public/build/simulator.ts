@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import { HTTPException } from 'hono/http-exception'
 import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
@@ -257,7 +258,7 @@ export function startupFailureKeepsSlot(emulatorId: string, deviceStopped: boole
 export function simulatorCreateWasInterrupted(error: unknown): boolean {
   if (error instanceof SimulatorHostError)
     return false
-  if (error instanceof Error && error.name === 'HTTPException')
+  if (error instanceof HTTPException)
     return false
   if (error instanceof Error && error.message === 'Simulator did not return a session URL.')
     return false
@@ -374,7 +375,7 @@ async function failSimulatorStartup(c: Context, slotId: string, emulatorId: stri
   const deviceId = emulatorId || (interrupted ? slotId : '')
   const deviceStopped = deviceId === '' || await createdDeviceStopped(c, deviceId, interrupted)
   await recordStartupFailure(c, slotId, deviceStopped ? '' : deviceId, deviceStopped)
-  if (error instanceof Error && error.name === 'HTTPException')
+  if (error instanceof HTTPException)
     throw error
   throw quickError(502, 'simulator_unavailable', error instanceof Error ? error.message : 'Simulator did not start.', { app_id: appId }, error, { alert: false })
 }

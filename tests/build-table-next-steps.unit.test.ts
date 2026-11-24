@@ -218,6 +218,27 @@ describe('builds table after a successful build', () => {
     await vi.waitFor(() => expect(host.querySelector('[data-test="build-detail-simulator"]')).not.toBeNull())
   })
 
+  it('asks for the opened build\'s saved output even when the listing fills the lookup', async () => {
+    const page = Array.from({ length: 20 }, (_, index) => ({ ...succeeded, id: `p${index}`, builder_job_id: `job_p${index}`, created_at: `2026-11-1${index % 10}T10:00:00Z` }))
+    mocks.builds = [{ ...running, platform: 'ios' }, ...page]
+    const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify({ outputs: {} }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    ;(host.querySelector('[data-test="row-b2"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="live"]')).not.toBeNull())
+    // The build succeeds and drops to the next page behind 20 succeeded builds.
+    mocks.builds = [{ ...running, platform: 'ios', status: 'succeeded' }, ...page]
+    mocks.listed = page
+    ;(host.querySelector('[data-test="live-finish"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => {
+      const url = String(fetchMock.mock.calls.at(-1)?.[0] ?? '')
+      const ids = decodeURIComponent(url.split('job_ids=')[1] ?? '').split(',')
+      // The backend reads only the first 20 job ids.
+      expect(ids.slice(0, 20)).toContain('job_2')
+    })
+  })
+
   it('keeps refreshing an opened build the listing leaves out until its row ends', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     mocks.builds = [{ ...running, platform: 'ios' }]

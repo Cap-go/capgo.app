@@ -230,8 +230,9 @@ async function getData(silent = false) {
     if (builds.some(build => isBuildActive(build.status)) || isBuildActive(outside?.status))
       outputsFailures.value = 0
     total.value = count || 0
+    // The opened build goes first, so the lookup's 20-job cap never drops the build on screen.
     if (isCurrent())
-      await loadSavedOutputs(outside ? [...builds, outside] : builds, isCurrent, silent)
+      await loadSavedOutputs(outside ? [outside, ...builds] : builds, isCurrent, silent)
   }
   catch (error) {
     if (!isCurrent())

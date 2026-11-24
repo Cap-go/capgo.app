@@ -108,6 +108,36 @@ describe('simulator card refresh', () => {
     app.unmount()
   })
 
+  it('keeps the explanation when an older list answer arrives after the refusal', async () => {
+    let answerFirstList: (() => void) | undefined
+    let lists = 0
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST')
+        return new Response(JSON.stringify({ error: 'simulator_not_configured', message: 'Simulator host missing' }), { status: 503 })
+      const list = new Response(JSON.stringify({ data: [], idle_minutes: 5, max_minutes: 40, configured: true }), { status: 200 })
+      if (++lists > 1)
+        return list
+      // The first list answers only after the start was refused.
+      await new Promise<void>((resolve) => {
+        answerFirstList = resolve
+      })
+      return list
+    }))
+    const container = document.createElement('div')
+    const app = createApp(SimulatorSessionCard, { appId })
+    app.mount(container)
+    await vi.waitFor(() => expect(answerFirstList).toBeDefined())
+    ;(Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('start-ios-simulator')) as HTMLButtonElement).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-test="simulator-not-configured"]')).not.toBeNull()
+    })
+    answerFirstList?.()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(container.querySelector('[data-test="simulator-not-configured"]')).not.toBeNull()
+    app.unmount()
+  })
+
   it('keeps checking after the last stop until the list shows its build time', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     const last = 'bf524173-6094-4d3f-8188-50a3027f6619'
