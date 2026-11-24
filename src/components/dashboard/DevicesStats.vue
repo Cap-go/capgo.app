@@ -145,7 +145,10 @@ const rawThirtyDayChartData = ref<ChartApiData | null>(null)
 const detectedAppId = ref('')
 const activeAppId = computed(() => props.appId || detectedAppId.value)
 const isNativeUsage = computed(() => props.usageKind === 'native')
-const titleKey = computed(() => isNativeUsage.value ? 'active_users_by_native_version' : 'active_users_by_version')
+// Bundle shares come from daily_version `get`: update offers to devices that are
+// not on the offered bundle yet, not the bundles devices run. Label them as such.
+const titleKey = computed(() => isNativeUsage.value ? 'active_users_by_native_version' : 'bundle-offers-by-version')
+const countUnitLabel = computed(() => isNativeUsage.value ? t('devices') : t('bundle-offers-unit'))
 
 // Cache for bundle ID lookups (version name -> bundle ID)
 const bundleIdCache = ref<Record<string, number>>({})
@@ -641,7 +644,7 @@ const compactChartOptions = computed<ChartOptions<'line'>>(() => {
             const counts = (item.dataset as { metaCounts?: number[] }).metaCounts ?? []
             const devices = counts[item.dataIndex] ?? 0
             const share = `${formatNumberValue(Number(item.raw ?? 0), { maximumFractionDigits: 1 })}%`
-            return devices > 0 ? `${item.dataset.label}: ${share} (${formatNumberValue(devices)} ${t('devices')})` : `${item.dataset.label}: ${share}`
+            return devices > 0 ? `${item.dataset.label}: ${share} (${formatNumberValue(devices)} ${countUnitLabel.value})` : `${item.dataset.label}: ${share}`
           },
         },
       },
@@ -1173,9 +1176,17 @@ watch(
         >
           <template #header>
             <div v-if="props.variant === 'chart'" class="flex items-start justify-between w-full gap-3">
-              <h2 class="min-w-0 text-base font-semibold leading-tight text-slate-900 dark:text-white">
-                {{ t(titleKey) }}
-              </h2>
+              <div class="min-w-0">
+                <h2 class="text-base font-semibold leading-tight text-slate-900 dark:text-white">
+                  {{ t(titleKey) }}
+                </h2>
+                <p v-if="!isNativeUsage" class="mt-0.5 text-xs leading-snug text-slate-500 dark:text-slate-400" :title="t('bundle-offers-help-detail')" data-testid="bundle-offers-help">
+                  {{ t('bundle-offers-help') }}
+                  <RouterLink v-if="activeAppId" :to="`/app/${activeAppId}/devices`" class="font-medium text-blue-600 hover:underline dark:text-blue-400">
+                    {{ t('bundle-offers-devices-link') }}
+                  </RouterLink>
+                </p>
+              </div>
             </div>
             <div v-else class="flex w-full items-start justify-end">
               <div class="flex max-w-[11rem] flex-col items-end text-right shrink-0">
@@ -1192,7 +1203,7 @@ watch(
                   {{ latestVersion.name }}
                 </div>
                 <div v-if="latestVersion" class="text-xs text-slate-500 dark:text-slate-400">
-                  {{ latestVersionCountDisplay }} {{ t('devices') }}
+                  {{ latestVersionCountDisplay }} {{ countUnitLabel }}
                 </div>
               </div>
             </div>
@@ -1204,7 +1215,7 @@ watch(
             </div>
             <!-- Legend under the chart so the chart keeps its height. -->
             <ul class="flex flex-wrap justify-center text-xs gap-x-3 gap-y-1" data-testid="version-chart-legend">
-              <li v-for="item in compactChart.legend" :key="item.name" class="flex items-center gap-1.5" :title="`${item.devices} ${t('devices')}`">
+              <li v-for="item in compactChart.legend" :key="item.name" class="flex items-center gap-1.5" :title="`${item.devices} ${countUnitLabel}`">
                 <span class="inline-block w-2 h-2 rounded-full" :style="{ backgroundColor: item.color }" />
                 <span class="font-medium text-slate-700 dark:text-slate-200">{{ item.name }}</span>
                 <span class="tabular-nums text-slate-500 dark:text-slate-400">{{ item.share }}</span>
