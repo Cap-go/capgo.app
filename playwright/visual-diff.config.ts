@@ -411,8 +411,8 @@ const BUILD_FIXTURES = [
   { id: '7c0d1b1e-0000-4000-8000-000000000001', app_id: 'com.demo.app', platform: 'android', build_mode: 'debug', status: 'failed', builder_job_id: 'job_failed', last_error: 'Gradle task assembleRelease failed: missing keystore password', created_at: '2026-11-16T15:00:00Z', updated_at: '2026-11-16T15:04:00Z', started_at: '2026-11-16T15:00:20Z', completed_at: '2026-11-16T15:04:00Z' },
 ]
 
-async function prepareBuildsWithResults(page: Page, open: 'table' | 'detail' | 'next-steps') {
-  await page.setViewportSize({ width: 1440, height: 1000 })
+async function prepareBuildsWithResults(page: Page, open: 'table' | 'detail' | 'next-steps', width = 1440) {
+  await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
   await routeConsoleQuery(page, 'build_requests', async (route, query) => {
     const byId = query.operations.find(op => op.method === 'eq' && op.args[0] === 'id')
     if (byId)
@@ -457,6 +457,9 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'builds-table', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'table') },
   { slug: 'builds-detail', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'detail') },
   { slug: 'builds-next-steps', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'next-steps') },
+  { slug: 'builds-table-mobile', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'table', 390) },
+  { slug: 'builds-detail-mobile', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'detail', 390) },
+  { slug: 'builds-next-steps-mobile', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'next-steps', 390) },
   {
     slug: 'builds-empty',
     path: '/app/com.demo.app/builds',
