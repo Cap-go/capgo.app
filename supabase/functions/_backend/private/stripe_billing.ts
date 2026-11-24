@@ -66,6 +66,8 @@ interface CancelBody extends OrgBody {
 interface CancelOfferBody extends OrgBody {
   reason?: unknown
   offerId?: unknown
+  // Accepting credits also cancels the plan: the comment goes to Stripe with it.
+  comment?: unknown
 }
 
 type AppContext = Context<MiddlewareKeyVariables>
@@ -218,7 +220,7 @@ app.post('/remove-backup-card', middlewareAuth, async (c) => {
   return c.json(await removeBackupCard(c, ctx, body.paymentMethodId))
 })
 
-// Before canceling: the discount offered to stay, or null when not eligible.
+// Before canceling: the offer to stay (a discount, or credits instead of the plan), or null when not eligible.
 app.post('/cancel-offer', middlewareAuth, async (c) => {
   const body = await parseBody<CancelOfferBody>(c)
   const feedback = parseCancelFeedback(body.reason)
@@ -237,8 +239,8 @@ app.post('/cancel-offer/accept', middlewareAuth, async (c) => {
   if (!offerId)
     throw simpleError('invalid_offer_id', 'Missing offerId')
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
-  const { discountEnd } = await acceptCancelSaveOffer(c, ctx, offerId)
-  return c.json({ discountEnd, subscription: await getSubscriptionSummary(c, ctx) })
+  const result = await acceptCancelSaveOffer(c, ctx, offerId, parseCancelComment(body.comment))
+  return c.json({ ...result, subscription: await getSubscriptionSummary(c, ctx) })
 })
 
 app.post('/cancel', middlewareAuth, async (c) => {

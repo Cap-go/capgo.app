@@ -3,23 +3,41 @@ import type { CancelFeedback, InAppBillingContext } from './stripe_in_app.ts'
 import Stripe from 'stripe'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getPgClient, withPgTransaction } from './pg.ts'
 import { getActiveSubscriptionId, lookupActiveSubscriptionId, syncSubscriptionData } from './stripe.ts'
+import { scheduleSubscriptionCancel } from './stripe_in_app.ts'
 
-// Cancel flow save offer: a monthly customer who starts to cancel is offered a
-// discount on the next months instead. Each offer and its outcome is stored in
-// public.cancel_save_offers so the admin dashboard can chart saves over time and
-// whether customers kept paying once the discount ended.
+// Cancel flow save offer. What a monthly customer who starts to cancel is offered
+// depends on the reason they give:
+// - 'credits' for customers who barely use Capgo ("unused", "other"): a discount on
+//   a plan they do not need does not help, so they stop the monthly plan at period
+//   end and get usage credits worth one month of it to keep shipping updates.
+// - 'discount' for everyone else: a percent off the next months.
+// Customers who already hold credits are offered nothing. Each offer and its outcome
+// is stored in public.cancel_save_offers so the admin dashboard can chart saves over
+// time and whether customers kept paying once the discount ended.
+
+export type CancelSaveOfferType = 'discount' | 'credits'
 
 export const CANCEL_SAVE_OFFER_PERCENT_OFF = 50
 export const CANCEL_SAVE_OFFER_DURATION_MONTHS = 3
 // Same id in both Stripe accounts; created on first use.
 export const CANCEL_SAVE_COUPON_ID = `capgo_cancel_save_${CANCEL_SAVE_OFFER_PERCENT_OFF}_${CANCEL_SAVE_OFFER_DURATION_MONTHS}m`
+// Reasons where using less, not paying less, is the problem.
+const CREDITS_REASONS: readonly CancelFeedback[] = ['unused', 'other']
+// One credit costs one US dollar. These currencies are close enough to the dollar
+// (and use cents) for one month of the plan to become the same number of credits.
+const CREDITS_CURRENCIES = new Set(['usd', 'eur', 'gbp', 'chf', 'cad', 'aud', 'nzd', 'sgd'])
+export const CANCEL_SAVE_CREDITS_EXPIRY_MONTHS = 12
 // A reopened cancel dialog reuses the unanswered offer instead of counting a new one.
 const OFFER_REUSE_HOURS = 24
+// An accept that has not finished after this long failed without releasing its
+// reservation (killed request): the subscription has no discount, so free it.
+const STALE_ACCEPTING_MINUTES = 15
 
-export interface CancelSaveOffer {
+interface DiscountOffer {
   id: string
+  type: 'discount'
   percentOff: number
   durationMonths: number
   monthlyAmount: number
@@ -27,31 +45,65 @@ export interface CancelSaveOffer {
   currency: string
 }
 
+interface CreditsOffer {
+  id: string
+  type: 'credits'
+  credits: number
+  monthlyAmount: number
+  currency: string
+}
+
+export type CancelSaveOffer = DiscountOffer | CreditsOffer
+
 interface OfferRow {
   id: string
   subscription_id: string
+  reason: CancelFeedback
+  offer_type: CancelSaveOfferType
   monthly_amount: string | number
   currency: string
-  percent_off: number
-  duration_months: number
+  percent_off: number | null
+  duration_months: number | null
+  credits: string | number | null
 }
+
+const OFFER_COLUMNS = 'id::text, subscription_id, reason, offer_type, monthly_amount, currency, percent_off, duration_months, credits'
 
 function toOffer(row: OfferRow): CancelSaveOffer {
   const monthlyAmount = Number(row.monthly_amount)
+  if (row.offer_type === 'credits')
+    return { id: row.id, type: 'credits', credits: Number(row.credits), monthlyAmount, currency: row.currency }
+  const percentOff = row.percent_off ?? CANCEL_SAVE_OFFER_PERCENT_OFF
   return {
     id: row.id,
-    percentOff: row.percent_off,
-    durationMonths: row.duration_months,
+    type: 'discount',
+    percentOff,
+    durationMonths: row.duration_months ?? CANCEL_SAVE_OFFER_DURATION_MONTHS,
     monthlyAmount,
-    discountedAmount: Math.round(monthlyAmount * (100 - row.percent_off) / 100),
+    discountedAmount: Math.round(monthlyAmount * (100 - percentOff) / 100),
     currency: row.currency,
   }
 }
 
+/** Credits worth one month of the plan, or null when the currency does not map to dollars. */
+export function creditsForMonthlyAmount(amount: number, currency: string): number | null {
+  if (!CREDITS_CURRENCIES.has(currency.toLowerCase()))
+    return null
+  const credits = Math.ceil(amount / 100)
+  return credits > 0 ? credits : null
+}
+
+/** Which offer fits the reason, falling back to the discount when credits cannot be priced. */
+export function offerTypeFor(reason: CancelFeedback, monthlyAmount: number, currency: string): CancelSaveOfferType {
+  if (CREDITS_REASONS.includes(reason) && creditsForMonthlyAmount(monthlyAmount, currency) !== null)
+    return 'credits'
+  return 'discount'
+}
+
 /**
- * The monthly price the discount would apply to, or null when the subscription
- * cannot be saved this way: not active, already ending, already discounted, or
- * billed on anything other than one month.
+ * The monthly price the offer is based on, or null when the subscription cannot be
+ * saved this way: not active, already ending, already discounted, or billed on
+ * anything other than one month.
  */
 export function getSaveableMonthlyAmount(subscription: Stripe.Subscription): { amount: number, currency: string } | null {
   if (subscription.status !== 'active' || subscription.cancel_at_period_end || subscription.cancel_at)
@@ -71,31 +123,36 @@ export function getSaveableMonthlyAmount(subscription: Stripe.Subscription): { a
   return amount > 0 ? { amount, currency: subscription.currency } : null
 }
 
-async function ensureCoupon(stripe: Stripe) {
+async function ensureCoupon(c: Context, stripe: Stripe) {
   try {
     await stripe.coupons.retrieve(CANCEL_SAVE_COUPON_ID)
+    return
   }
   catch (error) {
     if (!(error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing'))
       throw error
-    try {
-      await stripe.coupons.create({
-        id: CANCEL_SAVE_COUPON_ID,
-        name: `Stay with Capgo: ${CANCEL_SAVE_OFFER_PERCENT_OFF}% off for ${CANCEL_SAVE_OFFER_DURATION_MONTHS} months`,
-        percent_off: CANCEL_SAVE_OFFER_PERCENT_OFF,
-        duration: 'repeating',
-        duration_in_months: CANCEL_SAVE_OFFER_DURATION_MONTHS,
-      })
-    }
-    catch (createError) {
-      // Another request created it first.
-      if (!(createError instanceof Stripe.errors.StripeInvalidRequestError && createError.code === 'resource_already_exists'))
-        throw createError
-    }
+  }
+  try {
+    await stripe.coupons.create({
+      id: CANCEL_SAVE_COUPON_ID,
+      name: `Stay with Capgo: ${CANCEL_SAVE_OFFER_PERCENT_OFF}% off for ${CANCEL_SAVE_OFFER_DURATION_MONTHS} months`,
+      percent_off: CANCEL_SAVE_OFFER_PERCENT_OFF,
+      duration: 'repeating',
+      duration_in_months: CANCEL_SAVE_OFFER_DURATION_MONTHS,
+    })
+  }
+  catch (createError) {
+    // Another request created it first.
+    if (createError instanceof Stripe.errors.StripeInvalidRequestError && createError.code === 'resource_already_exists')
+      return
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save coupon create failed', error: createError })
+    throw createError
   }
 }
 
-async function withPg<T>(c: Context, run: (pg: Awaited<ReturnType<typeof getPgClient>>) => Promise<T>): Promise<T> {
+type PgClient = Awaited<ReturnType<typeof getPgClient>>
+
+async function withPg<T>(c: Context, run: (pg: PgClient) => Promise<T>): Promise<T> {
   const pg = await getPgClient(c)
   try {
     return await run(pg)
@@ -117,8 +174,27 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
   const saveable = getSaveableMonthlyAmount(await retrieveSubscription(ctx, subscriptionId))
   if (!saveable)
     return null
+  const offerType = offerTypeFor(reason, saveable.amount, saveable.currency)
+  const credits = offerType === 'credits' ? creditsForMonthlyAmount(saveable.amount, saveable.currency) : null
 
   return await withPg(c, async (pg) => {
+    // Credits already cover pay-as-you-go: neither offer adds anything.
+    const { rows: org } = await pg.query<{ has_usage_credits: boolean | null }>(
+      'SELECT has_usage_credits FROM public.orgs WHERE id = $1',
+      [orgId],
+    )
+    if (org[0]?.has_usage_credits)
+      return null
+
+    // The subscription has no discount (checked above), so an old reservation never
+    // reached Stripe: give it back instead of blocking this customer forever.
+    await pg.query(
+      `UPDATE public.cancel_save_offers SET outcome = 'offered', responded_at = NULL
+       WHERE customer_id = $1 AND outcome = 'accepting' AND discount_start IS NULL AND credit_grant_id IS NULL
+         AND responded_at < now() - make_interval(mins => $2::int)`,
+      [ctx.customerId, STALE_ACCEPTING_MINUTES],
+    )
+
     const { rows: accepted } = await pg.query(
       `SELECT 1 FROM public.cancel_save_offers WHERE customer_id = $1 AND outcome IN ('accepting', 'accepted') LIMIT 1`,
       [ctx.customerId],
@@ -127,27 +203,41 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
       return null
 
     const { rows: reused } = await pg.query<OfferRow>(
-      `UPDATE public.cancel_save_offers SET reason = $3, monthly_amount = $4, currency = $5
+      `UPDATE public.cancel_save_offers SET reason = $3, monthly_amount = $4, currency = $5, credits = $8
        WHERE id = (
          SELECT id FROM public.cancel_save_offers
-         WHERE customer_id = $1 AND subscription_id = $2 AND outcome = 'offered'
+         WHERE customer_id = $1 AND subscription_id = $2 AND outcome = 'offered' AND offer_type = $7
            AND created_at > now() - make_interval(hours => $6::int)
          ORDER BY created_at DESC LIMIT 1
        )
-       RETURNING id::text, subscription_id, monthly_amount, currency, percent_off, duration_months`,
-      [ctx.customerId, subscriptionId, reason, saveable.amount, saveable.currency, OFFER_REUSE_HOURS],
+       RETURNING ${OFFER_COLUMNS}`,
+      [ctx.customerId, subscriptionId, reason, saveable.amount, saveable.currency, OFFER_REUSE_HOURS, offerType, credits],
     )
     if (reused[0])
       return toOffer(reused[0])
 
+    const discount = offerType === 'discount'
     const { rows } = await pg.query<OfferRow>(
       `INSERT INTO public.cancel_save_offers
-         (org_id, customer_id, subscription_id, billing_account, reason, monthly_amount, currency, coupon_id, percent_off, duration_months)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id::text, subscription_id, monthly_amount, currency, percent_off, duration_months`,
-      [orgId, ctx.customerId, subscriptionId, ctx.billingAccount, reason, saveable.amount, saveable.currency, CANCEL_SAVE_COUPON_ID, CANCEL_SAVE_OFFER_PERCENT_OFF, CANCEL_SAVE_OFFER_DURATION_MONTHS],
+         (org_id, customer_id, subscription_id, billing_account, reason, monthly_amount, currency, offer_type, coupon_id, percent_off, duration_months, credits)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING ${OFFER_COLUMNS}`,
+      [
+        orgId,
+        ctx.customerId,
+        subscriptionId,
+        ctx.billingAccount,
+        reason,
+        saveable.amount,
+        saveable.currency,
+        offerType,
+        discount ? CANCEL_SAVE_COUPON_ID : null,
+        discount ? CANCEL_SAVE_OFFER_PERCENT_OFF : null,
+        discount ? CANCEL_SAVE_OFFER_DURATION_MONTHS : null,
+        credits,
+      ],
     )
-    cloudlog({ requestId: c.get('requestId'), message: 'cancel save offer shown', customerId: ctx.customerId, subscriptionId, reason })
+    cloudlog({ requestId: c.get('requestId'), message: 'cancel save offer shown', customerId: ctx.customerId, subscriptionId, reason, offerType })
     return toOffer(rows[0])
   })
 }
@@ -173,8 +263,10 @@ function addMonths(seconds: number, months: number) {
 const UNIQUE_VIOLATION = '23505'
 
 interface AcceptRow extends OfferRow {
+  org_id: string
   outcome: 'offered' | 'accepting' | 'accepted' | 'declined'
   discount_end: string | null
+  credit_grant_id: string | null
 }
 
 /**
@@ -185,7 +277,7 @@ interface AcceptRow extends OfferRow {
 async function reserveOffer(c: Context, customerId: string, offerId: string): Promise<AcceptRow | null> {
   return await withPg(c, async (pg) => {
     const select = () => pg.query<AcceptRow>(
-      `SELECT id::text, subscription_id, monthly_amount, currency, percent_off, duration_months, outcome,
+      `SELECT ${OFFER_COLUMNS}, org_id::text, outcome, credit_grant_id::text,
          to_char(discount_end AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS discount_end
        FROM public.cancel_save_offers WHERE id = $1 AND customer_id = $2`,
       [offerId, customerId],
@@ -201,7 +293,7 @@ async function reserveOffer(c: Context, customerId: string, offerId: string): Pr
       )
     }
     catch (error) {
-      // The customer already took (or is taking) the discount with another offer.
+      // The customer already took (or is taking) a save with another offer.
       if ((error as { code?: unknown })?.code === UNIQUE_VIOLATION)
         return null
       throw error
@@ -217,63 +309,50 @@ async function releaseOffer(c: Context, customerId: string, offerId: string) {
      WHERE id = $1 AND customer_id = $2 AND outcome = 'accepting'`,
     [offerId, customerId],
   )).catch((error) => {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save offer release failed', customerId, error })
+    // prepareCancelSaveOffer frees it later once it is stale.
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save offer release failed', customerId, offerId, error })
   })
 }
 
-async function applyDiscount(ctx: InAppBillingContext, subscriptionId: string, offerId: string) {
+async function applyDiscount(c: Context, ctx: InAppBillingContext, subscriptionId: string, offerId: string) {
   const current = await retrieveSubscription(ctx, subscriptionId)
   // A retried accept finds the discount it already applied.
   if (discountFor(current))
     return current
   if (!getSaveableMonthlyAmount(current))
     throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
-  await ensureCoupon(ctx.stripe)
+  await ensureCoupon(c, ctx.stripe)
   return await ctx.stripe.subscriptions.update(subscriptionId, {
     discounts: [{ coupon: CANCEL_SAVE_COUPON_ID }],
     expand: ['discounts'],
   }, { idempotencyKey: `cancel_save_offer:${offerId}` })
 }
 
-/** Applies the discount to the subscription; the plan keeps renewing. Safe to retry. */
-export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext, offerId: string) {
-  const offer = await reserveOffer(c, ctx.customerId, offerId)
-  if (!offer || offer.outcome === 'offered' || offer.outcome === 'declined')
-    throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
-  // Already saved: a retry after a lost response returns the recorded result.
-  if (offer.outcome === 'accepted' && offer.discount_end)
-    return { discountEnd: offer.discount_end }
-
-  const { subscriptionId: activeSubscriptionId, known } = await lookupActiveSubscriptionId(c, ctx.customerId)
-  // Billing state unreadable: keep the reservation, a retry picks it up.
-  if (!known)
-    throw simpleError('cancel_offer_failed', 'The discount could not be applied')
+async function acceptDiscount(c: Context, ctx: InAppBillingContext, offer: AcceptRow): Promise<{ discountEnd: string }> {
   const subscriptionId = offer.subscription_id
   let discount: Stripe.Discount | null
   try {
-    if (activeSubscriptionId !== subscriptionId)
-      throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
-    discount = discountFor(await applyDiscount(ctx, subscriptionId, offerId))
+    discount = discountFor(await applyDiscount(c, ctx, subscriptionId, offer.id))
   }
   catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save discount failed', customerId: ctx.customerId, offerId: offer.id, error })
     // An earlier attempt, or this failed call, may have applied the discount: look before releasing.
-    const after = await retrieveSubscription(ctx, subscriptionId).then(subscription => ({ discount: discountFor(subscription) })).catch(() => null)
-    // Stripe unreadable: the offer stays reserved and a retry reconciles it.
-    if (!after)
+    const after = await retrieveSubscription(ctx, subscriptionId).then(subscription => discountFor(subscription)).catch(() => undefined)
+    // Stripe unreadable: keep the reservation, a retry (or the stale cleanup) reconciles it.
+    if (after === undefined)
       throw error
-    if (!after.discount) {
-      // Nothing applied: give the reservation back so the customer can try again.
-      await releaseOffer(c, ctx.customerId, offerId)
+    if (!after) {
+      await releaseOffer(c, ctx.customerId, offer.id)
       throw error
     }
-    discount = after.discount
+    discount = after
   }
   if (!discount) {
-    await releaseOffer(c, ctx.customerId, offerId)
+    await releaseOffer(c, ctx.customerId, offer.id)
     throw simpleError('cancel_offer_failed', 'The discount could not be applied')
   }
   const discountStart = new Date(discount.start * 1000).toISOString()
-  const discountEnd = discount.end ? new Date(discount.end * 1000).toISOString() : addMonths(discount.start, offer.duration_months)
+  const discountEnd = discount.end ? new Date(discount.end * 1000).toISOString() : addMonths(discount.start, offer.duration_months ?? CANCEL_SAVE_OFFER_DURATION_MONTHS)
 
   // The discount is on the subscription, so record it even if a concurrent attempt on
   // this offer failed and released the reservation in the meantime.
@@ -281,21 +360,120 @@ export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext
     `UPDATE public.cancel_save_offers
      SET outcome = 'accepted', responded_at = COALESCE(responded_at, now()), discount_start = $3, discount_end = $4
      WHERE id = $1 AND customer_id = $2 AND outcome IN ('offered', 'accepting', 'accepted')`,
-    [offerId, ctx.customerId, discountStart, discountEnd],
+    [offer.id, ctx.customerId, discountStart, discountEnd],
   ))
   if (!rowCount)
-    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save offer applied but not recorded', customerId: ctx.customerId, offerId })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save offer applied but not recorded', customerId: ctx.customerId, offerId: offer.id })
   cloudlog({ requestId: c.get('requestId'), message: 'cancel save offer accepted', customerId: ctx.customerId, subscriptionId, discountEnd })
   await syncSubscriptionData(c, ctx.customerId, subscriptionId)
   return { discountEnd }
 }
 
-/** Records that the customer canceled anyway. Never blocks the cancellation. */
+/**
+ * Grants the offer's credits once: the grant id is stored on the offer row in the
+ * same transaction, so a retried accept never grants twice.
+ */
+async function grantOfferCredits(c: Context, offer: AcceptRow) {
+  return await withPg(c, pg => withPgTransaction(pg, async (tx) => {
+    const { rows } = await tx.query<{ credit_grant_id: string | null }>(
+      'SELECT credit_grant_id::text FROM public.cancel_save_offers WHERE id = $1 FOR UPDATE',
+      [offer.id],
+    )
+    const existing = rows[0]?.credit_grant_id
+    if (existing)
+      return existing
+    const notes = 'Cancel flow: credits instead of the monthly plan'
+    const sourceRef = JSON.stringify({ cancelSaveOfferId: offer.id })
+    const { rows: grant } = await tx.query<{ id: string }>(
+      `INSERT INTO public.usage_credit_grants (org_id, credits_total, credits_consumed, granted_at, expires_at, source, source_ref, notes)
+       VALUES ($1, $2, 0, now(), now() + make_interval(months => $3::int), 'cancel_save_offer', $4::jsonb, $5)
+       RETURNING id::text`,
+      [offer.org_id, offer.credits, CANCEL_SAVE_CREDITS_EXPIRY_MONTHS, sourceRef, notes],
+    )
+    const grantId = grant[0].id
+    await tx.query(
+      `INSERT INTO public.usage_credit_transactions (org_id, grant_id, transaction_type, amount, balance_after, description, source_ref)
+       SELECT $1, $2, 'manual_grant', $3,
+         COALESCE((SELECT available_credits FROM public.usage_credit_balances WHERE org_id = $1), 0),
+         $4, $5::jsonb`,
+      [offer.org_id, grantId, offer.credits, notes, sourceRef],
+    )
+    await tx.query('UPDATE public.cancel_save_offers SET credit_grant_id = $2 WHERE id = $1', [offer.id, grantId])
+    return grantId
+  }))
+}
+
+async function acceptCredits(c: Context, ctx: InAppBillingContext, offer: AcceptRow, comment?: string): Promise<{ credits: number }> {
+  const credits = Number(offer.credits)
+  try {
+    await grantOfferCredits(c, offer)
+    // The monthly plan stops at period end; the credits take over from there.
+    await scheduleSubscriptionCancel(c, ctx, offer.reason, comment)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save credits failed', customerId: ctx.customerId, offerId: offer.id, error })
+    // The grant (if any) stays linked to the offer, so a retry finishes without granting twice.
+    await releaseOffer(c, ctx.customerId, offer.id)
+    throw error
+  }
+  await withPg(c, pg => pg.query(
+    `UPDATE public.cancel_save_offers SET outcome = 'accepted', responded_at = COALESCE(responded_at, now())
+     WHERE id = $1 AND customer_id = $2 AND credit_grant_id IS NOT NULL`,
+    [offer.id, ctx.customerId],
+  ))
+  cloudlog({ requestId: c.get('requestId'), message: 'cancel save credits accepted', customerId: ctx.customerId, offerId: offer.id, credits })
+  return { credits }
+}
+
+export type AcceptCancelSaveOfferResult
+  = | { type: 'discount', discountEnd: string }
+    | { type: 'credits', credits: number }
+
+/** Applies the offer: a discount keeps the plan, credits replace it at period end. Safe to retry. */
+export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext, offerId: string, comment?: string): Promise<AcceptCancelSaveOfferResult> {
+  const offer = await reserveOffer(c, ctx.customerId, offerId)
+  if (!offer || offer.outcome === 'offered' || offer.outcome === 'declined')
+    throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
+  // Already saved: a retry after a lost response returns the recorded result.
+  if (offer.outcome === 'accepted') {
+    if (offer.offer_type === 'credits')
+      return { type: 'credits', credits: Number(offer.credits) }
+    if (offer.discount_end)
+      return { type: 'discount', discountEnd: offer.discount_end }
+  }
+
+  let activeSubscriptionId: string | null
+  try {
+    const lookup = await lookupActiveSubscriptionId(c, ctx.customerId)
+    if (!lookup.known)
+      throw simpleError('cancel_offer_failed', 'The offer could not be applied')
+    activeSubscriptionId = lookup.subscriptionId
+  }
+  catch (error) {
+    // Nothing reached Stripe yet: let the customer try again.
+    await releaseOffer(c, ctx.customerId, offerId)
+    throw error
+  }
+  if (activeSubscriptionId !== offer.subscription_id) {
+    await releaseOffer(c, ctx.customerId, offerId)
+    throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
+  }
+
+  if (offer.offer_type === 'credits')
+    return { type: 'credits', ...await acceptCredits(c, ctx, offer, comment) }
+  return { type: 'discount', ...await acceptDiscount(c, ctx, offer) }
+}
+
+/**
+ * Records that the customer canceled anyway. Never blocks the cancellation. An
+ * offer left 'accepting' by a failed accept, with nothing applied, counts as declined.
+ */
 export async function declineCancelSaveOffer(c: Context, ctx: InAppBillingContext, offerId: string) {
   try {
     await withPg(c, pg => pg.query(
       `UPDATE public.cancel_save_offers SET outcome = 'declined', responded_at = now()
-       WHERE id = $1 AND customer_id = $2 AND outcome = 'offered'`,
+       WHERE id = $1 AND customer_id = $2
+         AND (outcome = 'offered' OR (outcome = 'accepting' AND discount_start IS NULL AND credit_grant_id IS NULL))`,
       [offerId, ctx.customerId],
     ))
   }

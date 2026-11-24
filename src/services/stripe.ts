@@ -396,22 +396,38 @@ export function removeBackupCard(orgId: string, paymentMethodId: string) {
 }
 
 // Discount offered to stay instead of canceling a monthly plan.
-export interface CancelSaveOffer {
-  id: string
-  percentOff: number
-  durationMonths: number
-  // Minor units, like every Stripe amount.
-  monthlyAmount: number
-  discountedAmount: number
-  currency: string
-}
+// The offer depends on the cancel reason: a discount to keep the plan, or (for
+// customers who barely use it) credits worth one month to replace the plan.
+export type CancelSaveOffer
+  = | {
+    id: string
+    type: 'discount'
+    percentOff: number
+    durationMonths: number
+    // Minor units, like every Stripe amount.
+    monthlyAmount: number
+    discountedAmount: number
+    currency: string
+  }
+  | {
+    id: string
+    type: 'credits'
+    credits: number
+    monthlyAmount: number
+    currency: string
+  }
+
+export type AcceptCancelSaveOfferResult
+  = | { type: 'discount', discountEnd: string }
+    | { type: 'credits', credits: number }
 
 export function getCancelSaveOffer(orgId: string, reason: CancelReason) {
   return callBilling<{ offer: CancelSaveOffer | null }>('cancel-offer', { orgId, reason })
 }
 
-export function acceptCancelSaveOffer(orgId: string, offerId: string) {
-  return callBilling<{ discountEnd: string, subscription: BillingSubscription | null }>('cancel-offer/accept', { orgId, offerId })
+// comment: sent to Stripe when accepting credits cancels the plan.
+export function acceptCancelSaveOffer(orgId: string, offerId: string, comment = '') {
+  return callBilling<AcceptCancelSaveOfferResult & { subscription: BillingSubscription | null }>('cancel-offer/accept', { orgId, offerId, ...(comment ? { comment } : {}) })
 }
 
 // offerId: the save offer the customer turned down before canceling.

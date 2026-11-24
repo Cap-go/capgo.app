@@ -4,6 +4,7 @@ import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
 // The cancel dialog's save offer, with the billing API mocked: Stripe is not involved.
 const OFFER_ID = '00000000-0000-4000-8000-000000000001'
+const CREDITS_OFFER_ID = '00000000-0000-4000-8000-000000000002'
 const activeSubscription = { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: new Date(Date.now() + 18 * 86400000).toISOString() }
 
 function json(body: unknown, status = 200) {
@@ -14,7 +15,7 @@ function body(route: Route) {
   return route.request().postDataJSON() as Record<string, unknown>
 }
 
-async function openCancelDialog(page: Page, offer: (route: Route) => Promise<void>) {
+async function openCancelDialog(page: Page, offer: (route: Route) => Promise<void>, reason = 'too_expensive') {
   const calls: { path: string, body: Record<string, unknown> }[] = []
   let offerAccepted = false
   await page.route('**/private/config', route => route.fulfill(json({ stripeEnabled: true })))
@@ -40,7 +41,10 @@ async function openCancelDialog(page: Page, offer: (route: Route) => Promise<voi
   await page.route('**/private/stripe_billing/cancel-offer/accept', async (route) => {
     calls.push({ path: 'accept', body: body(route) })
     offerAccepted = true
-    await route.fulfill(json({ discountEnd: new Date(Date.now() + 90 * 86400000).toISOString(), subscription: activeSubscription }))
+    const credits = body(route).offerId === CREDITS_OFFER_ID
+    await route.fulfill(json(credits
+      ? { type: 'credits', credits: 29, subscription: { ...activeSubscription, cancelAtPeriodEnd: true } }
+      : { type: 'discount', discountEnd: new Date(Date.now() + 90 * 86400000).toISOString(), subscription: activeSubscription }))
   })
   await page.route('**/private/stripe_billing/discounts', route => route.fulfill(json({
     discounts: offerAccepted
@@ -58,7 +62,7 @@ async function openCancelDialog(page: Page, offer: (route: Route) => Promise<voi
   await discountsLoaded
   await dismissSupportPrompt(page)
   await page.locator('[data-test="billing-cancel"]').click({ timeout: 30000 })
-  await page.locator('[data-test="cancel-reason-too_expensive"]').click()
+  await page.locator(`[data-test="cancel-reason-${reason}"]`).click()
   await page.locator('[data-test="cancel-plan-confirm"]').click()
   return calls
 }
@@ -68,7 +72,7 @@ async function continuePastLoss(page: Page) {
   await page.locator('[data-test="cancel-loss-continue"]').click()
 }
 
-const eligible = (route: Route) => route.fulfill(json({ offer: { id: OFFER_ID, percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' } }))
+const eligible = (route: Route) => route.fulfill(json({ offer: { id: OFFER_ID, type: 'discount', percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' } }))
 
 test.describe('Cancel plan save offer', () => {
   test('keeping the plan with the discount does not cancel it', async ({ page }) => {
@@ -84,6 +88,20 @@ test.describe('Cancel plan save offer', () => {
     expect(calls.map(call => call.path)).toEqual(['cancel-offer', 'accept'])
     expect(calls[0].body).toMatchObject({ reason: 'too_expensive' })
     expect(calls[1].body).toMatchObject({ offerId: OFFER_ID })
+  })
+
+  test('a customer who barely uses the plan can switch to credits', async ({ page }) => {
+    const credits = (route: Route) => route.fulfill(json({ offer: { id: CREDITS_OFFER_ID, type: 'credits', credits: 29, monthlyAmount: 2900, currency: 'usd' } }))
+    const calls = await openCancelDialog(page, credits, 'unused')
+    await continuePastLoss(page)
+    const offer = page.locator('[data-test="cancel-save-offer"]')
+    await expect(offer).toHaveAttribute('data-offer-type', 'credits')
+    await expect(offer).toContainText('29')
+    await page.locator('[data-test="cancel-offer-accept"]').click()
+    await expect(offer).toBeHidden()
+    expect(calls.map(call => call.path)).toEqual(['cancel-offer', 'accept'])
+    expect(calls[0].body).toMatchObject({ reason: 'unused' })
+    expect(calls[1].body).toMatchObject({ offerId: CREDITS_OFFER_ID })
   })
 
   test('declining the offer cancels and records the offer', async ({ page }) => {

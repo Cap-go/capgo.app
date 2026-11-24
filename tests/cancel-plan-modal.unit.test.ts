@@ -22,6 +22,7 @@ vi.mock('../src/services/stripe', () => ({
 
 const offer = {
   id: 'offer_1',
+  type: 'discount' as const,
   percentOff: 50,
   durationMonths: 3,
   monthlyAmount: 2900,
@@ -140,5 +141,24 @@ describe('CancelPlanModal loss reminder', () => {
     ;(shell().querySelector('[data-test="cancel-offer-decline"]') as HTMLButtonElement).click()
     await vi.waitFor(() => expect(onCanceled).toHaveBeenCalledOnce())
     expect(mocks.cancelSubscriptionWithReason).toHaveBeenCalledWith('org_test', 'too_expensive', '', offer.id)
+  })
+
+  it('switches to credits and passes the comment along', async () => {
+    const creditsOffer = { id: 'offer_2', type: 'credits' as const, credits: 29, monthlyAmount: 2900, currency: 'usd' }
+    mocks.getCancelSaveOffer.mockResolvedValue({ offer: creditsOffer })
+    mocks.acceptCancelSaveOffer.mockResolvedValue({ type: 'credits', credits: 29, subscription: { cancelAtPeriodEnd: true } })
+    const { onSaved } = mountModal()
+    await pickReason()
+    const textarea = shell().querySelector('[data-test="cancel-comment"]') as HTMLTextAreaElement
+    textarea.value = ' only one app now '
+    textarea.dispatchEvent(new Event('input'))
+    await submitReason()
+    ;(shell().querySelector('[data-test="cancel-loss-continue"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(shell().querySelector('[data-offer-type="credits"]')).toBeTruthy())
+    expect(shell().textContent).toContain('billing-cancel-credits-title')
+    ;(shell().querySelector('[data-test="cancel-offer-accept"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledOnce())
+    expect(mocks.acceptCancelSaveOffer).toHaveBeenCalledWith('org_test', 'offer_2', 'only one app now')
+    expect(mocks.cancelSubscriptionWithReason).not.toHaveBeenCalled()
   })
 })

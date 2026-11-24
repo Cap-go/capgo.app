@@ -1,7 +1,9 @@
 <script setup lang="ts">
 /**
  * Org billing cancel flow: pick a reason, see what the plan includes, then load an optional
- * Stripe save offer before confirming cancellation. Accepting the offer keeps the subscription.
+ * save offer before confirming cancellation. The offer depends on the reason: a discount
+ * keeps the subscription; credits replace it (the plan ends at period end, the credits
+ * keep updates running on pay-as-you-go).
  */
 
 import type { BillingSubscription, CancelReason, CancelSaveOffer } from '~/services/stripe'
@@ -19,7 +21,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   canceled: [subscription: BillingSubscription | null]
-  // The customer took the discount and keeps the plan.
+  // The customer took the offer: kept the plan with a discount, or switched to credits.
   saved: [subscription: BillingSubscription | null]
 }>()
 
@@ -39,9 +41,10 @@ const lossItems = ['ota', 'channels', 'builds', 'support'] as const
 const needsComment = computed(() => reason.value === 'other')
 const busy = computed(() => isSubmitting.value || isAccepting.value)
 const canSubmit = computed(() => !!reason.value && (!needsComment.value || comment.value.trim().length > 0) && !busy.value)
-const offerPrices = computed(() => offer.value
-  ? { full: formatStripeAmount(offer.value.monthlyAmount, offer.value.currency), discounted: formatStripeAmount(offer.value.discountedAmount, offer.value.currency) }
-  : null)
+const discountOffer = computed(() => offer.value?.type === 'discount' ? offer.value : null)
+const creditsOffer = computed(() => offer.value?.type === 'credits' ? offer.value : null)
+const monthlyPrice = computed(() => offer.value ? formatStripeAmount(offer.value.monthlyAmount, offer.value.currency) : '')
+const discountedPrice = computed(() => discountOffer.value ? formatStripeAmount(discountOffer.value.discountedAmount, discountOffer.value.currency) : '')
 
 async function cancelPlan(selected: CancelReason) {
   const { subscription } = await cancelSubscriptionWithReason(props.orgId, selected, comment.value.trim(), offer.value?.id)
@@ -104,13 +107,17 @@ async function acceptOffer() {
     return
   isAccepting.value = true
   try {
-    const { subscription } = await acceptCancelSaveOffer(props.orgId, offer.value.id)
-    toast.success(t('billing-cancel-offer-accepted', { percent: offer.value.percentOff, months: offer.value.durationMonths }))
+    const current = offer.value
+    const { subscription } = await acceptCancelSaveOffer(props.orgId, current.id, comment.value.trim())
+    if (current.type === 'credits')
+      toast.success(t('billing-cancel-credits-accepted', { credits: current.credits }))
+    else
+      toast.success(t('billing-cancel-offer-accepted', { percent: current.percentOff, months: current.durationMonths }))
     emit('saved', subscription)
   }
   catch (error) {
     console.error('Cannot apply cancel offer', error)
-    toast.error(t('billing-cancel-offer-error'))
+    toast.error(t(offer.value.type === 'credits' ? 'billing-cancel-credits-error' : 'billing-cancel-offer-error'))
   }
   finally {
     isAccepting.value = false
@@ -147,13 +154,26 @@ async function acceptOffer() {
         </button>
       </div>
     </div>
-    <div v-else-if="offer && offerPrices" data-test="cancel-save-offer">
-      <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
+    <div v-else-if="offer" data-test="cancel-save-offer" :data-offer-type="offer.type">
+      <div v-if="creditsOffer" class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
         <p class="text-base font-semibold text-blue-900 dark:text-blue-100">
-          {{ t('billing-cancel-offer-title', { percent: offer.percentOff, months: offer.durationMonths }) }}
+          {{ t('billing-cancel-credits-title') }}
         </p>
         <p class="mt-2 text-sm text-blue-900 dark:text-blue-200">
-          {{ t('billing-cancel-offer-desc', { discounted: offerPrices.discounted, full: offerPrices.full, months: offer.durationMonths }) }}
+          {{ t('billing-cancel-credits-desc', { credits: creditsOffer.credits, full: monthlyPrice }) }}
+        </p>
+        <ul class="mt-3 list-disc space-y-1 pl-5 text-sm text-blue-900 dark:text-blue-200">
+          <li>{{ t('billing-cancel-credits-point-no-monthly') }}</li>
+          <li>{{ t('billing-cancel-credits-point-apps') }}</li>
+          <li>{{ t('billing-cancel-credits-point-expiry') }}</li>
+        </ul>
+      </div>
+      <div v-else-if="discountOffer" class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
+        <p class="text-base font-semibold text-blue-900 dark:text-blue-100">
+          {{ t('billing-cancel-offer-title', { percent: discountOffer.percentOff, months: discountOffer.durationMonths }) }}
+        </p>
+        <p class="mt-2 text-sm text-blue-900 dark:text-blue-200">
+          {{ t('billing-cancel-offer-desc', { discounted: discountedPrice, full: monthlyPrice, months: discountOffer.durationMonths }) }}
         </p>
       </div>
       <div class="mt-6 flex flex-wrap justify-end gap-2">
@@ -163,7 +183,7 @@ async function acceptOffer() {
         </button>
         <button type="button" class="d-btn d-btn-primary" :disabled="busy" data-test="cancel-offer-accept" @click="acceptOffer">
           <span v-if="isAccepting" class="d-loading d-loading-spinner d-loading-sm" />
-          {{ t('billing-cancel-offer-accept', { percent: offer.percentOff }) }}
+          {{ creditsOffer ? t('billing-cancel-credits-accept', { credits: creditsOffer.credits }) : t('billing-cancel-offer-accept', { percent: discountOffer?.percentOff }) }}
         </button>
       </div>
     </div>

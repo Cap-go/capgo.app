@@ -1,6 +1,6 @@
 import type Stripe from 'stripe'
 import { describe, expect, it } from 'vitest'
-import { getSaveableMonthlyAmount } from '../supabase/functions/_backend/utils/cancel_save_offer.ts'
+import { creditsForMonthlyAmount, getSaveableMonthlyAmount, offerTypeFor } from '../supabase/functions/_backend/utils/cancel_save_offer.ts'
 
 function item(unitAmount: number, interval: 'month' | 'year' = 'month', options: { quantity?: number, usageType?: 'licensed' | 'metered', intervalCount?: number } = {}) {
   return {
@@ -39,5 +39,25 @@ describe('getSaveableMonthlyAmount', () => {
     expect(getSaveableMonthlyAmount(subscription({}, [item(29000, 'year')]))).toBeNull()
     expect(getSaveableMonthlyAmount(subscription({}, [item(8700, 'month', { intervalCount: 3 })]))).toBeNull()
     expect(getSaveableMonthlyAmount(subscription({}, [item(0)]))).toBeNull()
+  })
+})
+
+describe('offer by cancel reason', () => {
+  it('offers credits worth one month to customers who barely use the plan', () => {
+    expect(offerTypeFor('unused', 2900, 'usd')).toBe('credits')
+    expect(offerTypeFor('other', 1400, 'eur')).toBe('credits')
+    expect(creditsForMonthlyAmount(2900, 'usd')).toBe(29)
+    expect(creditsForMonthlyAmount(1450, 'EUR')).toBe(15)
+  })
+
+  it('offers the discount for every other reason', () => {
+    for (const reason of ['too_expensive', 'missing_features', 'switched_service', 'too_complex', 'low_quality', 'customer_service'] as const)
+      expect(offerTypeFor(reason, 2900, 'usd')).toBe('discount')
+  })
+
+  it('falls back to the discount when the currency cannot become dollar credits', () => {
+    expect(creditsForMonthlyAmount(700, 'brl')).toBeNull()
+    expect(creditsForMonthlyAmount(1500, 'jpy')).toBeNull()
+    expect(offerTypeFor('unused', 700, 'brl')).toBe('discount')
   })
 })
