@@ -61,13 +61,16 @@ const OUTPUT_RETRIES = 3
 const outputsFailures = ref(0)
 // The build whose details replace the table (live progress, result, download, error).
 const openedBuild = shallowRef<Element | null>(null)
+// The opened build's latest row when the listing leaves it out (search, another page).
+const openedOutside = shallowRef<Element | null>(null)
 // The opened build as the latest refresh sees it: its job id and status move after the click.
 function findOpenedRow(): Element | null {
   const opened = openedBuild.value
   if (!opened)
     return null
   const rows: readonly { id: string }[] = elements.value
-  return (rows.find(build => build.id === opened.id) as Element | undefined) ?? opened
+  const outside = openedOutside.value?.id === opened.id ? openedOutside.value : null
+  return (rows.find(build => build.id === opened.id) as Element | undefined) ?? outside ?? opened
 }
 const openedRow = computed(findOpenedRow)
 const nextStepsDismissed = ref(isBuildNextStepsDismissed(props.appId))
@@ -210,13 +213,23 @@ async function getData(silent = false) {
     buildDurations.value = durations ?? {}
     if (durations === null)
       toast.error(t('error-fetching-build-durations'))
+    // The listing follows the search and page: read the opened build itself when it falls out.
+    const opened = openedBuild.value
+    let outside: Element | null = null
+    if (opened && !builds.some(build => build.id === opened.id)) {
+      const { data: row } = await capgo.from('build_requests').select('*').eq('id', opened.id).maybeSingle()
+      if (!isCurrent())
+        return
+      outside = row
+    }
+    openedOutside.value = outside
     elements.value = builds
     // A running build re-arms saved-output recovery for the moment it ends.
     if (builds.some(build => isBuildActive(build.status)))
       outputsFailures.value = 0
     total.value = count || 0
     if (isCurrent())
-      await loadSavedOutputs(builds, isCurrent, silent)
+      await loadSavedOutputs(outside ? [...builds, outside] : builds, isCurrent, silent)
   }
   catch (error) {
     if (!isCurrent())

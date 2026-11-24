@@ -4,7 +4,7 @@ import { createApp, defineComponent, h } from 'vue'
 import BuildTable from '../src/components/tables/BuildTable.vue'
 import { simulatorConfigured } from '../src/services/simulatorSessions'
 
-const mocks = vi.hoisted(() => ({ builds: [] as any[], buildQueries: 0, failBuilds: false, gate: undefined as Promise<void> | undefined, sendEvent: vi.fn(), push: vi.fn() }))
+const mocks = vi.hoisted(() => ({ builds: [] as any[], listed: undefined as any[] | undefined, buildQueries: 0, failBuilds: false, gate: undefined as Promise<void> | undefined, sendEvent: vi.fn(), push: vi.fn() }))
 vi.mock('../src/services/capgoApi', () => ({ invokeCapgoApi: vi.fn(async () => ({ data: { canEnable: true }, error: null })) }))
 vi.mock('../src/services/tracking', () => ({ sendEvent: mocks.sendEvent }))
 vi.mock('../src/services/date', () => ({ formatDate: () => '' }))
@@ -27,12 +27,14 @@ vi.mock('../src/services/console', () => ({
     auth: { getSession: async () => ({ data: { session: { access_token: 'token' } } }) },
     from: (table: string) => {
       let head = false
+      let byId: string | undefined
       const query: any = {
         then: (resolve: (data: unknown) => void) => {
-          const listing = table === 'build_requests' && !head
+          const listing = table === 'build_requests' && !head && !byId
           if (listing)
             mocks.buildQueries++
-          const data = table === 'build_requests' ? mocks.builds : []
+          // A search or another page can leave builds out of the listing (mocks.listed).
+          const data = table !== 'build_requests' ? [] : byId ? mocks.builds.find(build => build.id === byId) ?? null : mocks.listed ?? mocks.builds
           return (listing && mocks.gate ? mocks.gate : Promise.resolve()).then(() => listing && mocks.failBuilds ? { data: null, count: null, error: { message: 'down' } } : { data, count: mocks.builds.length, error: null }).then(resolve)
         },
         select: (_columns: string, options?: { head?: boolean }) => {
@@ -40,8 +42,13 @@ vi.mock('../src/services/console', () => ({
           return query
         },
       }
-      for (const method of ['eq', 'in', 'order', 'range', 'or'])
+      for (const method of ['in', 'order', 'range', 'or', 'maybeSingle'])
         query[method] = () => query
+      query.eq = (column: string, value: string) => {
+        if (column === 'id')
+          byId = value
+        return query
+      }
       return query
     },
   }),
@@ -77,6 +84,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
   mocks.buildQueries = 0
+  mocks.listed = undefined
   mocks.gate = undefined
   mocks.failBuilds = false
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: { job_1: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } } }), { status: 200 })))
@@ -192,6 +200,20 @@ describe('builds table after a successful build', () => {
     await vi.waitFor(() => expect(host.querySelector('[data-test="live"]')).not.toBeNull())
     expect(host.querySelector('[data-test="build-detail-simulator"]')).toBeNull()
     mocks.builds = [{ ...running, platform: 'ios', status: 'succeeded' }]
+    ;(host.querySelector('[data-test="live-finish"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="build-detail-simulator"]')).not.toBeNull())
+  })
+
+  it('follows the opened build when the refreshed listing leaves it out', async () => {
+    mocks.builds = [{ ...running, platform: 'ios' }]
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: mocks.builds[0].status === 'succeeded' ? { job_2: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } } : {} }), { status: 200 })))
+    const host = mount()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="row-b2"]')).not.toBeNull())
+    ;(host.querySelector('[data-test="row-b2"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(host.querySelector('[data-test="live"]')).not.toBeNull())
+    // A search for "running" no longer lists the build once it succeeded.
+    mocks.builds = [{ ...running, platform: 'ios', status: 'succeeded' }]
+    mocks.listed = []
     ;(host.querySelector('[data-test="live-finish"]') as HTMLButtonElement).click()
     await vi.waitFor(() => expect(host.querySelector('[data-test="build-detail-simulator"]')).not.toBeNull())
   })
