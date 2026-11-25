@@ -133,8 +133,8 @@ can fail and a password change there is lost.
 2. Right after the deploy: the `sb.capgo.app` snippet relays `/auth/v1/*` to
    `https://api.capgo.app/private/console/auth/*` (same method, query and body).
 3. Catch-up for rows written on hosted Auth in between, from the SQL editor:
-   `SELECT public.copy_auth_to_auth_cf(false);` (adds only the accounts created on hosted
-   Auth since the copy, with their identities, factors and tokens; changes nothing else).
+   `SELECT public.copy_auth_to_auth_cf(false);` (adds only the accounts and SSO providers
+   created on hosted Auth since the copy, with their own rows; changes nothing else).
 4. Hosted Auth dashboard: turn off new sign-ups.
 5. Check: row counts of `auth` vs `auth_cf` (users, identities, mfa_factors, sso_providers),
    login with TOTP, a password reset link from the email, one SSO login per provider, and a

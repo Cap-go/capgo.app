@@ -10,9 +10,9 @@
 
 -- Copies auth rows into auth_cf. p_replace first empties auth_cf (test data)
 -- and copies everything. Without it (catch-up after the switch, run by hand:
--- SELECT public.copy_auth_to_auth_cf(false);) it only adds the accounts created
--- on hosted Auth after the first copy, with their identities, factors and
--- tokens, so nothing removed on our GoTrue meanwhile comes back.
+-- SELECT public.copy_auth_to_auth_cf(false);) it only adds the accounts and
+-- SSO providers created on hosted Auth after the first copy, with their own
+-- rows, so nothing removed on our GoTrue meanwhile comes back.
 CREATE OR REPLACE FUNCTION public.copy_auth_to_auth_cf(p_replace boolean)
 RETURNS void
 LANGUAGE plpgsql
@@ -24,6 +24,7 @@ DECLARE
   v_values text;
   v_filter text := '';
   v_new_users uuid[];
+  v_new_providers uuid[];
 BEGIN
   IF (SELECT relkind FROM pg_catalog.pg_class WHERE oid = to_regclass('auth_cf.users')) IS DISTINCT FROM 'r' THEN
     RAISE EXCEPTION 'auth_cf.users is not a GoTrue table';
@@ -38,25 +39,33 @@ BEGIN
     END IF;
     TRUNCATE auth_cf.users, auth_cf.sso_providers CASCADE;
   ELSE
-    -- Accounts newer than every account both schemas share were created on
-    -- hosted Auth after the first copy (accounts deleted here are older).
-    SELECT array_agg(a.id) INTO v_new_users
+    -- Accounts and SSO providers newer than every one both schemas share were
+    -- created on hosted Auth after the first copy (ones deleted here are older).
+    SELECT coalesce(array_agg(a.id), '{}') INTO v_new_users
     FROM auth.users AS a
     WHERE a.created_at > (
       SELECT max(c.created_at) FROM auth_cf.users AS c JOIN auth.users AS b ON b.id = c.id
     )
       AND NOT EXISTS (SELECT 1 FROM auth_cf.users AS c WHERE c.id = a.id);
-    IF v_new_users IS NULL THEN
-      RETURN;
-    END IF;
+    SELECT coalesce(array_agg(a.id), '{}') INTO v_new_providers
+    FROM auth.sso_providers AS a
+    WHERE a.created_at > coalesce((
+      SELECT max(c.created_at) FROM auth_cf.sso_providers AS c JOIN auth.sso_providers AS b ON b.id = c.id
+    ), '-infinity')
+      AND NOT EXISTS (SELECT 1 FROM auth_cf.sso_providers AS c WHERE c.id = a.id);
   END IF;
 
   -- Parents first. Generated columns are skipped; enums are cast by name
   -- because auth and auth_cf each have their own enum types.
   FOREACH v_table IN ARRAY ARRAY['sso_providers', 'sso_domains', 'saml_providers', 'users', 'identities', 'mfa_factors', 'one_time_tokens'] LOOP
     IF NOT p_replace THEN
-      CONTINUE WHEN v_table IN ('sso_providers', 'sso_domains', 'saml_providers');
-      v_filter := format(' WHERE s.%I = ANY (%L::uuid[])', CASE WHEN v_table = 'users' THEN 'id' ELSE 'user_id' END, v_new_users);
+      v_filter := CASE v_table
+        WHEN 'users' THEN format(' WHERE s.id = ANY (%L::uuid[])', v_new_users)
+        WHEN 'sso_providers' THEN format(' WHERE s.id = ANY (%L::uuid[])', v_new_providers)
+        WHEN 'sso_domains' THEN format(' WHERE s.sso_provider_id = ANY (%L::uuid[])', v_new_providers)
+        WHEN 'saml_providers' THEN format(' WHERE s.sso_provider_id = ANY (%L::uuid[])', v_new_providers)
+        ELSE format(' WHERE s.user_id = ANY (%L::uuid[])', v_new_users)
+      END;
     END IF;
 
     SELECT
