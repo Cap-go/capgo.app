@@ -284,11 +284,32 @@ export function bankTransferSyncAction(
   subscription: { selfServeBankTransfer: boolean, status: string, latestInvoiceStatus: string | null, subscriptionId: string },
   stored: { status: string | null, subscriptionId: string | null } | null,
 ): BankTransferSyncAction {
-  if (!subscription.selfServeBankTransfer || subscription.status === 'trialing' || subscription.status === 'canceled' || subscription.latestInvoiceStatus === 'paid')
+  if (!subscription.selfServeBankTransfer || subscription.status === 'trialing' || subscription.latestInvoiceStatus === 'paid')
     return 'apply_live'
   if (stored?.status === 'succeeded' && stored.subscriptionId === subscription.subscriptionId)
     return 'keep_stored_plan'
   return 'wait_for_payment'
+}
+
+// Cancellation grace applies only to a plan that was already paid, and only until the period ends.
+export function bankTransferSyncDbStatus(
+  action: BankTransferSyncAction,
+  subscription: { status: string, cycleEnd: string | null },
+  liveStatus: 'succeeded' | 'failed' | 'created' | 'canceled',
+) {
+  if (action === 'apply_live')
+    return liveStatus
+  if (action === 'wait_for_payment') {
+    if (subscription.status === 'past_due')
+      return 'failed'
+    if (subscription.status === 'canceled')
+      return 'canceled'
+    return 'created'
+  }
+  if (subscription.status !== 'canceled')
+    return 'succeeded'
+  const cycleStillOpen = !!subscription.cycleEnd && new Date(subscription.cycleEnd) > new Date()
+  return cycleStillOpen ? 'succeeded' : 'canceled'
 }
 
 export type SubscriptionLookupResult =
@@ -553,10 +574,8 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
           ? { status: currentStripeInfo.status, subscriptionId: currentStripeInfo.subscription_id }
           : null)
       : 'apply_live'
-    if (bankTransferAction === 'wait_for_payment')
-      dbStatus = subscriptionData?.status === 'past_due' ? 'failed' : 'created'
-    else if (bankTransferAction === 'keep_stored_plan')
-      dbStatus = 'succeeded'
+    if (bankTransferAction !== 'apply_live' && subscriptionData)
+      dbStatus = bankTransferSyncDbStatus(bankTransferAction, subscriptionData, dbStatus)
 
     // Update stripe_info table with latest data, even if no subscription exists
     const updateData: any = {
