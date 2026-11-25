@@ -30,11 +30,12 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { bankTransferAfterPaymentAction, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferSubscriptionStillCurrent, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, paidInvoiceExtraMau, paidThroughWrite, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, settledPaidThrough, storedPlanConflictsWithPaidInvoice, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { buildTransferInvoiceFooter, getStripeCustomerEmailFromEvent, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
+import { invoiceRecordsSelfServeBankTransfer, invoicedSubscriptionGrantsAccessBeforePayment, isSelfServeBankTransfer } from '../utils/transfer_invoice.ts'
 import type { TrialPlanFirstInvoiceState } from '../utils/stripe_trial_plan.ts'
 import { cancelTrialPlanScheduleForSubscription, isTrialPlanFirstInvoiceUnpaid, isTrialPlanSubscription, settleTrialPlanFirstInvoice } from '../utils/stripe_trial_plan.ts'
 import { checkPlanStatusOnly } from '../utils/plans.ts'
@@ -295,6 +296,8 @@ function resolveActiveSubscriptionStatus(
   // never paid (a returned ACH debit) grants nothing.
   if (webhookStatus === 'past_due')
     return payment === 'first_invoice_unpaid' ? 'failed' : webhookStatus
+  if (payment === 'bank_transfer_due')
+    return 'succeeded'
   if (payment === 'paid' || isPaidSubscriptionUpdate(currentStripeInfo, subscriptionId))
     return 'succeeded'
   // Keep a failed payment visible until a payment succeeds.
@@ -307,8 +310,10 @@ function resolveActiveSubscriptionStatus(
  * paid: the subscription's latest invoice is paid (or it needs no payment).
  * unpaid: still waiting for a payment. first_invoice_unpaid: past_due on the
  * first invoice, so the org never paid this subscription.
+ * bank_transfer_due: a previously paid subscription changed plan, but the bank
+ * transfer invoice is still open. Keep the stored plan until that invoice is paid.
  */
-type SubscriptionPaymentState = 'paid' | 'unpaid' | 'first_invoice_unpaid'
+type SubscriptionPaymentState = 'paid' | 'unpaid' | 'first_invoice_unpaid' | 'bank_transfer_due'
 
 /**
  * Renewals and plan changes of the subscription that is already paid keep
@@ -976,6 +981,7 @@ async function persistStripeInfoAndRevenueMovement(
   updateData: StripeInfoUpdate,
   eventOccurredAtIso: string,
   movement: RevenueMovement,
+  options?: { preserveLaterPaidThrough?: boolean, subscriptionId?: string },
 ): Promise<PersistRevenueMovementResult> {
   const transactionUpdateData: StripeInfoUpdate = {
     ...updateData,
@@ -999,8 +1005,8 @@ async function persistStripeInfoAndRevenueMovement(
     // Lock the row so concurrent retries serialize before we classify
     // the event as missing/stale/duplicate. The admin dashboard derives revenue
     // movement from the persisted stripe_info changes.
-    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'past_due_at' | 'status'> & { paid_at: string | Date | null }>(
-      'SELECT last_stripe_event_at, past_due_at, status, paid_at FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
+    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'past_due_at' | 'status' | 'subscription_id'> & { paid_at: string | Date | null, subscription_anchor_end: string | Date | null }>(
+      'SELECT last_stripe_event_at, past_due_at, status, paid_at, subscription_anchor_end, subscription_id FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
       [customerId],
     )
     const lockedStripeInfo = stripeInfoRow.rows[0]
@@ -1011,6 +1017,12 @@ async function persistStripeInfoAndRevenueMovement(
     }
 
     if (isStaleStripeEvent(lockedStripeInfo, eventOccurredAtIso)) {
+      await pgClient.query('ROLLBACK')
+      return { status: 'stale', firstPaidAt: null }
+    }
+
+    if (options?.subscriptionId && !bankTransferSubscriptionStillCurrent(lockedStripeInfo.subscription_id, options.subscriptionId)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'Bank-transfer invoice does not match the locked subscription', customerId, lockedSubscriptionId: lockedStripeInfo.subscription_id, invoiceSubscriptionId: options.subscriptionId })
       await pgClient.query('ROLLBACK')
       return { status: 'stale', firstPaidAt: null }
     }
@@ -1029,6 +1041,21 @@ async function persistStripeInfoAndRevenueMovement(
     }
     if (transactionUpdateData.past_due_at === undefined && transactionUpdateData.status && lockedStripeInfo.past_due_at)
       transactionUpdateData.past_due_at = null
+
+    if (options?.preserveLaterPaidThrough) {
+      const written = paidThroughWrite(lockedStripeInfo.subscription_anchor_end, {
+        start: transactionUpdateData.subscription_anchor_start,
+        end: transactionUpdateData.subscription_anchor_end,
+      })
+      if (written.subscription_anchor_end)
+        transactionUpdateData.subscription_anchor_end = written.subscription_anchor_end
+      else
+        delete transactionUpdateData.subscription_anchor_end
+      if (written.subscription_anchor_start)
+        transactionUpdateData.subscription_anchor_start = written.subscription_anchor_start
+      else
+        delete transactionUpdateData.subscription_anchor_start
+    }
 
     const updateStatement = buildStripeInfoUpdateStatement(customerId, transactionUpdateData)
     const shouldRecordProcessedEvent = shouldRecordProcessedStripeEvent(updateStatement, movement)
@@ -1116,6 +1143,8 @@ async function persistInvoicePayment(
   customerId: string,
   invoiceSubscriptionId: string,
   eventOccurredAtIso: string,
+  invoicePlanPriceIds?: readonly string[],
+  invoiceExtraMau?: number,
 ): Promise<InvoicePaymentResult> {
   // Pin one connection: BEGIN/COMMIT on the request-shared Pool could land on different ones.
   const pg = await getPgClient(c, false)
@@ -1125,14 +1154,19 @@ async function persistInvoicePayment(
   try {
     pgClient = await checkoutPgClient(pg)
     await beginWriteTransaction(pgClient)
-    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'status' | 'subscription_id'> & { paid_at: string | Date | null }>(
-      'SELECT last_stripe_event_at, status, subscription_id, paid_at FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
+    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'status' | 'subscription_id' | 'price_id'> & { paid_at: string | Date | null }>(
+      'SELECT last_stripe_event_at, status, subscription_id, price_id, paid_at FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
       [customerId],
     )
     const lockedStripeInfo = stripeInfoRow.rows[0]
     if (!lockedStripeInfo) {
       await pgClient.query('ROLLBACK')
       return { status: 'missing', firstPaidAt: null }
+    }
+    if (storedPlanConflictsWithPaidInvoice(lockedStripeInfo.price_id, invoicePlanPriceIds)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'Paid bank-transfer invoice does not match the locked plan', customerId, storedPriceId: lockedStripeInfo.price_id })
+      await pgClient.query('ROLLBACK')
+      return { status: 'skipped', firstPaidAt: null }
     }
     if (decideInvoicePayment(lockedStripeInfo, invoiceSubscriptionId, eventOccurredAtIso) === 'skip') {
       await pgClient.query('ROLLBACK')
@@ -1146,9 +1180,10 @@ async function persistInvoicePayment(
       SET status = 'succeeded',
         paid_at = COALESCE(paid_at, $2::timestamptz),
         churn_reason = NULL,
+        extra_mau = CASE WHEN $3::integer IS NULL THEN extra_mau ELSE $3::integer END,
         last_stripe_event_at = GREATEST(COALESCE(last_stripe_event_at, $2::timestamptz), $2::timestamptz)
       WHERE customer_id = $1
-    `, [customerId, eventOccurredAtIso])
+    `, [customerId, eventOccurredAtIso, invoiceExtraMau ?? null])
     await pgClient.query('COMMIT')
     return { status: 'applied', firstPaidAt }
   }
@@ -2115,6 +2150,84 @@ async function recoverOpenAIFirstPaymentFromInvoice(c: Context<MiddlewareKeyVari
   }
 }
 
+// The subscription webhook kept the previous plan while this invoice was open.
+async function paidInvoiceSubscriptionLines(stripe: ReturnType<typeof getStripe>, invoice: Stripe.Invoice) {
+  if (!invoice.lines.has_more)
+    return invoice.lines.data
+  const listed = await stripe.invoices.listLineItems(invoice.id, { limit: 100 })
+  return listed.has_more ? [] : listed.data
+}
+
+async function applyBankTransferPlanAfterPayment(
+  c: Context<MiddlewareKeyVariablesStripe>,
+  org: Org,
+  customer: StripeInfoRow,
+  subscriptionId: string,
+  eventOccurredAtIso: string,
+  invoice: Stripe.Invoice,
+) {
+  if (!invoiceRecordsSelfServeBankTransfer(invoice))
+    return
+  const stripe = getStripe(c, getWebhookBillingAccount(c))
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+  if (!isSelfServeBankTransfer(subscription.metadata))
+    return
+  const rawLines = await paidInvoiceSubscriptionLines(stripe, invoice)
+  const lines = invoiceBillLines(rawLines)
+  const { priceId, productId } = parsePriceIds(c, subscription.items.data)
+  const extraMau = getExtraMau(subscription.items.data)
+  const storedPeriod = { start: customer.subscription_anchor_start, end: customer.subscription_anchor_end }
+  const period = settledPaidThrough(storedPeriod, rawLines)
+  const planAlreadyStored = !productId || bankTransferPlanAlreadyStored(
+    { productId: customer.product_id, priceId: customer.price_id, extraMau: customer.extra_mau },
+    { productId, priceId, extraMau },
+  )
+  const settles = bankTransferInvoiceSettlesUpgrade(lines, subscriptionItemPriceQuantities(subscription.items.data), { priceId: customer.price_id, extraMau: customer.extra_mau })
+  const action = bankTransferAfterPaymentAction(settles, planAlreadyStored, !!period)
+  if (action === 'ignore')
+    return
+  if (action === 'write') {
+    const updateData: StripeInfoUpdate = {
+      product_id: productId ?? customer.product_id ?? undefined,
+      price_id: priceId ?? customer.price_id ?? undefined,
+      extra_mau: extraMau,
+      status: 'succeeded',
+      ...(period?.start ? { subscription_anchor_start: period.start } : {}),
+      ...(period?.end ? { subscription_anchor_end: period.end } : {}),
+    }
+    const revenuePlans = await getRevenuePlans(c)
+    const movement = classifyRevenueMovement(customer, updateData, revenuePlans)
+    const stripeEventId = c.get('stripeEvent')?.id
+    if (!stripeEventId)
+      return
+    const { status: didPersist } = await persistStripeInfoAndRevenueMovement(c, customer.customer_id, stripeEventId, updateData, eventOccurredAtIso, movement, { preserveLaterPaidThrough: true, subscriptionId })
+    const extraChanged = extraMau !== (customer.extra_mau ?? 0)
+    const planProductId = productId ?? customer.product_id
+    if (planProductId) {
+      const refreshData: StripeData['data'] = {
+        customer_id: customer.customer_id,
+        product_id: planProductId,
+        status: 'succeeded',
+      }
+      if (priceId)
+        refreshData.price_id = priceId
+      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, {
+        data: refreshData,
+        isUpgrade: false,
+        // The refresh gate only compares product and price. Extra MAU still changes the allowance.
+        previousProductId: extraChanged && productId === customer.product_id ? 'stored-plan' : customer.product_id ?? undefined,
+        previousPriceId: customer.price_id ?? undefined,
+      }, didPersist, customer)
+    }
+  }
+  // A retry can arrive after the plan write committed and the tag sync failed. Still finish that sync.
+  await syncBillingBentoTagsFromStoredStripeInfo(c, org, customer.customer_id)
+  await backgroundTask(c, Promise.all([
+    purgePlanCacheForOrg(c, org.id),
+    purgeOnPremCacheForOrg(c, org.id),
+  ]))
+}
+
 // A paid subscription invoice is what grants paid access to a subscription that
 // was waiting for its payment (ACH debit settled, checkout paid late).
 async function invoicePaid(
@@ -2129,17 +2242,40 @@ async function invoicePaid(
   if (stripeData.data.status !== 'succeeded' || !subscriptionId)
     return c.json(BRES)
   // Renewals of a paid subscription: nothing to change, skip the row lock.
-  if (isPaidSubscriptionUpdate(customer, subscriptionId))
+  // A bank-transfer plan change kept the previous plan until this invoice was paid.
+  if (isPaidSubscriptionUpdate(customer, subscriptionId)) {
+    if (stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded')
+      await applyBankTransferPlanAfterPayment(c, org, customer, subscriptionId, new Date(stripeEvent.created * 1000).toISOString(), stripeEvent.data.object)
     return c.json(BRES)
+  }
 
   const eventOccurredAtIso = new Date(stripeEvent.created * 1000).toISOString()
-  const { status, firstPaidAt } = await persistInvoicePayment(c, stripeData.data.customer_id, subscriptionId, eventOccurredAtIso)
+  let invoicePlanPriceIds: string[] | undefined
+  let invoiceExtraMau: number | undefined
+  if ((stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded') && invoiceRecordsSelfServeBankTransfer(stripeEvent.data.object)) {
+    const stripe = getStripe(c, getWebhookBillingAccount(c))
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+    const lines = invoiceBillLines(await paidInvoiceSubscriptionLines(stripe, stripeEvent.data.object))
+    const planPriceId = subscriptionItemPriceQuantities(subscription.items.data).find(item => !item.extra)?.priceId
+    const positivePriceIds = lines.filter(line => line.amount > 0).map(line => line.priceId)
+    if (!isSelfServeBankTransfer(subscription.metadata) || (planPriceId && !positivePriceIds.includes(planPriceId))) {
+      cloudlog({ requestId: c.get('requestId'), message: 'Paid bank-transfer invoice does not match the current subscription', orgId: org.id, subscriptionId })
+      return c.json(BRES)
+    }
+    invoicePlanPriceIds = positivePriceIds
+    invoiceExtraMau = paidInvoiceExtraMau(lines, planPriceId)
+  }
+  const { status, firstPaidAt } = await persistInvoicePayment(c, stripeData.data.customer_id, subscriptionId, eventOccurredAtIso, invoicePlanPriceIds, invoiceExtraMau)
   if (status === 'missing')
     return quickError(404, 'succeeded_customer_id_not_found', 'succeeded: customer_id not found', { stripeData })
   if (status === 'skipped') {
     cloudlog({ requestId: c.get('requestId'), message: 'Paid invoice does not change the stored subscription', orgId: org.id, subscriptionId, storedSubscriptionId: customer.subscription_id, storedStatus: customer.status })
     return c.json(BRES)
   }
+
+  // Sync can zero extra MAU while the first invoice is unpaid. Restore it once that invoice is paid.
+  if (stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded')
+    await applyBankTransferPlanAfterPayment(c, org, customer, subscriptionId, eventOccurredAtIso, stripeEvent.data.object)
 
   cloudlog({ requestId: c.get('requestId'), message: 'Paid subscription invoice granted paid access', orgId: org.id, subscriptionId })
   const plans = await getBillingPlans(c)
@@ -2204,6 +2340,16 @@ async function handleActiveSubscriptionUpdate(
   const eventOccurredAtIso = new Date(stripeEvent.created * 1000).toISOString()
   if (originalStatus)
     stripeData.data.status = resolveActiveSubscriptionStatus(originalStatus, customer, stripeData.data.subscription_id, payment)
+  // The Stripe subscription already has the new price. Keep the stored plan until the invoice is paid.
+  if (payment === 'bank_transfer_due') {
+    stripeData.data.product_id = customer.product_id
+    stripeData.data.price_id = customer.price_id ?? undefined
+    stripeData.data.extra_mau = customer.extra_mau ?? 0
+    if (customer.subscription_anchor_start)
+      stripeData.data.subscription_anchor_start = customer.subscription_anchor_start
+    if (customer.subscription_anchor_end)
+      stripeData.data.subscription_anchor_end = customer.subscription_anchor_end
+  }
   const createdOrUpdatedResponse = await createdOrUpdated(c, stripeData, org, customer, eventOccurredAtIso, originalStatus)
   if (createdOrUpdatedResponse)
     return createdOrUpdatedResponse
@@ -2359,8 +2505,33 @@ async function handleCanceledSubscriptionStripeEvent(
   const neverPaidTrialPlan = gracePeriodEligible
     && (stripeEvent.type === 'customer.subscription.deleted' || stripeEvent.type === 'customer.subscription.updated')
     && await isTrialPlanFirstInvoiceUnpaid(getStripe(c, getWebhookBillingAccount(c)), stripeEvent.data.object)
-  if (gracePeriodEligible && !neverPaidTrialPlan && stripeData.data.subscription_anchor_end && new Date(stripeData.data.subscription_anchor_end) > new Date()) {
+  let paidThrough = stripeData.data.subscription_anchor_end
+  if (stripeEvent.type === 'customer.subscription.deleted' || stripeEvent.type === 'customer.subscription.updated') {
+    const subscription = stripeEvent.data.object
+    const previouslyPaid = customer.status === 'succeeded' && customer.subscription_id === subscription.id
+    if (isSelfServeBankTransfer(subscription.metadata) && previouslyPaid) {
+      const latest = subscription.latest_invoice
+      const invoice = latest && typeof latest !== 'string'
+        ? latest
+        : typeof latest === 'string'
+          ? await getStripe(c, getWebhookBillingAccount(c)).invoices.retrieve(latest)
+          : null
+      if (canceledBankTransferKeepsStoredPlan(true, true, invoice?.status === 'paid')) {
+        stripeData.data.product_id = customer.product_id
+        stripeData.data.price_id = customer.price_id ?? undefined
+        stripeData.data.extra_mau = customer.extra_mau ?? 0
+        if (customer.subscription_anchor_start)
+          stripeData.data.subscription_anchor_start = customer.subscription_anchor_start
+        if (customer.subscription_anchor_end) {
+          paidThrough = customer.subscription_anchor_end
+          stripeData.data.subscription_anchor_end = customer.subscription_anchor_end
+        }
+      }
+    }
+  }
+  if (gracePeriodEligible && !neverPaidTrialPlan && paidThrough && new Date(paidThrough) > new Date()) {
     stripeData.data.status = 'succeeded'
+    stripeData.data.subscription_anchor_end = paidThrough
   }
   const updateData = toStripeInfoUpdate(stripeData.data)
   const revenuePlans = await getRevenuePlans(c)
@@ -2404,9 +2575,10 @@ async function handleCanceledSubscriptionStripeEvent(
 /**
  * Whether an active subscription event proves the org paid. Stripe marks a
  * subscription `active` while an ACH debit is still processing, so the latest
- * invoice decides. Stripe-managed trials and invoiced (send_invoice) customers
- * keep access without a payment, as before. Only orgs without a confirmed
- * payment hit Stripe: renewals of a paid subscription skip the lookup.
+ * invoice decides. Stripe-managed trials and manually invoiced customers
+ * keep access without a payment, as before. A yearly bank transfer started
+ * from the plans page waits until that invoice is paid. Only orgs without a
+ * confirmed payment hit Stripe: renewals of a paid subscription skip the lookup.
  */
 async function getSubscriptionPaymentState(
   c: Context<MiddlewareKeyVariablesStripe>,
@@ -2420,13 +2592,17 @@ async function getSubscriptionPaymentState(
   if (stripeEvent.type !== 'customer.subscription.created' && stripeEvent.type !== 'customer.subscription.updated')
     return 'unpaid'
   const isPastDue = stripeData.data.status === 'past_due'
-  // Dunning of an org that paid before keeps its grace period.
-  if (isPastDue && (customer.paid_at || customer.status === 'succeeded'))
-    return 'unpaid'
-  if (!isPastDue && isPaidSubscriptionUpdate(customer, stripeData.data.subscription_id))
-    return 'paid'
   const subscription = stripeEvent.data.object
-  if (!isPastDue && (subscription.status === 'trialing' || subscription.collection_method === 'send_invoice'))
+  const selfServeBankTransfer = isSelfServeBankTransfer(subscription.metadata)
+  // Dunning of an org that paid before keeps its grace period.
+  // A bank-transfer upgrade must not take that shortcut: past_due would store the unpaid plan.
+  if (isPastDue && (customer.paid_at || customer.status === 'succeeded') && !selfServeBankTransfer)
+    return 'unpaid'
+  // A reused bank-transfer subscription can already be paid. Do not treat that as
+  // proof the new plan's invoice is paid.
+  if (!isPastDue && isPaidSubscriptionUpdate(customer, stripeData.data.subscription_id) && !selfServeBankTransfer)
+    return 'paid'
+  if (!isPastDue && invoicedSubscriptionGrantsAccessBeforePayment(subscription))
     return 'paid'
   const invoiceId = typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : subscription.latest_invoice?.id
   if (!invoiceId)
@@ -2438,7 +2614,12 @@ async function getSubscriptionPaymentState(
   const paymentIntent = invoice.status === 'open' && invoice.id
     ? await getSubscriptionInvoicePaymentIntent(stripe, invoice.id)
     : null
-  return subscriptionInvoicePaymentStateFromInvoice(invoice, paymentIntent?.status ?? null)
+  const state = subscriptionInvoicePaymentStateFromInvoice(invoice, paymentIntent?.status ?? null)
+  return bankTransferPaymentState(
+    selfServeBankTransfer,
+    state,
+    isPaidSubscriptionUpdate(customer, stripeData.data.subscription_id),
+  )
 }
 
 // The trial plan subscription only converts the org once its first invoice is paid.
@@ -2634,6 +2815,7 @@ export const stripeEventTestUtils = {
   shouldReplaceOrgManagementEmail,
   shouldTrackOrganizationUpgrade,
   isTransferInvoice,
+  invoicedSubscriptionGrantsAccessBeforePayment,
   shouldStampTransferInvoiceFooter,
   buildTransferInvoiceFooter,
   getTransferInvoiceFooterUpdate,

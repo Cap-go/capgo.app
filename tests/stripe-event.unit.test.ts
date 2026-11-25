@@ -293,7 +293,7 @@ describe('enterprise extra MAU item', () => {
 describe('transfer invoice footer helpers', () => {
   it.concurrent.each([
     ['send_invoice', ['card'], true],
-    ['charge_automatically', ['us_bank_account'], true],
+    ['charge_automatically', ['us_bank_account'], false],
     ['charge_automatically', ['card'], false],
     ...['ach_debit', 'sepa_debit', 'acss_debit', 'bacs_debit', 'au_becs_debit'].map(type => ['charge_automatically', [type], false] as const),
   ] as const)('classifies %s with %j as transfer=%s', (collectionMethod, paymentMethodTypes, expected) => {

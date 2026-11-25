@@ -776,6 +776,95 @@ describe('stripe redirect URL allowlist', () => {
     })
   })
 
+  it('expires an open card checkout before creating a bank-transfer subscription', async () => {
+    const expire = vi.fn().mockResolvedValue({ id: 'cs_open' })
+    const create = vi.fn().mockResolvedValue({
+      id: 'sub_bank',
+      latest_invoice: {
+        id: 'in_bank',
+        status: 'open',
+        amount_due: 12000,
+        hosted_invoice_url: 'https://pay.stripe.com/invoice/in_bank',
+        collection_method: 'send_invoice',
+      },
+      metadata: {},
+    })
+    const stripeClient = {
+      prices: {
+        list: vi.fn().mockResolvedValue({ data: createPriceList('year') }),
+        retrieve: subscriptionCheckoutMocks(null, { usd: { unit_amount: 1400 } }).retrievePrice,
+      },
+      customers: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: 'cus_123',
+          email: 'billing@example.com',
+          currency: 'usd',
+          address: { country: 'FR' },
+          deleted: false,
+        }),
+      },
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }), create },
+      subscriptionSchedules: { list: vi.fn().mockResolvedValue({ data: [] }) },
+      checkout: {
+        sessions: {
+          list: vi.fn().mockResolvedValue({
+            data: [
+              { id: 'cs_plan', mode: 'subscription' },
+              { id: 'cs_credits', mode: 'payment' },
+            ],
+            has_more: false,
+          }),
+          expire,
+        },
+      },
+    } as any
+    vi.mocked(Stripe).mockImplementation(function () {
+      return stripeClient
+    } as any)
+
+    const { createBankTransferSubscription } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const result = await createBankTransferSubscription(createContext(), 'cus_123', 'prod_test')
+
+    expect(result).toEqual({ url: 'https://pay.stripe.com/invoice/in_bank', bankTransfer: 'invoice' })
+    expect(expire).toHaveBeenCalledTimes(1)
+    expect(expire).toHaveBeenCalledWith('cs_plan', {}, expect.anything())
+    expect(expire.mock.invocationCallOrder[0]).toBeLessThan(create.mock.invocationCallOrder[0])
+  })
+
+  it('does not create a bank-transfer subscription when the open card checkout already completed', async () => {
+    const create = vi.fn()
+    const stripeClient = {
+      prices: {
+        list: vi.fn().mockResolvedValue({ data: createPriceList('year') }),
+        retrieve: subscriptionCheckoutMocks(null, { usd: { unit_amount: 1400 } }).retrievePrice,
+      },
+      customers: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: 'cus_123',
+          email: 'billing@example.com',
+          currency: 'usd',
+          address: { country: 'FR' },
+          deleted: false,
+        }),
+      },
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }), create },
+      subscriptionSchedules: { list: vi.fn().mockResolvedValue({ data: [] }) },
+      checkout: {
+        sessions: {
+          list: vi.fn().mockResolvedValue({ data: [{ id: 'cs_open', mode: 'subscription' }], has_more: false }),
+          expire: vi.fn().mockRejectedValue(new Error('already completed')),
+        },
+      },
+    } as any
+    vi.mocked(Stripe).mockImplementation(function () {
+      return stripeClient
+    } as any)
+
+    const { createBankTransferSubscription } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    await expect(createBankTransferSubscription(createContext(), 'cus_123', 'prod_test')).rejects.toThrow('already completed')
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('treats Stripe rate-limit errors as deterministic customer update failures', async () => {
     const { isDeterministicStripeCustomerUpdateError } = await import('../supabase/functions/_backend/utils/stripe.ts')
     const rateLimitError = new Stripe.errors.StripeRateLimitError({ message: 'rate limited' } as any)

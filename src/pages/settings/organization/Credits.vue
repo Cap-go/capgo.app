@@ -783,7 +783,7 @@ async function handleBuyCredits() {
     const session = await startCreditTopUp(orgId, topUpQuantity.value)
     if (session.kind === 'embedded')
       embeddedCheckout.value = session
-    else
+    else if (session.kind === 'hosted')
       globalThis.location.href = session.url
   }
   catch (error) {

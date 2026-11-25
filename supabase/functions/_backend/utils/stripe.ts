@@ -1,4 +1,4 @@
-import { billingRequestOptions, withBillingProfileLock } from './billing_profile_lock.ts'
+import { billingRequestOptions, expireBillingCheckouts, withBillingProfileLock } from './billing_profile_lock.ts'
 import type { Context } from 'hono'
 import type { BillingAccount } from './stripe_billing.ts'
 import type { Database } from './supabase.types.ts'
@@ -27,6 +27,7 @@ import {
   singleRowOrNull,
   TRIAL_PLAN_SCHEDULE_METADATA_KEY,
 } from './stripe_billing.ts'
+import { BANK_TRANSFER_DAYS_UNTIL_DUE, BANK_TRANSFER_METADATA_KEY, getTransferInvoiceFooterUpdate, isBankTransferCurrency, isSelfServeBankTransfer } from './transfer_invoice.ts'
 import { getEnv, isStripeConfigured, trimTrailingSlashes } from './utils.ts'
 
 export type { BillingAccount } from './stripe_billing.ts'
@@ -252,6 +253,70 @@ function stripeTimestampToIso(seconds: number | null | undefined) {
   return seconds ? new Date(seconds * 1000).toISOString() : null
 }
 
+export function invoiceServicePeriod(lines: Array<{ amount?: number | null, period?: { start?: number | null, end?: number | null } | null }>): { start: string | null, end: string | null } {
+  let start: number | null = null
+  let end: number | null = null
+  for (const line of lines) {
+    if ((line.amount ?? 0) <= 0 || line.period?.end == null)
+      continue
+    end = end == null ? line.period.end : Math.max(end, line.period.end)
+    const lineStart = line.period.start ?? line.period.end
+    start = start == null ? lineStart : Math.min(start, lineStart)
+  }
+  return {
+    start: stripeTimestampToIso(start),
+    end: stripeTimestampToIso(end),
+  }
+}
+
+export function paidThroughNeedsUpdate(
+  stored: { start?: string | null, end?: string | null },
+  next: { start: string | null, end: string | null },
+) {
+  if (!next.end)
+    return false
+  if (!stored.end)
+    return true
+  return new Date(next.end) > new Date(stored.end)
+}
+
+// Compare against the locked row. A handler that read an older snapshot must not move the boundary backward.
+export function paidThroughWrite(
+  lockedEnd: string | Date | null | undefined,
+  next: { start?: string | null, end?: string | null },
+): { subscription_anchor_start?: string, subscription_anchor_end?: string } {
+  const lockedIso = lockedEnd instanceof Date ? lockedEnd.toISOString() : lockedEnd ?? null
+  if (!next.end || !paidThroughNeedsUpdate({ end: lockedIso }, { start: next.start ?? null, end: next.end }))
+    return {}
+  return {
+    ...(next.start ? { subscription_anchor_start: next.start } : {}),
+    subscription_anchor_end: next.end,
+  }
+}
+
+// A mid-cycle proration starts at the upgrade time, not the subscription anchor.
+// Keep the stored anchor and only move the paid-through end.
+export function settledPaidThrough(
+  stored: { start?: string | null, end?: string | null },
+  lines: Array<{
+    amount?: number | null
+    period?: { start?: number | null, end?: number | null } | null
+    parent?: { subscription_item_details?: { proration?: boolean } | null } | null
+  }>,
+): { start: string | null, end: string | null } | null {
+  // One-off invoice items are not the subscription period, even when they carry a later end.
+  const subscriptionLines = lines.filter(line => line.parent?.subscription_item_details)
+  const period = invoiceServicePeriod(subscriptionLines)
+  if (!paidThroughNeedsUpdate(stored, period))
+    return null
+  const positive = subscriptionLines.filter(line => (line.amount ?? 0) > 0 && line.period?.end != null)
+  const prorationOnly = positive.length > 0 && positive.every(line => line.parent?.subscription_item_details?.proration)
+  return {
+    start: prorationOnly ? (stored.start ?? period.start) : period.start,
+    end: period.end,
+  }
+}
+
 function getSubscriptionEndDate(subscription: Stripe.Subscription, item: Stripe.SubscriptionItem | null) {
   const endSeconds = subscription.ended_at
     ?? subscription.cancel_at
@@ -266,11 +331,79 @@ export type SubscriptionSyncData = {
   extraMau: number
   status: Stripe.Subscription.Status
   trialPlanFirstInvoiceUnpaid: boolean
+  selfServeBankTransfer: boolean
+  latestInvoiceStatus: string | null
   cycleStart: string | null
   cycleEnd: string | null
   canceledAt: string | null
   subscriptionId: string
   cancel_at_period_end: boolean
+}
+
+// The cron sync must not treat a live bank-transfer subscription as paid.
+// A first invoice waits. An upgrade keeps the plan the customer already paid for.
+export type BankTransferSyncAction = 'apply_live' | 'keep_stored_plan' | 'wait_for_payment'
+
+// A cancel webhook must not store the live plan while its bank-transfer invoice is unpaid.
+export function canceledBankTransferKeepsStoredPlan(selfServeBankTransfer: boolean, previouslyPaidSameSubscription: boolean, invoicePaid: boolean) {
+  return selfServeBankTransfer && previouslyPaidSameSubscription && !invoicePaid
+}
+
+export function bankTransferSyncAction(
+  subscription: { selfServeBankTransfer: boolean, status: string, latestInvoiceStatus: string | null, subscriptionId: string },
+  stored: { status: string | null, subscriptionId: string | null } | null,
+): BankTransferSyncAction {
+  if (!subscription.selfServeBankTransfer || subscription.status === 'trialing' || subscription.latestInvoiceStatus === 'paid')
+    return 'apply_live'
+  if (stored?.status === 'succeeded' && stored.subscriptionId === subscription.subscriptionId)
+    return 'keep_stored_plan'
+  return 'wait_for_payment'
+}
+
+// Cancellation grace applies only to a plan that was already paid, and only until the period ends.
+export function bankTransferSyncDbStatus(
+  action: BankTransferSyncAction,
+  subscription: { status: string },
+  liveStatus: 'succeeded' | 'failed' | 'created' | 'canceled',
+  paidThrough: string | null,
+) {
+  if (action === 'apply_live')
+    return liveStatus
+  if (action === 'wait_for_payment') {
+    if (subscription.status === 'past_due')
+      return 'failed'
+    if (subscription.status === 'canceled')
+      return 'canceled'
+    return 'created'
+  }
+  if (subscription.status !== 'canceled')
+    return 'succeeded'
+  // The live cycle can already be the next unpaid year. Grace stops at the period that was paid.
+  const cycleStillOpen = !!paidThrough && new Date(paidThrough) > new Date()
+  return cycleStillOpen ? 'succeeded' : 'canceled'
+}
+
+// Every current subscription item must be on this paid invoice. An older plan's invoice does not qualify.
+export function paidInvoiceMatchesSubscription(lines: InvoiceBillLine[], items: BilledPriceQuantity[]) {
+  const positive = lines.filter(line => line.amount > 0)
+  if (positive.length === 0 || items.length === 0)
+    return false
+  const keys = new Set(positive.map(line => billedKey(line.priceId, line.quantity)))
+  return items.every(item => keys.has(billedKey(item.priceId, item.quantity)))
+}
+
+// Checked on the locked stripe_info row. A plan written after the invoice was read must not become paid.
+export function storedPlanConflictsWithPaidInvoice(storedPriceId: string | null | undefined, invoicePriceIds: readonly string[] | undefined) {
+  if (!invoicePriceIds || !storedPriceId)
+    return false
+  return !invoicePriceIds.includes(storedPriceId)
+}
+
+// Lines that are not the plan price are the extra-MAU packs on a bank-transfer invoice.
+export function paidInvoiceExtraMau(lines: Array<{ amount: number, priceId: string, quantity: number }>, planPriceId: string | null | undefined) {
+  return lines
+    .filter(line => line.amount > 0 && line.priceId !== planPriceId)
+    .reduce((total, line) => total + line.quantity, 0) * EXTRA_MAU_UNIT
 }
 
 export type SubscriptionLookupResult =
@@ -332,6 +465,8 @@ function subscriptionDataFromStripeSubscription(c: Context, subscription: Stripe
     extraMau: getExtraMau(subscription.items.data),
     status: subscription.status,
     trialPlanFirstInvoiceUnpaid,
+    selfServeBankTransfer: isSelfServeBankTransfer(subscription.metadata),
+    latestInvoiceStatus: latestInvoice?.status ?? null,
     cycleStart,
     cycleEnd,
     canceledAt,
@@ -514,11 +649,11 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
       }
     }
 
-    let currentStripeInfo: { status: string | null, past_due_at: string | null } | null
+    let currentStripeInfo: { status: string | null, past_due_at: string | null, subscription_id: string | null, subscription_anchor_end: string | null } | null
     try {
-      currentStripeInfo = await withRlsContext(c, servicePrincipal, async client => singleRowOrNull(await queryJson<{ status: string | null, past_due_at: string | null }>(
+      currentStripeInfo = await withRlsContext(c, servicePrincipal, async client => singleRowOrNull(await queryJson<{ status: string | null, past_due_at: string | null, subscription_id: string | null, subscription_anchor_end: string | null }>(
         client,
-        'SELECT status, past_due_at FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+        'SELECT status, past_due_at, subscription_id, subscription_anchor_end FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
         [customerId],
       )))
     }
@@ -528,6 +663,13 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
     }
 
     const hadPastDueState = !!currentStripeInfo?.past_due_at
+    const bankTransferAction = subscriptionData
+      ? bankTransferSyncAction(subscriptionData, currentStripeInfo
+          ? { status: currentStripeInfo.status, subscriptionId: currentStripeInfo.subscription_id }
+          : null)
+      : 'apply_live'
+    if (bankTransferAction !== 'apply_live' && subscriptionData)
+      dbStatus = bankTransferSyncDbStatus(bankTransferAction, subscriptionData, dbStatus, currentStripeInfo?.subscription_anchor_end ?? null)
 
     // Update stripe_info table with latest data, even if no subscription exists
     const updateData: any = {
@@ -544,22 +686,23 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
     }
 
     // Only include fields if they have valid values to avoid foreign key constraint violations
-    if (subscriptionData?.productId) {
+    if (subscriptionData?.productId && bankTransferAction !== 'keep_stored_plan') {
       updateData.product_id = subscriptionData.productId
     }
     if (subscriptionData?.subscriptionId) {
       updateData.subscription_id = subscriptionData.subscriptionId
     }
-    if (subscriptionData?.cycleStart) {
+    // An unpaid bank-transfer invoice must not move the paid-through date forward.
+    if (bankTransferAction === 'apply_live' && subscriptionData?.cycleStart)
       updateData.subscription_anchor_start = subscriptionData.cycleStart
-    }
-    if (subscriptionData?.cycleEnd) {
+    if (bankTransferAction === 'apply_live' && subscriptionData?.cycleEnd)
       updateData.subscription_anchor_end = subscriptionData.cycleEnd
-    }
     if (subscriptionData)
       updateData.canceled_at = subscriptionData.canceledAt ?? null
     // Extra MAU only counts while the subscription that bought it is live.
-    updateData.extra_mau = dbStatus === 'succeeded' ? subscriptionData?.extraMau ?? 0 : 0
+    // An unpaid bank-transfer upgrade keeps the quota already stored.
+    if (bankTransferAction !== 'keep_stored_plan')
+      updateData.extra_mau = dbStatus === 'succeeded' ? subscriptionData?.extraMau ?? 0 : 0
 
     try {
       await withRlsContext(c, servicePrincipal, client => updateStripeInfoByCustomer(client, customerId, updateData))
@@ -885,6 +1028,21 @@ export async function isOpenSubscriptionInvoicePaymentProcessing(stripe: Stripe,
 /** Open invoice with an in-flight renewal payment is pending, not overdue. */
 export function shouldBlockPastDueForProcessingPayment(paymentProcessing: boolean) {
   return paymentProcessing
+}
+
+// A plan change replaces the first bank-transfer invoice with billing_reason
+// subscription_update. Only a payment for this subscription counts. An older
+// canceled subscription's paid_at must not open access.
+export function bankTransferPaymentState(
+  selfServeBankTransfer: boolean,
+  invoiceState: 'paid' | 'unpaid' | 'first_invoice_unpaid',
+  alreadyPaidThisSubscription: boolean,
+): 'paid' | 'unpaid' | 'first_invoice_unpaid' | 'bank_transfer_due' {
+  if (!selfServeBankTransfer || invoiceState === 'paid')
+    return invoiceState
+  if (alreadyPaidThisSubscription)
+    return 'bank_transfer_due'
+  return 'first_invoice_unpaid'
 }
 
 export function subscriptionInvoicePaymentStateFromInvoice(
@@ -1224,11 +1382,13 @@ export interface ExtraMauCheckout {
 }
 
 // Embedded sessions render inside Capgo; url is only set for the hosted fallback.
+// bankTransfer is set when the yearly plan is invoiced instead of charged to a card.
 export interface CheckoutSessionResult {
   url: string | null
   clientSecret?: string | null
   publishableKey?: string
   sessionId?: string
+  bankTransfer?: 'invoice' | 'renewal'
 }
 
 // The emulator only serves hosted pages, and Stripe.js needs the account's publishable key.
@@ -1280,44 +1440,287 @@ export interface CheckoutOptions {
   standardPrice?: boolean
 }
 
-export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, options: CheckoutOptions = {}): Promise<CheckoutSessionResult> {
-  const { clientReferenceId, attributionId, datafastAttribution, affonsoReferral, extraMau, embedded } = options
+interface CheckoutPrice {
+  priceId: string
+  price: Stripe.Price
+  amounts: Record<string, number>
+  currencies: string[]
+}
+
+interface CheckoutQuote {
+  customerBilling: Awaited<ReturnType<typeof getCustomerBilling>>
+  checkoutPrice: CheckoutPrice
+  loadPlanPrice: (tier: PriceTier) => Promise<CheckoutPrice>
+  checkoutCurrency: string | undefined
+  lineItems: { price: string, quantity: number }[]
+  planPrice: Stripe.Price
+}
+
+const OPEN_SUBSCRIPTION_STATUSES = new Set<Stripe.Subscription.Status>(['active', 'trialing', 'past_due', 'incomplete'])
+const BANK_TRANSFER_REUSE_STATUSES = ['active', 'past_due', 'trialing'] as const
+
+export function pickBankTransferSubscription<T extends { status: string }>(subscriptions: T[]): T | null {
+  for (const status of BANK_TRANSFER_REUSE_STATUSES) {
+    const found = subscriptions.find(subscription => subscription.status === status)
+    if (found)
+      return found
+  }
+  return null
+}
+
+interface BankTransferExistingItem {
+  id: string
+  quantity?: number | null
+  price?: { id?: string, metadata?: Stripe.Metadata | null, lookup_key?: string | null } | null
+}
+
+export function buildBankTransferItems(
+  existingItems: BankTransferExistingItem[] | null,
+  lineItems: { price: string, quantity: number }[],
+): { items: Stripe.SubscriptionUpdateParams.Item[], changed: boolean } {
+  const planLine = lineItems[0]
+  const extraLine = lineItems[1]
+  if (!planLine)
+    throw new Error('Cannot bill a plan without a price')
+  if (!existingItems?.length) {
+    return {
+      items: lineItems.map(item => ({ price: item.price, quantity: item.quantity })),
+      changed: true,
+    }
+  }
+
+  const extras = existingItems.filter(item => item.price && isExtraMauItem({ price: item.price as Stripe.Price }))
+  const planItem = existingItems.find(item => !extras.includes(item))
+  const items: Stripe.SubscriptionUpdateParams.Item[] = []
+  if (planItem)
+    items.push({ id: planItem.id, price: planLine.price, quantity: planLine.quantity })
+  else
+    items.push({ price: planLine.price, quantity: planLine.quantity })
+
+  if (extraLine) {
+    if (extras[0])
+      items.push({ id: extras[0].id, price: extraLine.price, quantity: extraLine.quantity })
+    else
+      items.push({ price: extraLine.price, quantity: extraLine.quantity })
+    for (const leftover of extras.slice(1))
+      items.push({ id: leftover.id, deleted: true })
+  }
+  else {
+    for (const leftover of extras)
+      items.push({ id: leftover.id, deleted: true })
+  }
+
+  const changed = items.some((item) => {
+    if (item.deleted || !item.id)
+      return true
+    const previous = existingItems.find(existing => existing.id === item.id)
+    return !previous || previous.price?.id !== item.price || (previous.quantity ?? 1) !== item.quantity
+  })
+  return { items, changed }
+}
+
+export function invoiceAwaitingPayment(status: string | null | undefined) {
+  return status === 'draft' || status === 'open' || status === 'uncollectible'
+}
+
+export function invoiceAcceptsBankTransfer(invoice: { collection_method?: string | null, payment_settings?: { payment_method_types?: string[] | null } | null }) {
+  const types = invoice.payment_settings?.payment_method_types ?? []
+  const offersTransfer = types.includes('customer_balance') || types.includes('ach_credit_transfer')
+  return invoice.collection_method === 'send_invoice' && offersTransfer
+}
+
+// Same plan, but the open invoice can only be paid by card. Subscription payment
+// settings do not rewrite that invoice, so it has to be replaced.
+export function shouldReissueUnpaidCardInvoice(unpaid: boolean, itemsChanged: boolean, acceptsBankTransfer: boolean) {
+  return unpaid && !itemsChanged && !acceptsBankTransfer
+}
+
+// The grant stays behind a settling invoice. A retry whose write already committed only needs the sync.
+export function bankTransferAfterPaymentAction(settles: boolean, planAlreadyStored: boolean, periodAdvances: boolean) {
+  if (!settles && !planAlreadyStored)
+    return 'ignore' as const
+  if (!settles || (planAlreadyStored && !periodAdvances))
+    return 'sync' as const
+  return 'write' as const
+}
+
+// A null stored subscription is the first invoice. A different id belongs to a newer subscription.
+export function bankTransferSubscriptionStillCurrent(lockedSubscriptionId: string | null | undefined, invoiceSubscriptionId: string) {
+  return !lockedSubscriptionId || lockedSubscriptionId === invoiceSubscriptionId
+}
+
+export function bankTransferPlanAlreadyStored(
+  stored: { productId?: string | null, priceId?: string | null, extraMau?: number | null },
+  next: { productId?: string | null, priceId?: string | null, extraMau?: number | null },
+) {
+  if (!next.productId)
+    return true
+  return next.productId === stored.productId
+    && (next.priceId ?? null) === (stored.priceId ?? null)
+    && (next.extraMau ?? 0) === (stored.extraMau ?? 0)
+}
+
+export interface BilledPriceQuantity {
+  priceId: string
+  quantity: number
+  extra: boolean
+}
+
+export interface InvoiceBillLine extends BilledPriceQuantity {
+  amount: number
+  proration: boolean
+}
+
+function billedKey(priceId: string, quantity: number) {
+  return `${priceId}\0${quantity}`
+}
+
+// The paid invoice must bill the subscription's current prices and quantities.
+// A later unpaid plan change keeps different lines, so the older payment must not grant it.
+export function bankTransferInvoiceCoversSubscription(invoiceLines: BilledPriceQuantity[], subscriptionItems: BilledPriceQuantity[]) {
+  if (invoiceLines.length === 0 || invoiceLines.length !== subscriptionItems.length)
+    return false
+  const compare = (left: string, right: string) => left.localeCompare(right)
+  const invoiceKeys = invoiceLines.map(line => billedKey(line.priceId, line.quantity)).sort(compare)
+  const subscriptionKeys = subscriptionItems.map(line => billedKey(line.priceId, line.quantity)).sort(compare)
+  return invoiceKeys.every((key, index) => key === subscriptionKeys[index])
+}
+
+// A paid mid-cycle upgrade is a proration invoice: a credit for the old item and a debit
+// for the new one. Debit quantity is the subscription quantity being purchased.
+export function bankTransferInvoiceSettlesUpgrade(
+  lines: InvoiceBillLine[],
+  subscriptionItems: BilledPriceQuantity[],
+  stored: { priceId?: string | null, extraMau?: number | null },
+) {
+  const plan = subscriptionItems.find(item => !item.extra)
+  if (!plan)
+    return false
+  const debits = new Set(lines.filter(line => line.amount > 0).map(line => billedKey(line.priceId, line.quantity)))
+  const extraItems = subscriptionItems.filter(item => item.extra)
+  const nextExtra = extraItems.reduce((total, item) => total + item.quantity, 0) * EXTRA_MAU_UNIT
+  const storedExtra = stored.extraMau ?? 0
+  const priceChanged = plan.priceId !== (stored.priceId ?? null)
+  const extraChanged = nextExtra !== storedExtra
+  // Same prices are not proof this invoice covers them. An older invoice must not settle the renewal.
+  if (!priceChanged && !extraChanged)
+    return paidInvoiceMatchesSubscription(lines, subscriptionItems)
+  if (priceChanged && !debits.has(billedKey(plan.priceId, plan.quantity)))
+    return false
+  if (extraChanged && nextExtra > 0 && extraItems.some(item => !debits.has(billedKey(item.priceId, item.quantity))))
+    return false
+  if (nextExtra < storedExtra) {
+    const fullCycle = lines.filter(line => !line.proration && line.amount > 0)
+    if (bankTransferInvoiceCoversSubscription(fullCycle, subscriptionItems))
+      return true
+    const credited = lines.some(line => line.amount < 0 && line.proration && line.priceId !== plan.priceId && line.quantity * EXTRA_MAU_UNIT === storedExtra)
+    if (!credited)
+      return false
+  }
+  return true
+}
+
+export function subscriptionItemPriceQuantities(items: Array<{ price?: (TaggedPrice & { id?: string | null }) | null, quantity?: number | null }>): BilledPriceQuantity[] {
+  return items.flatMap((item) => {
+    if (!item.price?.id)
+      return []
+    return [{ priceId: item.price.id, quantity: item.quantity ?? 1, extra: isExtraMauPrice(item.price) }]
+  })
+}
+
+export function invoiceBillLines(lines: Array<{
+  amount?: number | null
+  quantity?: number | null
+  pricing?: { price_details?: { price?: string | { id?: string | null } | null } | null } | null
+  parent?: {
+    subscription_item_details?: { proration?: boolean } | null
+    invoice_item_details?: { proration?: boolean } | null
+  } | null
+}>): InvoiceBillLine[] {
+  return lines.flatMap((line) => {
+    const details = line.parent?.subscription_item_details
+    if (!details)
+      return []
+    const price = line.pricing?.price_details?.price
+    const priceId = typeof price === 'string' ? price : price?.id
+    if (!priceId)
+      return []
+    return [{ priceId, quantity: line.quantity ?? 1, amount: line.amount ?? 0, proration: !!details.proration, extra: false }]
+  })
+}
+
+export function invoiceLinePriceQuantities(lines: Parameters<typeof invoiceBillLines>[0]): BilledPriceQuantity[] {
+  return invoiceBillLines(lines).filter(line => !line.proration).map(({ priceId, quantity, extra }) => ({ priceId, quantity, extra }))
+}
+
+// An unpaid invoice must not be credited as unused time. That credit can zero out a
+// downgrade and look like a paid invoice while the original bill is still open.
+export function bankTransferProration(status: string, itemsChanged: boolean, unpaidInvoice = false): Stripe.SubscriptionUpdateParams.ProrationBehavior {
+  if (unpaidInvoice)
+    return 'none'
+  if (status === 'trialing' || itemsChanged)
+    return 'always_invoice'
+  return 'none'
+}
+
+// A plan change on an unpaid period starts a new cycle at the full price.
+export function bankTransferResetsUnpaidCycle(status: string, itemsChanged: boolean, unpaidInvoice: boolean) {
+  return unpaidInvoice && itemsChanged && status !== 'trialing'
+}
+
+export function bankTransferResumeUpdate(subscription: { cancel_at_period_end?: boolean | null, cancel_at?: number | null }): Pick<Stripe.SubscriptionUpdateParams, 'cancel_at' | 'cancel_at_period_end' | 'cancellation_details'> | Record<string, never> {
+  if (!subscription.cancel_at_period_end && typeof subscription.cancel_at !== 'number')
+    return {}
+  return {
+    cancel_at: '',
+    cancel_at_period_end: false,
+    cancellation_details: { feedback: '', comment: '' },
+  }
+}
+
+async function loadCheckoutQuote(c: Context, billingAccount: BillingAccount, customerId: string, recurrence: string, planId: string, options: CheckoutOptions): Promise<CheckoutQuote> {
   const requestedCurrency = options.currency?.trim().toLowerCase() || undefined
+  const resolvedPlanId = await resolveCheckoutPlanProductId(c, planId, billingAccount)
+  // Same tier as the Plans page: the most expensive of the visitor, billing address and saved card countries.
+  const customerBilling = await getCustomerBilling(getStripe(c, billingAccount), customerId)
+  const countries = [getRequestCountry(c), ...customerBilling.countries]
+  const loadPlanPrice = async (tier: PriceTier) => {
+    const prices = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount, tier)
+    cloudlog({ requestId: c.get('requestId'), message: 'prices', prices, billingAccount, resolvedPlanId, tier })
+    if (!prices.priceId)
+      throw new Error('Cannot find price')
+    const price = await getStripe(c, billingAccount).prices.retrieve(prices.priceId, { expand: ['currency_options'] })
+    const amounts = getPriceCurrencyAmounts(price)
+    const currencies = Object.keys(amounts)
+    return { priceId: prices.priceId, price, amounts, currencies }
+  }
+  const tier = options.standardPrice ? FULL_PRICE_TIER : priceTierForCountries(countries)
+  let checkoutPrice = await loadPlanPrice(tier)
+  // A regional price is only sold in its region's currency: any other one buys the full price. Decided
+  // before validating the currency, which the regional price may not list while the full price does.
+  const billedCurrency = customerBilling.currency ?? requestedCurrency ?? checkoutPrice.price.currency
+  if (!isRegionalCurrency(countries, tier, billedCurrency, checkoutPrice.currencies))
+    checkoutPrice = await loadPlanPrice(FULL_PRICE_TIER)
+  const { priceId, price: planPrice, amounts: planAmounts } = checkoutPrice
+  const checkoutCurrency = resolveCheckoutCurrency(customerBilling.currency, checkoutPrice.currencies, requestedCurrency)
+  const lineItems: { price: string, quantity: number }[] = [{ price: priceId, quantity: 1 }]
+  if (options.extraMau && options.extraMau.extraMau > 0) {
+    // Same interval as the plan: Checkout bills every item of a subscription together.
+    const interval = recurrence === 'year' ? 'year' : 'month'
+    const extraMauPriceId = await getExtraMauPriceId(c, options.extraMau.includedMau, interval, planPrice.tax_behavior ?? null, billingAccount, getCurrencyRatios(planAmounts))
+    lineItems.push({ price: extraMauPriceId, quantity: options.extraMau.extraMau / EXTRA_MAU_UNIT })
+  }
+  return { customerBilling, checkoutPrice, loadPlanPrice, checkoutCurrency, lineItems, planPrice }
+}
+
+export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, options: CheckoutOptions = {}): Promise<CheckoutSessionResult> {
+  const { clientReferenceId, attributionId, datafastAttribution, affonsoReferral, embedded } = options
   const billingAccount = await getBillingAccountForCustomer(c, customerId)
   assertBillingAccountReachableForUser(c, billingAccount, customerId)
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return { url: '' }
   return withBillingProfileLock(c, billingAccount, customerId, async (assertHeld) => {
-    const resolvedPlanId = await resolveCheckoutPlanProductId(c, planId, billingAccount)
-    // Same tier as the Plans page: the most expensive of the visitor, billing address and saved card countries.
-    const customerBilling = await getCustomerBilling(getStripe(c, billingAccount), customerId)
-    const countries = [getRequestCountry(c), ...customerBilling.countries]
-    const loadPlanPrice = async (tier: PriceTier) => {
-      const prices = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount, tier)
-      cloudlog({ requestId: c.get('requestId'), message: 'prices', prices, billingAccount, resolvedPlanId, tier })
-      if (!prices.priceId)
-        throw new Error('Cannot find price')
-      const price = await getStripe(c, billingAccount).prices.retrieve(prices.priceId, { expand: ['currency_options'] })
-      const amounts = getPriceCurrencyAmounts(price)
-      const currencies = Object.keys(amounts)
-      return { priceId: prices.priceId, price, amounts, currencies }
-    }
-    const tier = options.standardPrice ? FULL_PRICE_TIER : priceTierForCountries(countries)
-    let checkoutPrice = await loadPlanPrice(tier)
-    // A regional price is only sold in its region's currency: any other one buys the full price. Decided
-    // before validating the currency, which the regional price may not list while the full price does.
-    const billedCurrency = customerBilling.currency ?? requestedCurrency ?? checkoutPrice.price.currency
-    if (!isRegionalCurrency(countries, tier, billedCurrency, checkoutPrice.currencies))
-      checkoutPrice = await loadPlanPrice(FULL_PRICE_TIER)
-    const { priceId, price: planPrice, amounts: planAmounts } = checkoutPrice
-    const checkoutCurrency = resolveCheckoutCurrency(customerBilling.currency, checkoutPrice.currencies, requestedCurrency)
-    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: priceId, quantity: 1 }]
-    if (extraMau && extraMau.extraMau > 0) {
-      // Same interval as the plan: Checkout bills every item of a subscription together.
-      const interval = recurrence === 'year' ? 'year' : 'month'
-      const extraMauPriceId = await getExtraMauPriceId(c, extraMau.includedMau, interval, planPrice.tax_behavior ?? null, billingAccount, getCurrencyRatios(planAmounts))
-      lineItems.push({ price: extraMauPriceId, quantity: extraMau.extraMau / EXTRA_MAU_UNIT })
-    }
+    const quote = await loadCheckoutQuote(c, billingAccount, customerId, recurrence, planId, options)
     const metadata = {
       ...(attributionId ? { attribution_id: attributionId } : {}),
       ...getDatafastAttributionMetadata(datafastAttribution),
@@ -1330,7 +1733,7 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
     const session = await getStripe(c, billingAccount).checkout.sessions.create({
       allow_promotion_codes: true,
       // A regional discount needs a billing address: the webhook checks it and the card against the region.
-      billing_address_collection: getPriceTier(planPrice) === FULL_PRICE_TIER ? 'auto' : 'required',
+      billing_address_collection: getPriceTier(quote.planPrice) === FULL_PRICE_TIER ? 'auto' : 'required',
       mode: 'subscription',
       customer: customerId,
       ...getCheckoutRedirectParams(publishableKey, `${allowedSuccessUrl}?success=true`, allowedCancelUrl),
@@ -1343,18 +1746,229 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
       },
       tax_id_collection: { enabled: true },
       saved_payment_method_options: CHECKOUT_SAVED_PAYMENT_METHOD_OPTIONS,
-      line_items: lineItems,
-      ...(checkoutCurrency ? { currency: checkoutCurrency } : {}),
+      line_items: quote.lineItems,
+      ...(quote.checkoutCurrency ? { currency: quote.checkoutCurrency } : {}),
     }, billingRequestOptions).catch(async (error: unknown) => {
       if (!isCheckoutAmountLimit(error))
         throw error
-      const full = getPriceTier(checkoutPrice.price) === FULL_PRICE_TIER ? checkoutPrice : await loadPlanPrice(FULL_PRICE_TIER)
+      const full = getPriceTier(quote.checkoutPrice.price) === FULL_PRICE_TIER ? quote.checkoutPrice : await quote.loadPlanPrice(FULL_PRICE_TIER)
       throw simpleError('checkout_amount_limit', 'This total exceeds Stripe’s payment limit for this currency.', {
-        currency: checkoutCurrency ?? checkoutPrice.price.currency,
-        canSwitchToUsd: !customerBilling.currency && full.currencies.includes('usd') && checkoutCurrency !== 'usd',
+        currency: quote.checkoutCurrency ?? quote.checkoutPrice.price.currency,
+        canSwitchToUsd: !quote.customerBilling.currency && full.currencies.includes('usd') && quote.checkoutCurrency !== 'usd',
       })
     })
     return toCheckoutSessionResult(session, publishableKey)
+  })
+}
+
+function checkoutMetadata(options: CheckoutOptions) {
+  return {
+    ...(options.attributionId ? { attribution_id: options.attributionId } : {}),
+    ...getDatafastAttributionMetadata(options.datafastAttribution),
+    ...getAffonsoReferralMetadata(options.affonsoReferral),
+    [BANK_TRANSFER_METADATA_KEY]: '1',
+  }
+}
+
+function assertBankTransferCustomer(customer: Stripe.Customer | Stripe.DeletedCustomer) {
+  if (customer.deleted)
+    throw simpleError('no_customer', 'No customer')
+  if (!customer.email)
+    throw simpleError('billing_email_required', 'Add a billing email before paying by bank transfer')
+  if (!customer.address?.country)
+    throw simpleError('billing_address_required', 'Add a billing address before paying by bank transfer')
+}
+
+function mapBankTransferStripeError(error: unknown): never {
+  if (error instanceof Stripe.errors.StripeInvalidRequestError) {
+    const message = error.message.toLowerCase()
+    if (error.code === 'customer_tax_location_invalid' || message.includes('customer location') || message.includes('billing address'))
+      throw simpleError('billing_address_required', 'Add a billing address before paying by bank transfer', {}, error)
+    if (message.includes('customer_balance') || message.includes('payment method') || error.code === 'payment_method_unactivated')
+      throw simpleError('bank_transfer_unavailable', 'Bank transfer is not available for this currency', { code: error.code }, error)
+    if (message.includes('schedule'))
+      throw simpleError('bank_transfer_schedule', 'Cancel the scheduled plan in Billing before paying by bank transfer', {}, error)
+  }
+  throw error
+}
+
+async function cancelPendingTrialSchedules(stripe: Stripe, customerId: string) {
+  const schedules = await stripe.subscriptionSchedules.list({ customer: customerId, limit: 100 }, billingRequestOptions)
+  await Promise.all(schedules.data.map(async (schedule) => {
+    if (schedule.status !== 'not_started' || schedule.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] !== 'true')
+      return
+    await stripe.subscriptionSchedules.cancel(schedule.id, { invoice_now: false, prorate: false }, billingRequestOptions)
+  }))
+}
+
+async function releaseTrialSchedule(stripe: Stripe, subscription: Stripe.Subscription) {
+  const scheduleId = typeof subscription.schedule === 'string' ? subscription.schedule : subscription.schedule?.id
+  if (!scheduleId)
+    return
+  const schedule = await stripe.subscriptionSchedules.retrieve(scheduleId, {}, billingRequestOptions)
+  if (schedule.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] !== 'true')
+    throw simpleError('bank_transfer_schedule', 'Cancel the scheduled plan in Billing before paying by bank transfer')
+  if (schedule.status === 'active' || schedule.status === 'not_started')
+    await stripe.subscriptionSchedules.release(scheduleId, {}, billingRequestOptions)
+}
+
+async function cancelOtherOpenSubscriptions(stripe: Stripe, customerId: string, keepId: string) {
+  const listed = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 }, billingRequestOptions)
+  for (const subscription of listed.data) {
+    if (subscription.id === keepId || !OPEN_SUBSCRIPTION_STATUSES.has(subscription.status))
+      continue
+    const scheduleId = typeof subscription.schedule === 'string' ? subscription.schedule : subscription.schedule?.id
+    if (scheduleId) {
+      await stripe.subscriptionSchedules.cancel(scheduleId, { invoice_now: false, prorate: false }, billingRequestOptions)
+      continue
+    }
+    await stripe.subscriptions.cancel(subscription.id, { invoice_now: false, prorate: false }, billingRequestOptions)
+  }
+}
+
+async function latestSubscriptionInvoice(stripe: Stripe, subscription: Stripe.Subscription) {
+  const latest = subscription.latest_invoice
+  if (!latest)
+    return null
+  if (typeof latest !== 'string')
+    return latest
+  return await stripe.invoices.retrieve(latest, {}, billingRequestOptions)
+}
+
+// Drop the unpaid bill before the plan changes, so Stripe cannot credit time that was never paid.
+async function discardUnpaidInvoice(stripe: Stripe, invoice: Stripe.Invoice) {
+  if (invoice.status === 'draft') {
+    await stripe.invoices.del(invoice.id, {}, billingRequestOptions)
+    return
+  }
+  if (invoice.status === 'open' || invoice.status === 'uncollectible')
+    await stripe.invoices.voidInvoice(invoice.id, {}, billingRequestOptions)
+}
+
+// Only the invoice this checkout replaced is voided. Its id stays on the subscription
+// until the void succeeds, so a retry can finish that one invoice and leave older debts.
+const REPLACED_BANK_TRANSFER_INVOICE_METADATA_KEY = 'capgo_bank_transfer_replaces'
+
+async function retireReplacedInvoice(stripe: Stripe, subscription: Stripe.Subscription) {
+  const replacedId = subscription.metadata?.[REPLACED_BANK_TRANSFER_INVOICE_METADATA_KEY]
+  if (!replacedId)
+    return subscription
+  const latestId = typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : subscription.latest_invoice?.id
+  if (replacedId !== latestId) {
+    try {
+      const invoice = await stripe.invoices.retrieve(replacedId, {}, billingRequestOptions)
+      if (invoiceAwaitingPayment(invoice.status))
+        await discardUnpaidInvoice(stripe, invoice)
+    }
+    catch (error) {
+      if (!(error instanceof Stripe.errors.StripeInvalidRequestError) || error.code !== 'resource_missing')
+        throw error
+    }
+  }
+  return await stripe.subscriptions.update(subscription.id, {
+    metadata: { [REPLACED_BANK_TRANSFER_INVOICE_METADATA_KEY]: '' },
+    proration_behavior: 'none',
+    expand: ['latest_invoice'],
+  }, billingRequestOptions)
+}
+
+async function finalizeBankTransferInvoice(stripe: Stripe, subscription: Stripe.Subscription) {
+  const latest = subscription.latest_invoice
+  if (!latest)
+    return null
+  const invoiceId = typeof latest === 'string' ? latest : latest.id
+  let invoice = typeof latest === 'string' ? await stripe.invoices.retrieve(invoiceId, {}, billingRequestOptions) : latest
+  if (invoice.status === 'draft') {
+    const footer = getTransferInvoiceFooterUpdate(invoice)
+    if (footer)
+      await stripe.invoices.update(invoice.id, { footer }, billingRequestOptions)
+    invoice = await stripe.invoices.finalizeInvoice(invoice.id, {}, billingRequestOptions)
+  }
+  return invoice
+}
+
+function bankTransferResult(invoice: Stripe.Invoice | null): CheckoutSessionResult {
+  if (!invoice || invoice.status === 'paid' || invoice.amount_due === 0)
+    return { url: null, bankTransfer: 'renewal' }
+  if (!invoice.hosted_invoice_url)
+    throw simpleError('bank_transfer_unavailable', 'Bank transfer invoice has no payment page', { invoiceId: invoice.id, status: invoice.status })
+  return { url: invoice.hosted_invoice_url, bankTransfer: 'invoice' }
+}
+
+// Yearly plans can be paid by bank transfer. Stripe only offers that on send_invoice
+// subscriptions, so Checkout (subscription mode) cannot show it.
+export async function createBankTransferSubscription(c: Context, customerId: string, planId: string, options: CheckoutOptions = {}): Promise<CheckoutSessionResult> {
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  assertBillingAccountReachableForUser(c, billingAccount, customerId)
+  if (!isStripeConfiguredForAccount(c, billingAccount))
+    return { url: '' }
+  const stripe = getStripe(c, billingAccount)
+  return withBillingProfileLock(c, billingAccount, customerId, async (assertHeld) => {
+    const quote = await loadCheckoutQuote(c, billingAccount, customerId, 'year', planId, options)
+    const currency = (quote.checkoutCurrency ?? quote.planPrice.currency).toLowerCase()
+    if (!isBankTransferCurrency(currency))
+      throw simpleError('bank_transfer_unavailable', 'Bank transfer is not available in this currency', { currency })
+    const customer = await stripe.customers.retrieve(customerId)
+    assertBankTransferCustomer(customer)
+    await assertHeld()
+    try {
+      // A subscription Checkout still creates a second subscription when it completes.
+      // Payment sessions, such as credit top-ups, stay open.
+      await expireBillingCheckouts(stripe, customerId, assertHeld, 'subscription')
+      const listed = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 }, billingRequestOptions)
+      const open = listed.data.filter(subscription => OPEN_SUBSCRIPTION_STATUSES.has(subscription.status))
+      const reusable = pickBankTransferSubscription(open)
+      const billing = {
+        collection_method: 'send_invoice' as const,
+        days_until_due: BANK_TRANSFER_DAYS_UNTIL_DUE,
+        payment_settings: { payment_method_types: ['customer_balance' as const] },
+        automatic_tax: { enabled: isAutomaticTaxEnabled(billingAccount) },
+        metadata: checkoutMetadata(options),
+      }
+      let subscription: Stripe.Subscription
+      if (reusable) {
+        await releaseTrialSchedule(stripe, reusable)
+        const { items, changed } = buildBankTransferItems(reusable.items.data, quote.lineItems)
+        const openInvoice = await latestSubscriptionInvoice(stripe, reusable)
+        const unpaidInvoice = invoiceAwaitingPayment(openInvoice?.status) && reusable.status !== 'trialing'
+        const reissueCardInvoice = !!openInvoice && shouldReissueUnpaidCardInvoice(unpaidInvoice, changed, invoiceAcceptsBankTransfer(openInvoice))
+        const replaceUnpaidInvoice = bankTransferResetsUnpaidCycle(reusable.status, changed, unpaidInvoice) || reissueCardInvoice
+        const pendingReplaceId = reusable.metadata?.[REPLACED_BANK_TRANSFER_INVOICE_METADATA_KEY]
+        if (replaceUnpaidInvoice && openInvoice && pendingReplaceId && pendingReplaceId !== openInvoice.id)
+          await retireReplacedInvoice(stripe, reusable)
+        subscription = await stripe.subscriptions.update(reusable.id, {
+          ...billing,
+          metadata: {
+            ...billing.metadata,
+            ...(reusable.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] === 'true' ? { [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: '' } : {}),
+            ...(replaceUnpaidInvoice && openInvoice ? { [REPLACED_BANK_TRANSFER_INVOICE_METADATA_KEY]: openInvoice.id } : {}),
+          },
+          items,
+          proration_behavior: bankTransferProration(reusable.status, changed, unpaidInvoice),
+          ...(reusable.status === 'trialing' ? { trial_end: 'now' as const } : {}),
+          ...(replaceUnpaidInvoice ? { billing_cycle_anchor: 'now' as const } : {}),
+          ...bankTransferResumeUpdate(reusable),
+          expand: ['latest_invoice'],
+        }, billingRequestOptions)
+      }
+      else {
+        subscription = await stripe.subscriptions.create({
+          ...billing,
+          customer: customerId,
+          items: quote.lineItems,
+          ...(quote.checkoutCurrency ? { currency: quote.checkoutCurrency } : {}),
+          expand: ['latest_invoice'],
+        }, billingRequestOptions)
+      }
+      subscription = await retireReplacedInvoice(stripe, subscription)
+      await cancelPendingTrialSchedules(stripe, customerId)
+      await cancelOtherOpenSubscriptions(stripe, customerId, subscription.id)
+      const invoice = await finalizeBankTransferInvoice(stripe, subscription)
+      return bankTransferResult(invoice)
+    }
+    catch (error) {
+      mapBankTransferStripeError(error)
+    }
   })
 }
 

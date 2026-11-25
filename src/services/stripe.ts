@@ -14,14 +14,19 @@ interface CheckoutSessionResponse {
   clientSecret?: string | null
   publishableKey?: string
   sessionId?: string
+  bankTransfer?: 'invoice' | 'renewal'
 }
 
-// Embedded sessions mount in Capgo; hosted is only returned by the local Stripe emulator.
+// Embedded card checkout mounts in Capgo. A hosted URL is the local Stripe emulator, or a bank-transfer invoice page.
+// A yearly bank transfer either opens that invoice or switches the next renewal.
 export type CheckoutSession
   = | { kind: 'embedded', clientSecret: string, publishableKey: string, sessionId: string }
     | { kind: 'hosted', url: string }
+    | { kind: 'bank_transfer_renewal' }
 
 function toCheckoutSession(data: CheckoutSessionResponse): CheckoutSession | null {
+  if (data.bankTransfer === 'renewal')
+    return { kind: 'bank_transfer_renewal' }
   if (data.clientSecret && data.publishableKey && data.sessionId)
     return { kind: 'embedded', clientSecret: data.clientSecret, publishableKey: data.publishableKey, sessionId: data.sessionId }
   if (data.url)
@@ -90,6 +95,21 @@ export interface SubscriptionCheckoutRequest {
   currency?: string
   // Buy the full price instead of the regional discount.
   standardPrice?: boolean
+  paymentMethod?: 'card' | 'bank_transfer'
+}
+
+const BANK_TRANSFER_ERROR_CODES = new Set([
+  'billing_email_required',
+  'billing_address_required',
+  'bank_transfer_unavailable',
+  'bank_transfer_yearly_only',
+  'bank_transfer_schedule',
+])
+
+export class BankTransferCheckoutError extends Error {
+  constructor(readonly code: string) {
+    super(code)
+  }
 }
 
 export class CheckoutAmountLimitError extends Error {
@@ -116,6 +136,7 @@ export async function startSubscriptionCheckout(request: SubscriptionCheckoutReq
       ...(request.extraMau ? { extraMau: request.extraMau } : {}),
       ...(request.currency ? { currency: request.currency } : {}),
       ...(request.standardPrice ? { standardPrice: true } : {}),
+      ...(request.paymentMethod === 'bank_transfer' ? { paymentMethod: 'bank_transfer' } : {}),
     }),
   })
   if (error || !data) {
@@ -123,6 +144,8 @@ export async function startSubscriptionCheckout(request: SubscriptionCheckoutReq
       const body = await error.context.clone().json().catch(() => null) as { error?: string, moreInfo?: { canSwitchToUsd?: boolean } } | null
       if (body?.error === 'checkout_amount_limit')
         throw new CheckoutAmountLimitError(body.moreInfo?.canSwitchToUsd === true)
+      if (body?.error && BANK_TRANSFER_ERROR_CODES.has(body.error))
+        throw new BankTransferCheckoutError(body.error)
     }
     console.error('Cannot start subscription checkout', error)
     return null

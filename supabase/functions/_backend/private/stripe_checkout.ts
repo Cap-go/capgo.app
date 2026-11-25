@@ -5,7 +5,7 @@ import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { createCheckout, EXTRA_MAU_UNIT, MAX_EXTRA_MAU } from '../utils/stripe.ts'
+import { createBankTransferSubscription, createCheckout, EXTRA_MAU_UNIT, MAX_EXTRA_MAU } from '../utils/stripe.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 import { getEnv } from '../utils/utils.ts'
@@ -25,6 +25,8 @@ interface CheckoutData {
   extraMau?: number
   // Request an in-app embedded Checkout session instead of a hosted page URL.
   embedded?: boolean
+  // Yearly plans can be invoiced and paid by bank transfer.
+  paymentMethod?: 'card' | 'bank_transfer'
   // One of the plan price's Stripe currencies (see private/plan_prices).
   currency?: string
   // Skip the regional discount and buy the full price (see private/plan_prices).
@@ -100,7 +102,7 @@ app.post('/', middlewareAuth, async (c) => {
   cloudlog({ requestId: c.get('requestId'), message: 'user', org })
   const planId = body.priceId ?? 'price_1KkINoGH46eYKnWwwEi97h1B'
   const extraMauCheckout = await getExtraMauCheckout(c, planId, extraMau)
-  const checkout = await createCheckout(c, org.customer_id, body.recurrence ?? 'month', planId, body.successUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.cancelUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, {
+  const checkoutOptions = {
     clientReferenceId: body.clientReferenceId,
     attributionId: body.attributionId,
     datafastAttribution: {
@@ -112,6 +114,12 @@ app.post('/', middlewareAuth, async (c) => {
     embedded: body.embedded === true,
     currency: typeof body.currency === 'string' ? body.currency : undefined,
     standardPrice: body.standardPrice === true,
-  })
+  }
+  if (body.paymentMethod === 'bank_transfer') {
+    if ((body.recurrence ?? 'month') !== 'year')
+      throw simpleError('bank_transfer_yearly_only', 'Bank transfer is only available on yearly plans')
+    return c.json(await createBankTransferSubscription(c, org.customer_id, planId, checkoutOptions))
+  }
+  const checkout = await createCheckout(c, org.customer_id, body.recurrence ?? 'month', planId, body.successUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.cancelUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, checkoutOptions)
   return c.json(checkout)
 })
