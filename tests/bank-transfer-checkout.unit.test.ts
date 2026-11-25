@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, buildBankTransferItems, pickBankTransferSubscription } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, buildBankTransferItems, invoiceAcceptsBankTransfer, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
 describe('yearly bank transfer', () => {
@@ -53,6 +53,11 @@ describe('yearly bank transfer', () => {
       cancellation_details: { feedback: '', comment: '' },
     })
     expect(bankTransferResumeUpdate({ cancel_at_period_end: false, cancel_at: null })).toEqual({})
+    expect(invoiceAcceptsBankTransfer({ collection_method: 'charge_automatically', payment_settings: { payment_method_types: ['card'] } })).toBe(false)
+    expect(invoiceAcceptsBankTransfer({ collection_method: 'send_invoice', payment_settings: { payment_method_types: ['card'] } })).toBe(true)
+    expect(shouldReissueUnpaidCardInvoice(true, false, false)).toBe(true)
+    expect(shouldReissueUnpaidCardInvoice(true, true, false)).toBe(false)
+    expect(shouldReissueUnpaidCardInvoice(true, false, true)).toBe(false)
 
     const same = buildBankTransferItems(
       [{ id: 'si_plan', quantity: 1, price: { id: 'price_year' } }],

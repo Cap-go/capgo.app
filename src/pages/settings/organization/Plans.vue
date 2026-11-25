@@ -369,26 +369,29 @@ async function openChangePlan(plan: Plan, index: number) {
   if (isEnterprisePlan(plan) && enterpriseMauIndex.value > 0 && !enterpriseQuote.value)
     return
 
-  // get the current url
   isSubscribeLoading.value[index] = true
-  if (plan.stripe_id) {
-    const checkoutIsYearly = isCheckoutYearly(plan)
-    const session = await startPlanCheckout(plan, checkoutIsYearly)
-    if (!session) {
-      if (!checkoutAmountLimit.value)
-        toast.error(t('billing-checkout-error'))
-    }
-    else if (session.kind === 'embedded') {
-      embeddedCheckout.value = { ...session, planName: plan.name }
-      trackPlanCheckoutStarted(plan, checkoutIsYearly, 'embedded')
-    }
-    else if (session.kind === 'hosted') {
-      // Local Stripe emulator only serves hosted pages.
-      trackPlanCheckoutStarted(plan, checkoutIsYearly, 'hosted')
-      globalThis.location.href = session.url
+  try {
+    if (plan.stripe_id) {
+      const checkoutIsYearly = isCheckoutYearly(plan)
+      const session = await startPlanCheckout(plan, checkoutIsYearly)
+      if (!session) {
+        if (!checkoutAmountLimit.value)
+          toast.error(t('billing-checkout-error'))
+      }
+      else if (session.kind === 'embedded') {
+        embeddedCheckout.value = { ...session, planName: plan.name }
+        trackPlanCheckoutStarted(plan, checkoutIsYearly, 'embedded')
+      }
+      else if (session.kind === 'hosted') {
+        // Local Stripe emulator only serves hosted pages.
+        trackPlanCheckoutStarted(plan, checkoutIsYearly, 'hosted')
+        globalThis.location.href = session.url
+      }
     }
   }
-  isSubscribeLoading.value[index] = false
+  finally {
+    isSubscribeLoading.value[index] = false
+  }
 }
 
 function showBankTransfer(plan: Plan) {
@@ -424,6 +427,9 @@ async function openBankTransfer(plan: Plan, index: number) {
     showAdminModal.value = true
     return
   }
+  // The organization can change while the permission check runs.
+  if (currentOrganization.value?.gid !== orgId)
+    return
   if (isBankTransferDisabled(plan))
     return
 

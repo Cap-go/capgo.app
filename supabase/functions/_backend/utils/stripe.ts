@@ -1366,6 +1366,18 @@ export function invoiceAwaitingPayment(status: string | null | undefined) {
   return status === 'draft' || status === 'open' || status === 'uncollectible'
 }
 
+export function invoiceAcceptsBankTransfer(invoice: { collection_method?: string | null, payment_settings?: { payment_method_types?: string[] | null } | null }) {
+  if (invoice.collection_method === 'send_invoice')
+    return true
+  return (invoice.payment_settings?.payment_method_types ?? []).includes('customer_balance')
+}
+
+// Same plan, but the open invoice can only be paid by card. Subscription payment
+// settings do not rewrite that invoice, so it has to be replaced.
+export function shouldReissueUnpaidCardInvoice(unpaid: boolean, itemsChanged: boolean, acceptsBankTransfer: boolean) {
+  return unpaid && !itemsChanged && !acceptsBankTransfer
+}
+
 // An unpaid invoice must not be credited as unused time. That credit can zero out a
 // downgrade and look like a paid invoice while the original bill is still open.
 export function bankTransferProration(status: string, itemsChanged: boolean, unpaidInvoice = false): Stripe.SubscriptionUpdateParams.ProrationBehavior {
@@ -1598,7 +1610,6 @@ export async function createBankTransferSubscription(c: Context, customerId: str
     assertBankTransferCustomer(customer)
     await assertHeld()
     try {
-      await cancelPendingTrialSchedules(stripe, customerId)
       const listed = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 }, billingRequestOptions)
       const open = listed.data.filter(subscription => OPEN_SUBSCRIPTION_STATUSES.has(subscription.status))
       const reusable = pickBankTransferSubscription(open)
@@ -1615,14 +1626,16 @@ export async function createBankTransferSubscription(c: Context, customerId: str
         const { items, changed } = buildBankTransferItems(reusable.items.data, quote.lineItems)
         const openInvoice = await latestSubscriptionInvoice(stripe, reusable)
         const unpaidInvoice = invoiceAwaitingPayment(openInvoice?.status) && reusable.status !== 'trialing'
-        if (openInvoice && bankTransferResetsUnpaidCycle(reusable.status, changed, unpaidInvoice))
+        const reissueCardInvoice = !!openInvoice && shouldReissueUnpaidCardInvoice(unpaidInvoice, changed, invoiceAcceptsBankTransfer(openInvoice))
+        const replaceUnpaidInvoice = bankTransferResetsUnpaidCycle(reusable.status, changed, unpaidInvoice) || reissueCardInvoice
+        if (openInvoice && replaceUnpaidInvoice)
           await discardUnpaidInvoice(stripe, openInvoice)
         subscription = await stripe.subscriptions.update(reusable.id, {
           ...billing,
           items,
           proration_behavior: bankTransferProration(reusable.status, changed, unpaidInvoice),
           ...(reusable.status === 'trialing' ? { trial_end: 'now' as const } : {}),
-          ...(bankTransferResetsUnpaidCycle(reusable.status, changed, unpaidInvoice) ? { billing_cycle_anchor: 'now' as const } : {}),
+          ...(replaceUnpaidInvoice ? { billing_cycle_anchor: 'now' as const } : {}),
           ...bankTransferResumeUpdate(reusable),
           ...(reusable.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] === 'true' ? { metadata: { ...billing.metadata, [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: '' } } : {}),
           expand: ['latest_invoice'],
@@ -1637,6 +1650,7 @@ export async function createBankTransferSubscription(c: Context, customerId: str
           expand: ['latest_invoice'],
         }, billingRequestOptions)
       }
+      await cancelPendingTrialSchedules(stripe, customerId)
       await cancelOtherOpenSubscriptions(stripe, customerId, subscription.id)
       const invoice = await finalizeBankTransferInvoice(stripe, subscription)
       return bankTransferResult(invoice)
