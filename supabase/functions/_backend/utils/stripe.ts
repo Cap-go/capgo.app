@@ -280,6 +280,11 @@ export type SubscriptionSyncData = {
 // A first invoice waits. An upgrade keeps the plan the customer already paid for.
 export type BankTransferSyncAction = 'apply_live' | 'keep_stored_plan' | 'wait_for_payment'
 
+// A cancel webhook must not store the live plan while its bank-transfer invoice is unpaid.
+export function canceledBankTransferKeepsStoredPlan(selfServeBankTransfer: boolean, previouslyPaidSameSubscription: boolean, invoicePaid: boolean) {
+  return selfServeBankTransfer && previouslyPaidSameSubscription && !invoicePaid
+}
+
 export function bankTransferSyncAction(
   subscription: { selfServeBankTransfer: boolean, status: string, latestInvoiceStatus: string | null, subscriptionId: string },
   stored: { status: string | null, subscriptionId: string | null } | null,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoiceRecordsSelfServeBankTransfer } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
@@ -110,6 +110,9 @@ describe('yearly bank transfer', () => {
     expect(bankTransferSyncDbStatus('wait_for_payment', { status: 'canceled', cycleEnd: '2999-01-01T00:00:00.000Z' }, 'succeeded')).toBe('canceled')
     expect(bankTransferSyncDbStatus('keep_stored_plan', { status: 'canceled', cycleEnd: '2999-01-01T00:00:00.000Z' }, 'canceled')).toBe('succeeded')
     expect(bankTransferSyncDbStatus('keep_stored_plan', { status: 'canceled', cycleEnd: '2000-01-01T00:00:00.000Z' }, 'succeeded')).toBe('canceled')
+    expect(canceledBankTransferKeepsStoredPlan(true, true, false)).toBe(true)
+    expect(canceledBankTransferKeepsStoredPlan(true, true, true)).toBe(false)
+    expect(canceledBankTransferKeepsStoredPlan(true, false, false)).toBe(false)
 
     const same = buildBankTransferItems(
       [{ id: 'si_plan', quantity: 1, price: { id: 'price_year' } }],
