@@ -1198,18 +1198,18 @@ When backend code uses the plugin read-path (`/updates`, `/stats`, `/channel_sel
 A ping is any message that hands a human the PR: the URL, a request to look, review, or merge, or a message that presents the PR as the result. "Do not ping" forbids that message. It does not forbid the work, and it is not a reason to end the turn.
 
 ```
-draft while you code → Ready → CI green (unless an exception below) → every review clear → nothing pending → ONLY THEN the turn is finished and you ping the human
+draft while you code → CI green (unless an exception below) → Ready → every review clear (unless the outage exception) → nothing pending → ONLY THEN the turn is finished and you ping the human
 ```
 
 #### Finish line
 
-The turn stays open until **all** of these are true:
+The turn stays open until **all** of these are true. The text / non-deployed exception overrides condition 2. The outage exception overrides conditions 2, 3, 4, and 5.
 
 1. The PR is **Ready for review** (not a draft).
-2. Every CI/CD check is green. No check is failing, pending, queued, or skipped in a way that hides a required job.
-3. Every review is finished. No automatic review and no human review already on the PR is pending, and no reviewer still requests changes.
-4. Zero unresolved review threads remain (Critical, Major, Minor, P2, nits — all of them).
-5. Nothing else is pending on the PR: no requested changes, no unfinished review, no open "please look" left to the human.
+2. Every CI/CD check is green, unless the text / non-deployed exception or the outage exception applies. No check is failing, pending, queued, or skipped in a way that hides a required job.
+3. Every review is finished, unless the outage exception applies. No automatic review and no human review already on the PR is pending, and no reviewer still requests changes.
+4. Zero unresolved review threads remain (Critical, Major, Minor, P2, nits — all of them), unless the outage exception applies.
+5. Nothing else is pending on the PR: no requested changes, no unfinished review, no open "please look" left to the human. Pending CI does not count when the text / non-deployed exception applies. The outage exception overrides this condition.
 
 The chat message at that moment is the first delivered result. It is the ask for human review or merge. A human approval that has not been requested yet is not "pending". Do not wait for the human you have not pinged. Do ping them once the list above is true.
 
