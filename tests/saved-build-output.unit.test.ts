@@ -29,7 +29,7 @@ describe('saved native build output', () => {
     expect(pickSavedOutput([{ ...ipa, downloadUrl: 'http://builder.example/ipa' }], 'ios')).toBeUndefined()
   })
 
-  it('reports the jobs whose builder lookup failed, but not a job the builder no longer knows', async () => {
+  it('reports the jobs whose builder lookup failed or answered garbage, but not a job the builder no longer knows', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.endsWith('/job_ok'))
         return new Response(JSON.stringify({ outputs: [ipa] }), { status: 200 })
@@ -37,12 +37,14 @@ describe('saved native build output', () => {
         return new Response(null, { status: 404 })
       if (url.endsWith('/job_down'))
         return new Response(null, { status: 503 })
+      if (url.endsWith('/job_garbled'))
+        return new Response('<html>', { status: 200 })
       throw new Error('timeout')
     }))
     const failed: string[] = []
-    const outputs = await savedOutputsForJobs({} as never, {} as never, 'app', 'org', ['job_ok', 'job_gone', 'job_down', 'job_slow'], failed)
+    const outputs = await savedOutputsForJobs({} as never, {} as never, 'app', 'org', ['job_ok', 'job_gone', 'job_down', 'job_garbled', 'job_slow'], failed)
     vi.unstubAllGlobals()
     expect(Object.keys(outputs)).toEqual(['job_ok'])
-    expect(failed.sort()).toEqual(['job_down', 'job_slow'])
+    expect(failed.sort()).toEqual(['job_down', 'job_garbled', 'job_slow'])
   })
 })

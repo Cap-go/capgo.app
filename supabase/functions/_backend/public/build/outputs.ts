@@ -55,7 +55,7 @@ export async function savedOutputsForJobs(c: Context, principal: RlsPrincipal, a
           failed.push(row.builder_job_id)
         return
       }
-      const body = await response.json().catch(() => undefined) as { outputs?: BuilderOutput[] } | undefined
+      const body = await response.json() as { outputs?: BuilderOutput[] } | undefined
       const saved = pickSavedOutput(body?.outputs, row.platform)
       if (saved)
         outputs[row.builder_job_id] = saved
