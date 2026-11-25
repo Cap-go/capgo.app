@@ -1,6 +1,6 @@
 # Self-hosted GoTrue on Cloudflare (auth migration, PR 2)
 
-GoTrue v2.197.0 (the release hosted Supabase Auth runs for our project) in a
+GoTrue v2.198.0 (the release hosted Supabase Auth runs for our project) in a
 Cloudflare container, on the production database in schema `auth_cf` as role
 `gotrue_cf`. The GoTrue Worker has no route: the production API binds it, and
 `sb.capgo.app/auth/v1/*` reaches it through the API relay (see Cutover).
