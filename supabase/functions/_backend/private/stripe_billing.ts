@@ -257,6 +257,10 @@ app.post('/cancel-offer/accept', middlewareAuth, async (c) => {
     throw simpleError('invalid_offer_id', 'Missing offerId')
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
   const result = await acceptCancelSaveOffer(c, ctx, offerId, parseCancelComment(body.comment))
+  // Credits replace the plan: it ends at period end, so the attempt did cancel it.
+  const attemptId = parseOfferId(body.attemptId)
+  if (result.type === 'credits' && attemptId)
+    await recordCancelAttemptCanceled(c, body.orgId!, attemptId)
   return c.json({ ...result, subscription: await getSubscriptionSummary(c, ctx) })
 })
 

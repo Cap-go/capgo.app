@@ -436,8 +436,8 @@ export function recordFounderCallClick(orgId: string, attemptId: string) {
 }
 
 // comment: sent to Stripe when accepting credits cancels the plan.
-export function acceptCancelSaveOffer(orgId: string, offerId: string, comment = '') {
-  return callBilling<AcceptCancelSaveOfferResult & { subscription: BillingSubscription | null }>('cancel-offer/accept', { orgId, offerId, ...(comment ? { comment } : {}) })
+export function acceptCancelSaveOffer(orgId: string, offerId: string, comment = '', attemptId?: string) {
+  return callBilling<AcceptCancelSaveOfferResult & { subscription: BillingSubscription | null }>('cancel-offer/accept', { orgId, offerId, ...(comment ? { comment } : {}), ...(attemptId ? { attemptId } : {}) })
 }
 
 // offerId: the save offer the customer turned down before canceling.

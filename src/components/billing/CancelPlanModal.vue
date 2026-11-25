@@ -121,7 +121,7 @@ async function acceptOffer() {
   isAccepting.value = true
   try {
     const current = offer.value
-    const { subscription } = await acceptCancelSaveOffer(props.orgId, current.id, comment.value.trim())
+    const { subscription } = await acceptCancelSaveOffer(props.orgId, current.id, comment.value.trim(), attemptId.value ?? undefined)
     if (current.type === 'credits')
       toast.success(t('billing-cancel-credits-accepted', { credits: current.credits }))
     else

@@ -161,7 +161,7 @@ describe('CancelPlanModal loss reminder', () => {
     expect(shell().textContent).toContain('billing-cancel-credits-title')
     ;(shell().querySelector('[data-test="cancel-offer-accept"]') as HTMLButtonElement).click()
     await vi.waitFor(() => expect(onSaved).toHaveBeenCalledOnce())
-    expect(mocks.acceptCancelSaveOffer).toHaveBeenCalledWith('org_test', 'offer_2', 'only one app now')
+    expect(mocks.acceptCancelSaveOffer).toHaveBeenCalledWith('org_test', 'offer_2', 'only one app now', undefined)
     expect(mocks.cancelSubscriptionWithReason).not.toHaveBeenCalled()
   })
 
