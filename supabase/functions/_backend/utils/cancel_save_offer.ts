@@ -352,8 +352,10 @@ async function reserveOffer(c: Context, customerId: string, offerId: string): Pr
         `UPDATE public.cancel_save_offers SET responded_at = now() WHERE id = $1 AND customer_id = $2 AND outcome = 'accepting'`,
         [offerId, customerId],
       )
+      // Reread: the cleanup may have freed it and another accept reserved it again since
+      // the first read, with the amounts of a newer offer. Reserved, the row no longer changes.
       if (renewed.rowCount)
-        return row
+        return (await select()).rows[0] ?? null
       row = (await select()).rows[0]
     }
     if (row?.outcome !== 'offered')
