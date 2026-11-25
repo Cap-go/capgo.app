@@ -1,4 +1,4 @@
-import { billingRequestOptions, withBillingProfileLock } from './billing_profile_lock.ts'
+import { billingRequestOptions, expireBillingCheckouts, withBillingProfileLock } from './billing_profile_lock.ts'
 import type { Context } from 'hono'
 import type { BillingAccount } from './stripe_billing.ts'
 import type { Database } from './supabase.types.ts'
@@ -1882,6 +1882,8 @@ export async function createBankTransferSubscription(c: Context, customerId: str
     assertBankTransferCustomer(customer)
     await assertHeld()
     try {
+      // An open card Checkout still creates a second subscription when it completes.
+      await expireBillingCheckouts(stripe, customerId, assertHeld)
       const listed = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 }, billingRequestOptions)
       const open = listed.data.filter(subscription => OPEN_SUBSCRIPTION_STATUSES.has(subscription.status))
       const reusable = pickBankTransferSubscription(open)
