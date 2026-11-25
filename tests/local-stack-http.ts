@@ -67,11 +67,27 @@ function responseError(errorName: string, response: Response, text: string): Loc
   return new LocalStackError(errorName, errorMessage(payload, text || response.statusText), response.status, code)
 }
 
+// auth-js NETWORK_ERROR_CODES: answered as AuthRetryableFetchError, which callers retry.
+const AUTH_RETRYABLE_STATUSES = new Set([500, 501, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 528, 529, 530])
+const AUTH_RETRYABLE = 'AuthRetryableFetchError'
+
 async function send(errorName: string, url: string, init: RequestInit): Promise<RawResult> {
-  const response = await fetch(url, init)
+  const auth = errorName === 'AuthApiError'
+  let response: Response
+  try {
+    response = await fetch(url, init)
+  }
+  catch (error) {
+    // auth-js returns a failed fetch as a retryable error with status 0.
+    if (!auth)
+      throw error
+    return { status: 0, payload: null, error: new LocalStackError(AUTH_RETRYABLE, error instanceof Error ? error.message : String(error), 0) }
+  }
   const text = await response.text()
-  if (!response.ok)
-    return { status: response.status, payload: null, error: responseError(errorName, response, text) }
+  if (!response.ok) {
+    const name = auth && AUTH_RETRYABLE_STATUSES.has(response.status) ? AUTH_RETRYABLE : errorName
+    return { status: response.status, payload: null, error: responseError(name, response, text) }
+  }
   return { status: response.status, payload: parseJson(text), error: null }
 }
 
