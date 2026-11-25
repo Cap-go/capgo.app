@@ -1362,10 +1362,33 @@ export function buildBankTransferItems(
   return { items, changed }
 }
 
-export function bankTransferProration(status: string, itemsChanged: boolean): Stripe.SubscriptionUpdateParams.ProrationBehavior {
+export function invoiceAwaitingPayment(status: string | null | undefined) {
+  return status === 'draft' || status === 'open' || status === 'uncollectible'
+}
+
+// An unpaid invoice must not be credited as unused time. That credit can zero out a
+// downgrade and look like a paid invoice while the original bill is still open.
+export function bankTransferProration(status: string, itemsChanged: boolean, unpaidInvoice = false): Stripe.SubscriptionUpdateParams.ProrationBehavior {
+  if (unpaidInvoice)
+    return 'none'
   if (status === 'trialing' || itemsChanged)
     return 'always_invoice'
   return 'none'
+}
+
+// A plan change on an unpaid period starts a new cycle at the full price.
+export function bankTransferResetsUnpaidCycle(status: string, itemsChanged: boolean, unpaidInvoice: boolean) {
+  return unpaidInvoice && itemsChanged && status !== 'trialing'
+}
+
+export function bankTransferResumeUpdate(subscription: { cancel_at_period_end?: boolean | null, cancel_at?: number | null }): Pick<Stripe.SubscriptionUpdateParams, 'cancel_at' | 'cancel_at_period_end' | 'cancellation_details'> | Record<string, never> {
+  if (!subscription.cancel_at_period_end && typeof subscription.cancel_at !== 'number')
+    return {}
+  return {
+    cancel_at: '',
+    cancel_at_period_end: false,
+    cancellation_details: { feedback: '', comment: '' },
+  }
 }
 
 async function loadCheckoutQuote(c: Context, billingAccount: BillingAccount, customerId: string, recurrence: string, planId: string, options: CheckoutOptions): Promise<CheckoutQuote> {
@@ -1516,6 +1539,25 @@ async function cancelOtherOpenSubscriptions(stripe: Stripe, customerId: string, 
   }
 }
 
+async function latestSubscriptionInvoice(stripe: Stripe, subscription: Stripe.Subscription) {
+  const latest = subscription.latest_invoice
+  if (!latest)
+    return null
+  if (typeof latest !== 'string')
+    return latest
+  return await stripe.invoices.retrieve(latest, {}, billingRequestOptions)
+}
+
+// Drop the unpaid bill before the plan changes, so Stripe cannot credit time that was never paid.
+async function discardUnpaidInvoice(stripe: Stripe, invoice: Stripe.Invoice) {
+  if (invoice.status === 'draft') {
+    await stripe.invoices.del(invoice.id, {}, billingRequestOptions)
+    return
+  }
+  if (invoice.status === 'open' || invoice.status === 'uncollectible')
+    await stripe.invoices.voidInvoice(invoice.id, {}, billingRequestOptions)
+}
+
 async function finalizeBankTransferInvoice(stripe: Stripe, subscription: Stripe.Subscription) {
   const latest = subscription.latest_invoice
   if (!latest)
@@ -1571,11 +1613,17 @@ export async function createBankTransferSubscription(c: Context, customerId: str
       if (reusable) {
         await releaseTrialSchedule(stripe, reusable)
         const { items, changed } = buildBankTransferItems(reusable.items.data, quote.lineItems)
+        const openInvoice = await latestSubscriptionInvoice(stripe, reusable)
+        const unpaidInvoice = invoiceAwaitingPayment(openInvoice?.status) && reusable.status !== 'trialing'
+        if (openInvoice && bankTransferResetsUnpaidCycle(reusable.status, changed, unpaidInvoice))
+          await discardUnpaidInvoice(stripe, openInvoice)
         subscription = await stripe.subscriptions.update(reusable.id, {
           ...billing,
           items,
-          proration_behavior: bankTransferProration(reusable.status, changed),
+          proration_behavior: bankTransferProration(reusable.status, changed, unpaidInvoice),
           ...(reusable.status === 'trialing' ? { trial_end: 'now' as const } : {}),
+          ...(bankTransferResetsUnpaidCycle(reusable.status, changed, unpaidInvoice) ? { billing_cycle_anchor: 'now' as const } : {}),
+          ...bankTransferResumeUpdate(reusable),
           ...(reusable.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] === 'true' ? { metadata: { ...billing.metadata, [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: '' } } : {}),
           expand: ['latest_invoice'],
         }, billingRequestOptions)
