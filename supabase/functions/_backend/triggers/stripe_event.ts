@@ -2489,8 +2489,12 @@ async function handleCanceledSubscriptionStripeEvent(
         stripeData.data.product_id = customer.product_id
         stripeData.data.price_id = customer.price_id ?? undefined
         stripeData.data.extra_mau = customer.extra_mau ?? 0
-        if (customer.subscription_anchor_end)
+        if (customer.subscription_anchor_start)
+          stripeData.data.subscription_anchor_start = customer.subscription_anchor_start
+        if (customer.subscription_anchor_end) {
           paidThrough = customer.subscription_anchor_end
+          stripeData.data.subscription_anchor_end = customer.subscription_anchor_end
+        }
       }
     }
   }
