@@ -2473,11 +2473,12 @@ async function getSubscriptionPaymentState(
   if (stripeEvent.type !== 'customer.subscription.created' && stripeEvent.type !== 'customer.subscription.updated')
     return 'unpaid'
   const isPastDue = stripeData.data.status === 'past_due'
-  // Dunning of an org that paid before keeps its grace period.
-  if (isPastDue && (customer.paid_at || customer.status === 'succeeded'))
-    return 'unpaid'
   const subscription = stripeEvent.data.object
   const selfServeBankTransfer = isSelfServeBankTransfer(subscription.metadata)
+  // Dunning of an org that paid before keeps its grace period.
+  // A bank-transfer upgrade must not take that shortcut: past_due would store the unpaid plan.
+  if (isPastDue && (customer.paid_at || customer.status === 'succeeded') && !selfServeBankTransfer)
+    return 'unpaid'
   // A reused bank-transfer subscription can already be paid. Do not treat that as
   // proof the new plan's invoice is paid.
   if (!isPastDue && isPaidSubscriptionUpdate(customer, stripeData.data.subscription_id) && !selfServeBankTransfer)
