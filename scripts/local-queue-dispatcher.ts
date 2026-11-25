@@ -49,21 +49,28 @@ async function withDb<T>(dbUrl: string, run: (client: Client) => Promise<T>): Pr
   }
 }
 
+// One statement each, so db_url and the route always switch together: a wakeup
+// in between would send the host URL through pg_net (inside Docker), or the
+// Docker URL through the outbox.
 export async function routeToOutbox(client: Pick<Client, 'query'>, dbUrl: string): Promise<void> {
   await client.query(
-    `INSERT INTO private.settings (name, value) VALUES ('db_url', $1)
+    `WITH route AS (
+       INSERT INTO public.http_dispatch_targets (target) VALUES ('*') ON CONFLICT DO NOTHING
+     )
+     INSERT INTO private.settings (name, value) VALUES ('db_url', $1)
      ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = pg_catalog.now()
      WHERE private.settings.value IS DISTINCT FROM EXCLUDED.value`,
     [dbUrl],
   )
-  await client.query(`INSERT INTO public.http_dispatch_targets (target) VALUES ('*') ON CONFLICT DO NOTHING`)
 }
 
 export async function restorePgNet(client: Pick<Client, 'query'>, dbUrl: string): Promise<void> {
-  await client.query(`DELETE FROM public.http_dispatch_targets WHERE target = '*'`)
-  // Only undo our own value; anything else was set on purpose.
+  // Only undo our own db_url value; anything else was set on purpose.
   await client.query(
-    `UPDATE private.settings SET value = $1, updated_at = pg_catalog.now() WHERE name = 'db_url' AND value = $2`,
+    `WITH unroute AS (
+       DELETE FROM public.http_dispatch_targets WHERE target = '*'
+     )
+     UPDATE private.settings SET value = $1, updated_at = pg_catalog.now() WHERE name = 'db_url' AND value = $2`,
     [SEED_DB_URL, dbUrl],
   )
 }

@@ -45,17 +45,19 @@ describe('local queue dispatcher', () => {
   it('routes every target to the outbox with the host db_url', async () => {
     const { client, queries } = recordingClient()
     await routeToOutbox(client, 'http://127.0.0.1:54321')
-    expect(queries).toHaveLength(2)
-    expect(queries[0].sql).toContain('private.settings')
+    // One statement: the route and db_url never disagree.
+    expect(queries).toHaveLength(1)
+    expect(queries[0].sql).toContain(`INSERT INTO public.http_dispatch_targets (target) VALUES ('*')`)
+    expect(queries[0].sql).toContain('INSERT INTO private.settings')
     expect(queries[0].params).toEqual(['http://127.0.0.1:54321'])
-    expect(queries[1].sql).toContain(`INSERT INTO public.http_dispatch_targets (target) VALUES ('*')`)
   })
 
   it('restores the seed db_url only when it is still ours, and drops the * route', async () => {
     const { client, queries } = recordingClient()
     await restorePgNet(client, 'http://127.0.0.1:54321')
+    expect(queries).toHaveLength(1)
     expect(queries[0].sql).toContain(`DELETE FROM public.http_dispatch_targets WHERE target = '*'`)
-    expect(queries[1].sql).toContain(`AND value = $2`)
-    expect(queries[1].params).toEqual([SEED_DB_URL, 'http://127.0.0.1:54321'])
+    expect(queries[0].sql).toContain(`AND value = $2`)
+    expect(queries[0].params).toEqual([SEED_DB_URL, 'http://127.0.0.1:54321'])
   })
 })

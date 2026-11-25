@@ -10,11 +10,15 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
+// Each child gets its own process group: both are wrappers (supabase-worktree.ts
+// runs the Supabase CLI with spawnSync), so stopping only the wrapper would leave
+// the real server running. Signals go to the whole group instead.
 const children: ChildProcess[] = [
-  spawn('bun', ['scripts/supabase-worktree.ts', 'functions', 'serve'], { cwd: ROOT, stdio: 'inherit' }),
+  spawn('bun', ['scripts/supabase-worktree.ts', 'functions', 'serve'], { cwd: ROOT, stdio: 'inherit', detached: true }),
   spawn('./scripts/start-cloudflare-workers.sh', [], {
     cwd: ROOT,
     stdio: 'inherit',
+    detached: true,
     env: { ...process.env, LOCAL_QUEUE_DISPATCHER: 'true' },
   }),
 ]
@@ -23,8 +27,16 @@ let exitCode: number | undefined
 let interrupted = false
 const stopAll = (signal: NodeJS.Signals) => {
   for (const child of children) {
-    if (child.exitCode === null && child.signalCode === null)
-      child.kill(signal)
+    if (!child.pid)
+      continue
+    try {
+      // Also after the wrapper exited: the group can still hold the real server.
+      process.kill(-child.pid, signal)
+    }
+    catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH'))
+        throw error
+    }
   }
 }
 
