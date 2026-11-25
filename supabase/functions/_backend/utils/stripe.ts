@@ -1673,16 +1673,31 @@ async function discardUnpaidInvoice(stripe: Stripe, invoice: Stripe.Invoice) {
     await stripe.invoices.voidInvoice(invoice.id, {}, billingRequestOptions)
 }
 
-// A failed void leaves the old invoice collectible. The next checkout lists it again
-// and retires every unpaid invoice except the subscription's latest one.
-async function discardSupersededInvoices(stripe: Stripe, subscriptionId: string, keepInvoiceId: string | undefined) {
-  if (!keepInvoiceId)
-    return
-  const listed = await Promise.all((['draft', 'open', 'uncollectible'] as const).map(status =>
-    stripe.invoices.list({ subscription: subscriptionId, status, limit: 100 }, billingRequestOptions),
-  ))
-  const stale = listed.flatMap(page => page.data).filter(invoice => invoice.id !== keepInvoiceId && invoiceAwaitingPayment(invoice.status))
-  await Promise.all(stale.map(invoice => discardUnpaidInvoice(stripe, invoice)))
+// Only the invoice this checkout replaced is voided. Its id stays on the subscription
+// until the void succeeds, so a retry can finish that one invoice and leave older debts.
+const REPLACED_BANK_TRANSFER_INVOICE_METADATA_KEY = 'capgo_bank_transfer_replaces'
+
+async function retireReplacedInvoice(stripe: Stripe, subscription: Stripe.Subscription) {
+  const replacedId = subscription.metadata?.[REPLACED_BANK_TRANSFER_INVOICE_METADATA_KEY]
+  if (!replacedId)
+    return subscription
+  const latestId = typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : subscription.latest_invoice?.id
+  if (replacedId !== latestId) {
+    try {
+      const invoice = await stripe.invoices.retrieve(replacedId, {}, billingRequestOptions)
+      if (invoiceAwaitingPayment(invoice.status))
+        await discardUnpaidInvoice(stripe, invoice)
+    }
+    catch (error) {
+      if (!(error instanceof Stripe.errors.StripeInvalidRequestError) || error.code !== 'resource_missing')
+        throw error
+    }
+  }
+  return await stripe.subscriptions.update(subscription.id, {
+    metadata: { [REPLACED_BANK_TRANSFER_INVOICE_METADATA_KEY]: '' },
+    proration_behavior: 'none',
+    expand: ['latest_invoice'],
+  }, billingRequestOptions)
 }
 
 async function finalizeBankTransferInvoice(stripe: Stripe, subscription: Stripe.Subscription) {
@@ -1745,12 +1760,16 @@ export async function createBankTransferSubscription(c: Context, customerId: str
         const replaceUnpaidInvoice = bankTransferResetsUnpaidCycle(reusable.status, changed, unpaidInvoice) || reissueCardInvoice
         subscription = await stripe.subscriptions.update(reusable.id, {
           ...billing,
+          metadata: {
+            ...billing.metadata,
+            ...(reusable.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] === 'true' ? { [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: '' } : {}),
+            ...(replaceUnpaidInvoice && openInvoice ? { [REPLACED_BANK_TRANSFER_INVOICE_METADATA_KEY]: openInvoice.id } : {}),
+          },
           items,
           proration_behavior: bankTransferProration(reusable.status, changed, unpaidInvoice),
           ...(reusable.status === 'trialing' ? { trial_end: 'now' as const } : {}),
           ...(replaceUnpaidInvoice ? { billing_cycle_anchor: 'now' as const } : {}),
           ...bankTransferResumeUpdate(reusable),
-          ...(reusable.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] === 'true' ? { metadata: { ...billing.metadata, [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: '' } } : {}),
           expand: ['latest_invoice'],
         }, billingRequestOptions)
       }
@@ -1763,8 +1782,7 @@ export async function createBankTransferSubscription(c: Context, customerId: str
           expand: ['latest_invoice'],
         }, billingRequestOptions)
       }
-      const latestId = typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : subscription.latest_invoice?.id
-      await discardSupersededInvoices(stripe, subscription.id, latestId)
+      subscription = await retireReplacedInvoice(stripe, subscription)
       await cancelPendingTrialSchedules(stripe, customerId)
       await cancelOtherOpenSubscriptions(stripe, customerId, subscription.id)
       const invoice = await finalizeBankTransferInvoice(stripe, subscription)
