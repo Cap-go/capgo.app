@@ -13,8 +13,8 @@ export function isSelfServeBankTransfer(metadata: Record<string, string> | null 
   return metadata?.[BANK_TRANSFER_METADATA_KEY] === '1'
 }
 
-// Finalized subscription invoices snapshot the subscription metadata. Ordinary
-// renewals do not carry this key, so the webhook can skip a Stripe retrieve.
+// Finalized invoices snapshot the subscription metadata, including renewals.
+// Card subscriptions do not have this key, so those invoices skip a Stripe retrieve.
 export function invoiceRecordsSelfServeBankTransfer(invoice: {
   metadata?: Record<string, string> | null
   parent?: { subscription_details?: { metadata?: Record<string, string> | null } | null } | null
