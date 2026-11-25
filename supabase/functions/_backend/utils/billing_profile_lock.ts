@@ -32,11 +32,13 @@ export const billingRequestOptions = { timeout: 10_000, maxNetworkRetries: 1 }
 
 // Expiration fails if Checkout won the race and completed. Abort in that case,
 // then retry from a fresh subscription scan instead of creating a second charge.
-export async function expireBillingCheckouts(stripe: Stripe, customerId: string, assertHeld: () => Promise<void>) {
+export async function expireBillingCheckouts(stripe: Stripe, customerId: string, assertHeld: () => Promise<void>, mode?: Stripe.Checkout.Session['mode']) {
   let cursor: string | undefined
   do {
     const page = await stripe.checkout.sessions.list({ customer: customerId, status: 'open', limit: 100, ...(cursor ? { starting_after: cursor } : {}) }, billingRequestOptions)
     for (const session of page.data) {
+      if (mode && session.mode !== mode)
+        continue
       await assertHeld()
       await stripe.checkout.sessions.expire(session.id, {}, billingRequestOptions)
     }

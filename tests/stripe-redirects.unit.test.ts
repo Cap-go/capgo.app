@@ -805,7 +805,18 @@ describe('stripe redirect URL allowlist', () => {
       },
       subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }), create },
       subscriptionSchedules: { list: vi.fn().mockResolvedValue({ data: [] }) },
-      checkout: { sessions: { list: vi.fn().mockResolvedValue({ data: [{ id: 'cs_open' }], has_more: false }), expire } },
+      checkout: {
+        sessions: {
+          list: vi.fn().mockResolvedValue({
+            data: [
+              { id: 'cs_plan', mode: 'subscription' },
+              { id: 'cs_credits', mode: 'payment' },
+            ],
+            has_more: false,
+          }),
+          expire,
+        },
+      },
     } as any
     vi.mocked(Stripe).mockImplementation(function () {
       return stripeClient
@@ -815,7 +826,8 @@ describe('stripe redirect URL allowlist', () => {
     const result = await createBankTransferSubscription(createContext(), 'cus_123', 'prod_test')
 
     expect(result).toEqual({ url: 'https://pay.stripe.com/invoice/in_bank', bankTransfer: 'invoice' })
-    expect(expire).toHaveBeenCalledWith('cs_open', {}, expect.anything())
+    expect(expire).toHaveBeenCalledTimes(1)
+    expect(expire).toHaveBeenCalledWith('cs_plan', {}, expect.anything())
     expect(expire.mock.invocationCallOrder[0]).toBeLessThan(create.mock.invocationCallOrder[0])
   })
 
@@ -839,7 +851,7 @@ describe('stripe redirect URL allowlist', () => {
       subscriptionSchedules: { list: vi.fn().mockResolvedValue({ data: [] }) },
       checkout: {
         sessions: {
-          list: vi.fn().mockResolvedValue({ data: [{ id: 'cs_open' }], has_more: false }),
+          list: vi.fn().mockResolvedValue({ data: [{ id: 'cs_open', mode: 'subscription' }], has_more: false }),
           expire: vi.fn().mockRejectedValue(new Error('already completed')),
         },
       },

@@ -1882,8 +1882,9 @@ export async function createBankTransferSubscription(c: Context, customerId: str
     assertBankTransferCustomer(customer)
     await assertHeld()
     try {
-      // An open card Checkout still creates a second subscription when it completes.
-      await expireBillingCheckouts(stripe, customerId, assertHeld)
+      // A subscription Checkout still creates a second subscription when it completes.
+      // Payment sessions, such as credit top-ups, stay open.
+      await expireBillingCheckouts(stripe, customerId, assertHeld, 'subscription')
       const listed = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 }, billingRequestOptions)
       const open = listed.data.filter(subscription => OPEN_SUBSCRIPTION_STATUSES.has(subscription.status))
       const reusable = pickBankTransferSubscription(open)
