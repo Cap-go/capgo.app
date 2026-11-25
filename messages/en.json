@@ -4487,6 +4487,7 @@
   "simulator-auto-stop": "It stops by itself after {idle} minutes without input, and after {max} minutes at most. Stop it when you are done.",
   "simulator-running": "Running",
   "simulator-started-at": "Started {time}",
+  "saved-build-simulator-ready": "The simulator is starting. Open it from the simulator card at the top of the page.",
   "simulator-open": "Open simulator",
   "simulator-recent": "Recent simulators",
   "simulator-ran-for": "Ran {duration}, counted {counted} of build time",

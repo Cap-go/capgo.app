@@ -407,7 +407,7 @@ async function openSavedBuild(jobId: string) {
       return
     }
     // Stay on this page: the running session appears in the simulator card above with its Open link.
-    toast.success(t('simulator-running'))
+    toast.success(t('saved-build-simulator-ready'))
     document.querySelector('[data-simulator-card]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
   catch (error) {
