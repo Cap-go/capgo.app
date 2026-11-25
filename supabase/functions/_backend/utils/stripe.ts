@@ -27,7 +27,7 @@ import {
   singleRowOrNull,
   TRIAL_PLAN_SCHEDULE_METADATA_KEY,
 } from './stripe_billing.ts'
-import { BANK_TRANSFER_DAYS_UNTIL_DUE, BANK_TRANSFER_METADATA_KEY, getTransferInvoiceFooterUpdate, isBankTransferCurrency } from './transfer_invoice.ts'
+import { BANK_TRANSFER_DAYS_UNTIL_DUE, BANK_TRANSFER_METADATA_KEY, getTransferInvoiceFooterUpdate, isBankTransferCurrency, isSelfServeBankTransfer } from './transfer_invoice.ts'
 import { getEnv, isStripeConfigured, trimTrailingSlashes } from './utils.ts'
 
 export type { BillingAccount } from './stripe_billing.ts'
@@ -267,11 +267,28 @@ export type SubscriptionSyncData = {
   extraMau: number
   status: Stripe.Subscription.Status
   trialPlanFirstInvoiceUnpaid: boolean
+  selfServeBankTransfer: boolean
+  latestInvoiceStatus: string | null
   cycleStart: string | null
   cycleEnd: string | null
   canceledAt: string | null
   subscriptionId: string
   cancel_at_period_end: boolean
+}
+
+// The cron sync must not treat a live bank-transfer subscription as paid.
+// A first invoice waits. An upgrade keeps the plan the customer already paid for.
+export type BankTransferSyncAction = 'apply_live' | 'keep_stored_plan' | 'wait_for_payment'
+
+export function bankTransferSyncAction(
+  subscription: { selfServeBankTransfer: boolean, status: string, latestInvoiceStatus: string | null, subscriptionId: string },
+  stored: { status: string | null, subscriptionId: string | null } | null,
+): BankTransferSyncAction {
+  if (!subscription.selfServeBankTransfer || subscription.status === 'trialing' || subscription.status === 'canceled' || subscription.latestInvoiceStatus === 'paid')
+    return 'apply_live'
+  if (stored?.status === 'succeeded' && stored.subscriptionId === subscription.subscriptionId)
+    return 'keep_stored_plan'
+  return 'wait_for_payment'
 }
 
 export type SubscriptionLookupResult =
@@ -333,6 +350,8 @@ function subscriptionDataFromStripeSubscription(c: Context, subscription: Stripe
     extraMau: getExtraMau(subscription.items.data),
     status: subscription.status,
     trialPlanFirstInvoiceUnpaid,
+    selfServeBankTransfer: isSelfServeBankTransfer(subscription.metadata),
+    latestInvoiceStatus: latestInvoice?.status ?? null,
     cycleStart,
     cycleEnd,
     canceledAt,
@@ -515,11 +534,11 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
       }
     }
 
-    let currentStripeInfo: { status: string | null, past_due_at: string | null } | null
+    let currentStripeInfo: { status: string | null, past_due_at: string | null, subscription_id: string | null } | null
     try {
-      currentStripeInfo = await withRlsContext(c, servicePrincipal, async client => singleRowOrNull(await queryJson<{ status: string | null, past_due_at: string | null }>(
+      currentStripeInfo = await withRlsContext(c, servicePrincipal, async client => singleRowOrNull(await queryJson<{ status: string | null, past_due_at: string | null, subscription_id: string | null }>(
         client,
-        'SELECT status, past_due_at FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+        'SELECT status, past_due_at, subscription_id FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
         [customerId],
       )))
     }
@@ -529,6 +548,15 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
     }
 
     const hadPastDueState = !!currentStripeInfo?.past_due_at
+    const bankTransferAction = subscriptionData
+      ? bankTransferSyncAction(subscriptionData, currentStripeInfo
+          ? { status: currentStripeInfo.status, subscriptionId: currentStripeInfo.subscription_id }
+          : null)
+      : 'apply_live'
+    if (bankTransferAction === 'wait_for_payment')
+      dbStatus = subscriptionData?.status === 'past_due' ? 'failed' : 'created'
+    else if (bankTransferAction === 'keep_stored_plan')
+      dbStatus = 'succeeded'
 
     // Update stripe_info table with latest data, even if no subscription exists
     const updateData: any = {
@@ -545,7 +573,7 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
     }
 
     // Only include fields if they have valid values to avoid foreign key constraint violations
-    if (subscriptionData?.productId) {
+    if (subscriptionData?.productId && bankTransferAction !== 'keep_stored_plan') {
       updateData.product_id = subscriptionData.productId
     }
     if (subscriptionData?.subscriptionId) {
@@ -560,7 +588,9 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
     if (subscriptionData)
       updateData.canceled_at = subscriptionData.canceledAt ?? null
     // Extra MAU only counts while the subscription that bought it is live.
-    updateData.extra_mau = dbStatus === 'succeeded' ? subscriptionData?.extraMau ?? 0 : 0
+    // An unpaid bank-transfer upgrade keeps the quota already stored.
+    if (bankTransferAction !== 'keep_stored_plan')
+      updateData.extra_mau = dbStatus === 'succeeded' ? subscriptionData?.extraMau ?? 0 : 0
 
     try {
       await withRlsContext(c, servicePrincipal, client => updateStripeInfoByCustomer(client, customerId, updateData))

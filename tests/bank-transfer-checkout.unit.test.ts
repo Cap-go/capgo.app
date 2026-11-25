@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, buildBankTransferItems, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, buildBankTransferItems, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoiceRecordsSelfServeBankTransfer } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
@@ -99,6 +99,11 @@ describe('yearly bank transfer', () => {
     ])
     const fewerExtra = subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }, { price: extraPrice, quantity: 1 }])
     expect(bankTransferInvoiceSettlesUpgrade(reduced, fewerExtra, { priceId: 'price_year', extraMau: 2000 })).toBe(true)
+    const unpaidTransfer = { selfServeBankTransfer: true, status: 'active', latestInvoiceStatus: 'open', subscriptionId: 'sub_1' }
+    expect(bankTransferSyncAction(unpaidTransfer, { status: 'succeeded', subscriptionId: 'sub_1' })).toBe('keep_stored_plan')
+    expect(bankTransferSyncAction(unpaidTransfer, { status: 'created', subscriptionId: null })).toBe('wait_for_payment')
+    expect(bankTransferSyncAction({ ...unpaidTransfer, latestInvoiceStatus: 'paid' }, { status: 'succeeded', subscriptionId: 'sub_1' })).toBe('apply_live')
+    expect(bankTransferSyncAction({ ...unpaidTransfer, selfServeBankTransfer: false }, { status: 'succeeded', subscriptionId: 'sub_1' })).toBe('apply_live')
 
     const same = buildBankTransferItems(
       [{ id: 'si_plan', quantity: 1, price: { id: 'price_year' } }],
