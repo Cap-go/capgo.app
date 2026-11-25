@@ -85,9 +85,11 @@ describe('onboarding setup mode', () => {
 
   it.concurrent('ships every AI onboarding message key the screens use', () => {
     const used = new Set<string>()
-    for (const file of ['src/components/dashboard/OnboardingSetupModeChoice.vue', 'src/pages/onboarding/ai.vue']) {
+    for (const file of ['src/components/dashboard/OnboardingSetupModeChoice.vue', 'src/pages/onboarding/ai.vue', 'src/services/paymentRequired.ts']) {
       const source = readFileSync(resolve(__dirname, '..', file), 'utf8')
       for (const match of source.matchAll(/t\(['`](ai-onboarding-[\w-]+?)(?:\$\{|['`])/g))
+        used.add(match[1]!)
+      for (const match of source.matchAll(/'(ai-onboarding-[\w-]+)'/g))
         used.add(match[1]!)
     }
     // Keys built from a variable: every goal option and goal-specific task must exist.

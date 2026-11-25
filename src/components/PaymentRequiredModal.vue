@@ -4,14 +4,12 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { isDirectOfferMetadata, resolveUnpaidCopyVariant } from '~/services/paymentRequired'
-import { useMainStore } from '~/stores/main'
+import { resolveUnpaidCopyVariant } from '~/services/paymentRequired'
 import { useOrganizationStore } from '~/stores/organization'
 
 const { t } = useI18n()
 const router = useRouter()
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
-const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const billingOrgId = computed(() => organizationStore.currentOrganization?.gid)
 const { paidAt, trialSkipped } = useBillingPaidAt(billingOrgId, hideExternalPurchaseFlows)
@@ -19,7 +17,6 @@ const copyVariant = computed(() => resolveUnpaidCopyVariant({
   isNative: hideExternalPurchaseFlows,
   paidAt: paidAt.value,
   trialSkipped: trialSkipped.value,
-  isDirectOfferUser: isDirectOfferMetadata(main.auth?.app_metadata),
 }))
 // Direct-offer orgs never had a trial: invite them to start instead of saying it ended.
 const showNoTrialCopy = computed(() => copyVariant.value === 'no_trial')

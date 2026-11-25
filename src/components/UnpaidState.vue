@@ -5,8 +5,7 @@ import { useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { isDirectOfferMetadata, resolveUnpaidCopyVariant } from '~/services/paymentRequired'
-import { useMainStore } from '~/stores/main'
+import { resolveUnpaidCopyVariant } from '~/services/paymentRequired'
 import { useOrganizationStore } from '~/stores/organization'
 
 // Page-level empty state for gated pages when the organization has no active
@@ -14,7 +13,6 @@ import { useOrganizationStore } from '~/stores/organization'
 // reachable route to the plans page.
 const { t } = useI18n()
 const router = useRouter()
-const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
 const billingOrgId = computed(() => organizationStore.currentOrganization?.gid)
@@ -23,7 +21,6 @@ const copyVariant = computed(() => resolveUnpaidCopyVariant({
   isNative: hideExternalPurchaseFlows,
   paidAt: paidAt.value,
   trialSkipped: trialSkipped.value,
-  isDirectOfferUser: isDirectOfferMetadata(main.auth?.app_metadata),
 }))
 const showNoTrialCopy = computed(() => copyVariant.value === 'no_trial')
 

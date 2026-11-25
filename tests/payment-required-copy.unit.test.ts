@@ -61,24 +61,21 @@ describe('payment required copy', () => {
     expect(isDirectOfferMetadata(undefined)).toBe(false)
   })
 
-  it.concurrent('selects unpaid copy for a fresh org that never had a trial', () => {
+  it.concurrent('selects unpaid copy only when organization history confirms a skipped trial', () => {
     expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: null, trialSkipped: true })).toBe('no_trial')
-    expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: undefined, trialSkipped: false, isDirectOfferUser: true })).toBe('no_trial')
-    expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: null, trialSkipped: false, isDirectOfferUser: true })).toBe('no_trial')
   })
 
   it.concurrent('keeps expired-trial copy for a never-paid org that had a trial', () => {
     expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: null, trialSkipped: false })).toBe('expired_trial')
   })
 
-  it.concurrent('keeps lapsed-subscription copy for previously paid orgs and while billing loads', () => {
+  it.concurrent('keeps lapsed-subscription copy for previously paid orgs and while billing is unresolved', () => {
     expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: '2026-01-15T12:00:00.000Z', trialSkipped: false })).toBe('lapsed')
-    expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: '2026-01-15T12:00:00.000Z', trialSkipped: false, isDirectOfferUser: true })).toBe('lapsed')
     expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: undefined, trialSkipped: false })).toBe('lapsed')
   })
 
-  it.concurrent('keeps native copy in the native app even for direct-offer users', () => {
-    expect(resolveUnpaidCopyVariant({ isNative: true, paidAt: null, trialSkipped: true, isDirectOfferUser: true })).toBe('native')
+  it.concurrent('keeps native copy in the native app even when a trial was skipped', () => {
+    expect(resolveUnpaidCopyVariant({ isNative: true, paidAt: null, trialSkipped: true })).toBe('native')
   })
 
   it.concurrent('selects the no-trial onboarding plan subtitle for direct-offer users', () => {

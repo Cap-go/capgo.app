@@ -55,22 +55,20 @@ export function isDirectOfferMetadata(metadata: Record<string, unknown> | null |
 
 /**
  * Copy variant for unpaid-org surfaces. Does not change gating.
- * Fresh orgs that never had a trial see "choose a plan to start shipping".
- * Expired trials and lapsed subscriptions keep their existing copy.
- * While billing history is still loading, keep the existing lapsed copy unless
- * the user is a known direct-offer signup, so ad visitors do not see a
- * suspension message first.
+ * Fresh orgs that never had a trial (`trialSkipped`) see "choose a plan to
+ * start shipping". Expired trials and lapsed subscriptions keep their existing
+ * copy. While billing history is still loading or a lookup failed, keep the
+ * existing lapsed copy. Account metadata is not used here; after history
+ * resolves, only the organization signal decides.
  */
 export function resolveUnpaidCopyVariant(options: {
   isNative: boolean
   paidAt: string | null | undefined
   trialSkipped: boolean
-  isDirectOfferUser?: boolean
 }): UnpaidCopyVariant {
   if (options.isNative)
     return 'native'
-  const neverPaid = options.paidAt === null || options.paidAt === undefined
-  if (options.trialSkipped || (options.isDirectOfferUser === true && neverPaid))
+  if (options.trialSkipped)
     return 'no_trial'
   if (options.paidAt === null)
     return 'expired_trial'
