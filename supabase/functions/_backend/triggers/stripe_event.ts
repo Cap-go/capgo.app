@@ -30,7 +30,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, storedPlanConflictsWithPaidInvoice, subscriptionBillingPeriod, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, invoiceServicePeriod, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, storedPlanConflictsWithPaidInvoice, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
@@ -2148,12 +2148,13 @@ async function applyBankTransferPlanAfterPayment(
   const subscription = await stripe.subscriptions.retrieve(subscriptionId)
   if (!isSelfServeBankTransfer(subscription.metadata))
     return
-  const lines = invoiceBillLines(await paidInvoiceSubscriptionLines(stripe, invoice))
+  const rawLines = await paidInvoiceSubscriptionLines(stripe, invoice)
+  const lines = invoiceBillLines(rawLines)
   if (!bankTransferInvoiceSettlesUpgrade(lines, subscriptionItemPriceQuantities(subscription.items.data), { priceId: customer.price_id, extraMau: customer.extra_mau }))
     return
   const { priceId, productId } = parsePriceIds(c, subscription.items.data)
   const extraMau = getExtraMau(subscription.items.data)
-  const period = subscriptionBillingPeriod(subscription)
+  const period = invoiceServicePeriod(rawLines)
   const planAlreadyStored = !productId || bankTransferPlanAlreadyStored(
     { productId: customer.product_id, priceId: customer.price_id, extraMau: customer.extra_mau },
     { productId, priceId, extraMau },

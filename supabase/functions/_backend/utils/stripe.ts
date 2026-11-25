@@ -253,11 +253,19 @@ function stripeTimestampToIso(seconds: number | null | undefined) {
   return seconds ? new Date(seconds * 1000).toISOString() : null
 }
 
-export function subscriptionBillingPeriod(subscription: { items?: { data?: Stripe.SubscriptionItem[] } | null }): { start: string | null, end: string | null } {
-  const item = getLicensedSubscriptionItem(subscription.items?.data)
+export function invoiceServicePeriod(lines: Array<{ amount?: number | null, period?: { start?: number | null, end?: number | null } | null }>): { start: string | null, end: string | null } {
+  let start: number | null = null
+  let end: number | null = null
+  for (const line of lines) {
+    if ((line.amount ?? 0) <= 0 || line.period?.end == null)
+      continue
+    end = end == null ? line.period.end : Math.max(end, line.period.end)
+    const lineStart = line.period.start ?? line.period.end
+    start = start == null ? lineStart : Math.min(start, lineStart)
+  }
   return {
-    start: stripeTimestampToIso(item?.current_period_start),
-    end: stripeTimestampToIso(item?.current_period_end),
+    start: stripeTimestampToIso(start),
+    end: stripeTimestampToIso(end),
   }
 }
 
@@ -265,7 +273,11 @@ export function paidThroughNeedsUpdate(
   stored: { start?: string | null, end?: string | null },
   next: { start: string | null, end: string | null },
 ) {
-  return !!next.end && (stored.end !== next.end || (!!next.start && stored.start !== next.start))
+  if (!next.end)
+    return false
+  if (!stored.end)
+    return true
+  return new Date(next.end) > new Date(stored.end)
 }
 
 function getSubscriptionEndDate(subscription: Stripe.Subscription, item: Stripe.SubscriptionItem | null) {

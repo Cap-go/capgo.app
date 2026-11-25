@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, storedPlanConflictsWithPaidInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, invoiceServicePeriod, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, storedPlanConflictsWithPaidInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoiceRecordsSelfServeBankTransfer } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
@@ -124,6 +124,14 @@ describe('yearly bank transfer', () => {
     expect(storedPlanConflictsWithPaidInvoice(null, ['price_maker'])).toBe(false)
     expect(paidThroughNeedsUpdate({ start: '2026-01-01T00:00:00.000Z', end: '2026-11-01T00:00:00.000Z' }, { start: '2026-11-01T00:00:00.000Z', end: '2027-11-01T00:00:00.000Z' })).toBe(true)
     expect(paidThroughNeedsUpdate({ start: '2026-11-01T00:00:00.000Z', end: '2027-11-01T00:00:00.000Z' }, { start: '2026-11-01T00:00:00.000Z', end: '2027-11-01T00:00:00.000Z' })).toBe(false)
+    expect(paidThroughNeedsUpdate({ end: '2027-11-01T00:00:00.000Z' }, { start: '2025-11-01T00:00:00.000Z', end: '2026-11-01T00:00:00.000Z' })).toBe(false)
+    expect(invoiceServicePeriod([
+      { amount: -1000, period: { start: 1_700_000_000, end: 1_731_628_800 } },
+      { amount: 39600, period: { start: 1_762_000_000, end: 1_793_536_000 } },
+    ])).toEqual({
+      start: new Date(1_762_000_000 * 1000).toISOString(),
+      end: new Date(1_793_536_000 * 1000).toISOString(),
+    })
     expect(canceledBankTransferKeepsStoredPlan(true, true, false)).toBe(true)
     expect(canceledBankTransferKeepsStoredPlan(true, true, true)).toBe(false)
     expect(canceledBankTransferKeepsStoredPlan(true, false, false)).toBe(false)
