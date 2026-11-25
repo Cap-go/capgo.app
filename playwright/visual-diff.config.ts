@@ -940,6 +940,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       // A customer missing a feature: the discount stays, and a call with the founder is offered next to it.
       await page.route('**/private/stripe_billing/cancel-offer', route => route.fulfill({ json: {
         offer: { id: '00000000-0000-4000-8000-000000000003', type: 'discount', percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' },
+        founderCall: true,
+        attemptId: '00000000-0000-4000-8000-000000000004',
       } }))
       await page.goto('/settings/organization/billing')
       await page.locator('[data-test="billing-cancel"]').click()

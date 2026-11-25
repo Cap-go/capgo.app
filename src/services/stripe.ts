@@ -319,9 +319,8 @@ export const CANCEL_REASONS = [
 
 export type CancelReason = typeof CANCEL_REASONS[number]
 
-// Reasons a conversation can solve better than a price: the cancel flow offers a call
-// with the founder before canceling.
-export const FOUNDER_CALL_REASONS: readonly CancelReason[] = ['missing_features', 'switched_service', 'too_complex', 'low_quality', 'customer_service']
+// The founder call the cancel flow offers when a conversation can help more than a
+// price (the backend decides from the reason).
 export const FOUNDER_CALL_URL = 'https://book.capgo.app/meet-martin'
 
 export interface IntentSecret {
@@ -426,8 +425,14 @@ export type AcceptCancelSaveOfferResult
   = | { type: 'discount', discountEnd: string }
     | { type: 'credits', credits: number }
 
+// attemptId: the recorded cancel attempt (null if it could not be saved), passed back
+// on cancel and on the founder call click so the admin report can measure each outcome.
 export function getCancelSaveOffer(orgId: string, reason: CancelReason) {
-  return callBilling<{ offer: CancelSaveOffer | null }>('cancel-offer', { orgId, reason })
+  return callBilling<{ offer: CancelSaveOffer | null, founderCall?: boolean, attemptId?: string | null }>('cancel-offer', { orgId, reason })
+}
+
+export function recordFounderCallClick(orgId: string, attemptId: string) {
+  return callBilling<{ ok: boolean }>('cancel-offer/founder-click', { orgId, attemptId })
 }
 
 // comment: sent to Stripe when accepting credits cancels the plan.
@@ -436,8 +441,8 @@ export function acceptCancelSaveOffer(orgId: string, offerId: string, comment = 
 }
 
 // offerId: the save offer the customer turned down before canceling.
-export function cancelSubscriptionWithReason(orgId: string, reason: CancelReason, comment: string, offerId?: string) {
-  return callBilling<{ subscription: BillingSubscription | null }>('cancel', { orgId, reason, comment, ...(offerId ? { offerId } : {}) })
+export function cancelSubscriptionWithReason(orgId: string, reason: CancelReason, comment: string, offerId?: string, attemptId?: string) {
+  return callBilling<{ subscription: BillingSubscription | null }>('cancel', { orgId, reason, comment, ...(offerId ? { offerId } : {}), ...(attemptId ? { attemptId } : {}) })
 }
 
 export function resumeSubscription(orgId: string) {

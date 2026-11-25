@@ -11,7 +11,7 @@ import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import BillingModal from '~/components/billing/BillingModal.vue'
-import { acceptCancelSaveOffer, CANCEL_REASONS, cancelSubscriptionWithReason, formatStripeAmount, FOUNDER_CALL_REASONS, FOUNDER_CALL_URL, getCancelSaveOffer } from '~/services/stripe'
+import { acceptCancelSaveOffer, CANCEL_REASONS, cancelSubscriptionWithReason, formatStripeAmount, FOUNDER_CALL_URL, getCancelSaveOffer, recordFounderCallClick } from '~/services/stripe'
 
 const props = defineProps<{
   orgId: string
@@ -35,6 +35,8 @@ const offer = ref<CancelSaveOffer | null | undefined>(undefined)
 const showLossReminder = ref(false)
 // Set once the offer was checked and the reason calls for a talk with the founder.
 const showFounderCall = ref(false)
+// The recorded cancel attempt, for the admin report.
+const attemptId = ref<string | null>(null)
 const lossHeading = ref<HTMLElement | null>(null)
 const MAX_COMMENT = 1000
 const lossItems = ['ota', 'channels', 'builds', 'support'] as const
@@ -49,7 +51,7 @@ const monthlyPrice = computed(() => offer.value ? formatStripeAmount(offer.value
 const discountedPrice = computed(() => discountOffer.value ? formatStripeAmount(discountOffer.value.discountedAmount, discountOffer.value.currency) : '')
 
 async function cancelPlan(selected: CancelReason) {
-  const { subscription } = await cancelSubscriptionWithReason(props.orgId, selected, comment.value.trim(), offer.value?.id)
+  const { subscription } = await cancelSubscriptionWithReason(props.orgId, selected, comment.value.trim(), offer.value?.id, attemptId.value ?? undefined)
   toast.success(t('billing-cancel-success'))
   emit('canceled', subscription)
 }
@@ -69,12 +71,14 @@ async function loadOfferOrCancel() {
   try {
     if (offer.value === undefined) {
       // The offer is optional: if it cannot be loaded, cancel as asked.
-      offer.value = await getCancelSaveOffer(props.orgId, reason.value).then(res => res.offer).catch((error) => {
+      const res = await getCancelSaveOffer(props.orgId, reason.value).catch((error) => {
         console.error('Cannot load cancel offer', error)
         return null
       })
+      offer.value = res?.offer ?? null
+      attemptId.value = res?.attemptId ?? null
       showLossReminder.value = false
-      showFounderCall.value = FOUNDER_CALL_REASONS.includes(reason.value)
+      showFounderCall.value = !!res?.founderCall
       if (offer.value || showFounderCall.value)
         return
     }
@@ -103,6 +107,12 @@ async function submit() {
   finally {
     isSubmitting.value = false
   }
+}
+
+// Measured only: the link opens whatever happens to the request.
+function trackFounderClick() {
+  if (attemptId.value)
+    recordFounderCallClick(props.orgId, attemptId.value).catch(error => console.error('Cannot record founder call click', error))
 }
 
 async function acceptOffer() {
@@ -186,7 +196,7 @@ async function acceptOffer() {
         <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
           {{ t('billing-cancel-founder-desc') }}
         </p>
-        <a :href="FOUNDER_CALL_URL" target="_blank" rel="noopener" class="d-btn d-btn-sm d-btn-outline mt-3" data-test="cancel-founder-book">
+        <a :href="FOUNDER_CALL_URL" target="_blank" rel="noopener" class="d-btn d-btn-sm d-btn-outline mt-3" data-test="cancel-founder-book" @click="trackFounderClick">
           {{ t('billing-cancel-founder-book') }}
         </a>
       </div>

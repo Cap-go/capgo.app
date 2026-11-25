@@ -217,3 +217,32 @@ describe('declining a discount offer while its accept is in flight', () => {
     expect(rows[0].discount_end.toISOString()).toBe('2026-04-01T00:00:00.000Z')
   })
 })
+
+describe('cancel attempts recorded for the admin report', () => {
+  it('records the attempt, a founder call click, and the cancel, scoped to the org', async () => {
+    const { recordCancelAttempt, recordCancelAttemptCanceled, recordFounderCallClick } = await import('../supabase/functions/_backend/utils/cancel_attempt.ts')
+    const id = await recordCancelAttempt(c, { orgId, customerId, reason: 'missing_features', offerId: null, founderCall: true })
+    expect(id).not.toBeNull()
+    // Another org cannot touch it.
+    await recordFounderCallClick(c, staleOrgId, id!)
+    await recordCancelAttemptCanceled(c, staleOrgId, id!)
+    const read = async () => (await pool.query<{ reason: string, founder_call_shown: boolean, founder_call_clicked_at: Date | null, canceled_at: Date | null }>(
+      'SELECT reason, founder_call_shown, founder_call_clicked_at, canceled_at FROM public.cancel_attempts WHERE id = $1',
+      [id],
+    )).rows[0]
+    expect(await read()).toMatchObject({ reason: 'missing_features', founder_call_shown: true, founder_call_clicked_at: null, canceled_at: null })
+    await recordFounderCallClick(c, orgId, id!)
+    await recordCancelAttemptCanceled(c, orgId, id!)
+    const done = await read()
+    expect(done.founder_call_clicked_at).not.toBeNull()
+    expect(done.canceled_at).not.toBeNull()
+  })
+
+  it('never counts a click on an attempt that did not show the founder call', async () => {
+    const { recordCancelAttempt, recordFounderCallClick } = await import('../supabase/functions/_backend/utils/cancel_attempt.ts')
+    const id = await recordCancelAttempt(c, { orgId, customerId, reason: 'too_expensive', offerId: null, founderCall: false })
+    await recordFounderCallClick(c, orgId, id!)
+    const { rows } = await pool.query('SELECT founder_call_clicked_at FROM public.cancel_attempts WHERE id = $1', [id])
+    expect(rows[0].founder_call_clicked_at).toBeNull()
+  })
+})
