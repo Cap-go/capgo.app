@@ -202,6 +202,22 @@ app.get('/.well-known/openai-apps-challenge', (c) => {
   return c.text(token)
 })
 
+// Muse connector domain verification. Muse fetches
+// `/.well-known/muse-challenge/<token>` with no credentials and requires HTTP 200
+// whose body is only `muse-challenge=<token>`. The baked-in token expires 2026-12-02.
+// Set MUSE_CHALLENGE_TOKEN to publish a later challenge without a code change.
+const MUSE_CHALLENGE_TOKEN = '4da517a9663c456b785515ffaf40adbc4279ae7f4ebb360ad66ecf2664345878'
+
+app.get('/.well-known/muse-challenge/:token', (c) => {
+  const configured = getEnv(c, 'MUSE_CHALLENGE_TOKEN').trim()
+  const expected = configured || MUSE_CHALLENGE_TOKEN
+  const token = c.req.param('token')
+  c.header('Cache-Control', 'no-store')
+  if (!expected || token !== expected)
+    return c.text('Not found', 404)
+  return c.text(`muse-challenge=${expected}`)
+})
+
 // ---------------------------------------------------------------------------
 // RFC 7591 Dynamic Client Registration (public clients only, PKCE required).
 // ---------------------------------------------------------------------------

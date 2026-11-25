@@ -121,10 +121,12 @@ S3_SECRET_ACCESS_KEY_TO_USE="${S3_SECRET_ACCESS_KEY:-$(get_supabase_status_var '
 S3_REGION_TO_USE="${S3_REGION:-$(get_supabase_status_var 'S3_PROTOCOL_REGION')}"
 
 WORKERS_PID=''
+QUEUE_DISPATCHER_PID=''
 cleanup() {
   local pid
   echo -e "\n${YELLOW}Stopping workers...${NC}"
-  for pid in "${WORKERS_PID}"; do
+  # The dispatcher goes first: it puts pg_net routing back while the database is up.
+  for pid in "${QUEUE_DISPATCHER_PID}" "${WORKERS_PID}"; do
     if [[ -z "${pid}" ]]; then
       continue
     fi
@@ -179,4 +181,13 @@ done
 echo -e "${GREEN}Starting API, Plugin and Files workers in one local runtime...${NC}"
 bun "${ROOT_DIR}/scripts/local-cloudflare-workers.ts" "${ROOT_DIR}" "${RUNTIME_ENV_FILE}" "${PERSIST_DIR}" "${CLOUDFLARE_API_PORT}" "${CLOUDFLARE_PLUGIN_PORT}" "${CLOUDFLARE_FILES_PORT}" "${API_INSPECTOR_PORT}" &
 WORKERS_PID=$!
+
+# Opt-in: send queue wakeups through the outbox and the QueueDispatcher Durable
+# Object like prod, instead of pg_net (`bun run backend` turns it on).
+if [[ "${LOCAL_QUEUE_DISPATCHER:-false}" == "true" ]]; then
+  echo -e "${GREEN}Routing queue wakeups to the local QueueDispatcher...${NC}"
+  SUPABASE_DB_URL="${SUPABASE_DB_URL}" SUPABASE_URL="${SUPABASE_URL}" CLOUDFLARE_API_PORT="${CLOUDFLARE_API_PORT}" \
+    bun "${ROOT_DIR}/scripts/local-queue-dispatcher.ts" &
+  QUEUE_DISPATCHER_PID=$!
+fi
 wait "${WORKERS_PID}"

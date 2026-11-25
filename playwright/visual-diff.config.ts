@@ -461,6 +461,55 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'builds-detail-mobile', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'detail', 390) },
   { slug: 'builds-next-steps-mobile', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'next-steps', 390) },
   {
+    // A saved iOS build opened in the simulator: the page stays on the build history.
+    slug: 'builds-open-saved-simulator',
+    path: '/app/com.demo.app/builds',
+    auth: true,
+    prepare: async (page) => {
+      // Fixed times keep the captured dates identical between runs; expiries stay far in the future.
+      const now = Date.parse('2026-11-24T12:00:00.000Z')
+      const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString()
+      const future = '2099-01-01T00:00:00.000Z'
+      const build = {
+        id: '00000000-0000-4000-8000-000000004221', ai_analyzed: false, app_id: 'com.demo.app', build_config: null, build_mode: 'release',
+        builder_job_id: 'job-visual-ios', completed_at: iso(-50 * 60_000), created_at: iso(-60 * 60_000), ios_dependency_manager: null,
+        last_error: null, owner_org: '046a36ac-e03c-4590-9257-bd6c9dba9ee8', platform: 'ios', queue_priority: null,
+        requested_by: '6aa76066-55ef-4238-ade6-0b32334a4097', runner_wait_seconds: 12, started_at: iso(-59 * 60_000), status: 'succeeded',
+        updated_at: iso(-50 * 60_000), upload_expires_at: future, upload_path: 'visual.zip', upload_session_key: 'visual',
+        upload_url: 'https://builder.example.com/upload/visual', uses_stored_credentials: true, xcode_version: null,
+      }
+      let started = false
+      await routeConsoleQuery(page, 'build_requests', (route, query) => route.fulfill(consoleQueryJson(consoleQueryRows(query, [build]), 1)))
+      await page.route('**/private/simulator/outputs**', route => route.fulfill({ json: { outputs: {
+        'job-visual-ios': { url: 'https://builder.example.com/output/app.ipa', kind: 'ios_ipa', expires_at: future },
+      } } }))
+      await page.route('**/private/simulator/**', async (route) => {
+        const request = route.request()
+        if (request.url().includes('/outputs'))
+          return route.fallback()
+        if (request.method() === 'POST') {
+          started = true
+          return route.fulfill({ json: { data: { id: 'sim-visual', url: 'https://ios-emulator.capgo.app/s/sim-visual/', install_error: null } } })
+        }
+        if (request.url().includes('/sim-visual'))
+          return route.fulfill({ json: { data: { status: 'in-progress' } } })
+        return route.fulfill({ json: { data: started ? [{ id: 'sim-visual', platform: 'ios', status: 'in-progress', started_at: iso(0), build_time_seconds: null, billable_seconds: null }] : [], idle_minutes: 5, max_minutes: 40 } })
+      })
+      await page.reload()
+      const open = page.getByRole('button', { name: 'Open in simulator' }).first()
+      await open.waitFor({ state: 'visible' })
+      // The base opened a blank tab; close it so only the build history is captured.
+      page.context().on('page', popup => void popup.close().catch(() => {}))
+      await open.click()
+      const link = page.getByRole('link', { name: 'Open simulator' }).first()
+      if (process.env.VISUAL_DIFF_PHASE === 'after')
+        await link.waitFor({ state: 'visible' })
+      else
+        await link.waitFor({ state: 'visible' }).catch(() => {})
+      await page.waitForTimeout(800)
+    },
+  },
+  {
     slug: 'builds-empty',
     path: '/app/com.demo.app/builds',
     auth: true,
@@ -514,6 +563,41 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.goto('/app/com.demo.app/getting-started')
       await page.locator('[data-test="dual-onboarding-checklists"], [data-test="builder-checklist"]').first().waitFor()
       if (progress === 'builder')
+        await page.locator('[data-test="builder-step-start_setup"][data-status="done"]').waitFor({ state: 'attached' })
+    },
+  })),
+  // Builder-only setup at desktop size: before any platform starts, then with iOS started.
+  ...[
+    { slug: 'onboarding-builder-method-waiting', started: null },
+    { slug: 'onboarding-builder-method-ios-progress', started: 'ios' as const },
+  ].map(({ slug, started }): VisualDiffRoute => ({
+    slug,
+    path: '/apps',
+    auth: true,
+    prepare: async (page) => {
+      const onboarding = { setup: {
+        todo_list_version: 4,
+        builder_todo_list_version: '1',
+        paths: ['builder'],
+        selected_path: 'builder',
+        // The base only lists steps for a selected platform.
+        selected_builder_platform: started,
+        source: 'manual',
+        outcome: 'in_progress',
+        steps: { builder: Object.fromEntries((['ios', 'android'] as const).map(platform => [platform, Object.fromEntries(BUILDER_STEP_IDS[platform].map(id => [id, { status: platform === started && id === 'start_setup' ? 'done' : 'pending' }]))])) },
+      } }
+      await routeConsoleQuery(page, 'apps', async (route, query) => {
+        const matchesApp = query.operations.some(op => op.method === 'eq' && op.args[0] === 'app_id' && op.args[1] === 'com.demo.app')
+        await forwardConsoleQuery(route, (row: any) => row?.app_id === 'com.demo.app' || (matchesApp && row?.onboarding !== undefined)
+          ? { ...row, need_onboarding: true, onboarding }
+          : row)
+      })
+      await routeConsoleQuery(page, 'verify_getting_started', route => route.fulfill(consoleQueryJson(onboarding)))
+      await page.route('**/private/onboarding_progress', route => route.fulfill({ json: { onboarding, hasChannel: false, checkErrors: [] } }))
+      await page.setViewportSize({ width: 1440, height: 900 })
+      await page.goto('/app/com.demo.app/getting-started')
+      await page.locator('[data-test="builder-checklist"]').waitFor()
+      if (started)
         await page.locator('[data-test="builder-step-start_setup"][data-status="done"]').waitFor({ state: 'attached' })
     },
   })),
@@ -849,7 +933,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
         trialPlan: null,
       } }))
       await page.route('**/private/stripe_billing/cancel-offer', route => route.fulfill({ json: {
-        offer: { id: '00000000-0000-4000-8000-000000000001', percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' },
+        offer: { id: '00000000-0000-4000-8000-000000000001', type: 'discount', percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' },
       } }))
       await page.goto('/settings/organization/billing')
       await page.locator('[data-test="billing-cancel"]').click()
@@ -878,11 +962,82 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
         trialPlan: null,
       } }))
       await page.route('**/private/stripe_billing/cancel-offer', route => route.fulfill({ json: {
-        offer: { id: '00000000-0000-4000-8000-000000000001', percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' },
+        offer: { id: '00000000-0000-4000-8000-000000000001', type: 'discount', percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' },
       } }))
       await page.goto('/settings/organization/billing')
       await page.locator('[data-test="billing-cancel"]').click()
       await page.locator('[data-test="cancel-reason-too_expensive"]').click()
+      await page.locator('[data-test="cancel-plan-confirm"]').click()
+      await page.locator('[data-test="cancel-loss-reminder"]')
+        .or(page.locator('[data-test="cancel-save-offer"]'))
+        .first()
+        .waitFor()
+      if (await page.locator('[data-test="cancel-loss-reminder"]').isVisible())
+        await page.locator('[data-test="cancel-loss-continue"]').click()
+      await page.locator('[data-test="cancel-save-offer"]').waitFor()
+    },
+  },
+  {
+    slug: 'org-billing-cancel-credits',
+    path: '/settings/organization/billing',
+    auth: true,
+    prepare: async (page) => {
+      await page.route('**/private/sso/check-enforcement', route => route.fulfill({ json: { allowed: true } }))
+      await page.route('**/private/stripe_past_due', route => route.fulfill({ json: { past_due: false, invoice: null } }))
+      await page.route('**/private/stripe_billing/overview', route => route.fulfill({ json: {
+        publishableKey: '',
+        card: { id: 'pm_visual', brand: 'visa', last4: '4242', expMonth: 4, expYear: 2030 },
+        backupCard: null,
+        subscription: { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: new Date(Date.now() + 18 * 86400000).toISOString() },
+        invoices: [],
+        openInvoice: null,
+        trialPlan: null,
+      } }))
+      // A customer who barely uses the plan: before this change they got the same
+      // discount as everyone, now they are offered credits instead of the plan.
+      await page.route('**/private/stripe_billing/cancel-offer', route => route.fulfill({ json: {
+        offer: process.env.VISUAL_DIFF_PHASE === 'before'
+          ? { id: '00000000-0000-4000-8000-000000000001', percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' }
+          : { id: '00000000-0000-4000-8000-000000000002', type: 'credits', credits: 29, monthlyAmount: 2900, currency: 'usd' },
+      } }))
+      await page.goto('/settings/organization/billing')
+      await page.locator('[data-test="billing-cancel"]').click()
+      await page.locator('[data-test="cancel-reason-unused"]').click()
+      await page.locator('[data-test="cancel-plan-confirm"]').click()
+      await page.locator('[data-test="cancel-loss-reminder"]')
+        .or(page.locator('[data-test="cancel-save-offer"]'))
+        .first()
+        .waitFor()
+      if (await page.locator('[data-test="cancel-loss-reminder"]').isVisible())
+        await page.locator('[data-test="cancel-loss-continue"]').click()
+      await page.locator('[data-test="cancel-save-offer"]').waitFor()
+    },
+  },
+  {
+    slug: 'org-billing-cancel-founder',
+    path: '/settings/organization/billing',
+    auth: true,
+    prepare: async (page) => {
+      await page.route('**/private/sso/check-enforcement', route => route.fulfill({ json: { allowed: true } }))
+      await page.route('**/private/stripe_past_due', route => route.fulfill({ json: { past_due: false, invoice: null } }))
+      await page.route('**/private/stripe_billing/overview', route => route.fulfill({ json: {
+        publishableKey: '',
+        card: { id: 'pm_visual', brand: 'visa', last4: '4242', expMonth: 4, expYear: 2030 },
+        backupCard: null,
+        subscription: { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: new Date(Date.now() + 18 * 86400000).toISOString() },
+        invoices: [],
+        openInvoice: null,
+        trialPlan: null,
+      } }))
+      // A customer missing a feature: the discount stays, and a call with the founder is offered next to it.
+      await page.route('**/private/stripe_billing/cancel-offer', route => route.fulfill({ json: {
+        offer: { id: '00000000-0000-4000-8000-000000000003', type: 'discount', percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' },
+        founderCall: true,
+        attemptId: '00000000-0000-4000-8000-000000000004',
+      } }))
+      await page.goto('/settings/organization/billing')
+      await page.locator('[data-test="billing-cancel"]').click()
+      await page.locator('[data-test="cancel-reason-missing_features"]').click()
       await page.locator('[data-test="cancel-plan-confirm"]').click()
       await page.locator('[data-test="cancel-loss-reminder"]')
         .or(page.locator('[data-test="cancel-save-offer"]'))

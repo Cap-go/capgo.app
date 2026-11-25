@@ -5,12 +5,12 @@ import { simpleError } from './hono.ts'
 import { closeClient, getDrizzleClient, getPgClient, withPgTransaction } from './pg.ts'
 
 /**
- * Who a direct Postgres statement runs as, mirroring the supabase-js clients it replaces:
- * - `service`: the connection role, like `supabaseAdmin` (RLS bypassed).
- * - `jwt`: `authenticated` with the user's claims, like `supabaseClient(c, jwt)`.
- * - `apikey`: `anon` with `request.headers.capgkey` set, like `supabaseApikey`. RLS policies
- *   and RBAC functions read the key back through `get_apikey_header()`.
- * - `anon`: plain `anon`, like `emptySupabase`.
+ * Who a direct Postgres statement runs as, mirroring the PostgREST roles it replaces:
+ * - `service`: the connection role, like the service-role key (RLS bypassed).
+ * - `jwt`: `authenticated` with the user's claims, like a request with the user's JWT.
+ * - `apikey`: `anon` with `request.headers.capgkey` set, like a request with the `capgkey`
+ *   header. RLS policies and RBAC functions read the key back through `get_apikey_header()`.
+ * - `anon`: plain `anon`, like the anon key.
  *
  * `session_user` stays `postgres` on every direct connection, even after the role switch (it was
  * `authenticator` under PostgREST). SQL that detects internal callers through `session_user`
@@ -25,7 +25,7 @@ export type RlsPrincipal
 
 export const servicePrincipal: RlsPrincipal = { kind: 'service' }
 
-/** API-key principal; hashed keys have no `key`, so fall back to the request's capgkey like `supabaseApikey`. */
+/** API-key principal; hashed keys have no `key`, so fall back to the request's capgkey. */
 export function apikeyPrincipal(c: Context, apikey: string | null | undefined): RlsPrincipal {
   const effectiveApikey = apikey ?? c.get('capgkey')
   if (!effectiveApikey)
@@ -33,7 +33,7 @@ export function apikeyPrincipal(c: Context, apikey: string | null | undefined): 
   return { kind: 'apikey', apikey: effectiveApikey }
 }
 
-/** Principal for the authenticated caller, like `supabaseWithAuth`. */
+/** Principal for the authenticated caller: the user's JWT, else their API key. */
 export function authPrincipal(c: Context, auth: AuthInfo | null | undefined = c.get('auth')): RlsPrincipal {
   if (auth?.authType === 'jwt' && auth.jwt)
     return { kind: 'jwt', userId: auth.userId, claims: auth.claims }
@@ -158,8 +158,7 @@ export function withRlsTransaction<T>(pg: PgClient, principal: RlsPrincipal, run
 
 /**
  * Opens a connection, runs `run` in one transaction as `principal`, then closes the connection.
- * This is the direct-Postgres replacement for a supabase-js `.from()` / `.rpc()` call made with
- * `supabaseApikey`, `supabaseWithAuth` or `supabaseClient`.
+ * This is the direct-Postgres replacement for a PostgREST `.from()` / `.rpc()` call made as the caller.
  */
 export async function withRlsContext<T>(
   c: Context,

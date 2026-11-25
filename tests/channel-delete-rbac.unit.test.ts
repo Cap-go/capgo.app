@@ -122,7 +122,7 @@ describe('channel delete RBAC guard', () => {
     })
     expect(channelDeleteCalls()).toHaveLength(1)
     expect(channelDeleteCalls()[0][1]).toEqual([42, 'com.example.app', 'production'])
-    // Both reads run as the API key, like the supabaseApikey client did: the context rides on BEGIN.
+    // Both reads run as the API key: the context rides on BEGIN.
     const contextCalls = queryMock.mock.calls.filter(([text]) => String(text).includes('request.headers'))
     expect(contextCalls).toHaveLength(2)
     for (const [text] of contextCalls) {

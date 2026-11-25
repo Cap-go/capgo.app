@@ -183,7 +183,7 @@ async function stop(id: string) {
 </script>
 
 <template>
-  <section class="p-4 mb-6 bg-white rounded-xl border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
+  <section data-simulator-card class="p-4 mb-6 bg-white rounded-xl border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
     <div class="flex flex-wrap gap-3 items-center">
       <span class="inline-flex gap-1 items-center px-2 py-1 text-xs font-medium text-white bg-slate-900 rounded-full dark:bg-white dark:text-slate-900">
         <IconSmartphone class="w-3.5 h-3.5" />
@@ -215,7 +215,7 @@ async function stop(id: string) {
       <span v-if="startedAt(session.id)" class="text-sm text-slate-600 dark:text-slate-300">
         {{ t('simulator-started-at', { time: formatLocalDateTime(startedAt(session.id)) }) }}
       </span>
-      <a v-if="session.url" class="text-sm text-blue-600 underline dark:text-blue-400" :href="session.url" target="_blank" rel="noreferrer">
+      <a v-if="session.url" class="text-white d-btn d-btn-primary d-btn-sm" :href="session.url" target="_blank" rel="noreferrer">
         {{ t('simulator-open') }}
       </a>
       <button type="button" class="d-btn" :disabled="pending !== '' || stoppingId !== ''" @click="stop(session.id)">

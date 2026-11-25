@@ -20,8 +20,8 @@ function usesLegacyManifestUpload(cliVersion) {
   return major < 8 || (major === 8 && minor < 30)
 }
 
-export default {
-  async fetch(request) {
+const legacySnippet = {
+  async handle(request) {
     const url = new URL(request.url)
     const isWarningsRpc = request.method === 'POST'
       && url.hostname === 'sb.capgo.app'
@@ -72,5 +72,19 @@ export default {
       statusText: response.statusText,
       headers,
     })
+  },
+}
+
+function markResponse(response) {
+  if (response.status === 101)
+    return response
+  const marked = new Response(response.body, response)
+  marked.headers.set('x-capgo-snippet', 'legacy')
+  return marked
+}
+
+export default {
+  async fetch(request) {
+    return markResponse(await legacySnippet.handle(request))
   },
 }

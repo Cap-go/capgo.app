@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+: "${DATABASE_URL:?DATABASE_URL is required}"
 
 # Keep the default order check for every migration except the five that
 # landed after production had applied 20261117115240.
-if plan=$(supabase db push --dry-run 2>&1); then
-  exec supabase db push
+if plan=$(supabase db push --db-url "$DATABASE_URL" --dry-run 2>&1); then
+  exec supabase db push --db-url "$DATABASE_URL"
 fi
 printf '%s\n' "$plan" >&2
 
@@ -24,4 +25,4 @@ while read -r migration; do
   esac
 done <<< "${plan#*"$marker"}"
 [[ "$found" == true ]] || exit 1
-exec supabase db push --include-all
+exec supabase db push --db-url "$DATABASE_URL" --include-all

@@ -3,6 +3,17 @@
 This file provides guidance to AI agents (Claude Code, Cursor, Copilot, etc.)
 when working with code in this repository.
 
+## Forks and branding
+
+All code in this repository is licensed under the [AGPL-3.0](LICENSE). That
+license covers the code only. It grants no rights to the Capgo name, wordmark,
+logos, or other branding, which Digital Shift OU owns. If you are building a
+public fork, a derivative project, or a hosted or self-hosted service presented
+to others from this code, rebrand it: replace the Capgo name, logos, icons, and
+domains with the project's own, and make clear it is not Capgo and not endorsed
+by Capgo. Private internal self-hosting and truthful plain-text attribution are
+fine. See [TRADEMARK.md](TRADEMARK.md).
+
 ## Admin dashboard
 
 The admin dashboard lives in [`Cap-go/capgo_admin_dashboard`](https://github.com/Cap-go/capgo_admin_dashboard) and reads the Capgo database read-only; Capgo carries no admin code.
@@ -110,7 +121,9 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `bun test:cloudflare:backend` - Run backend tests against Cloudflare Workers
 - `bun test:cloudflare:updates` - Run update tests against Cloudflare Workers
 - `./scripts/start-cloudflare-workers.sh` - Start local Cloudflare Workers for
-  testing
+  testing. With `LOCAL_QUEUE_DISPATCHER=true` (what `bun backend` sets) it also
+  runs `scripts/local-queue-dispatcher.ts`: queue wakeups go to the outbox and
+  the local `QueueDispatcher` instead of pg_net, and stopping it puts pg_net back
 
 Note: Prefer Tinbase (`bun test:db` / `tests/tinbase-db-tests.txt`) for
 data/auth-only coverage so Docker/Cloudflare shards stay small and can
@@ -158,7 +171,9 @@ and the test suite has to keep running once it is gone.
 - `bun run supabase:start` - Start local Supabase instance (worktree-isolated)
 - `bun run supabase:cleanup` - Stop local Supabase and delete this worktree's Supabase volumes
 - `bun run supabase:db:reset` - Reset and seed local database
-- `bun backend` - Start Supabase functions locally
+- `bun backend` - Start the local backend: Supabase (`supabase:start`), the edge
+  functions (`functions serve`) and the Cloudflare Workers, with queue wakeups
+  going through the local `QueueDispatcher` like prod (Ctrl+C stops all of it)
 - `bun reset` - Reset Supabase database
 
 ### Local Postgres without the Supabase stack
@@ -274,11 +289,13 @@ backfill code, design for this scale:
 - **Queue wakeups (pg_net vs Durable Object):** pgmq stays the queue
   everywhere. `process_function_queue` and `wake_updates_cache_purge` send
   their HTTP wakeups through `public.http_dispatch_post`: by default (self-host,
-  local, CI) that is `net.http_post`. Targets listed in
+  quiesced CI jobs) that is `net.http_post`. Targets listed in
   `public.http_dispatch_targets` (a queue name, or `*`) go to the unlogged
-  `public.http_dispatch_outbox` instead, which the prod-only `QueueDispatcher`
-  Durable Object (`cloudflare_workers/api/queue_dispatcher.ts`) claims every
-  second via `POST /triggers/http_dispatch/claim` and sends. Roll a target
+  `public.http_dispatch_outbox` instead, which the `QueueDispatcher` Durable
+  Object (`cloudflare_workers/api/queue_dispatcher.ts`) claims every second via
+  `POST /triggers/http_dispatch/claim` and sends. Prod routes `*`; locally
+  `bun backend` does the same through `scripts/local-queue-dispatcher.ts`
+  (it sets `db_url` to the host Supabase URL while it runs). Roll a target
   back by deleting its row. The dispatcher only sends to origins in
   `SUPABASE_URL` / `HTTP_DISPATCH_ALLOWED_ORIGINS`.
 - Do not assume a `202` HTTP response means queue work finished. If the handler
@@ -344,20 +361,13 @@ Do:
   - Never create migration files manually.
   - Always use `bunx supabase migration new <feature_slug>`.
   - Manual creation of migration files is not allowed.
-- **Supabase admin client + sign-in pitfall:** if you call
-  `supabaseAdmin.auth.signInWithPassword(...)`, that client becomes authenticated
-  as the user (it is no longer a pure service-role client). Always use a
-  **separate admin client** for sign-in, and keep a clean admin client for
-  service-role writes. Example:
-  - `const loginAdmin = supabaseAdmin(c)` → use for `signInWithPassword`
-  - `const adminClient = supabaseAdmin(c)` → use for admin writes
 - **Backend DB access style:** prefer `getPgClient()` / `getDrizzleClient()` for
   multi-step SQL, transactions, joins, schema-backed writes, or code that
   benefits from explicit pool lifecycle handling. Do **not** force every simple
-  one-statement internal helper write into Drizzle just for consistency. A
-  small service-role helper that is already a single clear `supabaseAdmin(c)`
-  call may stay on `supabaseAdmin` when that keeps the code smaller and equally
-  correct.
+  one-statement internal helper write into Drizzle just for consistency.
+- The backend has no service-role supabase-js client: GoTrue admin calls go
+  through `gotrueAdmin()` (`utils/gotrue_admin.ts`) and Supabase Storage through
+  plain `fetch` helpers in `utils/bundle_storage.ts`. Don't add one back.
 
 ### AI model freshness (HARD RULE)
 

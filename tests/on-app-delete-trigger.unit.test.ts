@@ -67,17 +67,6 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   closeClient: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({
-    storage: {
-      from: () => ({
-        list: async () => ({ data: [] }),
-        remove: async () => ({ error: null }),
-      }),
-    },
-  }),
-}))
-
 vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
   const actual = await vi.importActual('../supabase/functions/_backend/utils/hono.ts')
   return {

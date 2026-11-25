@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { BuilderPlatform } from '~/services/builderOnboardingChecklist'
+import type { BuilderSetupMethod } from '~/services/builderOnboardingChecklist'
 import type { CliAiPromptOrganization } from '~/services/cliAiPrompt'
 import type { OrganizationApp } from '~/stores/organization'
 import type { Database, Json } from '~/types/database.types'
@@ -2464,13 +2464,22 @@ async function copyManualCliCommand() {
     trackSuccessfulCopy('onboarding_cli_command_copied', 'manual_start', manualSetupUsesBuilder(main.user?.onboarding) ? 'builder' : 'ota')
 }
 
-async function copyBuilderCliCommand(platform: BuilderPlatform) {
+async function copyBuilderCliCommand() {
   if (!apiKey.value)
     return
 
-  const copied = await copyText(`${builderCliCommand.value} --platform ${platform}`)
+  // The CLI detects the platform in the project and asks only when both exist.
+  const copied = await copyText(builderCliCommand.value)
   if (copied)
     trackSuccessfulCopy('onboarding_cli_command_copied')
+}
+
+function trackBuilderMethodSelected(method: BuilderSetupMethod) {
+  progressTracker?.trackStepEvent('onboarding_builder_method_selected', 'setup', {
+    method,
+    app_id: createdApp.value?.app_id,
+    intent: selectedIntent.value ?? undefined,
+  })
 }
 
 async function reportOnboardingPatch(patch: { source?: 'manual' | 'cli' | 'mcp' | 'ai', outcome?: 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual' }) {
@@ -3565,6 +3574,7 @@ defineExpose({
               @snapshot="panel.snapshot"
               @platform-changed="panel.selectPlatform"
               @copy-command="copyBuilderCliCommand"
+              @method-selected="trackBuilderMethodSelected"
               @copy-ai="copyAiInstructions"
               @complete="panel.complete"
             />
@@ -3582,6 +3592,7 @@ defineExpose({
           :hiding="isHidingSplash"
           :leaving="isHandingOff"
           @copy-command="copyBuilderCliCommand"
+          @method-selected="trackBuilderMethodSelected"
           @copy-ai="copyAiInstructions"
           @hide="skipOnboardingSplash"
           @explore="openDashboard"

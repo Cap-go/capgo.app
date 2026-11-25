@@ -7,6 +7,7 @@ const OTHER_USER_ID = '33333333-3333-4333-8333-333333333333'
 const mocks = vi.hoisted(() => ({
   checkPermission: vi.fn(),
   checkPermissionInMemberOrgs: vi.fn(),
+  cloudlogErr: vi.fn(),
   app: { data: null as unknown, error: null as unknown },
   client: {
     copyObject: vi.fn(),
@@ -31,23 +32,23 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: vi.fn(),
-  cloudlogErr: vi.fn(),
+  cloudlogErr: (...args: unknown[]) => mocks.cloudlogErr(...args),
   serializeError: (error: unknown) => error,
 }))
 
+const TEST_ENV: Record<string, string> = {
+  S3_SECRET_ACCESS_KEY: 'test-secret-key',
+  SUPABASE_URL: 'https://sb.example',
+  SUPABASE_SERVICE_ROLE_KEY: 'service-key',
+}
+
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
-  getEnv: (_c: unknown, key: string) => key === 'S3_SECRET_ACCESS_KEY' ? 'test-secret-key' : '',
+  getEnv: (_c: unknown, key: string) => TEST_ENV[key] ?? '',
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: (...args: unknown[]) => mocks.checkPermission(...args),
   checkPermissionInMemberOrgs: (...args: unknown[]) => mocks.checkPermissionInMemberOrgs(...args),
-}))
-
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({
-    storage: { from: () => mocks.supabaseStorage },
-  }),
 }))
 
 // mocks.app keeps the supabase-js `{ data, error }` shape of the apps lookup.
@@ -224,15 +225,27 @@ describe('image tokens', () => {
 
 describe('legacy Supabase image import', () => {
   const ICON = `org/${ORG_ID}/com.app/icon`
+  const STORAGE = 'https://sb.example/storage/v1'
   const notFound = () => Object.assign(new Error('missing'), { statusCode: 404 })
+  const r2Puts = () => fetchMock.mock.calls.filter(([url]) => url === 'https://r2.example/put')
 
   function legacyEntry(updatedAt: string) {
-    mocks.supabaseStorage.list.mockResolvedValue({ data: [{ id: 'obj-1', name: 'icon', updated_at: updatedAt }], error: null })
+    mocks.supabaseStorage.list.mockResolvedValue(Response.json([{ id: 'obj-1', name: 'icon', updated_at: updatedAt }]))
   }
 
   beforeEach(() => {
-    mocks.supabaseStorage.download.mockResolvedValue({ data: new Blob([new Uint8Array([9, 9])], { type: 'image/png' }), error: null })
-    mocks.supabaseStorage.remove.mockResolvedValue({ data: [], error: null })
+    // Routes the Storage REST calls to the handlers; anything else is the R2 PUT.
+    fetchMock.mockImplementation(async (url: string, init: RequestInit = {}) => {
+      if (url === `${STORAGE}/object/list/images`)
+        return mocks.supabaseStorage.list(init)
+      if (url === `${STORAGE}/object/authenticated/images/${ICON}`)
+        return mocks.supabaseStorage.download(init)
+      if (url === `${STORAGE}/object/images`)
+        return mocks.supabaseStorage.remove(init)
+      return new Response(null, { status: 200 })
+    })
+    mocks.supabaseStorage.download.mockImplementation(async () => new Response(new Uint8Array([9, 9]), { headers: { 'content-type': 'image/png' } }))
+    mocks.supabaseStorage.remove.mockImplementation(async () => Response.json([]))
   })
 
   it('moves a fresh legacy upload into R2 and removes the Supabase copy', async () => {
@@ -240,13 +253,27 @@ describe('legacy Supabase image import', () => {
     mocks.client.statObject.mockRejectedValue(notFound())
 
     await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(true)
-    expect(mocks.supabaseStorage.list).toHaveBeenCalledWith(`org/${ORG_ID}/com.app`, { search: 'icon', limit: 100 })
+    const listInit = mocks.supabaseStorage.list.mock.calls[0]![0] as RequestInit
+    expect(listInit.method).toBe('POST')
+    expect(listInit.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer service-key', apikey: 'service-key' }))
+    expect(JSON.parse(listInit.body as string)).toEqual({
+      limit: 100,
+      offset: 0,
+      sortBy: { column: 'name', order: 'asc' },
+      search: 'icon',
+      prefix: `org/${ORG_ID}/com.app`,
+    })
+    expect(mocks.supabaseStorage.download).toHaveBeenCalledWith(expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer service-key' }),
+    }))
     expect(mocks.client.getPresignedUrl).toHaveBeenCalledWith('PUT', `images/${ICON}`, expect.anything())
     expect(fetchMock).toHaveBeenCalledWith('https://r2.example/put', expect.objectContaining({
       body: new Uint8Array([9, 9]),
       headers: expect.objectContaining({ 'Content-Type': 'image/png' }),
     }))
-    expect(mocks.supabaseStorage.remove).toHaveBeenCalledWith([ICON])
+    const removeInit = mocks.supabaseStorage.remove.mock.calls[0]![0] as RequestInit
+    expect(removeInit.method).toBe('DELETE')
+    expect(JSON.parse(removeInit.body as string)).toEqual({ prefixes: [ICON] })
   })
 
   it('overwrites R2 when an old CLI re-uploaded the icon after it', async () => {
@@ -254,7 +281,7 @@ describe('legacy Supabase image import', () => {
     mocks.client.statObject.mockResolvedValue({ lastModified: new Date('2026-10-26T11:00:00Z') })
 
     await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(true)
-    expect(fetchMock).toHaveBeenCalled()
+    expect(r2Puts()).toHaveLength(1)
   })
 
   it('drops a stale migration leftover instead of overwriting a newer R2 upload', async () => {
@@ -263,16 +290,49 @@ describe('legacy Supabase image import', () => {
 
     await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(false)
     expect(mocks.supabaseStorage.download).not.toHaveBeenCalled()
-    expect(fetchMock).not.toHaveBeenCalled()
-    expect(mocks.supabaseStorage.remove).toHaveBeenCalledWith([ICON])
+    expect(r2Puts()).toHaveLength(0)
+    expect(mocks.supabaseStorage.remove).toHaveBeenCalledOnce()
   })
 
   it('does nothing when Supabase has no such object', async () => {
-    mocks.supabaseStorage.list.mockResolvedValue({ data: [{ id: null, name: 'icon' }], error: null })
+    mocks.supabaseStorage.list.mockResolvedValue(Response.json([{ id: null, name: 'icon' }]))
     await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(false)
     expect(mocks.supabaseStorage.download).not.toHaveBeenCalled()
     expect(mocks.supabaseStorage.remove).not.toHaveBeenCalled()
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(r2Puts()).toHaveLength(0)
+  })
+
+  it.each([
+    ['an error status', () => mocks.supabaseStorage.list.mockResolvedValue(new Response('boom', { status: 500 }))],
+    ['a network error', () => mocks.supabaseStorage.list.mockRejectedValue(new TypeError('fetch failed'))],
+  ])('logs and skips the import when the lookup fails with %s', async (_label, fail) => {
+    fail()
+    await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(false)
+    expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'Cannot look up legacy Supabase image', path: ICON }))
+    expect(mocks.supabaseStorage.download).not.toHaveBeenCalled()
+    expect(mocks.supabaseStorage.remove).not.toHaveBeenCalled()
+  })
+
+  it('keeps the Supabase copy when the download fails', async () => {
+    legacyEntry('2026-10-26T12:00:00Z')
+    mocks.client.statObject.mockRejectedValue(notFound())
+    // Storage answers a missing object with 400 "Object not found".
+    mocks.supabaseStorage.download.mockImplementation(async () => Response.json({ error: 'not_found' }, { status: 400 }))
+
+    await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(false)
+    expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'Cannot download legacy Supabase image', path: ICON }))
+    expect(r2Puts()).toHaveLength(0)
+    expect(mocks.supabaseStorage.remove).not.toHaveBeenCalled()
+  })
+
+  it('still reports the import when removing the Supabase copy fails', async () => {
+    legacyEntry('2026-10-26T12:00:00Z')
+    mocks.client.statObject.mockRejectedValue(notFound())
+    mocks.supabaseStorage.remove.mockImplementation(async () => new Response('denied', { status: 403 }))
+
+    await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(true)
+    expect(r2Puts()).toHaveLength(1)
+    expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'Could not remove the legacy Supabase image', path: ICON }))
   })
 })
 

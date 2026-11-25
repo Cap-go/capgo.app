@@ -437,9 +437,7 @@ async function openSavedBuild(jobId: string) {
   const appId = props.appId
   const epoch = simulatorEpoch()
   const output = savedOutputs.value[jobId]
-  const tab = window.open('', '_blank')
   if (!output?.expires_at || Date.parse(output.expires_at) <= Date.now()) {
-    tab?.close()
     toast.error(t('saved-build-expired'))
     return
   }
@@ -463,7 +461,6 @@ async function openSavedBuild(jobId: string) {
     if (payload.data?.id && epoch === simulatorEpoch())
       rememberSimulator(appId, { id: payload.data.id, url })
     if (payload.data?.install_error) {
-      tab?.close()
       toast.error(payload.data.install_error)
       const id = payload.data.id
       if (id) {
@@ -481,13 +478,14 @@ async function openSavedBuild(jobId: string) {
       }
       return
     }
-    if (url && tab)
-      tab.location.replace(url)
-    else
-      tab?.close()
+    // Stay on this page: the running session appears in the simulator card above with its Open link.
+    // The user may have switched apps or stopped simulators while this one started.
+    if (appId !== props.appId || epoch !== simulatorEpoch())
+      return
+    toast.success(t('saved-build-simulator-ready'))
+    document.querySelector('[data-simulator-card]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
   catch (error) {
-    tab?.close()
     toast.error(error instanceof Error ? error.message : t('simulator-did-not-start'))
   }
   finally {

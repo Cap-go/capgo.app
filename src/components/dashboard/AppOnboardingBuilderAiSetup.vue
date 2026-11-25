@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, useId } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconCheck from '~icons/lucide/check'
@@ -9,7 +9,6 @@ import { builderSetupAssistants } from './onboardingDevelopmentEnvironmentOption
 
 const emit = defineEmits(['copy'])
 const { t } = useI18n()
-const titleId = useId()
 const selectedClient = ref<string>('codex')
 const assistant = computed(() => builderSetupAssistants.find(option => option.client === selectedClient.value)!)
 const installCommand = computed(() => `npx install-mcp "npx @capgo/cli@latest mcp" --client ${assistant.value.client}`)
@@ -37,19 +36,13 @@ async function copyInstallCommand() {
 </script>
 
 <template>
-  <section class="rounded-2xl border border-azure-500/30 bg-azure-500/5 p-5 text-left dark:border-azure-400/30 dark:bg-azure-500/10" :aria-labelledby="titleId" data-test="builder-checklist-ai-setup">
-    <p class="text-xs font-semibold tracking-wide text-sky-700 dark:text-azure-300">
-      {{ t('builder-checklist-ai-eyebrow') }}
-    </p>
-    <h2 :id="titleId" class="mt-2 text-xl font-semibold leading-7 text-slate-950 dark:text-white">
-      {{ t('builder-checklist-ai-title') }}
-    </h2>
-    <div class="mt-5 grid gap-6 lg:grid-cols-2">
+  <section class="rounded-2xl border border-azure-500/30 bg-azure-500/5 p-5 text-left dark:border-azure-400/30 dark:bg-azure-500/10" :aria-label="t('builder-checklist-method-ai')" data-test="builder-checklist-ai-setup">
+    <div class="grid gap-6 lg:grid-cols-2">
       <div class="min-w-0">
-        <h3 class="flex items-center gap-3 text-base font-semibold text-slate-950 dark:text-white">
+        <h2 class="flex items-center gap-3 text-base font-semibold text-slate-950 dark:text-white">
           <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-azure-500/30 text-sm text-sky-700 dark:text-azure-300" aria-hidden="true">1</span>
           {{ t('builder-checklist-mcp-install-title') }}
-        </h3>
+        </h2>
         <fieldset class="mt-4 flex min-w-0 flex-wrap gap-2" :aria-label="t('builder-checklist-ai-assistants')">
           <button
             v-for="option in builderSetupAssistants"
@@ -87,10 +80,10 @@ async function copyInstallCommand() {
         </p>
       </div>
       <div class="min-w-0 border-t border-azure-500/20 pt-6 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
-        <h3 class="flex items-center gap-3 text-base font-semibold text-slate-950 dark:text-white">
+        <h2 class="flex items-center gap-3 text-base font-semibold text-slate-950 dark:text-white">
           <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-azure-500/30 text-sm text-sky-700 dark:text-azure-300" aria-hidden="true">2</span>
           {{ t('builder-checklist-mcp-start-title') }}
-        </h3>
+        </h2>
         <p class="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
           {{ t('builder-checklist-ai-description') }}
         </p>

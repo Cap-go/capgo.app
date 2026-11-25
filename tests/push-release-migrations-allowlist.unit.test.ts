@@ -30,4 +30,12 @@ describe('push-release-migrations out-of-order allowlist', () => {
       expect(version && version < PROD_LATEST_VERSION, `unexpected allowlist entry ${path}`).toBe(true)
     }
   })
+
+  it('passes DATABASE_URL to every supabase db push', () => {
+    const script = readFileSync(new URL('../scripts/push-release-migrations.sh', import.meta.url), 'utf8')
+    const pushes = script.match(/supabase db push[^\n)]*/g) ?? []
+    expect(pushes).toHaveLength(3)
+    for (const push of pushes)
+      expect(push).toContain('--db-url "$DATABASE_URL"')
+  })
 })
