@@ -26,7 +26,7 @@ vi.mock('../supabase/functions/_backend/utils/stripe_in_app.ts', () => ({
 }))
 
 const SUBSCRIPTION_ID = 'sub_cancel_credits_test'
-const { acceptCancelSaveOffer } = await import('../supabase/functions/_backend/utils/cancel_save_offer.ts')
+const { acceptCancelSaveOffer, declineCancelSaveOffer } = await import('../supabase/functions/_backend/utils/cancel_save_offer.ts')
 
 const customerId = `cus_${randomUUID()}`
 // A dedicated org: the grant flips its has_usage_credits flag, which must not
@@ -55,6 +55,8 @@ const ctx = {
 let pool: Pool
 let offerA: string
 let offerB: string
+let discountOffer: string
+const discountCustomer = `cus_${randomUUID()}`
 
 async function grantCount() {
   const { rows } = await pool.query<{ n: number }>(
@@ -94,6 +96,13 @@ beforeAll(async () => {
   )
   offerA = (await insert()).rows[0].id
   offerB = (await insert()).rows[0].id
+  // A discount accept still running (or whose recording failed): reserved, no discount_start yet.
+  discountOffer = (await pool.query<{ id: string }>(
+    `INSERT INTO public.cancel_save_offers
+       (org_id, customer_id, subscription_id, billing_account, reason, monthly_amount, currency, coupon_id, percent_off, duration_months, outcome, responded_at)
+     VALUES ($1, $2, 'sub_discount_test', 'ee', 'too_expensive', 1400, 'usd', 'capgo_cancel_save_50_3m', 50, 3, 'accepting', now()) RETURNING id::text`,
+    [orgId, discountCustomer],
+  )).rows[0].id
 })
 
 afterAll(async () => {
@@ -101,7 +110,7 @@ afterAll(async () => {
     `SELECT credit_grant_id::text AS id FROM public.cancel_save_offers WHERE customer_id = $1 AND credit_grant_id IS NOT NULL`,
     [customerId],
   )
-  await pool.query('DELETE FROM public.cancel_save_offers WHERE customer_id = $1', [customerId])
+  await pool.query('DELETE FROM public.cancel_save_offers WHERE customer_id = ANY($1)', [[customerId, discountCustomer]])
   for (const { id } of rows) {
     await pool.query('DELETE FROM public.usage_credit_transactions WHERE grant_id = $1', [id])
     await pool.query('DELETE FROM public.usage_credit_grants WHERE id = $1', [id])
@@ -140,5 +149,27 @@ describe('credits offer accept after a failed cancellation', () => {
     await expect(acceptCancelSaveOffer(c, ctx, offerA)).resolves.toEqual({ type: 'credits', credits: 14 })
     expect(mocks.cancel.mock.calls.length).toBe(cancels)
     expect(await grantCount()).toBe(1)
+  })
+})
+
+describe('declining a discount offer while its accept is in flight', () => {
+  const discountCtx = (discounts: unknown[] | Error) => ({
+    customerId: discountCustomer,
+    billingAccount: 'ee',
+    publishableKey: '',
+    stripe: { subscriptions: { retrieve: async () => {
+      if (discounts instanceof Error)
+        throw discounts
+      return { discounts }
+    } } },
+  }) as any
+
+  it('keeps the reservation while Stripe has the discount or cannot be read, declines once it has none', async () => {
+    await declineCancelSaveOffer(c, discountCtx([{ start: 1, source: { coupon: 'capgo_cancel_save_50_3m' } }]), discountOffer)
+    expect((await offer(discountOffer)).outcome).toBe('accepting')
+    await declineCancelSaveOffer(c, discountCtx(new Error('stripe down')), discountOffer)
+    expect((await offer(discountOffer)).outcome).toBe('accepting')
+    await declineCancelSaveOffer(c, discountCtx([]), discountOffer)
+    expect((await offer(discountOffer)).outcome).toBe('declined')
   })
 })
