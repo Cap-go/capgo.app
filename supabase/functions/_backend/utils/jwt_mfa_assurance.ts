@@ -29,7 +29,7 @@ async function userHasVerifiedMfaFactors(
       `
       SELECT EXISTS (
         SELECT 1
-        FROM auth.mfa_factors
+        FROM auth_cf.mfa_factors
         WHERE user_id = $1::uuid
           AND status = 'verified'
       ) AS has_verified_mfa

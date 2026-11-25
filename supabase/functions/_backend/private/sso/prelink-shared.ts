@@ -74,14 +74,14 @@ async function deleteEmailIdentity(
     const result = await pgClient.query<{ deleted_identity_id: string }>(
       `
         with deleted_identity as (
-          delete from auth.identities
+          delete from auth_cf.identities
           where id = $1
             and user_id = $2
             and provider = 'email'
           returning user_id, id as deleted_identity_id
         ),
         updated_user as (
-          update auth.users
+          update auth_cf.users
           set encrypted_password = null,
               updated_at = now()
           where id in (select user_id from deleted_identity)
@@ -123,9 +123,9 @@ async function getOrgPrelinkCandidates(
           au.email,
           ai.id as email_identity_id
         from public.org_users ou
-        inner join auth.users au
+        inner join auth_cf.users au
           on au.id = ou.user_id
-        inner join auth.identities ai
+        inner join auth_cf.identities ai
           on ai.user_id = au.id
          and ai.provider = 'email'
         where ou.org_id = $1

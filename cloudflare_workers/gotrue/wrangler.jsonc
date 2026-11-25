@@ -28,8 +28,9 @@
     "GOTRUE_DB_DRIVER": "postgres",
     "DB_NAMESPACE": "auth_cf",
     "GOTRUE_DB_MAX_POOL_SIZE": "10",
-    // Test phase: the local console auth relay. PR 3 switches it to https://sb.capgo.app/auth/v1.
-    "API_EXTERNAL_URL": "http://localhost:8787/private/console/auth",
+    // Public auth URL: email links and the SAML entity ID / ACS (…/sso/saml/*) keep
+    // hosted Supabase's addresses; the sb.capgo.app snippet relays /auth/v1/* to us.
+    "API_EXTERNAL_URL": "https://sb.capgo.app/auth/v1",
     "GOTRUE_SITE_URL": "https://console.capgo.app",
     "GOTRUE_URI_ALLOW_LIST": "http://localhost:5173/onboarding/set_password,http://localhost:5173/forgot_password?step=2,http://localhost:5173/onboarding/verify_email,http://localhost:5173,https://console.capgo.app/onboarding/set_password,https://console.capgo.app/onboarding/verify_email",
     "GOTRUE_JWT_ISSUER": "https://xvwzpoazmxkqosrdewyv.supabase.co/auth/v1",

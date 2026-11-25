@@ -58,7 +58,7 @@ async function findCanonicalAuthUserIdByEmail(pgClient: PgExecutor, email: strin
   const result = await pgClient.query<{ id: string }>(
     `
       select au.id
-      from auth.users au
+      from auth_cf.users au
       left join public.users pu
         on pu.id = au.id
       where lower(au.email) = lower($1)
@@ -68,7 +68,7 @@ async function findCanonicalAuthUserIdByEmail(pgClient: PgExecutor, email: strin
         case when pu.id is not null then 0 else 1 end,
         case when exists (
           select 1
-          from auth.identities ai
+          from auth_cf.identities ai
           where ai.user_id = au.id
             and ai.provider = any($3::text[])
         ) then 0 else 1 end,
@@ -208,7 +208,7 @@ async function provisionOrgsInTransaction(
 async function transferSsoIdentities(pgClient: PgExecutor, originalUserId: string, duplicateUserId: string, trustedProviders: string[]): Promise<number> {
   const result = await pgClient.query(
     `
-      update auth.identities
+      update auth_cf.identities
       set user_id = $1,
           updated_at = now()
       where user_id = $2
@@ -228,7 +228,7 @@ async function setAuthUserSsoOnly(pgClient: PgExecutor, userId: string, authoriz
 
   await pgClient.query(
     `
-      update auth.users
+      update auth_cf.users
       set is_sso_user = true,
           encrypted_password = null,
           raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb)
@@ -244,7 +244,7 @@ async function setAuthUserSsoOnly(pgClient: PgExecutor, userId: string, authoriz
 
   await pgClient.query(
     `
-      delete from auth.identities
+      delete from auth_cf.identities
       where user_id = $1
         and provider <> all($2::text[])
     `,
@@ -253,7 +253,7 @@ async function setAuthUserSsoOnly(pgClient: PgExecutor, userId: string, authoriz
 
   await pgClient.query(
     `
-      delete from auth.sessions
+      delete from auth_cf.sessions
       where user_id = $1
     `,
     [userId],
@@ -802,11 +802,11 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
 
     // Detect pre-existing auth identity with the same trusted email (different UUID).
     // This happens when SSO is enabled for a domain where users already had email/password accounts.
-    // Supabase Auth creates a new auth.users record instead of linking — we fix this by merging.
+    // Supabase Auth creates a new auth_cf.users record instead of linking — we fix this by merging.
     //
     // Security note: never resolve the merge candidate from public.users.email. That profile
-    // column is user-editable; only auth.users.email and the current verified SSO session are
-    // trusted identity sources for account linking. Unconfirmed auth.users rows are ignored
+    // column is user-editable; only auth_cf.users.email and the current verified SSO session are
+    // trusted identity sources for account linking. Unconfirmed auth_cf.users rows are ignored
     // so a pre-signup cannot become the merge target.
     let resolvedExistingUserId: string | null = null
     try {
@@ -816,7 +816,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
       }
     }
     catch (existingAuthUserError) {
-      cloudlogErr({ requestId, message: 'Failed to check auth.users for pre-existing account by email', userId, email: userEmail, error: existingAuthUserError })
+      cloudlogErr({ requestId, message: 'Failed to check auth_cf.users for pre-existing account by email', userId, email: userEmail, error: existingAuthUserError })
       return quickError(500, 'user_lookup_failed', 'Failed to resolve existing account for SSO merge')
     }
 
