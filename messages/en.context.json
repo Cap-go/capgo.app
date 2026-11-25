@@ -3789,6 +3789,7 @@
   "save-encryption-key": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "saved-build": "Used in Capgo web console areas: components/tables. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "saved-build-expired": "Used in Capgo web console areas: components/tables. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "saved-build-simulator-ready": "Used in Capgo web console areas: components/tables. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "saving": "Used in Capgo web console areas: components/dashboard, pages. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "scan-again": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "scan-bundle-detail": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
