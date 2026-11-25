@@ -125,8 +125,8 @@ the queue consumers.
 
 We support both deployments for practical reasons:
 
-- **Supabase** is the legacy backend and the only required piece for
-  self-hosting.
+- **Supabase** is the legacy backend. Self-hosting needs it plus the API
+  worker, whose `QueueDispatcher` wakes the queue consumers.
 - **Cloudflare Workers** runs the same backend code (via the Hono adapter) but is
   much cheaper at Capgo scale. With ~50M devices, Supabase Edge Functions are
   cost-prohibitive because they follow AWS pricing. Cloudflare is ~10x cheaper
