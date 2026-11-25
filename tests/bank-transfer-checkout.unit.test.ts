@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, buildBankTransferItems, invoiceAcceptsBankTransfer, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferInvoiceCoversSubscription, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, buildBankTransferItems, invoiceAcceptsBankTransfer, invoiceLinePriceQuantities, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
 describe('yearly bank transfer', () => {
@@ -66,6 +66,15 @@ describe('yearly bank transfer', () => {
       { productId: 'prod_enterprise', priceId: 'price_year', extraMau: 2000 },
       { productId: 'prod_enterprise', priceId: 'price_year', extraMau: 2000 },
     )).toBe(true)
+    const paidLines = invoiceLinePriceQuantities([
+      { quantity: 1, pricing: { price_details: { price: 'price_year' } }, parent: { subscription_item_details: { proration: false } } },
+    ])
+    const currentItems = subscriptionItemPriceQuantities([{ price: { id: 'price_team' }, quantity: 1 }])
+    expect(bankTransferInvoiceCoversSubscription(paidLines, currentItems)).toBe(false)
+    expect(bankTransferInvoiceCoversSubscription(paidLines, subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }]))).toBe(true)
+    expect(invoiceLinePriceQuantities([
+      { quantity: 1, pricing: { price_details: { price: 'price_year' } }, parent: { invoice_item_details: { proration: true } } },
+    ])).toEqual([])
 
     const same = buildBankTransferItems(
       [{ id: 'si_plan', quantity: 1, price: { id: 'price_year' } }],

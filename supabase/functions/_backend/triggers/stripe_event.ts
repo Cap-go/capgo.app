@@ -30,7 +30,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { bankTransferPlanAlreadyStored, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { bankTransferInvoiceCoversSubscription, bankTransferPlanAlreadyStored, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceLinePriceQuantities, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
@@ -2121,16 +2121,27 @@ async function recoverOpenAIFirstPaymentFromInvoice(c: Context<MiddlewareKeyVari
 }
 
 // The subscription webhook kept the previous plan while this invoice was open.
+async function paidInvoiceSubscriptionLines(stripe: ReturnType<typeof getStripe>, invoice: Stripe.Invoice) {
+  if (!invoice.lines.has_more)
+    return invoice.lines.data
+  const listed = await stripe.invoices.listLineItems(invoice.id, { limit: 100 })
+  return listed.has_more ? [] : listed.data
+}
+
 async function applyBankTransferPlanAfterPayment(
   c: Context<MiddlewareKeyVariablesStripe>,
   org: Org,
   customer: StripeInfoRow,
   subscriptionId: string,
   eventOccurredAtIso: string,
+  invoice: Stripe.Invoice,
 ) {
   const stripe = getStripe(c, getWebhookBillingAccount(c))
   const subscription = await stripe.subscriptions.retrieve(subscriptionId)
   if (!isSelfServeBankTransfer(subscription.metadata))
+    return
+  const lines = await paidInvoiceSubscriptionLines(stripe, invoice)
+  if (!bankTransferInvoiceCoversSubscription(invoiceLinePriceQuantities(lines), subscriptionItemPriceQuantities(subscription.items.data)))
     return
   const { priceId, productId } = parsePriceIds(c, subscription.items.data)
   const extraMau = getExtraMau(subscription.items.data)
@@ -2174,7 +2185,8 @@ async function invoicePaid(
   // Renewals of a paid subscription: nothing to change, skip the row lock.
   // A bank-transfer plan change kept the previous plan until this invoice was paid.
   if (isPaidSubscriptionUpdate(customer, subscriptionId)) {
-    await applyBankTransferPlanAfterPayment(c, org, customer, subscriptionId, new Date(stripeEvent.created * 1000).toISOString())
+    if (stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded')
+      await applyBankTransferPlanAfterPayment(c, org, customer, subscriptionId, new Date(stripeEvent.created * 1000).toISOString(), stripeEvent.data.object)
     return c.json(BRES)
   }
 

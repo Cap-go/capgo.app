@@ -1389,6 +1389,49 @@ export function bankTransferPlanAlreadyStored(
     && (next.extraMau ?? 0) === (stored.extraMau ?? 0)
 }
 
+export interface BilledPriceQuantity {
+  priceId: string
+  quantity: number
+}
+
+// The paid invoice must bill the subscription's current prices and quantities.
+// A later unpaid plan change keeps different lines, so the older payment must not grant it.
+export function bankTransferInvoiceCoversSubscription(invoiceLines: BilledPriceQuantity[], subscriptionItems: BilledPriceQuantity[]) {
+  if (invoiceLines.length === 0 || invoiceLines.length !== subscriptionItems.length)
+    return false
+  const invoiceKeys = invoiceLines.map(line => `${line.priceId}\0${line.quantity}`).sort()
+  const subscriptionKeys = subscriptionItems.map(line => `${line.priceId}\0${line.quantity}`).sort()
+  return invoiceKeys.every((key, index) => key === subscriptionKeys[index])
+}
+
+export function subscriptionItemPriceQuantities(items: Array<{ price?: { id?: string | null } | null, quantity?: number | null }>): BilledPriceQuantity[] {
+  return items.flatMap((item) => {
+    if (!item.price?.id)
+      return []
+    return [{ priceId: item.price.id, quantity: item.quantity ?? 1 }]
+  })
+}
+
+export function invoiceLinePriceQuantities(lines: Array<{
+  quantity?: number | null
+  pricing?: { price_details?: { price?: string | { id?: string | null } | null } | null } | null
+  parent?: {
+    subscription_item_details?: { proration?: boolean } | null
+    invoice_item_details?: { proration?: boolean } | null
+  } | null
+}>): BilledPriceQuantity[] {
+  return lines.flatMap((line) => {
+    const details = line.parent?.subscription_item_details
+    if (!details || details.proration)
+      return []
+    const price = line.pricing?.price_details?.price
+    const priceId = typeof price === 'string' ? price : price?.id
+    if (!priceId)
+      return []
+    return [{ priceId, quantity: line.quantity ?? 1 }]
+  })
+}
+
 // An unpaid invoice must not be credited as unused time. That credit can zero out a
 // downgrade and look like a paid invoice while the original bill is still open.
 export function bankTransferProration(status: string, itemsChanged: boolean, unpaidInvoice = false): Stripe.SubscriptionUpdateParams.ProrationBehavior {
