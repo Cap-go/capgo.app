@@ -39,7 +39,9 @@ try {
       throw new Error('Could not unschedule process_all_cron_tasks')
   }
 
-  // Drop wakeups the scheduler already queued for the QueueDispatcher.
+  // Drop wakeups the scheduler already queued for the QueueDispatcher. Run this
+  // before the workers start: wakeups a running dispatcher already claimed are
+  // in its memory, not in the outbox.
   await client.query('TRUNCATE TABLE public.http_dispatch_outbox')
 
   const { rows: queues } = await client.query<QueueRow>(
