@@ -328,6 +328,13 @@ export function paidInvoiceMatchesSubscription(lines: InvoiceBillLine[], items: 
   return items.every(item => keys.has(billedKey(item.priceId, item.quantity)))
 }
 
+// Checked on the locked stripe_info row. A plan written after the invoice was read must not become paid.
+export function storedPlanConflictsWithPaidInvoice(storedPriceId: string | null | undefined, invoicePriceIds: readonly string[] | undefined) {
+  if (!invoicePriceIds || !storedPriceId)
+    return false
+  return !invoicePriceIds.includes(storedPriceId)
+}
+
 export type SubscriptionLookupResult =
   | { ok: true, data: SubscriptionSyncData }
   | { ok: false, reason: 'missing_subscription_id' }

@@ -30,7 +30,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, paidInvoiceMatchesSubscription, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, paidInvoiceMatchesSubscription, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, storedPlanConflictsWithPaidInvoice, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
@@ -1121,6 +1121,7 @@ async function persistInvoicePayment(
   customerId: string,
   invoiceSubscriptionId: string,
   eventOccurredAtIso: string,
+  invoicePlanPriceIds?: readonly string[],
 ): Promise<InvoicePaymentResult> {
   // Pin one connection: BEGIN/COMMIT on the request-shared Pool could land on different ones.
   const pg = await getPgClient(c, false)
@@ -1130,14 +1131,19 @@ async function persistInvoicePayment(
   try {
     pgClient = await checkoutPgClient(pg)
     await beginWriteTransaction(pgClient)
-    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'status' | 'subscription_id'> & { paid_at: string | Date | null }>(
-      'SELECT last_stripe_event_at, status, subscription_id, paid_at FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
+    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'status' | 'subscription_id' | 'price_id'> & { paid_at: string | Date | null }>(
+      'SELECT last_stripe_event_at, status, subscription_id, price_id, paid_at FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
       [customerId],
     )
     const lockedStripeInfo = stripeInfoRow.rows[0]
     if (!lockedStripeInfo) {
       await pgClient.query('ROLLBACK')
       return { status: 'missing', firstPaidAt: null }
+    }
+    if (storedPlanConflictsWithPaidInvoice(lockedStripeInfo.price_id, invoicePlanPriceIds)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'Paid bank-transfer invoice does not match the locked plan', customerId, storedPriceId: lockedStripeInfo.price_id })
+      await pgClient.query('ROLLBACK')
+      return { status: 'skipped', firstPaidAt: null }
     }
     if (decideInvoicePayment(lockedStripeInfo, invoiceSubscriptionId, eventOccurredAtIso) === 'skip') {
       await pgClient.query('ROLLBACK')
@@ -2206,6 +2212,7 @@ async function invoicePaid(
   }
 
   const eventOccurredAtIso = new Date(stripeEvent.created * 1000).toISOString()
+  let invoicePlanPriceIds: string[] | undefined
   if ((stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded') && invoiceRecordsSelfServeBankTransfer(stripeEvent.data.object)) {
     const stripe = getStripe(c, getWebhookBillingAccount(c))
     const subscription = await stripe.subscriptions.retrieve(subscriptionId)
@@ -2214,8 +2221,9 @@ async function invoicePaid(
       cloudlog({ requestId: c.get('requestId'), message: 'Paid bank-transfer invoice does not match the current subscription', orgId: org.id, subscriptionId })
       return c.json(BRES)
     }
+    invoicePlanPriceIds = lines.filter(line => line.amount > 0).map(line => line.priceId)
   }
-  const { status, firstPaidAt } = await persistInvoicePayment(c, stripeData.data.customer_id, subscriptionId, eventOccurredAtIso)
+  const { status, firstPaidAt } = await persistInvoicePayment(c, stripeData.data.customer_id, subscriptionId, eventOccurredAtIso, invoicePlanPriceIds)
   if (status === 'missing')
     return quickError(404, 'succeeded_customer_id_not_found', 'succeeded: customer_id not found', { stripeData })
   if (status === 'skipped') {
