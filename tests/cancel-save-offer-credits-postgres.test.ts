@@ -26,7 +26,7 @@ vi.mock('../supabase/functions/_backend/utils/stripe_in_app.ts', () => ({
 }))
 
 const SUBSCRIPTION_ID = 'sub_cancel_credits_test'
-const { acceptCancelSaveOffer, declineCancelSaveOffer } = await import('../supabase/functions/_backend/utils/cancel_save_offer.ts')
+const { acceptCancelSaveOffer, declineCancelSaveOffer, prepareCancelSaveOffer } = await import('../supabase/functions/_backend/utils/cancel_save_offer.ts')
 
 const customerId = `cus_${randomUUID()}`
 // A dedicated org: the grant flips its has_usage_credits flag, which must not
@@ -57,6 +57,8 @@ let offerA: string
 let offerB: string
 let discountOffer: string
 const discountCustomer = `cus_${randomUUID()}`
+// Without credits, so preparing an offer reaches the stale cleanup.
+const staleOrgId = randomUUID()
 
 async function grantCount() {
   const { rows } = await pool.query<{ n: number }>(
@@ -86,6 +88,11 @@ beforeAll(async () => {
     `INSERT INTO public.orgs (id, created_by, name, management_email, customer_id, has_usage_credits)
      VALUES ($1::uuid, $2::uuid, 'Cancel Credits Test Org', 'cancel-credits@example.com', $3, false)`,
     [orgId, USER_ID, customerId],
+  )
+  await pool.query(
+    `INSERT INTO public.orgs (id, created_by, name, management_email, customer_id, has_usage_credits)
+     VALUES ($1::uuid, $2::uuid, 'Cancel Stale Test Org', 'cancel-stale@example.com', NULL, false)`,
+    [staleOrgId, USER_ID],
   )
   // Two offers shown to the same customer (for example two open dialogs).
   const insert = () => pool.query<{ id: string }>(
@@ -117,7 +124,7 @@ afterAll(async () => {
   }
   await pool.query('DELETE FROM public.usage_credit_transactions WHERE org_id = $1::uuid', [orgId])
   await pool.query('DELETE FROM public.usage_credit_grants WHERE org_id = $1::uuid', [orgId])
-  await pool.query('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
+  await pool.query('DELETE FROM public.orgs WHERE id = ANY($1::uuid[])', [[orgId, staleOrgId]])
   await pool.query('DELETE FROM public.stripe_info WHERE customer_id = $1', [customerId])
   await pool.end()
 })
@@ -181,5 +188,26 @@ describe('declining a discount offer while its accept is in flight', () => {
     expect((await offer(discountOffer)).outcome).toBe('accepting')
     await expect(acceptCancelSaveOffer(c, discountCtx([]), discountOffer)).rejects.toThrow('no longer available')
     expect((await offer(discountOffer)).outcome).toBe('offered')
+  })
+
+  it('frees a stale reservation of another subscription only once Stripe shows no discount there', async () => {
+    await pool.query(`UPDATE public.cancel_save_offers SET outcome = 'accepting', responded_at = now() - interval '1 hour' WHERE id = $1`, [discountOffer])
+    // The current subscription is saveable; the offer's old one answers as given.
+    const prepareCtx = (old: unknown[] | Error) => ({
+      ...discountCtx([]),
+      stripe: { subscriptions: { retrieve: async (id: string) => {
+        if (id !== 'sub_discount_test')
+          return ctx.stripe.subscriptions.retrieve()
+        if (old instanceof Error)
+          throw old
+        return { discounts: old }
+      } } },
+    }) as any
+    await prepareCancelSaveOffer(c, prepareCtx([{ start: 1, source: { coupon: 'capgo_cancel_save_50_3m' } }]), staleOrgId, 'too_expensive')
+    expect((await offer(discountOffer)).outcome).toBe('accepting')
+    await prepareCancelSaveOffer(c, prepareCtx(new Error('stripe down')), staleOrgId, 'too_expensive')
+    expect((await offer(discountOffer)).outcome).toBe('accepting')
+    await prepareCancelSaveOffer(c, prepareCtx([]), staleOrgId, 'too_expensive')
+    expect((await offer(discountOffer)).outcome).not.toBe('accepting')
   })
 })

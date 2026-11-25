@@ -215,14 +215,30 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
     const offerType = offerTypeFor(reason, planCredits)
     const credits = offerType === 'credits' ? planCredits : null
 
-    // The subscription has no discount (checked above), so an old reservation never
-    // reached Stripe: give it back instead of blocking this customer forever.
-    await pg.query(
-      `UPDATE public.cancel_save_offers SET outcome = 'offered', responded_at = NULL
+    // A stale reservation whose subscription has no discount never reached Stripe: give
+    // it back instead of blocking this customer forever. The current subscription has
+    // none (checked above); any other one is read first, and kept if it has the discount
+    // or cannot be read.
+    const { rows: stale } = await pg.query<{ id: string, subscription_id: string }>(
+      `SELECT id::text, subscription_id FROM public.cancel_save_offers
        WHERE customer_id = $1 AND outcome = 'accepting' AND discount_start IS NULL AND credit_grant_id IS NULL
          AND responded_at < now() - make_interval(mins => $2::int)`,
       [ctx.customerId, STALE_ACCEPTING_MINUTES],
     )
+    const releasable: string[] = []
+    for (const row of stale) {
+      const discounted = row.subscription_id !== subscriptionId
+        && await retrieveSubscription(ctx, row.subscription_id).then(other => !!discountFor(other)).catch(() => true)
+      if (!discounted)
+        releasable.push(row.id)
+    }
+    if (releasable.length > 0) {
+      await pg.query(
+        `UPDATE public.cancel_save_offers SET outcome = 'offered', responded_at = NULL
+         WHERE id = ANY($1::uuid[]) AND outcome = 'accepting' AND discount_start IS NULL AND credit_grant_id IS NULL`,
+        [releasable],
+      )
+    }
 
     const { rows: accepted } = await pg.query(
       `SELECT 1 FROM public.cancel_save_offers WHERE customer_id = $1 AND outcome IN ('accepting', 'accepted') LIMIT 1`,
