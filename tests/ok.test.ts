@@ -1,11 +1,11 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { TestClient } from './sql-data-client'
 import { env } from 'node:process'
 import { describe, expect, it } from 'vitest'
 import { CLOUDFLARE_API_URL, getSupabaseClient } from './test-utils.ts'
 
 describe('supabase Client Tests', () => {
   it('client creation and database query', async () => {
-    const client: SupabaseClient = getSupabaseClient()
+    const client: TestClient = getSupabaseClient()
 
     // Test a simple query to the database
     const { data: table_data, error: table_error } = await client
@@ -22,7 +22,7 @@ describe('supabase Client Tests', () => {
 
 describe('[GET] /ok Function Test', () => {
   it('function invocation', async () => {
-    const client: SupabaseClient = getSupabaseClient()
+    const client: TestClient = getSupabaseClient()
 
     // In Cloudflare Workers test mode, Supabase Edge Functions are not running.
     // Validate the Cloudflare API worker /ok endpoint instead.

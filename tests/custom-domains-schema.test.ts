@@ -1,10 +1,10 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { TestClient } from './sql-data-client'
 import { randomUUID } from 'node:crypto'
 import { createClient } from './sql-data-client'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getSupabaseClient, SUPABASE_ANON_KEY, SUPABASE_BASE_URL } from './test-utils.ts'
 
-const admin = getSupabaseClient() as SupabaseClient
+const admin = getSupabaseClient() as TestClient
 const orgIds = [randomUUID(), randomUUID()]
 const hostname = `updates-${randomUUID()}.example.com`
 const routeId = randomUUID()

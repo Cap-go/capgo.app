@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { TestClient } from './sql-data-client'
 import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
@@ -30,7 +30,7 @@ function isRetryableRpcTransportError(error: { message?: string } | null) {
   return error?.message?.includes('fetch failed') === true
 }
 
-async function requestActorUserId(client: SupabaseClient<Database>) {
+async function requestActorUserId(client: TestClient<Database>) {
   let result: Awaited<ReturnType<typeof client.rpc<'request_actor_user_id'>>>
 
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -44,7 +44,7 @@ async function requestActorUserId(client: SupabaseClient<Database>) {
   return result!
 }
 
-async function requestActorEmail(client: SupabaseClient<Database>) {
+async function requestActorEmail(client: TestClient<Database>) {
   let result: Awaited<ReturnType<typeof client.rpc<'request_actor_email_adress'>>>
 
   for (let attempt = 0; attempt < 3; attempt++) {

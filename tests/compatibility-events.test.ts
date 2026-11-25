@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { TestClient } from './sql-data-client'
 import { randomUUID } from 'node:crypto'
 import { createClient } from './sql-data-client'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -25,7 +25,7 @@ const STRIPE_CUSTOMER_ID = `cus_compat_events_${testRunId.slice(0, 8)}`
 // The compatibility_events table and acknowledge_compatibility_event RPC are added
 // by a migration that postdates the generated Supabase types, so the typed client
 // does not know about them yet. Use an untyped view of each client for those calls.
-type UntypedClient = SupabaseClient<any, 'public', any>
+type UntypedClient = TestClient<any>
 
 interface CompatibilityEventRow {
   id: number
@@ -54,7 +54,7 @@ async function signInClient(email: string, password: string): Promise<UntypedCli
   }) as UntypedClient
 }
 
-function compatTable(client: SupabaseClient<any>) {
+function compatTable(client: TestClient<any>) {
   return (client as UntypedClient).from('compatibility_events')
 }
 
