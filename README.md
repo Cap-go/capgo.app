@@ -134,9 +134,11 @@ In production, we route most traffic through Cloudflare Workers for cost and
 scale, while Supabase remains the reference backend and the default for
 self-hosted deployments. Capgo cloud console and current CLI calls go to the
 Cloudflare API hosts (`VITE_API_HOST` / `hostApi`). Capgo cloud still publishes
-a small Supabase function allowlist for Postgres `pg_net` (`triggers`) and for
+a small Supabase function allowlist for the queue consumer (`triggers`) and for
 legacy CLI compatibility via `/functions/v1` through 2026-10-28. Self-hosted
-deployments keep using `/functions/v1`. Plugin hot paths and other unused Capgo
+deployments keep using `/functions/v1`, and also run the Cloudflare API worker:
+its `QueueDispatcher` Durable Object is what wakes the queue consumers (the
+database no longer uses `pg_net`). Plugin hot paths and other unused Capgo
 cloud endpoints are not published on Supabase.
 
 ## Project structure (self-hosting map)
@@ -517,7 +519,7 @@ supabase secrets set --env-file supabase/functions/.env
 Capgo Cloud (prod / preprod / alpha) only publishes allowlisted Supabase
 functions from `scripts/supabase-cloud-functions.ts`:
 
-- `triggers` forever (`pg_net` queue consumer)
+- `triggers` forever (queue consumer, called by the `QueueDispatcher`)
 - `bundle`, `channel`, `files`, `private` until **2026-10-28** (old Capgo CLI
   still called these via `supabase.functions.invoke` on `sb.capgo.app`; new
   CLI uses `api.capgo.app` / `files.capgo.app`)

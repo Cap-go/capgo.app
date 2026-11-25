@@ -59,22 +59,6 @@ describe('swap memory cleanup functions', () => {
     )
   })
 
-  it('cleanup_net_http_response truncates net._http_response', async () => {
-    const id = BigInt(Date.now()) * 1000n + 7n
-    await executeSQL(
-      `INSERT INTO net._http_response (id, status_code, content, created)
-       VALUES ($1, 200, 'swap-cleanup-test', now())`,
-      [id.toString()],
-    )
-
-    await executeSQL(`SELECT public.cleanup_net_http_response()`)
-
-    const rows = await executeSQL(
-      `SELECT count(*)::int AS n FROM net._http_response`,
-    )
-    expect(rows[0]?.n).toBe(0)
-  })
-
   it('null_migrated_app_version_manifests clears fully migrated dual-storage arrays', async () => {
     const appId = `com.swap.nullmanifest.${randomUUID().slice(0, 8)}`
     const orgRows = await executeSQL(

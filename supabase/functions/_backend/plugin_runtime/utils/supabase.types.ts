@@ -3852,7 +3852,6 @@ export type Database = {
       cleanup_expired_demo_apps: { Args: never; Returns: undefined }
       cleanup_frequent_job_details: { Args: never; Returns: undefined }
       cleanup_job_run_details_7days: { Args: never; Returns: undefined }
-      cleanup_net_http_response: { Args: never; Returns: undefined }
       cleanup_old_audit_logs: {
         Args: { batch_size?: number; max_batches?: number }
         Returns: undefined

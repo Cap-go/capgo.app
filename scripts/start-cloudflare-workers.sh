@@ -125,7 +125,6 @@ QUEUE_DISPATCHER_PID=''
 cleanup() {
   local pid
   echo -e "\n${YELLOW}Stopping workers...${NC}"
-  # The dispatcher goes first: it puts pg_net routing back while the database is up.
   for pid in "${QUEUE_DISPATCHER_PID}" "${WORKERS_PID}"; do
     if [[ -z "${pid}" ]]; then
       continue
@@ -182,10 +181,10 @@ echo -e "${GREEN}Starting API, Plugin and Files workers in one local runtime...$
 bun "${ROOT_DIR}/scripts/local-cloudflare-workers.ts" "${ROOT_DIR}" "${RUNTIME_ENV_FILE}" "${PERSIST_DIR}" "${CLOUDFLARE_API_PORT}" "${CLOUDFLARE_PLUGIN_PORT}" "${CLOUDFLARE_FILES_PORT}" "${API_INSPECTOR_PORT}" &
 WORKERS_PID=$!
 
-# Opt-in: send queue wakeups through the outbox and the QueueDispatcher Durable
-# Object like prod, instead of pg_net (`bun run backend` turns it on).
-if [[ "${LOCAL_QUEUE_DISPATCHER:-false}" == "true" ]]; then
-  echo -e "${GREEN}Routing queue wakeups to the local QueueDispatcher...${NC}"
+# The QueueDispatcher Durable Object is the only thing that drains the queue
+# wakeup outbox (no pg_net), so it runs unless LOCAL_QUEUE_DISPATCHER=false.
+if [[ "${LOCAL_QUEUE_DISPATCHER:-true}" == "true" ]]; then
+  echo -e "${GREEN}Starting the local QueueDispatcher...${NC}"
   SUPABASE_DB_URL="${SUPABASE_DB_URL}" SUPABASE_URL="${SUPABASE_URL}" CLOUDFLARE_API_PORT="${CLOUDFLARE_API_PORT}" \
     bun "${ROOT_DIR}/scripts/local-queue-dispatcher.ts" &
   QUEUE_DISPATCHER_PID=$!

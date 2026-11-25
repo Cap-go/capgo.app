@@ -4592,7 +4592,6 @@ export type Database = {
       cleanup_frequent_job_details: { Args: never; Returns: undefined }
       cleanup_job_run_details_7days: { Args: never; Returns: undefined }
       cleanup_long_canceled_org_data: { Args: never; Returns: undefined }
-      cleanup_net_http_response: { Args: never; Returns: undefined }
       cleanup_old_audit_logs: {
         Args: {
           batch_size?: number

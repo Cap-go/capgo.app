@@ -1,28 +1,21 @@
 BEGIN;
 
-SELECT plan(10);
+SELECT plan(8);
 
 SELECT pgmq.create('test_http_dispatch');
-
--- net.http_request_queue is shared with pg_net and other sessions, so only
--- count this test queue's requests, relative to a baseline.
-CREATE TEMP VIEW test_pg_net_requests AS
-SELECT count(*) AS requests
-FROM net.http_request_queue
-WHERE
-  pg_catalog.convert_from(body, 'utf8')::jsonb ->> 'queue_name'
-  = 'test_http_dispatch';
-
-CREATE TEMP TABLE pg_net_baseline AS
-SELECT requests FROM test_pg_net_requests;
 
 CREATE TEMP VIEW test_outbox AS
 SELECT calls, timeout_ms, body
 FROM public.http_dispatch_outbox
 WHERE target = 'test_http_dispatch';
 
--- Default (self-host): no targets routed, so pg_net still sends one call per
--- 100 readable messages.
+SELECT ok(
+  NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_net')
+  AND to_regclass('public.http_dispatch_targets') IS NULL,
+  'pg_net and the routing switch are gone: wakeups only use the outbox'
+);
+
+-- One consumer call per 100 readable messages, in a single outbox row.
 SELECT pgmq.send_batch(
   'test_http_dispatch',
   ARRAY(SELECT '{"function_name":"noop"}'::jsonb FROM generate_series(1, 150))
@@ -30,36 +23,10 @@ SELECT pgmq.send_batch(
 
 SELECT public.process_function_queue('test_http_dispatch', 100);
 
-SELECT is(
-  (SELECT requests FROM test_pg_net_requests) - (SELECT requests FROM pg_net_baseline),
-  2::bigint,
-  'unrouted queues keep dispatching through pg_net'
-);
-
-SELECT is(
-  (SELECT count(*) FROM test_outbox),
-  0::bigint,
-  'unrouted queues write nothing to the outbox'
-);
-
--- Routed: the same wakeup goes to the outbox instead of pg_net.
-INSERT INTO public.http_dispatch_targets (target) VALUES ('test_http_dispatch');
-
-TRUNCATE pg_net_baseline;
-INSERT INTO pg_net_baseline SELECT requests FROM test_pg_net_requests;
-
-SELECT public.process_function_queue('test_http_dispatch', 100);
-
-SELECT is(
-  (SELECT requests FROM test_pg_net_requests) - (SELECT requests FROM pg_net_baseline),
-  0::bigint,
-  'routed queues send nothing through pg_net'
-);
-
 SELECT results_eq(
   'SELECT calls, timeout_ms, body FROM test_outbox',
   $$VALUES (2, 8000, '{"queue_name":"test_http_dispatch","batch_size":100,"wait_for_completion":false}'::jsonb)$$,
-  'routed queues write one outbox row with the consumer call count'
+  'a queue wakeup writes one outbox row with the consumer call count'
 );
 
 SELECT ok(
@@ -107,10 +74,6 @@ SELECT is(
   'the API secret is never stored in the outbox'
 );
 
--- '*' routes every target, including the updates cache purge wake.
-DELETE FROM public.http_dispatch_targets WHERE target = 'test_http_dispatch';
-INSERT INTO public.http_dispatch_targets (target) VALUES ('*')
-ON CONFLICT DO NOTHING;
 DELETE FROM public.http_dispatch_outbox WHERE target = 'updates_cache_purge';
 
 SELECT public.wake_updates_cache_purge();
@@ -118,13 +81,13 @@ SELECT public.wake_updates_cache_purge();
 SELECT results_eq(
   $$SELECT calls, timeout_ms, body FROM public.http_dispatch_outbox WHERE target = 'updates_cache_purge'$$,
   $$VALUES (1, 5000, '{"wake":true}'::jsonb)$$,
-  'the wildcard target routes the updates cache purge wake'
+  'the updates cache purge wake goes to the outbox'
 );
 
 SELECT ok(
   NOT has_table_privilege('authenticated', 'public.http_dispatch_outbox', 'SELECT')
-  AND NOT has_table_privilege('anon', 'public.http_dispatch_targets', 'INSERT'),
-  'dispatch tables are not exposed to API roles'
+  AND NOT has_table_privilege('anon', 'public.http_dispatch_outbox', 'INSERT'),
+  'the outbox is not exposed to API roles'
 );
 
 SELECT * FROM finish();

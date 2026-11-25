@@ -39,9 +39,8 @@ try {
       throw new Error('Could not unschedule process_all_cron_tasks')
   }
 
-  // Wait for a pg_net worker already handling seeded scheduler work, then remove queued callbacks.
-  // Deleting rows would not synchronize with an active pg_net batch.
-  await client.query('TRUNCATE TABLE net.http_request_queue')
+  // Drop wakeups the scheduler already queued for the QueueDispatcher.
+  await client.query('TRUNCATE TABLE public.http_dispatch_outbox')
 
   const { rows: queues } = await client.query<QueueRow>(
     'SELECT q.queue_name FROM pgmq.list_queues() AS q',

@@ -7,7 +7,7 @@ import process from 'node:process'
  * published on sb.capgo.app.
  *
  * Forever:
- * - `triggers` — Postgres pg_net → /functions/v1/triggers/queue_consumer/sync
+ * - `triggers` — QueueDispatcher (outbox) → /functions/v1/triggers/queue_consumer/sync
  *
  * Deprecated for legacy Capgo CLIs that still call supabase.functions.invoke
  * on sb.capgo.app. Keep Capgo-cloud publish until 2026-10-28; new CLI uses
