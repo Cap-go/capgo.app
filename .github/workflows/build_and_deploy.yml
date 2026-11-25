@@ -160,7 +160,13 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
       - name: Apply Supabase Migrations
-        run: bash scripts/push-release-migrations.sh
+        # `supabase link` wrote the session pooler URL (no password); runners have no IPv6.
+        run: |
+          password=$(jq -rn --arg p "$SUPABASE_DB_PASSWORD" '$p|@uri')
+          echo "::add-mask::$password"
+          pooler_url=$(cat supabase/.temp/pooler-url)
+          export DATABASE_URL="${pooler_url/@/:$password@}"
+          bash scripts/push-release-migrations.sh
       - name: Setup Google Cloud CLI
         if: env.SUPA_ENV == 'PROD'
         uses: google-github-actions/setup-gcloud@v2
