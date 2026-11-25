@@ -161,7 +161,8 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
       - name: Apply Supabase Migrations
         env:
-          DATABASE_URL: ${{ secrets[format('DATABASE_URL_{0}', env.SUPA_ENV)] }}
+          # Each secret is gated on its own env, so a missing PROD secret never falls back to ALPHA.
+          DATABASE_URL: ${{ (env.SUPA_ENV == 'PROD' && secrets.DATABASE_URL_PROD) || (env.SUPA_ENV == 'ALPHA' && secrets.DATABASE_URL_ALPHA) || '' }}
         run: |
           if [ -z "$DATABASE_URL" ]; then
             echo "::error::Secret DATABASE_URL_$SUPA_ENV isn't configured"
