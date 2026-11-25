@@ -130,7 +130,8 @@ Run it in a low-traffic slot. Between the migration and step 2, a sign-up on hos
 can fail and a password change there is lost.
 
 1. Before merging: push `SUPABASE_SERVICE_ROLE_KEY` to `capgo_gotrue-prod` (see Secrets).
-2. Right after the deploy: the `sb.capgo.app` snippet relays `/auth/v1/*` to
+2. Right after the deploy: turn on the `sb.capgo.app` snippet
+   `cloudflare_workers/gotrue_auth_relay/index.js` (rule in its header): `/auth/v1/*` goes to
    `https://api.capgo.app/private/console/auth/*` (same method, query and body).
 3. Catch-up for rows written on hosted Auth in between, from the SQL editor:
    `SELECT public.copy_auth_to_auth_cf(false);` (adds only the accounts and SSO providers
