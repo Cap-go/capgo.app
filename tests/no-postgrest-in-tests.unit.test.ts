@@ -22,7 +22,7 @@ const REST_PATH_ALLOWED: Record<string, string> = {
 const SUPABASE_JS = String.raw`['"]@supabase/supabase-js['"]`
 const SUPABASE_JS_IMPORT = [
   // import ... from / export ... from, type-only included
-  new RegExp(String.raw`(?:import|export)\s[^;]*?\bfrom\s+${SUPABASE_JS}`),
+  new RegExp(String.raw`\b(?:import|export)\b[^;]*?\bfrom\s*${SUPABASE_JS}`),
   // side-effect import, require() and dynamic import()
   new RegExp(String.raw`(?:import|require)\s*\(?\s*${SUPABASE_JS}`),
 ]
@@ -71,6 +71,8 @@ describe('tests never rely on PostgREST', () => {
     'const { createClient } = require(\'@supabase/supabase-js\')',
     'const supabase = await import(\'@supabase/supabase-js\')',
     'import \'@supabase/supabase-js\'',
+    'import{createClient}from\'@supabase/supabase-js\'',
+    'export{type SupabaseClient}from"@supabase/supabase-js"',
   ])('flags %s', (source) => {
     expect(importsSupabaseJs(source)).toBe(true)
   })
