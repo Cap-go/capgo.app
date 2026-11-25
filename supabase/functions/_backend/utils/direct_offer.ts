@@ -5,14 +5,7 @@ import { cloudlogErr, serializeError } from './logging.ts'
 
 export { DIRECT_OFFER, isDirectOfferMetadata }
 
-/**
- * Paid-ads signups ("pay first") carry `offer = 'direct'` in their auth app
- * metadata (raw_app_meta_data). Only the server writes it, at signup
- * (/auth/register), so users cannot remove it to get a
- * trial. Their orgs get no free trial: trial_at is set to the creation time.
- * Only this exact value has any effect. Keep in sync with
- * public.generate_org_user_stripe_info_on_org_create().
- */
+/** Length of a normal trial when the signup is not a direct offer. */
 export const DEFAULT_TRIAL_DAYS = 15
 /** Bento tag for direct-offer users. They never get trial tags. */
 export const DIRECT_OFFER_BENTO_TAG = 'offer=direct'

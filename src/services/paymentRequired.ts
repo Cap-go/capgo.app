@@ -38,7 +38,7 @@ export function shouldShowPlanFailureBanner(
     && !shouldShowExpiredTrialPlansState(currentOrganizationFailed, isNative, paidAt)
 }
 
-export { DIRECT_OFFER, isDirectOfferMetadata } from '../../supabase/functions/_backend/utils/direct_offer_metadata.ts'
+export { isDirectOfferMetadata } from '../../supabase/functions/_backend/utils/direct_offer_metadata.ts'
 
 export type UnpaidCopyVariant = 'no_trial' | 'expired_trial' | 'lapsed' | 'native'
 
