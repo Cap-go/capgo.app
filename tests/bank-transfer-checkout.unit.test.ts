@@ -122,10 +122,10 @@ describe('yearly bank transfer', () => {
     expect(canceledBankTransferKeepsStoredPlan(true, true, false)).toBe(true)
     expect(canceledBankTransferKeepsStoredPlan(true, true, true)).toBe(false)
     expect(canceledBankTransferKeepsStoredPlan(true, false, false)).toBe(false)
-    expect(bankTransferPaymentState(true, 'unpaid', false, true)).toBe('first_invoice_unpaid')
-    expect(bankTransferPaymentState(true, 'unpaid', true, false)).toBe('bank_transfer_due')
-    expect(bankTransferPaymentState(true, 'paid', false, true)).toBe('paid')
-    expect(bankTransferPaymentState(false, 'unpaid', false, true)).toBe('unpaid')
+    expect(bankTransferPaymentState(true, 'unpaid', false)).toBe('first_invoice_unpaid')
+    expect(bankTransferPaymentState(true, 'unpaid', true)).toBe('bank_transfer_due')
+    expect(bankTransferPaymentState(true, 'paid', false)).toBe('paid')
+    expect(bankTransferPaymentState(false, 'unpaid', false)).toBe('unpaid')
 
     const same = buildBankTransferItems(
       [{ id: 'si_plan', quantity: 1, price: { id: 'price_year' } }],

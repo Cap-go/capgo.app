@@ -2565,7 +2565,6 @@ async function getSubscriptionPaymentState(
     selfServeBankTransfer,
     state,
     isPaidSubscriptionUpdate(customer, stripeData.data.subscription_id),
-    !customer.paid_at && customer.status !== 'succeeded',
   )
 }
 
