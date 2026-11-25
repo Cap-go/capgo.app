@@ -268,12 +268,7 @@
     },
     "alpha": {
       "name": "capgo_api-alpha",
-      "durable_objects": {
-        "bindings": [
-          { "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" },
-          { "name": "QUEUE_DISPATCHER", "class_name": "QueueDispatcher" }
-        ]
-      },
+      "durable_objects": { "bindings": [{ "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" }] },
       "send_email": [{ "name": "AUTH_EMAIL", "allowed_sender_addresses": ["noreply@capgo.app"] }],
       "triggers": {
         "crons": ["* * * * *"]
@@ -332,7 +327,6 @@
           "dataset": "notification_events_alpha"
         }
       ],
-      "services": [{ "binding": "API_SELF", "service": "capgo_api-alpha" }],
       "d1_databases": [
         {
           "binding": "DB_STOREAPPS",
