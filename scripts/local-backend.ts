@@ -34,7 +34,8 @@ const stopAll = (signal: NodeJS.Signals) => {
       process.kill(-child.pid, signal)
     }
     catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH'))
+      // ESRCH: group gone. EPERM: macOS, a group left with only its unreaped leader.
+      if (!(error instanceof Error && 'code' in error && (error.code === 'ESRCH' || error.code === 'EPERM')))
         throw error
     }
   }
