@@ -7,7 +7,7 @@ import path from 'node:path'
 const baseURL = process.env.CAPGO_MEDIA_BASE_URL ?? 'http://localhost:5173'
 const email = process.env.CAPGO_MEDIA_EMAIL ?? `media-onboard-${Date.now()}@example.com`
 const password = process.env.CAPGO_MEDIA_PASSWORD ?? `CapgoMedia${Date.now()}!Zx`
-const outDir = path.resolve('docs/pr/app-first-onboarding')
+const outDir = path.resolve('docs/pr-screenshots/app-first-onboarding')
 
 function isSafeFileName(name) {
   return name.length > 0 && !name.includes('/') && !name.includes('\\') && name !== '.' && name !== '..'

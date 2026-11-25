@@ -11,7 +11,7 @@ VITE_LOG="${RUN_DIR}/vite.log"
 TINBASE_DIR="${RUN_DIR}/tinbase"
 BACKEND_LOG="${RUN_DIR}/backend.log"
 BASE_REF="${SCREENSHOT_BASE_REF:-origin/main}"
-OUTPUT_DIR="docs/screenshots/security-updates-ui"
+OUTPUT_DIR="docs/pr-screenshots/security-updates-ui"
 GUARD_PATHS=(
   "src/pages/settings/account/Notifications.vue"
   "src/constants/observeTabs.ts"

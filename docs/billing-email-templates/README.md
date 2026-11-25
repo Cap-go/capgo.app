@@ -19,7 +19,7 @@ Repository changes do not publish Bento templates. After deploying the backend, 
 
 Keep existing workflow event triggers, delays, and unsubscribe/envelope settings. Preview with synthetic events for each threshold and upgrade tier before publishing. The screenshot is a synthetic rendering of the proposed content, not an inbox delivery or a screenshot of a deployed console change.
 
-![Proposed email content](../screenshots/billing-email-improvements.png)
+![Proposed email content](../pr-screenshots/billing-email-improvements.png)
 
 ## Coverage and remaining verification
 
