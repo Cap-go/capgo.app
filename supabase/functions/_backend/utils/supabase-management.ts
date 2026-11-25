@@ -77,6 +77,8 @@ function getProjectRef(c: Context): string | null {
 
 const MANAGEMENT_API_TIMEOUT_MS = 8_000
 
+const hasGoTrueBinding = (c: Context) => Boolean((c.env as Partial<Bindings> | undefined)?.GOTRUE)
+
 // Hosted Supabase: the Management API. With a GOTRUE binding (our self-hosted
 // GoTrue): its admin API, which the Management API wraps (same bodies and
 // responses).
@@ -89,8 +91,15 @@ function sendSSOProviderRequest(c: Context, method: string, providerPath: string
     body: body ? JSON.stringify(body) : undefined,
   }
 
-  if ((c.env as Partial<Bindings> | undefined)?.GOTRUE) {
+  if (hasGoTrueBinding(c)) {
     const key = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
+    if (!key) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'SUPABASE_SERVICE_ROLE_KEY not configured',
+      })
+      throw new ManagementAPIError(500, 'management_api_not_configured', 'Service role key not configured')
+    }
     return gotrueFetch(c, `admin/sso/providers${providerPath}`, {
       ...init,
       headers: { 'apikey': key, 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
@@ -129,7 +138,8 @@ async function callManagementAPI(
   providerPath: string,
   body?: any,
 ): Promise<any> {
-  const path = `/sso/providers${providerPath}`
+  // The path actually called, so logs tell GoTrue apart from the Management API.
+  const path = hasGoTrueBinding(c) ? `admin/sso/providers${providerPath}` : `/config/auth/sso/providers${providerPath}`
   try {
     cloudlog({
       requestId: c.get('requestId'),

@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { createSSOProvider, restoreSSOProvider, snapshotSSOProvider, updateSSOProvider } from '../supabase/functions/_backend/utils/supabase-management.ts'
+import { createSSOProvider, deleteSSOProvider, restoreSSOProvider, snapshotSSOProvider, updateSSOProvider } from '../supabase/functions/_backend/utils/supabase-management.ts'
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: vi.fn(),
@@ -149,5 +149,28 @@ describe('sSO provider calls with a GOTRUE binding', () => {
     await expect(updateSSOProvider(bound, 'provider-id', { domains: [] })).rejects.toMatchObject({ status: 400, code: 'saml_entity_id_mismatch', message: 'EntityID mismatch' })
     expect(bindingFetch.mock.calls[0]?.[0]).toBe('https://gotrue/admin/sso/providers/provider-id')
     expect(bindingFetch.mock.calls[0]?.[1]?.method).toBe('PUT')
+  })
+
+  it('snapshots, restores and deletes through GoTrue with the service key', async () => {
+    const provider = { id: 'provider-id', saml: { entity_id: 'idp', metadata_xml: '<EntityDescriptor/>' }, domains: [{ domain: 'example.com' }] }
+    const bindingFetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(provider), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', vi.fn())
+    const bound = { get: vi.fn(() => 'request-id'), env: { GOTRUE: { fetch: bindingFetch } } } as unknown as Context
+
+    const snapshot = await snapshotSSOProvider(bound, 'provider-id')
+    await restoreSSOProvider(bound, 'provider-id', snapshot)
+    await deleteSSOProvider(bound, 'provider-id')
+
+    expect(bindingFetch.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ['https://gotrue/admin/sso/providers/provider-id', 'GET'],
+      ['https://gotrue/admin/sso/providers/provider-id', 'PUT'],
+      ['https://gotrue/admin/sso/providers/provider-id', 'DELETE'],
+    ])
+    for (const [, init] of bindingFetch.mock.calls)
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer service-key')
+    expect(JSON.parse(bindingFetch.mock.calls[1]?.[1]?.body as string)).toEqual({ metadata_xml: '<EntityDescriptor/>', domains: ['example.com'] })
   })
 })
