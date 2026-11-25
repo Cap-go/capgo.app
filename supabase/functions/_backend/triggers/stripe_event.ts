@@ -2214,6 +2214,10 @@ async function invoicePaid(
     return c.json(BRES)
   }
 
+  // Sync can zero extra MAU while the first invoice is unpaid. Restore it once that invoice is paid.
+  if (stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded')
+    await applyBankTransferPlanAfterPayment(c, org, customer, subscriptionId, eventOccurredAtIso, stripeEvent.data.object)
+
   cloudlog({ requestId: c.get('requestId'), message: 'Paid subscription invoice granted paid access', orgId: org.id, subscriptionId })
   const plans = await getBillingPlans(c)
   const plan = plans.find(candidate => candidate.stripe_id === customer.product_id || candidate.stripe_id_us === customer.product_id)
