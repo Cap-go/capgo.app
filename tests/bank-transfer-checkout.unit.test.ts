@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, invoiceServicePeriod, paidInvoiceExtraMau, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, pickBankTransferSubscription, settledPaidThrough, shouldReissueUnpaidCardInvoice, storedPlanConflictsWithPaidInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, invoiceServicePeriod, paidInvoiceExtraMau, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, paidThroughWrite, pickBankTransferSubscription, settledPaidThrough, shouldReissueUnpaidCardInvoice, storedPlanConflictsWithPaidInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoiceRecordsSelfServeBankTransfer } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
@@ -160,6 +160,16 @@ describe('yearly bank transfer', () => {
     expect(settledPaidThrough(storedYear, [
       { amount: 39600, period: { start: oldStart, end: oldEnd }, parent: { subscription_item_details: { proration: false } } },
     ])).toBeNull()
+    const laterOneOffEnd = Math.floor(Date.parse('2028-01-01T00:00:00.000Z') / 1000)
+    expect(settledPaidThrough(anchor, [
+      { amount: 39600, period: { start: upgradeAt, end: prorationEnd }, parent: { subscription_item_details: { proration: true } } },
+      { amount: 500, period: { start: upgradeAt, end: laterOneOffEnd }, parent: { invoice_item_details: { proration: false } } },
+    ])).toEqual({ start: anchor.start, end: new Date(prorationEnd * 1000).toISOString() })
+    expect(paidThroughWrite('2027-01-01T00:00:00.000Z', { start: anchor.start, end: '2026-07-01T00:00:00.000Z' })).toEqual({})
+    expect(paidThroughWrite('2026-07-01T00:00:00.000Z', { start: anchor.start, end: '2027-01-01T00:00:00.000Z' })).toEqual({
+      subscription_anchor_start: anchor.start,
+      subscription_anchor_end: '2027-01-01T00:00:00.000Z',
+    })
     const current = subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }])
     const unrelated = invoiceBillLines([
       { amount: 100, quantity: 1, pricing: { price_details: { price: 'price_other' } }, parent: { subscription_item_details: { proration: false } } },

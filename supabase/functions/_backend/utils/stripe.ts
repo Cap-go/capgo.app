@@ -280,6 +280,20 @@ export function paidThroughNeedsUpdate(
   return new Date(next.end) > new Date(stored.end)
 }
 
+// Compare against the locked row. A handler that read an older snapshot must not move the boundary backward.
+export function paidThroughWrite(
+  lockedEnd: string | Date | null | undefined,
+  next: { start?: string | null, end?: string | null },
+): { subscription_anchor_start?: string, subscription_anchor_end?: string } {
+  const lockedIso = lockedEnd instanceof Date ? lockedEnd.toISOString() : lockedEnd ?? null
+  if (!next.end || !paidThroughNeedsUpdate({ end: lockedIso }, { start: next.start ?? null, end: next.end }))
+    return {}
+  return {
+    ...(next.start ? { subscription_anchor_start: next.start } : {}),
+    subscription_anchor_end: next.end,
+  }
+}
+
 // A mid-cycle proration starts at the upgrade time, not the subscription anchor.
 // Keep the stored anchor and only move the paid-through end.
 export function settledPaidThrough(
@@ -290,10 +304,12 @@ export function settledPaidThrough(
     parent?: { subscription_item_details?: { proration?: boolean } | null } | null
   }>,
 ): { start: string | null, end: string | null } | null {
-  const period = invoiceServicePeriod(lines)
+  // One-off invoice items are not the subscription period, even when they carry a later end.
+  const subscriptionLines = lines.filter(line => line.parent?.subscription_item_details)
+  const period = invoiceServicePeriod(subscriptionLines)
   if (!paidThroughNeedsUpdate(stored, period))
     return null
-  const positive = lines.filter(line => (line.amount ?? 0) > 0 && line.period?.end != null)
+  const positive = subscriptionLines.filter(line => (line.amount ?? 0) > 0 && line.period?.end != null)
   const prorationOnly = positive.length > 0 && positive.every(line => line.parent?.subscription_item_details?.proration)
   return {
     start: prorationOnly ? (stored.start ?? period.start) : period.start,

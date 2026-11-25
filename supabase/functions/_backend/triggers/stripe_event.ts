@@ -30,7 +30,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, paidInvoiceExtraMau, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, settledPaidThrough, storedPlanConflictsWithPaidInvoice, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, paidInvoiceExtraMau, paidThroughWrite, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, settledPaidThrough, storedPlanConflictsWithPaidInvoice, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
@@ -981,6 +981,7 @@ async function persistStripeInfoAndRevenueMovement(
   updateData: StripeInfoUpdate,
   eventOccurredAtIso: string,
   movement: RevenueMovement,
+  options?: { preserveLaterPaidThrough?: boolean },
 ): Promise<PersistRevenueMovementResult> {
   const transactionUpdateData: StripeInfoUpdate = {
     ...updateData,
@@ -1004,8 +1005,8 @@ async function persistStripeInfoAndRevenueMovement(
     // Lock the row so concurrent retries serialize before we classify
     // the event as missing/stale/duplicate. The admin dashboard derives revenue
     // movement from the persisted stripe_info changes.
-    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'past_due_at' | 'status'> & { paid_at: string | Date | null }>(
-      'SELECT last_stripe_event_at, past_due_at, status, paid_at FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
+    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'past_due_at' | 'status'> & { paid_at: string | Date | null, subscription_anchor_end: string | Date | null }>(
+      'SELECT last_stripe_event_at, past_due_at, status, paid_at, subscription_anchor_end FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
       [customerId],
     )
     const lockedStripeInfo = stripeInfoRow.rows[0]
@@ -1034,6 +1035,21 @@ async function persistStripeInfoAndRevenueMovement(
     }
     if (transactionUpdateData.past_due_at === undefined && transactionUpdateData.status && lockedStripeInfo.past_due_at)
       transactionUpdateData.past_due_at = null
+
+    if (options?.preserveLaterPaidThrough) {
+      const written = paidThroughWrite(lockedStripeInfo.subscription_anchor_end, {
+        start: transactionUpdateData.subscription_anchor_start,
+        end: transactionUpdateData.subscription_anchor_end,
+      })
+      if (written.subscription_anchor_end)
+        transactionUpdateData.subscription_anchor_end = written.subscription_anchor_end
+      else
+        delete transactionUpdateData.subscription_anchor_end
+      if (written.subscription_anchor_start)
+        transactionUpdateData.subscription_anchor_start = written.subscription_anchor_start
+      else
+        delete transactionUpdateData.subscription_anchor_start
+    }
 
     const updateStatement = buildStripeInfoUpdateStatement(customerId, transactionUpdateData)
     const shouldRecordProcessedEvent = shouldRecordProcessedStripeEvent(updateStatement, movement)
@@ -2162,40 +2178,41 @@ async function applyBankTransferPlanAfterPayment(
     { productId: customer.product_id, priceId: customer.price_id, extraMau: customer.extra_mau },
     { productId, priceId, extraMau },
   )
-  if (planAlreadyStored && !period)
-    return
-  const updateData: StripeInfoUpdate = {
-    product_id: productId ?? customer.product_id ?? undefined,
-    price_id: priceId ?? customer.price_id ?? undefined,
-    extra_mau: extraMau,
-    status: 'succeeded',
-    ...(period?.start ? { subscription_anchor_start: period.start } : {}),
-    ...(period?.end ? { subscription_anchor_end: period.end } : {}),
-  }
-  const revenuePlans = await getRevenuePlans(c)
-  const movement = classifyRevenueMovement(customer, updateData, revenuePlans)
-  const stripeEventId = c.get('stripeEvent')?.id
-  if (!stripeEventId)
-    return
-  const { status: didPersist } = await persistStripeInfoAndRevenueMovement(c, customer.customer_id, stripeEventId, updateData, eventOccurredAtIso, movement)
-  const extraChanged = extraMau !== (customer.extra_mau ?? 0)
-  const planProductId = productId ?? customer.product_id
-  if (planProductId) {
-    const refreshData: StripeData['data'] = {
-      customer_id: customer.customer_id,
-      product_id: planProductId,
+  if (!(planAlreadyStored && !period)) {
+    const updateData: StripeInfoUpdate = {
+      product_id: productId ?? customer.product_id ?? undefined,
+      price_id: priceId ?? customer.price_id ?? undefined,
+      extra_mau: extraMau,
       status: 'succeeded',
+      ...(period?.start ? { subscription_anchor_start: period.start } : {}),
+      ...(period?.end ? { subscription_anchor_end: period.end } : {}),
     }
-    if (priceId)
-      refreshData.price_id = priceId
-    await refreshPlanStatusAfterStripeSubscriptionChange(c, org, {
-      data: refreshData,
-      isUpgrade: false,
-      // The refresh gate only compares product and price. Extra MAU still changes the allowance.
-      previousProductId: extraChanged && productId === customer.product_id ? 'stored-plan' : customer.product_id ?? undefined,
-      previousPriceId: customer.price_id ?? undefined,
-    }, didPersist, customer)
+    const revenuePlans = await getRevenuePlans(c)
+    const movement = classifyRevenueMovement(customer, updateData, revenuePlans)
+    const stripeEventId = c.get('stripeEvent')?.id
+    if (!stripeEventId)
+      return
+    const { status: didPersist } = await persistStripeInfoAndRevenueMovement(c, customer.customer_id, stripeEventId, updateData, eventOccurredAtIso, movement, { preserveLaterPaidThrough: true })
+    const extraChanged = extraMau !== (customer.extra_mau ?? 0)
+    const planProductId = productId ?? customer.product_id
+    if (planProductId) {
+      const refreshData: StripeData['data'] = {
+        customer_id: customer.customer_id,
+        product_id: planProductId,
+        status: 'succeeded',
+      }
+      if (priceId)
+        refreshData.price_id = priceId
+      await refreshPlanStatusAfterStripeSubscriptionChange(c, org, {
+        data: refreshData,
+        isUpgrade: false,
+        // The refresh gate only compares product and price. Extra MAU still changes the allowance.
+        previousProductId: extraChanged && productId === customer.product_id ? 'stored-plan' : customer.product_id ?? undefined,
+        previousPriceId: customer.price_id ?? undefined,
+      }, didPersist, customer)
+    }
   }
+  // A retry can arrive after the plan write committed and the tag sync failed. Still finish that sync.
   await syncBillingBentoTagsFromStoredStripeInfo(c, org, customer.customer_id)
   await backgroundTask(c, Promise.all([
     purgePlanCacheForOrg(c, org.id),
