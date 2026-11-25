@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import { gotrueFetch } from '../../utils/gotrue_admin.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
@@ -64,15 +65,15 @@ function maskEmail(email: string | undefined | null): string | undefined {
  * so we call the endpoint directly with the service role key.
  */
 async function adminDeleteIdentity(c: Context<MiddlewareKeyVariables>, userId: string, identityId: string): Promise<{ error: string | null }> {
-  const supabaseUrl = getEnv(c, 'SUPABASE_URL')
   const serviceRoleKey = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
-  const url = `${supabaseUrl}/auth/v1/admin/users/${userId}/identities/${identityId}`
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 5000)
 
   try {
-    const res = await fetch(url, {
+    // Our self-hosted GoTrue (v2.197.0) has no such route and answers 404,
+    // which takes the database fallback below.
+    const res = await gotrueFetch(c, `admin/users/${userId}/identities/${identityId}`, {
       method: 'DELETE',
       headers: {
         Authorization: `Bearer ${serviceRoleKey}`,
