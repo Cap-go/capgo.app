@@ -33,7 +33,6 @@ export const TRANSFER_INVOICE_FOOTER_MAX_LENGTH = 5000
 
 const TRANSFER_INVOICE_PAYMENT_METHOD_TYPES = new Set([
   'customer_balance',
-  'us_bank_account',
   'ach_credit_transfer',
 ])
 

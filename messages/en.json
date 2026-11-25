@@ -4395,7 +4395,7 @@
   "billing-bank-transfer-renewal": "The next renewal will be paid by bank transfer. We will email the invoice.",
   "billing-bank-transfer-email-required": "Add a billing email in Billing, then try the bank transfer again.",
   "billing-bank-transfer-address-required": "Add a billing address in Billing, then try the bank transfer again.",
-  "billing-bank-transfer-unavailable": "Bank transfer is available in USD, EUR, GBP, JPY, and MXN. Card checkout still works in this currency.",
+  "billing-bank-transfer-unavailable": "Bank transfer is not available for this currency. You can still pay by card.",
   "billing-bank-transfer-yearly-only": "Bank transfer is available on yearly plans.",
   "billing-bank-transfer-schedule": "Cancel the scheduled plan in Billing before paying by bank transfer.",
   "billing-card-save-failed": "We couldn't save this card. Please check the details and try again.",

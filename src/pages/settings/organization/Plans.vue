@@ -435,11 +435,14 @@ async function openBankTransfer(plan: Plan, index: number) {
         toast.error(t('billing-checkout-error'))
       return
     }
-    trackPlanCheckoutStarted(plan, true, 'bank_transfer')
     if (session.kind === 'bank_transfer_renewal') {
       toast.success(t('billing-bank-transfer-renewal'))
+      await organizationStore.fetchOrganizations()
+      if (orgId)
+        organizationStore.setCurrentOrganization(orgId)
       return
     }
+    trackPlanCheckoutStarted(plan, true, 'bank_transfer')
     if (session.kind === 'hosted') {
       globalThis.location.href = session.url
       return

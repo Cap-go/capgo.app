@@ -17,8 +17,8 @@ interface CheckoutSessionResponse {
   bankTransfer?: 'invoice' | 'renewal'
 }
 
-// Embedded sessions mount in Capgo; hosted is only returned by the local Stripe emulator.
-// A yearly bank transfer either opens the Stripe invoice or switches the next renewal.
+// Embedded card checkout mounts in Capgo. A hosted URL is the local Stripe emulator, or a bank-transfer invoice page.
+// A yearly bank transfer either opens that invoice or switches the next renewal.
 export type CheckoutSession
   = | { kind: 'embedded', clientSecret: string, publishableKey: string, sessionId: string }
     | { kind: 'hosted', url: string }
