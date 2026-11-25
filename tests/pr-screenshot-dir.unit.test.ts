@@ -9,7 +9,9 @@ const forbidden = [
   '.github/pr-screenshots',
   '.github/pr-assets',
   '.github/assets',
+  '.github/pr-previews',
   'assets/pr-previews',
+  'artifacts/pr',
 ]
 
 describe('pr screenshot directory', () => {

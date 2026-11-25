@@ -1111,7 +1111,9 @@ Do not create another screenshot directory. These paths are forbidden:
 - `.github/pr-screenshots/`
 - `.github/pr-assets/`
 - `.github/assets/`
+- `.github/pr-previews/`
 - `assets/pr-previews/`
+- `artifacts/pr/`
 
 App Store captures stay in `fastlane/screenshots/`. Local visual-diff captures stay in `.context/visual-diff/` and are not committed.
 
