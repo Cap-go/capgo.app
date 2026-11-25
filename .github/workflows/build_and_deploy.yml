@@ -161,15 +161,13 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
       - name: Apply Supabase Migrations
         env:
-          DATABASE_URL_ALPHA: ${{ secrets.DATABASE_URL_ALPHA }}
-          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL_PROD }}
+          DATABASE_URL: ${{ secrets[format('DATABASE_URL_{0}', env.SUPA_ENV)] }}
         run: |
-          secret="DATABASE_URL_$SUPA_ENV"
-          if [ -z "${!secret:-}" ]; then
-            echo "::error::Secret $secret isn't configured"
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Secret DATABASE_URL_$SUPA_ENV isn't configured"
             exit 1
           fi
-          DATABASE_URL="${!secret}" bash scripts/push-release-migrations.sh
+          bash scripts/push-release-migrations.sh
       - name: Setup Google Cloud CLI
         if: env.SUPA_ENV == 'PROD'
         uses: google-github-actions/setup-gcloud@v2
