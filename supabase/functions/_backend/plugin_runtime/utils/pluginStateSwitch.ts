@@ -39,9 +39,17 @@ export function pluginStateBucket(appId: string, deviceId: string) {
  */
 export const PLUGIN_STATE_FILL_MAX_TTL_SECONDS = 30
 
-/** Every device reads KV and published deletions are trusted (rollout complete). */
+/** Published deletions are trusted (PLUGIN_STATE_KV_AUTHORITATIVE). */
 export function isPluginStateAuthoritative(c: AnyContext) {
   return getEnv(c, 'PLUGIN_STATE_KV_AUTHORITATIVE').trim().toLowerCase() === 'true'
+}
+
+/**
+ * KV answers may be shared with every device: authoritative AND every device
+ * reads KV. A partial share keeps the database cohort on its own answers.
+ */
+export function isPluginStateShared(c: AnyContext) {
+  return isPluginStateAuthoritative(c) && pluginStateShareBps(c) >= 10_000
 }
 
 /**

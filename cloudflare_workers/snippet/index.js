@@ -754,7 +754,8 @@ async function tryEdgeAnswer(budget, request, url, endpoint, appId, body, rawBod
     // the worker's update enumeration guard limited.
     const ip = request.headers.get('cf-connecting-ip')
     const statHeader = edgeStatHeader({ e: 'updates', b: rawBody, n: fill.n })
-    if (!ip || !statHeader || !canSpend(budget, 1, 2))
+    // Keep the worker fetch (and its fill when room is left) for an IP the guard limited.
+    if (!ip || !statHeader || !canSpend(budget, 1, doc.kvRead ? 1 : 2))
       return null
     if (await withinServingDeadline(budget, () => cacheMatch(budget, getIpLimitCacheKey(url.hostname, ip), true)).catch(() => true))
       return null
@@ -938,12 +939,11 @@ export default {
         const answerPath = method === 'POST' && EDGE_ANSWERS_ENABLED && EDGE_ANSWER_PATHS.has(url.pathname)
         const mainFill = isPlainObject(entry.document) ? entry.document.fill : null
         const deviceId = Array.isArray(body) ? body[0]?.device_id : body?.device_id
-        const kvEntry = answerPath && isPlainObject(mainFill) && isKvCohort(mainFill, appId, deviceId)
-          ? await readEdgeCache(budget, kvEdgeCacheKey(edgeKey))
-          : {}
+        const kvRead = answerPath && isPlainObject(mainFill) && isKvCohort(mainFill, appId, deviceId)
+        const kvEntry = kvRead ? await readEdgeCache(budget, kvEdgeCacheKey(edgeKey)) : {}
         const kvDoc = isPlainObject(kvEntry.document) ? kvEntry.document : null
         const edgeDoc = isPlainObject(entry.document) || kvDoc
-          ? { fill: entry.document?.fill, kvFill: kvDoc?.fill }
+          ? { fill: entry.document?.fill, kvFill: kvDoc?.fill, kvRead }
           : null
         if (entry.response) {
           console.log(`Edge cache HIT (${entry.kind}) for ${appId}/${endpoint}/${method}`)

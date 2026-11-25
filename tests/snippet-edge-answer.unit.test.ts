@@ -46,7 +46,7 @@ function encodeStat(value: unknown) {
   return Buffer.from(JSON.stringify(value)).toString('base64url')
 }
 
-const ENV_KEYS = ['PLUGIN_STATE_KV_AUTHORITATIVE', 'SNIPPET_EDGE_ANSWER', 'SNIPPET_EDGE_ANSWER_TTL_SECONDS', 'CF_CACHE_PURGE_TOKEN', 'CF_ANALYTICS_TOKEN', 'UPDATES_CACHE_LOCAL_PURGE_URL', 'LIMITED_APPS']
+const ENV_KEYS = ['PLUGIN_STATE_KV', 'PLUGIN_STATE_KV_AUTHORITATIVE', 'SNIPPET_EDGE_ANSWER', 'SNIPPET_EDGE_ANSWER_TTL_SECONDS', 'CF_CACHE_PURGE_TOKEN', 'CF_ANALYTICS_TOKEN', 'UPDATES_CACHE_LOCAL_PURGE_URL', 'LIMITED_APPS']
 
 // Outside workerd, getEnv reads process.env.
 async function fillFrom(env: Record<string, string>, handler: (c: any) => unknown) {
@@ -58,7 +58,8 @@ async function fillFrom(env: Record<string, string>, handler: (c: any) => unknow
       await handler(c)
       return c.json({ ok: true })
     })
-    const response = await app.request('/')
+    // The PLUGIN_STATE binding: pluginStateShareBps reports the KV share.
+    const response = await app.request('/', undefined, { PLUGIN_STATE: {} })
     return response.headers
   }
   finally {
@@ -400,25 +401,28 @@ describe('snippet edge stats queue', () => {
 
 describe('snippet fills from KV-served answers', () => {
   const update = (c: any) => setSnippetUpdatesFill(c, 'com.example.app', ANSWER, { blockProviderInfraRequests: false, legacyChannelSelfStore: false })
+  const fromKv = async (c: any) => {
+    markPluginStateServed(c)
+    await update(c)
+  }
+  const CANARY = { ...ENABLED_ENV, PLUGIN_STATE_KV: '25%' }
 
   it('teaches the KV canary cohort its own answer, purged with the snapshot', async () => {
-    const fill = readFill(await fillFrom(ENABLED_ENV, async (c) => {
-      markPluginStateServed(c)
-      await update(c)
-    }))
-    expect(fill.v).toBe(4)
-    expect(fill.kv).toBe(true)
+    const fill = readFill(await fillFrom(CANARY, fromKv))
+    expect(fill).toMatchObject({ v: 4, kv: true, ks: 2500 })
     // Bounded by the document freshness window, not the 900 s default.
     expect(fill.ttl).toBe(30)
     expect(fill.tags.split(',')).toContain('capgo-plugin-state-com.example.app')
     expect(fill.tags.split(',')).toContain('capgo-updates-com.example.app')
   })
 
-  it('shares KV answers with every device once KV is authoritative', async () => {
-    const fill = readFill(await fillFrom({ ...ENABLED_ENV, PLUGIN_STATE_KV_AUTHORITATIVE: 'true' }, async (c) => {
-      markPluginStateServed(c)
-      await update(c)
-    }))
+  it('keeps the cohorts apart when authoritative is set before 100%', async () => {
+    const fill = readFill(await fillFrom({ ...CANARY, PLUGIN_STATE_KV_AUTHORITATIVE: 'true' }, fromKv))
+    expect(fill).toMatchObject({ v: 4, kv: true, ks: 2500 })
+  })
+
+  it('shares KV answers with every device once KV is authoritative at 100%', async () => {
+    const fill = readFill(await fillFrom({ ...ENABLED_ENV, PLUGIN_STATE_KV: 'on', PLUGIN_STATE_KV_AUTHORITATIVE: 'true' }, fromKv))
     expect(fill.v).toBe(2)
     expect(fill.kv).toBeUndefined()
     expect(fill.ks).toBe(0)
@@ -426,10 +430,9 @@ describe('snippet fills from KV-served answers', () => {
     expect(fill.tags.split(',')).toContain('capgo-plugin-state-com.example.app')
   })
 
-  it('keeps database answers as before', async () => {
-    const fill = readFill(await fillFrom(ENABLED_ENV, update))
-    expect(fill.v).toBe(2)
-    expect(fill.ttl).toBe(900)
+  it('tells the snippet the KV share on database answers', async () => {
+    const fill = readFill(await fillFrom(CANARY, update))
+    expect(fill).toMatchObject({ v: 2, ks: 2500, ttl: 900 })
     expect(fill.kv).toBeUndefined()
     expect(fill.tags.split(',')).not.toContain('capgo-plugin-state-com.example.app')
   })

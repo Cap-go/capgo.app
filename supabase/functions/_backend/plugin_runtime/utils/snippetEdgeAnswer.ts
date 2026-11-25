@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { ALLOWED_STATS_ACTIONS } from '../plugins/stats_actions.ts'
-import { isPluginStateAuthoritative, isPluginStateServed, PLUGIN_STATE_FILL_MAX_TTL_SECONDS, pluginStateShareBps } from './pluginStateSwitch.ts'
+import { isPluginStateServed, isPluginStateShared, PLUGIN_STATE_FILL_MAX_TTL_SECONDS, pluginStateShareBps } from './pluginStateSwitch.ts'
 import { PROVIDER_INFRA_ASNS } from './providerAsns.ts'
 import { edgeCacheTtlForReplicaLag } from './replicaFreshness.ts'
 import { pluginStateAppCacheTag, updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
@@ -142,7 +142,8 @@ async function fillBase(c: Context, appId: string, blockProviderInfraRequests: b
   // KV answers teach the snippet too. During the canary they are stored as
   // the cohort's own answer (v4 `kv`), never given to database devices.
   const kvServed = isPluginStateServed(c)
-  const kvCanary = kvServed && !isPluginStateAuthoritative(c)
+  const shared = isPluginStateShared(c)
+  const kvCanary = kvServed && !shared
   // A replayed request has no snippet in front of it.
   if (getSnippetEdgeReplay(c))
     return null
@@ -172,8 +173,8 @@ async function fillBase(c: Context, appId: string, blockProviderInfraRequests: b
     v: 2,
     bps,
     ttl,
-    // Authoritative: every device reads KV, one answer serves them all.
-    ks: isPluginStateAuthoritative(c) ? 0 : pluginStateShareBps(c),
+    // Shared (authoritative at 100%): one answer serves every device.
+    ks: shared ? 0 : pluginStateShareBps(c),
     tags: tags.join(','),
   }
   // The snippet cannot look the IP up: it answers only devices outside the

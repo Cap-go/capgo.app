@@ -192,16 +192,18 @@ describe('cloudflare snippet edge answers per KV cohort', () => {
     expect(tagsOf('/edge-v4-kv/').join(',')).toContain('capgo-plugin-state-com.edge.app')
     expect(tagsOf('/edge-v4/').join(',')).not.toContain('capgo-plugin-state-com.edge.app')
 
-    cache.match.mockClear()
-    cache.put.mockClear()
-    for (const device of [KV_DEVICE_2, DB_DEVICE_2]) {
+    // KV device: both entries + IP limit; database device: its entry + IP limit.
+    for (const [device, lookups] of [[KV_DEVICE_2, 3], [DB_DEVICE_2, 2]] as const) {
+      cache.match.mockClear()
+      cache.put.mockClear()
+      fetchMock.mockClear()
       const answer = await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: device })))
       expect(answer.headers.get('X-Capgo-Edge')).toBe('answer')
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(cache.match).toHaveBeenCalledTimes(lookups)
+      expect(cache.put).not.toHaveBeenCalled()
+      expect(subrequests(cache, fetchMock)).toBeLessThanOrEqual(5)
     }
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    // KV device: both entries + IP limit; database device: its entry + IP limit.
-    expect(cache.match).toHaveBeenCalledTimes(5)
-    expect(cache.put).not.toHaveBeenCalled()
   })
 
   it('refuses a KV canary response that carries a database fill', async () => {
