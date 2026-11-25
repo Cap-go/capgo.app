@@ -114,9 +114,15 @@ async function main() {
       if (started || ++failedStarts % 30 === 0)
         console.error(`Local queue dispatcher tick failed: ${errorMessage(error)}`)
     }
+    if (stopping)
+      break
     await new Promise<void>((resolveWait) => {
-      wake = resolveWait
-      setTimeout(resolveWait, started ? TICK_MS : RETRY_MS)
+      // Cleared on wake: a pending timer would keep the process alive after the restore.
+      const timer = setTimeout(resolveWait, started ? TICK_MS : RETRY_MS)
+      wake = () => {
+        clearTimeout(timer)
+        resolveWait()
+      }
     })
   }
 
