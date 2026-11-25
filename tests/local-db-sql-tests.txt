@@ -4,6 +4,7 @@ tests/app-onboarding-v3-postgres.test.ts
 tests/app-version-r2-path-guard.test.ts
 tests/app-versions-deleted-at-rbac.test.ts
 tests/app-versions-rls-dos.test.ts
+tests/cancel-save-offer-credits-postgres.test.ts
 tests/canceled-org-retention-cleanup.test.ts
 tests/cicd-encryption-policy.test.ts
 tests/cicd-setup-locking.test.ts

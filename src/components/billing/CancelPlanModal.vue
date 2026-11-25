@@ -1,7 +1,9 @@
 <script setup lang="ts">
 /**
  * Org billing cancel flow: pick a reason, see what the plan includes, then load an optional
- * Stripe save offer before confirming cancellation. Accepting the offer keeps the subscription.
+ * save offer before confirming cancellation. The offer depends on the reason: a discount
+ * keeps the subscription; credits replace it (the plan ends at period end, the credits
+ * keep updates running on pay-as-you-go).
  */
 
 import type { BillingSubscription, CancelReason, CancelSaveOffer } from '~/services/stripe'
@@ -9,7 +11,7 @@ import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import BillingModal from '~/components/billing/BillingModal.vue'
-import { acceptCancelSaveOffer, CANCEL_REASONS, cancelSubscriptionWithReason, formatStripeAmount, getCancelSaveOffer } from '~/services/stripe'
+import { acceptCancelSaveOffer, CANCEL_REASONS, cancelSubscriptionWithReason, formatStripeAmount, FOUNDER_CALL_URL, getCancelSaveOffer, recordFounderCallClick } from '~/services/stripe'
 
 const props = defineProps<{
   orgId: string
@@ -19,7 +21,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   canceled: [subscription: BillingSubscription | null]
-  // The customer took the discount and keeps the plan.
+  // The customer took the offer: kept the plan with a discount, or switched to credits.
   saved: [subscription: BillingSubscription | null]
 }>()
 
@@ -31,6 +33,10 @@ const isAccepting = ref(false)
 // undefined until checked; null when the customer is not eligible.
 const offer = ref<CancelSaveOffer | null | undefined>(undefined)
 const showLossReminder = ref(false)
+// Set once the offer was checked and the reason calls for a talk with the founder.
+const showFounderCall = ref(false)
+// The recorded cancel attempt, for the admin report.
+const attemptId = ref<string | null>(null)
 const lossHeading = ref<HTMLElement | null>(null)
 const MAX_COMMENT = 1000
 const lossItems = ['ota', 'channels', 'builds', 'support'] as const
@@ -39,12 +45,13 @@ const lossItems = ['ota', 'channels', 'builds', 'support'] as const
 const needsComment = computed(() => reason.value === 'other')
 const busy = computed(() => isSubmitting.value || isAccepting.value)
 const canSubmit = computed(() => !!reason.value && (!needsComment.value || comment.value.trim().length > 0) && !busy.value)
-const offerPrices = computed(() => offer.value
-  ? { full: formatStripeAmount(offer.value.monthlyAmount, offer.value.currency), discounted: formatStripeAmount(offer.value.discountedAmount, offer.value.currency) }
-  : null)
+const discountOffer = computed(() => offer.value?.type === 'discount' ? offer.value : null)
+const creditsOffer = computed(() => offer.value?.type === 'credits' ? offer.value : null)
+const monthlyPrice = computed(() => offer.value ? formatStripeAmount(offer.value.monthlyAmount, offer.value.currency) : '')
+const discountedPrice = computed(() => discountOffer.value ? formatStripeAmount(discountOffer.value.discountedAmount, discountOffer.value.currency) : '')
 
 async function cancelPlan(selected: CancelReason) {
-  const { subscription } = await cancelSubscriptionWithReason(props.orgId, selected, comment.value.trim(), offer.value?.id)
+  const { subscription } = await cancelSubscriptionWithReason(props.orgId, selected, comment.value.trim(), offer.value?.id, attemptId.value ?? undefined)
   toast.success(t('billing-cancel-success'))
   emit('canceled', subscription)
 }
@@ -64,12 +71,15 @@ async function loadOfferOrCancel() {
   try {
     if (offer.value === undefined) {
       // The offer is optional: if it cannot be loaded, cancel as asked.
-      offer.value = await getCancelSaveOffer(props.orgId, reason.value).then(res => res.offer).catch((error) => {
+      const res = await getCancelSaveOffer(props.orgId, reason.value).catch((error) => {
         console.error('Cannot load cancel offer', error)
         return null
       })
+      offer.value = res?.offer ?? null
+      attemptId.value = res?.attemptId ?? null
       showLossReminder.value = false
-      if (offer.value)
+      showFounderCall.value = !!res?.founderCall
+      if (offer.value || showFounderCall.value)
         return
     }
     await cancelPlan(reason.value)
@@ -99,18 +109,28 @@ async function submit() {
   }
 }
 
+// Measured only: the link opens whatever happens to the request.
+function trackFounderClick() {
+  if (attemptId.value)
+    recordFounderCallClick(props.orgId, attemptId.value).catch(error => console.error('Cannot record founder call click', error))
+}
+
 async function acceptOffer() {
   if (!offer.value || busy.value)
     return
   isAccepting.value = true
   try {
-    const { subscription } = await acceptCancelSaveOffer(props.orgId, offer.value.id)
-    toast.success(t('billing-cancel-offer-accepted', { percent: offer.value.percentOff, months: offer.value.durationMonths }))
+    const current = offer.value
+    const { subscription } = await acceptCancelSaveOffer(props.orgId, current.id, comment.value.trim(), attemptId.value ?? undefined)
+    if (current.type === 'credits')
+      toast.success(t('billing-cancel-credits-accepted', { credits: current.credits }))
+    else
+      toast.success(t('billing-cancel-offer-accepted', { percent: current.percentOff, months: current.durationMonths }))
     emit('saved', subscription)
   }
   catch (error) {
     console.error('Cannot apply cancel offer', error)
-    toast.error(t('billing-cancel-offer-error'))
+    toast.error(t(offer.value.type === 'credits' ? 'billing-cancel-credits-error' : 'billing-cancel-offer-error'))
   }
   finally {
     isAccepting.value = false
@@ -147,23 +167,47 @@ async function acceptOffer() {
         </button>
       </div>
     </div>
-    <div v-else-if="offer && offerPrices" data-test="cancel-save-offer">
-      <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
+    <div v-else-if="offer || showFounderCall" data-test="cancel-save-offer" :data-offer-type="offer?.type ?? 'founder_call'">
+      <div v-if="creditsOffer" class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
         <p class="text-base font-semibold text-blue-900 dark:text-blue-100">
-          {{ t('billing-cancel-offer-title', { percent: offer.percentOff, months: offer.durationMonths }) }}
+          {{ t('billing-cancel-credits-title') }}
         </p>
         <p class="mt-2 text-sm text-blue-900 dark:text-blue-200">
-          {{ t('billing-cancel-offer-desc', { discounted: offerPrices.discounted, full: offerPrices.full, months: offer.durationMonths }) }}
+          {{ t('billing-cancel-credits-desc', { credits: creditsOffer.credits, full: monthlyPrice }) }}
         </p>
+        <ul class="mt-3 list-disc space-y-1 pl-5 text-sm text-blue-900 dark:text-blue-200">
+          <li>{{ t('billing-cancel-credits-point-no-monthly') }}</li>
+          <li>{{ t('billing-cancel-credits-point-apps') }}</li>
+          <li>{{ t('billing-cancel-credits-point-expiry') }}</li>
+        </ul>
+      </div>
+      <div v-else-if="discountOffer" class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
+        <p class="text-base font-semibold text-blue-900 dark:text-blue-100">
+          {{ t('billing-cancel-offer-title', { percent: discountOffer.percentOff, months: discountOffer.durationMonths }) }}
+        </p>
+        <p class="mt-2 text-sm text-blue-900 dark:text-blue-200">
+          {{ t('billing-cancel-offer-desc', { discounted: discountedPrice, full: monthlyPrice, months: discountOffer.durationMonths }) }}
+        </p>
+      </div>
+      <div v-if="showFounderCall" class="rounded-lg border border-slate-200 p-4 dark:border-slate-700" :class="{ 'mt-4': offer }" data-test="cancel-founder-call">
+        <p class="text-base font-semibold text-slate-900 dark:text-white">
+          {{ t('billing-cancel-founder-title') }}
+        </p>
+        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
+          {{ t('billing-cancel-founder-desc') }}
+        </p>
+        <a :href="FOUNDER_CALL_URL" target="_blank" rel="noopener" class="d-btn d-btn-sm d-btn-outline mt-3" data-test="cancel-founder-book" @click="trackFounderClick">
+          {{ t('billing-cancel-founder-book') }}
+        </a>
       </div>
       <div class="mt-6 flex flex-wrap justify-end gap-2">
         <button type="button" class="d-btn d-btn-ghost" :disabled="busy" data-test="cancel-offer-decline" @click="submit">
           <span v-if="isSubmitting" class="d-loading d-loading-spinner d-loading-sm" />
           {{ t('billing-cancel-offer-decline') }}
         </button>
-        <button type="button" class="d-btn d-btn-primary" :disabled="busy" data-test="cancel-offer-accept" @click="acceptOffer">
+        <button v-if="offer" type="button" class="d-btn d-btn-primary" :disabled="busy" data-test="cancel-offer-accept" @click="acceptOffer">
           <span v-if="isAccepting" class="d-loading d-loading-spinner d-loading-sm" />
-          {{ t('billing-cancel-offer-accept', { percent: offer.percentOff }) }}
+          {{ creditsOffer ? t('billing-cancel-credits-accept', { credits: creditsOffer.credits }) : t('billing-cancel-offer-accept', { percent: discountOffer?.percentOff }) }}
         </button>
       </div>
     </div>
