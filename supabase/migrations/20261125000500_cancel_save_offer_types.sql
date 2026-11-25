@@ -93,6 +93,7 @@ COMMENT ON TABLE public.cancel_attempts IS
 
 CREATE INDEX cancel_attempts_created_at_idx ON public.cancel_attempts (created_at);
 CREATE INDEX cancel_attempts_offer_id_idx ON public.cancel_attempts (offer_id);
+CREATE INDEX cancel_attempts_org_id_idx ON public.cancel_attempts (org_id);
 
 ALTER TABLE public.cancel_attempts ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Deny all direct access" ON public.cancel_attempts AS RESTRICTIVE USING (false) WITH CHECK (false);

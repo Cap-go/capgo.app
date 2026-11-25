@@ -148,7 +148,7 @@ describe('CancelPlanModal loss reminder', () => {
 
   it('switches to credits and passes the comment along', async () => {
     const creditsOffer = { id: 'offer_2', type: 'credits' as const, credits: 29, monthlyAmount: 2900, currency: 'usd' }
-    mocks.getCancelSaveOffer.mockResolvedValue({ offer: creditsOffer })
+    mocks.getCancelSaveOffer.mockResolvedValue({ offer: creditsOffer, founderCall: false, attemptId: 'attempt_credits' })
     mocks.acceptCancelSaveOffer.mockResolvedValue({ type: 'credits', credits: 29, subscription: { cancelAtPeriodEnd: true } })
     const { onSaved } = mountModal()
     await pickReason()
@@ -161,7 +161,7 @@ describe('CancelPlanModal loss reminder', () => {
     expect(shell().textContent).toContain('billing-cancel-credits-title')
     ;(shell().querySelector('[data-test="cancel-offer-accept"]') as HTMLButtonElement).click()
     await vi.waitFor(() => expect(onSaved).toHaveBeenCalledOnce())
-    expect(mocks.acceptCancelSaveOffer).toHaveBeenCalledWith('org_test', 'offer_2', 'only one app now', undefined)
+    expect(mocks.acceptCancelSaveOffer).toHaveBeenCalledWith('org_test', 'offer_2', 'only one app now', 'attempt_credits')
     expect(mocks.cancelSubscriptionWithReason).not.toHaveBeenCalled()
   })
 
