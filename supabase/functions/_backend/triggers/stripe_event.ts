@@ -35,7 +35,7 @@ import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { buildTransferInvoiceFooter, getStripeCustomerEmailFromEvent, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
-import { invoicedSubscriptionGrantsAccessBeforePayment, isSelfServeBankTransfer } from '../utils/transfer_invoice.ts'
+import { invoiceRecordsSelfServeBankTransfer, invoicedSubscriptionGrantsAccessBeforePayment, isSelfServeBankTransfer } from '../utils/transfer_invoice.ts'
 import type { TrialPlanFirstInvoiceState } from '../utils/stripe_trial_plan.ts'
 import { cancelTrialPlanScheduleForSubscription, isTrialPlanFirstInvoiceUnpaid, isTrialPlanSubscription, settleTrialPlanFirstInvoice } from '../utils/stripe_trial_plan.ts'
 import { checkPlanStatusOnly } from '../utils/plans.ts'
@@ -2136,6 +2136,8 @@ async function applyBankTransferPlanAfterPayment(
   eventOccurredAtIso: string,
   invoice: Stripe.Invoice,
 ) {
+  if (!invoiceRecordsSelfServeBankTransfer(invoice))
+    return
   const stripe = getStripe(c, getWebhookBillingAccount(c))
   const subscription = await stripe.subscriptions.retrieve(subscriptionId)
   if (!isSelfServeBankTransfer(subscription.metadata))

@@ -13,6 +13,16 @@ export function isSelfServeBankTransfer(metadata: Record<string, string> | null 
   return metadata?.[BANK_TRANSFER_METADATA_KEY] === '1'
 }
 
+// Finalized subscription invoices snapshot the subscription metadata. Ordinary
+// renewals do not carry this key, so the webhook can skip a Stripe retrieve.
+export function invoiceRecordsSelfServeBankTransfer(invoice: {
+  metadata?: Record<string, string> | null
+  parent?: { subscription_details?: { metadata?: Record<string, string> | null } | null } | null
+}) {
+  return isSelfServeBankTransfer(invoice.parent?.subscription_details?.metadata)
+    || isSelfServeBankTransfer(invoice.metadata)
+}
+
 // Trials and invoices Capgo sent by hand stay active before payment.
 // A bank transfer started from the plans page does not.
 export function invoicedSubscriptionGrantsAccessBeforePayment(subscription: {

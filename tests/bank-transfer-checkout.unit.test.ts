@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, buildBankTransferItems, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
+import { invoiceRecordsSelfServeBankTransfer } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
 describe('yearly bank transfer', () => {
@@ -54,7 +55,10 @@ describe('yearly bank transfer', () => {
     })
     expect(bankTransferResumeUpdate({ cancel_at_period_end: false, cancel_at: null })).toEqual({})
     expect(invoiceAcceptsBankTransfer({ collection_method: 'charge_automatically', payment_settings: { payment_method_types: ['card'] } })).toBe(false)
-    expect(invoiceAcceptsBankTransfer({ collection_method: 'send_invoice', payment_settings: { payment_method_types: ['card'] } })).toBe(true)
+    expect(invoiceAcceptsBankTransfer({ collection_method: 'send_invoice', payment_settings: { payment_method_types: ['card'] } })).toBe(false)
+    expect(invoiceAcceptsBankTransfer({ collection_method: 'send_invoice', payment_settings: { payment_method_types: ['customer_balance'] } })).toBe(true)
+    expect(invoiceRecordsSelfServeBankTransfer({ parent: { subscription_details: { metadata: { capgo_bank_transfer: '1' } } } })).toBe(true)
+    expect(invoiceRecordsSelfServeBankTransfer({ metadata: {} })).toBe(false)
     expect(shouldReissueUnpaidCardInvoice(true, false, false)).toBe(true)
     expect(shouldReissueUnpaidCardInvoice(true, true, false)).toBe(false)
     expect(shouldReissueUnpaidCardInvoice(true, false, true)).toBe(false)
@@ -89,6 +93,12 @@ describe('yearly bank transfer', () => {
     const withExtra = subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }, { price: extraPrice, quantity: 2 }])
     expect(bankTransferInvoiceSettlesUpgrade(extraUpgrade, withExtra, { priceId: 'price_year', extraMau: 0 })).toBe(true)
     expect(bankTransferInvoiceSettlesUpgrade(extraUpgrade, subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }, { price: extraPrice, quantity: 5 }]), { priceId: 'price_year', extraMau: 0 })).toBe(false)
+    const reduced = invoiceBillLines([
+      { amount: 39600, quantity: 1, pricing: { price_details: { price: 'price_year' } }, parent: { subscription_item_details: { proration: false } } },
+      { amount: 3000, quantity: 1, pricing: { price_details: { price: 'price_extra' } }, parent: { subscription_item_details: { proration: false } } },
+    ])
+    const fewerExtra = subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }, { price: extraPrice, quantity: 1 }])
+    expect(bankTransferInvoiceSettlesUpgrade(reduced, fewerExtra, { priceId: 'price_year', extraMau: 2000 })).toBe(true)
 
     const same = buildBankTransferItems(
       [{ id: 'si_plan', quantity: 1, price: { id: 'price_year' } }],

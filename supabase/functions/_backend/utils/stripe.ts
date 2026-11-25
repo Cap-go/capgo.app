@@ -1367,9 +1367,9 @@ export function invoiceAwaitingPayment(status: string | null | undefined) {
 }
 
 export function invoiceAcceptsBankTransfer(invoice: { collection_method?: string | null, payment_settings?: { payment_method_types?: string[] | null } | null }) {
-  if (invoice.collection_method === 'send_invoice')
-    return true
-  return (invoice.payment_settings?.payment_method_types ?? []).includes('customer_balance')
+  const types = invoice.payment_settings?.payment_method_types ?? []
+  const offersTransfer = types.includes('customer_balance') || types.includes('ach_credit_transfer')
+  return invoice.collection_method === 'send_invoice' && offersTransfer
 }
 
 // Same plan, but the open invoice can only be paid by card. Subscription payment
@@ -1438,6 +1438,9 @@ export function bankTransferInvoiceSettlesUpgrade(
   if (extraChanged && nextExtra > 0 && extraItems.some(item => !debits.has(billedKey(item.priceId, item.quantity))))
     return false
   if (nextExtra < storedExtra) {
+    const fullCycle = lines.filter(line => !line.proration && line.amount > 0)
+    if (bankTransferInvoiceCoversSubscription(fullCycle, subscriptionItems))
+      return true
     const credited = lines.some(line => line.amount < 0 && line.proration && line.priceId !== plan.priceId && line.quantity * EXTRA_MAU_UNIT === storedExtra)
     if (!credited)
       return false
