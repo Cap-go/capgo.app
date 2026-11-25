@@ -1,10 +1,8 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
-import { gotrueFetch } from '../../utils/gotrue_admin.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
-import { getEnv } from '../../utils/utils.ts'
 
 export interface PrelinkUsersRequest {
   provider_id: string
@@ -60,50 +58,12 @@ function maskEmail(email: string | undefined | null): string | undefined {
 }
 
 /**
- * Remove a specific identity from a user via the GoTrue admin REST API.
- * The Supabase JS SDK GoTrueAdminApi does not expose identity deletion,
- * so we call the endpoint directly with the service role key.
+ * Remove a user's email identity and clear their password hash, so password
+ * sign-in stops working. GoTrue has no admin route to delete one identity
+ * (only the user-level unlink, which needs the user's own session), so this
+ * writes the auth tables directly.
  */
-async function adminDeleteIdentity(c: Context<MiddlewareKeyVariables>, userId: string, identityId: string): Promise<{ error: string | null }> {
-  const serviceRoleKey = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 5000)
-
-  try {
-    // Our self-hosted GoTrue (v2.197.0) has no such route and answers 404,
-    // which takes the database fallback below.
-    const res = await gotrueFetch(c, `admin/users/${userId}/identities/${identityId}`, {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        apikey: serviceRoleKey,
-      },
-      signal: controller.signal,
-    })
-
-    if (!res.ok) {
-      if (res.status === 404) {
-        return fallbackDeleteEmailIdentity(c, userId, identityId)
-      }
-      const body = await res.text().catch(() => 'unknown')
-      return { error: `HTTP ${res.status}: ${body}` }
-    }
-
-    return { error: null }
-  }
-  catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      return { error: 'Request timed out after 5s' }
-    }
-    return { error: err instanceof Error ? err.message : String(err) }
-  }
-  finally {
-    clearTimeout(timeout)
-  }
-}
-
-async function fallbackDeleteEmailIdentity(
+async function deleteEmailIdentity(
   c: Context<MiddlewareKeyVariables>,
   userId: string,
   identityId: string,
@@ -111,9 +71,6 @@ async function fallbackDeleteEmailIdentity(
   const pgClient = await getPgClient(c)
 
   try {
-    // Local/self-hosted Supabase builds can lack the GoTrue admin identity-delete
-    // route. Mirror the intended effect by removing the email identity and clearing
-    // the password hash so password auth no longer works.
     const result = await pgClient.query<{ deleted_identity_id: string }>(
       `
         with deleted_identity as (
@@ -138,7 +95,7 @@ async function fallbackDeleteEmailIdentity(
     )
 
     if ((result.rowCount ?? 0) === 0) {
-      return { error: 'Fallback identity unlink did not modify any rows' }
+      return { error: 'Identity unlink did not modify any rows' }
     }
 
     return { error: null }
@@ -248,7 +205,7 @@ export async function runPrelinkUsers(
 
   for (const candidate of candidates) {
     try {
-      const { error: deleteError } = await adminDeleteIdentity(
+      const { error: deleteError } = await deleteEmailIdentity(
         c,
         candidate.user_id,
         candidate.email_identity_id,
