@@ -32,6 +32,13 @@ export function pluginStateBucket(appId: string, deviceId: string) {
   return (hash >>> 0) % 10_000
 }
 
+/**
+ * Longest snippet fill from a KV answer: the worker trusts a document read
+ * for 30 seconds (pluginState.ts *_CACHE_TTL_SECONDS), and a read racing a
+ * publication purge may land the old one afterwards for that long.
+ */
+export const PLUGIN_STATE_FILL_MAX_TTL_SECONDS = 30
+
 /** Every device reads KV and published deletions are trusted (rollout complete). */
 export function isPluginStateAuthoritative(c: AnyContext) {
   return getEnv(c, 'PLUGIN_STATE_KV_AUTHORITATIVE').trim().toLowerCase() === 'true'

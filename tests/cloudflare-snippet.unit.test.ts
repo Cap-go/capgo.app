@@ -790,6 +790,9 @@ describe('cloudflare snippet on-prem fallback', () => {
     const first = await snippet.fetch(onPremRequest({ app_id: 'com.example.shared' }))
     expect(first.status).toBe(429)
     expect(edgeCachePuts(cache).length).toBeGreaterThan(0)
+    // A snapshot publication purges only the plugin-state tag: it must evict this answer.
+    const tags = [...cache.store.values()].map(response => response.headers.get('Cache-Tag') ?? '')
+    expect(tags.some(tag => tag.split(',').includes('capgo-plugin-state-com.example.shared'))).toBe(true)
   })
 
   it('returns on-prem from a fallback worker without caching when the primary fails', async () => {

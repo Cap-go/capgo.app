@@ -408,6 +408,8 @@ describe('snippet fills from KV-served answers', () => {
     }))
     expect(fill.v).toBe(4)
     expect(fill.kv).toBe(true)
+    // Bounded by the document freshness window, not the 900 s default.
+    expect(fill.ttl).toBe(30)
     expect(fill.tags.split(',')).toContain('capgo-plugin-state-com.example.app')
     expect(fill.tags.split(',')).toContain('capgo-updates-com.example.app')
   })
@@ -420,12 +422,14 @@ describe('snippet fills from KV-served answers', () => {
     expect(fill.v).toBe(2)
     expect(fill.kv).toBeUndefined()
     expect(fill.ks).toBe(0)
+    expect(fill.ttl).toBe(30)
     expect(fill.tags.split(',')).toContain('capgo-plugin-state-com.example.app')
   })
 
   it('keeps database answers as before', async () => {
     const fill = readFill(await fillFrom(ENABLED_ENV, update))
     expect(fill.v).toBe(2)
+    expect(fill.ttl).toBe(900)
     expect(fill.kv).toBeUndefined()
     expect(fill.tags.split(',')).not.toContain('capgo-plugin-state-com.example.app')
   })

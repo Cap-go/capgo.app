@@ -391,6 +391,19 @@ function applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl) {
   }
 }
 
+/** Same tag as the worker's pluginStateAppCacheTag. */
+function pluginStateAppCacheTag(appId) {
+  return `capgo-plugin-state-${appId.toLowerCase().replace(/[^a-z0-9._-]/g, '_')}`
+}
+
+/**
+ * A shared KV answer (X-Plugin-State-Shared) must leave with its snapshot:
+ * a publication purges only the plugin-state tag.
+ */
+function cacheTagFor(tag, appId, responseHeaders) {
+  return responseHeaders?.get('X-Plugin-State-Shared') === '1' ? `${tag},${pluginStateAppCacheTag(appId)}` : tag
+}
+
 async function setOnPremCache(budget, edgeKey, appId, endpoint, method, responseBody, status, responseHeaders) {
   const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
   if (!cacheTtl) {
@@ -404,7 +417,7 @@ async function setOnPremCache(budget, edgeKey, appId, endpoint, method, response
 
   const headers = new Headers(responseHeaders)
   headers.set('Content-Type', 'application/json')
-  headers.set('Cache-Tag', `app-onprem-v2:${appId}`)
+  headers.set('Cache-Tag', cacheTagFor(`app-onprem-v2:${appId}`, appId, responseHeaders))
   headers.set('X-Onprem-Cached', 'true')
   headers.set('X-Onprem-App-Id', appId)
   headers.set('X-Onprem-Ttl', String(cacheTtl))
@@ -455,7 +468,7 @@ async function setPlanUpgradeCache(budget, edgeKey, appId, endpoint, method, res
 
   const headers = new Headers(responseHeaders)
   headers.set('Content-Type', 'application/json')
-  headers.set('Cache-Tag', `app-plan-v2:${appId}`)
+  headers.set('Cache-Tag', cacheTagFor(`app-plan-v2:${appId}`, appId, responseHeaders))
   headers.set('X-Plan-Upgrade-Cached', 'true')
   headers.set('X-Plan-Upgrade-App-Id', appId)
   headers.set('X-Plan-Upgrade-Ttl', String(cacheTtl))

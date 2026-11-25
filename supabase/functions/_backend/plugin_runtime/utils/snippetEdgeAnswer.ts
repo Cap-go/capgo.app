@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { ALLOWED_STATS_ACTIONS } from '../plugins/stats_actions.ts'
-import { isPluginStateAuthoritative, isPluginStateServed, pluginStateShareBps } from './pluginStateSwitch.ts'
+import { isPluginStateAuthoritative, isPluginStateServed, PLUGIN_STATE_FILL_MAX_TTL_SECONDS, pluginStateShareBps } from './pluginStateSwitch.ts'
 import { PROVIDER_INFRA_ASNS } from './providerAsns.ts'
 import { edgeCacheTtlForReplicaLag } from './replicaFreshness.ts'
 import { pluginStateAppCacheTag, updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
@@ -159,7 +159,9 @@ async function fillBase(c: Context, appId: string, blockProviderInfraRequests: b
   if (planTtl < 1)
     return null
   // The answer was read from the local replica: same lag rule as the worker cache.
-  const ttl = await edgeCacheTtlForReplicaLag(c, planTtl, replicaSource ?? undefined)
+  const replicaTtl = await edgeCacheTtlForReplicaLag(c, planTtl, replicaSource ?? undefined)
+  // A KV answer may come from a document read just before a publication purge.
+  const ttl = kvServed ? Math.min(replicaTtl, PLUGIN_STATE_FILL_MAX_TTL_SECONDS) : replicaTtl
   // Both scopes: the answer depends on the channel (main tag) and on the
   // served bundle row (versions tag: deleted, key_id). A KV answer also
   // leaves with its snapshot: publications purge only the plugin-state tag.
