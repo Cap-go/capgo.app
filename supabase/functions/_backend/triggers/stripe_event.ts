@@ -30,7 +30,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, paidInvoiceMatchesSubscription, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
@@ -2206,6 +2206,15 @@ async function invoicePaid(
   }
 
   const eventOccurredAtIso = new Date(stripeEvent.created * 1000).toISOString()
+  if ((stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded') && invoiceRecordsSelfServeBankTransfer(stripeEvent.data.object)) {
+    const stripe = getStripe(c, getWebhookBillingAccount(c))
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+    const lines = invoiceBillLines(await paidInvoiceSubscriptionLines(stripe, stripeEvent.data.object))
+    if (!isSelfServeBankTransfer(subscription.metadata) || !paidInvoiceMatchesSubscription(lines, subscriptionItemPriceQuantities(subscription.items.data))) {
+      cloudlog({ requestId: c.get('requestId'), message: 'Paid bank-transfer invoice does not match the current subscription', orgId: org.id, subscriptionId })
+      return c.json(BRES)
+    }
+  }
   const { status, firstPaidAt } = await persistInvoicePayment(c, stripeData.data.customer_id, subscriptionId, eventOccurredAtIso)
   if (status === 'missing')
     return quickError(404, 'succeeded_customer_id_not_found', 'succeeded: customer_id not found', { stripeData })
@@ -2286,6 +2295,10 @@ async function handleActiveSubscriptionUpdate(
     stripeData.data.product_id = customer.product_id
     stripeData.data.price_id = customer.price_id ?? undefined
     stripeData.data.extra_mau = customer.extra_mau ?? 0
+    if (customer.subscription_anchor_start)
+      stripeData.data.subscription_anchor_start = customer.subscription_anchor_start
+    if (customer.subscription_anchor_end)
+      stripeData.data.subscription_anchor_end = customer.subscription_anchor_end
   }
   const createdOrUpdatedResponse = await createdOrUpdated(c, stripeData, org, customer, eventOccurredAtIso, originalStatus)
   if (createdOrUpdatedResponse)
@@ -2442,9 +2455,7 @@ async function handleCanceledSubscriptionStripeEvent(
   const neverPaidTrialPlan = gracePeriodEligible
     && (stripeEvent.type === 'customer.subscription.deleted' || stripeEvent.type === 'customer.subscription.updated')
     && await isTrialPlanFirstInvoiceUnpaid(getStripe(c, getWebhookBillingAccount(c)), stripeEvent.data.object)
-  if (gracePeriodEligible && !neverPaidTrialPlan && stripeData.data.subscription_anchor_end && new Date(stripeData.data.subscription_anchor_end) > new Date()) {
-    stripeData.data.status = 'succeeded'
-  }
+  let paidThrough = stripeData.data.subscription_anchor_end
   if (stripeEvent.type === 'customer.subscription.deleted' || stripeEvent.type === 'customer.subscription.updated') {
     const subscription = stripeEvent.data.object
     const previouslyPaid = customer.status === 'succeeded' && customer.subscription_id === subscription.id
@@ -2459,8 +2470,14 @@ async function handleCanceledSubscriptionStripeEvent(
         stripeData.data.product_id = customer.product_id
         stripeData.data.price_id = customer.price_id ?? undefined
         stripeData.data.extra_mau = customer.extra_mau ?? 0
+        if (customer.subscription_anchor_end)
+          paidThrough = customer.subscription_anchor_end
       }
     }
+  }
+  if (gracePeriodEligible && !neverPaidTrialPlan && paidThrough && new Date(paidThrough) > new Date()) {
+    stripeData.data.status = 'succeeded'
+    stripeData.data.subscription_anchor_end = paidThrough
   }
   const updateData = toStripeInfoUpdate(stripeData.data)
   const revenuePlans = await getRevenuePlans(c)

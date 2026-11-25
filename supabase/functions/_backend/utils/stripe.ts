@@ -299,8 +299,9 @@ export function bankTransferSyncAction(
 // Cancellation grace applies only to a plan that was already paid, and only until the period ends.
 export function bankTransferSyncDbStatus(
   action: BankTransferSyncAction,
-  subscription: { status: string, cycleEnd: string | null },
+  subscription: { status: string },
   liveStatus: 'succeeded' | 'failed' | 'created' | 'canceled',
+  paidThrough: string | null,
 ) {
   if (action === 'apply_live')
     return liveStatus
@@ -313,8 +314,18 @@ export function bankTransferSyncDbStatus(
   }
   if (subscription.status !== 'canceled')
     return 'succeeded'
-  const cycleStillOpen = !!subscription.cycleEnd && new Date(subscription.cycleEnd) > new Date()
+  // The live cycle can already be the next unpaid year. Grace stops at the period that was paid.
+  const cycleStillOpen = !!paidThrough && new Date(paidThrough) > new Date()
   return cycleStillOpen ? 'succeeded' : 'canceled'
+}
+
+// Every current subscription item must be on this paid invoice. An older plan's invoice does not qualify.
+export function paidInvoiceMatchesSubscription(lines: InvoiceBillLine[], items: BilledPriceQuantity[]) {
+  const positive = lines.filter(line => line.amount > 0)
+  if (positive.length === 0 || items.length === 0)
+    return false
+  const keys = new Set(positive.map(line => billedKey(line.priceId, line.quantity)))
+  return items.every(item => keys.has(billedKey(item.priceId, item.quantity)))
 }
 
 export type SubscriptionLookupResult =
@@ -560,11 +571,11 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
       }
     }
 
-    let currentStripeInfo: { status: string | null, past_due_at: string | null, subscription_id: string | null } | null
+    let currentStripeInfo: { status: string | null, past_due_at: string | null, subscription_id: string | null, subscription_anchor_end: string | null } | null
     try {
-      currentStripeInfo = await withRlsContext(c, servicePrincipal, async client => singleRowOrNull(await queryJson<{ status: string | null, past_due_at: string | null, subscription_id: string | null }>(
+      currentStripeInfo = await withRlsContext(c, servicePrincipal, async client => singleRowOrNull(await queryJson<{ status: string | null, past_due_at: string | null, subscription_id: string | null, subscription_anchor_end: string | null }>(
         client,
-        'SELECT status, past_due_at, subscription_id FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+        'SELECT status, past_due_at, subscription_id, subscription_anchor_end FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
         [customerId],
       )))
     }
@@ -580,7 +591,7 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
           : null)
       : 'apply_live'
     if (bankTransferAction !== 'apply_live' && subscriptionData)
-      dbStatus = bankTransferSyncDbStatus(bankTransferAction, subscriptionData, dbStatus)
+      dbStatus = bankTransferSyncDbStatus(bankTransferAction, subscriptionData, dbStatus, currentStripeInfo?.subscription_anchor_end ?? null)
 
     // Update stripe_info table with latest data, even if no subscription exists
     const updateData: any = {
@@ -603,12 +614,11 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
     if (subscriptionData?.subscriptionId) {
       updateData.subscription_id = subscriptionData.subscriptionId
     }
-    if (subscriptionData?.cycleStart) {
+    // An unpaid bank-transfer invoice must not move the paid-through date forward.
+    if (bankTransferAction === 'apply_live' && subscriptionData?.cycleStart)
       updateData.subscription_anchor_start = subscriptionData.cycleStart
-    }
-    if (subscriptionData?.cycleEnd) {
+    if (bankTransferAction === 'apply_live' && subscriptionData?.cycleEnd)
       updateData.subscription_anchor_end = subscriptionData.cycleEnd
-    }
     if (subscriptionData)
       updateData.canceled_at = subscriptionData.canceledAt ?? null
     // Extra MAU only counts while the subscription that bought it is live.
@@ -1829,6 +1839,9 @@ export async function createBankTransferSubscription(c: Context, customerId: str
         const unpaidInvoice = invoiceAwaitingPayment(openInvoice?.status) && reusable.status !== 'trialing'
         const reissueCardInvoice = !!openInvoice && shouldReissueUnpaidCardInvoice(unpaidInvoice, changed, invoiceAcceptsBankTransfer(openInvoice))
         const replaceUnpaidInvoice = bankTransferResetsUnpaidCycle(reusable.status, changed, unpaidInvoice) || reissueCardInvoice
+        const pendingReplaceId = reusable.metadata?.[REPLACED_BANK_TRANSFER_INVOICE_METADATA_KEY]
+        if (replaceUnpaidInvoice && openInvoice && pendingReplaceId && pendingReplaceId !== openInvoice.id)
+          await retireReplacedInvoice(stripe, reusable)
         subscription = await stripe.subscriptions.update(reusable.id, {
           ...billing,
           metadata: {

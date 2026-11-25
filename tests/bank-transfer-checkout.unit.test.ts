@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, paidInvoiceMatchesSubscription, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoiceRecordsSelfServeBankTransfer } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
@@ -107,9 +107,18 @@ describe('yearly bank transfer', () => {
     const canceledUnpaid = { ...unpaidTransfer, status: 'canceled' }
     expect(bankTransferSyncAction(canceledUnpaid, { status: 'created', subscriptionId: null })).toBe('wait_for_payment')
     expect(bankTransferSyncAction(canceledUnpaid, { status: 'succeeded', subscriptionId: 'sub_1' })).toBe('keep_stored_plan')
-    expect(bankTransferSyncDbStatus('wait_for_payment', { status: 'canceled', cycleEnd: '2999-01-01T00:00:00.000Z' }, 'succeeded')).toBe('canceled')
-    expect(bankTransferSyncDbStatus('keep_stored_plan', { status: 'canceled', cycleEnd: '2999-01-01T00:00:00.000Z' }, 'canceled')).toBe('succeeded')
-    expect(bankTransferSyncDbStatus('keep_stored_plan', { status: 'canceled', cycleEnd: '2000-01-01T00:00:00.000Z' }, 'succeeded')).toBe('canceled')
+    expect(bankTransferSyncDbStatus('wait_for_payment', { status: 'canceled' }, 'succeeded', '2999-01-01T00:00:00.000Z')).toBe('canceled')
+    expect(bankTransferSyncDbStatus('keep_stored_plan', { status: 'canceled' }, 'canceled', '2999-01-01T00:00:00.000Z')).toBe('succeeded')
+    expect(bankTransferSyncDbStatus('keep_stored_plan', { status: 'canceled' }, 'succeeded', '2000-01-01T00:00:00.000Z')).toBe('canceled')
+    const currentPlan = subscriptionItemPriceQuantities([{ price: { id: 'price_team' }, quantity: 1 }])
+    const oldInvoice = invoiceBillLines([
+      { amount: 39600, quantity: 1, pricing: { price_details: { price: 'price_maker' } }, parent: { subscription_item_details: { proration: false } } },
+    ])
+    const currentInvoice = invoiceBillLines([
+      { amount: 94800, quantity: 1, pricing: { price_details: { price: 'price_team' } }, parent: { subscription_item_details: { proration: false } } },
+    ])
+    expect(paidInvoiceMatchesSubscription(oldInvoice, currentPlan)).toBe(false)
+    expect(paidInvoiceMatchesSubscription(currentInvoice, currentPlan)).toBe(true)
     expect(canceledBankTransferKeepsStoredPlan(true, true, false)).toBe(true)
     expect(canceledBankTransferKeepsStoredPlan(true, true, true)).toBe(false)
     expect(canceledBankTransferKeepsStoredPlan(true, false, false)).toBe(false)
