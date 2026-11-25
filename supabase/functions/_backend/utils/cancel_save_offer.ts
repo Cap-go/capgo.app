@@ -247,9 +247,11 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
     }
     if (releasable.length > 0) {
       await pg.query(
+        // Still stale: an accept retry that renewed the row since the select keeps it.
         `UPDATE public.cancel_save_offers SET outcome = 'offered', responded_at = NULL
-         WHERE id = ANY($1::uuid[]) AND outcome = 'accepting' AND discount_start IS NULL AND credit_grant_id IS NULL`,
-        [releasable],
+         WHERE id = ANY($1::uuid[]) AND outcome = 'accepting' AND discount_start IS NULL AND credit_grant_id IS NULL
+           AND responded_at < now() - make_interval(mins => $2::int)`,
+        [releasable, STALE_ACCEPTING_MINUTES],
       )
     }
 
@@ -341,14 +343,18 @@ async function reserveOffer(c: Context, customerId: string, offerId: string): Pr
        FROM public.cancel_save_offers WHERE id = $1 AND customer_id = $2`,
       [offerId, customerId],
     )
-    const row = (await select()).rows[0]
+    let row = (await select()).rows[0]
     if (row?.outcome === 'accepting') {
       // A retry rejoins the reservation: restart its stale clock, so the cleanup never
-      // frees it while this attempt is still talking to Stripe.
-      await pg.query(
+      // frees it while this attempt is still talking to Stripe. Both updates lock the row
+      // and check its state: if the cleanup freed it first, reserve it again below.
+      const renewed = await pg.query(
         `UPDATE public.cancel_save_offers SET responded_at = now() WHERE id = $1 AND customer_id = $2 AND outcome = 'accepting'`,
         [offerId, customerId],
       )
+      if (renewed.rowCount)
+        return row
+      row = (await select()).rows[0]
     }
     if (row?.outcome !== 'offered')
       return row ?? null
