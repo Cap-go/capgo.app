@@ -38,7 +38,7 @@ export function shouldShowPlanFailureBanner(
     && !shouldShowExpiredTrialPlansState(currentOrganizationFailed, isNative, paidAt)
 }
 
-export const DIRECT_OFFER = 'direct'
+export { DIRECT_OFFER, isDirectOfferMetadata } from '../../supabase/functions/_backend/utils/direct_offer_metadata.ts'
 
 export type UnpaidCopyVariant = 'no_trial' | 'expired_trial' | 'lapsed' | 'native'
 
@@ -47,11 +47,6 @@ export type OnboardingPlanSubtitleKey
     | 'ai-onboarding-plan-subtitle-no-trial'
     | 'invite-onboarding-plan-subtitle'
     | 'invite-onboarding-plan-subtitle-no-trial'
-
-/** True when auth app_metadata marks a paid-ads (direct offer) signup. */
-export function isDirectOfferMetadata(metadata: Record<string, unknown> | null | undefined): boolean {
-  return metadata?.offer === DIRECT_OFFER
-}
 
 /**
  * Copy variant for unpaid-org surfaces. Does not change gating.
