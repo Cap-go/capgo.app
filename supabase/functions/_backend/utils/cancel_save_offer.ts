@@ -386,11 +386,11 @@ async function acceptDiscount(c: Context, ctx: InAppBillingContext, offer: Accep
   const discountEnd = discount.end ? new Date(discount.end * 1000).toISOString() : addMonths(discount.start, offer.duration_months ?? CANCEL_SAVE_OFFER_DURATION_MONTHS)
 
   // The discount is on the subscription, so record it even if a concurrent attempt on
-  // this offer failed and released the reservation, or a concurrent cancel declined it.
+  // this offer failed and released the reservation in the meantime.
   const { rowCount } = await withPg(c, pg => pg.query(
     `UPDATE public.cancel_save_offers
      SET outcome = 'accepted', responded_at = COALESCE(responded_at, now()), discount_start = $3, discount_end = $4
-     WHERE id = $1 AND customer_id = $2 AND outcome IN ('offered', 'accepting', 'accepted', 'declined')`,
+     WHERE id = $1 AND customer_id = $2 AND outcome IN ('offered', 'accepting', 'accepted')`,
     [offer.id, ctx.customerId, discountStart, discountEnd],
   ))
   if (!rowCount)
@@ -509,28 +509,17 @@ export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext
 }
 
 /**
- * Records that the customer canceled anyway. Never blocks the cancellation. An
- * offer left 'accepting' by a failed accept, with nothing applied, counts as declined.
- * An offer whose credits were already granted is left alone: see completeCreditsOfferAfterCancel.
+ * Records that the customer canceled anyway. Never blocks the cancellation. Only an
+ * unanswered offer is declined: an 'accepting' one may still be applying its discount or
+ * grant, so it keeps the customer's one save reserved until its accept finishes, or until
+ * the stale cleanup (which checks Stripe first) frees it. Granted credits are completed by
+ * completeCreditsOfferAfterCancel.
  */
 export async function declineCancelSaveOffer(c: Context, ctx: InAppBillingContext, offerId: string) {
   try {
-    // An accept may be applying, or have applied, its discount without recording it yet:
-    // a reservation whose subscription has a discount in Stripe (or cannot be read) is no decline.
-    const { rows } = await withPg(c, pg => pg.query<{ subscription_id: string }>(
-      `SELECT subscription_id FROM public.cancel_save_offers
-       WHERE id = $1 AND customer_id = $2 AND outcome = 'accepting' AND offer_type = 'discount' AND discount_start IS NULL`,
-      [offerId, ctx.customerId],
-    ))
-    if (rows[0]) {
-      const discounted = await retrieveSubscription(ctx, rows[0].subscription_id).then(subscription => !!discountFor(subscription)).catch(() => true)
-      if (discounted)
-        return
-    }
     await withPg(c, pg => pg.query(
       `UPDATE public.cancel_save_offers SET outcome = 'declined', responded_at = COALESCE(responded_at, now())
-       WHERE id = $1 AND customer_id = $2 AND credit_grant_id IS NULL
-         AND (outcome = 'offered' OR (outcome = 'accepting' AND discount_start IS NULL))`,
+       WHERE id = $1 AND customer_id = $2 AND outcome = 'offered'`,
       [offerId, ctx.customerId],
     ))
   }

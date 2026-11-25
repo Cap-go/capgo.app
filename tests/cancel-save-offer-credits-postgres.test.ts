@@ -164,12 +164,11 @@ describe('declining a discount offer while its accept is in flight', () => {
     } } },
   }) as any
 
-  it('keeps the reservation while Stripe has the discount or cannot be read, declines once it has none', async () => {
+  it('keeps the reservation whatever Stripe shows: the accept may still be applying it', async () => {
     await declineCancelSaveOffer(c, discountCtx([{ start: 1, source: { coupon: 'capgo_cancel_save_50_3m' } }]), discountOffer)
     expect((await offer(discountOffer)).outcome).toBe('accepting')
-    await declineCancelSaveOffer(c, discountCtx(new Error('stripe down')), discountOffer)
-    expect((await offer(discountOffer)).outcome).toBe('accepting')
     await declineCancelSaveOffer(c, discountCtx([]), discountOffer)
-    expect((await offer(discountOffer)).outcome).toBe('declined')
+    expect((await offer(discountOffer)).outcome).toBe('accepting')
   })
+
 })
