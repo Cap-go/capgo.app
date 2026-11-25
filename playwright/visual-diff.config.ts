@@ -423,20 +423,22 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     path: '/app/com.demo.app/builds',
     auth: true,
     prepare: async (page) => {
-      const now = Date.now()
+      // Fixed times keep the captured dates identical between runs; expiries stay far in the future.
+      const now = Date.parse('2026-11-24T12:00:00.000Z')
       const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString()
+      const future = '2099-01-01T00:00:00.000Z'
       const build = {
         id: '00000000-0000-4000-8000-000000004221', ai_analyzed: false, app_id: 'com.demo.app', build_config: null, build_mode: 'release',
         builder_job_id: 'job-visual-ios', completed_at: iso(-50 * 60_000), created_at: iso(-60 * 60_000), ios_dependency_manager: null,
         last_error: null, owner_org: '046a36ac-e03c-4590-9257-bd6c9dba9ee8', platform: 'ios', queue_priority: null,
         requested_by: '6aa76066-55ef-4238-ade6-0b32334a4097', runner_wait_seconds: 12, started_at: iso(-59 * 60_000), status: 'succeeded',
-        updated_at: iso(-50 * 60_000), upload_expires_at: iso(60 * 60_000), upload_path: 'visual.zip', upload_session_key: 'visual',
+        updated_at: iso(-50 * 60_000), upload_expires_at: future, upload_path: 'visual.zip', upload_session_key: 'visual',
         upload_url: 'https://builder.example.com/upload/visual', uses_stored_credentials: true, xcode_version: null,
       }
       let started = false
       await routeConsoleQuery(page, 'build_requests', (route, query) => route.fulfill(consoleQueryJson(consoleQueryRows(query, [build]), 1)))
       await page.route('**/private/simulator/outputs**', route => route.fulfill({ json: { outputs: {
-        'job-visual-ios': { url: 'https://builder.example.com/output/app.ipa', kind: 'ios_ipa', expires_at: iso(6 * 24 * 60 * 60_000) },
+        'job-visual-ios': { url: 'https://builder.example.com/output/app.ipa', kind: 'ios_ipa', expires_at: future },
       } } }))
       await page.route('**/private/simulator/**', async (route) => {
         const request = route.request()
@@ -456,7 +458,11 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       // The base opened a blank tab; close it so only the build history is captured.
       page.context().on('page', popup => void popup.close().catch(() => {}))
       await open.click()
-      await page.getByRole('link', { name: 'Open simulator' }).or(page.getByText('Open simulator')).first().waitFor({ state: 'visible' }).catch(() => {})
+      const link = page.getByRole('link', { name: 'Open simulator' }).first()
+      if (process.env.VISUAL_DIFF_PHASE === 'after')
+        await link.waitFor({ state: 'visible' })
+      else
+        await link.waitFor({ state: 'visible' }).catch(() => {})
       await page.waitForTimeout(800)
     },
   },
