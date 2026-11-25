@@ -121,7 +121,9 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `bun test:cloudflare:backend` - Run backend tests against Cloudflare Workers
 - `bun test:cloudflare:updates` - Run update tests against Cloudflare Workers
 - `./scripts/start-cloudflare-workers.sh` - Start local Cloudflare Workers for
-  testing
+  testing. With `LOCAL_QUEUE_DISPATCHER=true` (what `bun backend` sets) it also
+  runs `scripts/local-queue-dispatcher.ts`: queue wakeups go to the outbox and
+  the local `QueueDispatcher` instead of pg_net, and stopping it puts pg_net back
 
 Note: Prefer Tinbase (`bun test:db` / `tests/tinbase-db-tests.txt`) for
 data/auth-only coverage so Docker/Cloudflare shards stay small and can
@@ -169,7 +171,9 @@ and the test suite has to keep running once it is gone.
 - `bun run supabase:start` - Start local Supabase instance (worktree-isolated)
 - `bun run supabase:cleanup` - Stop local Supabase and delete this worktree's Supabase volumes
 - `bun run supabase:db:reset` - Reset and seed local database
-- `bun backend` - Start Supabase functions locally
+- `bun backend` - Start the local backend: Supabase (`supabase:start`), the edge
+  functions (`functions serve`) and the Cloudflare Workers, with queue wakeups
+  going through the local `QueueDispatcher` like prod (Ctrl+C stops all of it)
 - `bun reset` - Reset Supabase database
 
 ### Local Postgres without the Supabase stack
@@ -285,11 +289,13 @@ backfill code, design for this scale:
 - **Queue wakeups (pg_net vs Durable Object):** pgmq stays the queue
   everywhere. `process_function_queue` and `wake_updates_cache_purge` send
   their HTTP wakeups through `public.http_dispatch_post`: by default (self-host,
-  local, CI) that is `net.http_post`. Targets listed in
+  quiesced CI jobs) that is `net.http_post`. Targets listed in
   `public.http_dispatch_targets` (a queue name, or `*`) go to the unlogged
-  `public.http_dispatch_outbox` instead, which the prod-only `QueueDispatcher`
-  Durable Object (`cloudflare_workers/api/queue_dispatcher.ts`) claims every
-  second via `POST /triggers/http_dispatch/claim` and sends. Roll a target
+  `public.http_dispatch_outbox` instead, which the `QueueDispatcher` Durable
+  Object (`cloudflare_workers/api/queue_dispatcher.ts`) claims every second via
+  `POST /triggers/http_dispatch/claim` and sends. Prod routes `*`; locally
+  `bun backend` does the same through `scripts/local-queue-dispatcher.ts`
+  (it sets `db_url` to the host Supabase URL while it runs). Roll a target
   back by deleting its row. The dispatcher only sends to origins in
   `SUPABASE_URL` / `HTTP_DISPATCH_ALLOWED_ORIGINS`.
 - Do not assume a `202` HTTP response means queue work finished. If the handler
