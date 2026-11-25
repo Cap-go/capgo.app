@@ -280,6 +280,27 @@ export function paidThroughNeedsUpdate(
   return new Date(next.end) > new Date(stored.end)
 }
 
+// A mid-cycle proration starts at the upgrade time, not the subscription anchor.
+// Keep the stored anchor and only move the paid-through end.
+export function settledPaidThrough(
+  stored: { start?: string | null, end?: string | null },
+  lines: Array<{
+    amount?: number | null
+    period?: { start?: number | null, end?: number | null } | null
+    parent?: { subscription_item_details?: { proration?: boolean } | null } | null
+  }>,
+): { start: string | null, end: string | null } | null {
+  const period = invoiceServicePeriod(lines)
+  if (!paidThroughNeedsUpdate(stored, period))
+    return null
+  const positive = lines.filter(line => (line.amount ?? 0) > 0 && line.period?.end != null)
+  const prorationOnly = positive.length > 0 && positive.every(line => line.parent?.subscription_item_details?.proration)
+  return {
+    start: prorationOnly ? (stored.start ?? period.start) : period.start,
+    end: period.end,
+  }
+}
+
 function getSubscriptionEndDate(subscription: Stripe.Subscription, item: Stripe.SubscriptionItem | null) {
   const endSeconds = subscription.ended_at
     ?? subscription.cancel_at

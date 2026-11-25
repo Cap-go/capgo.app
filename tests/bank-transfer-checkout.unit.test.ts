@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, invoiceServicePeriod, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, storedPlanConflictsWithPaidInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, invoiceServicePeriod, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, pickBankTransferSubscription, settledPaidThrough, shouldReissueUnpaidCardInvoice, storedPlanConflictsWithPaidInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoiceRecordsSelfServeBankTransfer } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
@@ -132,6 +132,12 @@ describe('yearly bank transfer', () => {
       start: new Date(1_762_000_000 * 1000).toISOString(),
       end: new Date(1_793_536_000 * 1000).toISOString(),
     })
+    const anchor = { start: '2026-01-01T00:00:00.000Z', end: '2026-07-01T00:00:00.000Z' }
+    const prorationEnd = Math.floor(Date.parse('2027-01-01T00:00:00.000Z') / 1000)
+    const upgradeAt = Math.floor(Date.parse('2026-07-15T00:00:00.000Z') / 1000)
+    expect(settledPaidThrough(anchor, [
+      { amount: 20000, period: { start: upgradeAt, end: prorationEnd }, parent: { subscription_item_details: { proration: true } } },
+    ])).toEqual({ start: anchor.start, end: new Date(prorationEnd * 1000).toISOString() })
     expect(canceledBankTransferKeepsStoredPlan(true, true, false)).toBe(true)
     expect(canceledBankTransferKeepsStoredPlan(true, true, true)).toBe(false)
     expect(canceledBankTransferKeepsStoredPlan(true, false, false)).toBe(false)
