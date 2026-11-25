@@ -216,9 +216,10 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
     const credits = offerType === 'credits' ? planCredits : null
 
     // A stale reservation that never reached Stripe goes back, instead of blocking this
-    // customer forever. Credits without a grant never did. A discount on the current
-    // subscription did not either (it has none, checked above). Any other subscription is
-    // read: its discount found there is recorded as accepted; unreadable, it waits.
+    // customer forever. Credits without a grant never did. A discount is read again from
+    // its own subscription now (not trusted from the read above): found, it is recorded
+    // as accepted; unreadable, it waits. Every accept attempt restarts the stale clock,
+    // so no attempt still applying its discount is this old.
     const { rows: stale } = await pg.query<{ id: string, subscription_id: string, offer_type: CancelSaveOfferType, duration_months: number | null }>(
       `SELECT id::text, subscription_id, offer_type, duration_months FROM public.cancel_save_offers
        WHERE customer_id = $1 AND outcome = 'accepting' AND discount_start IS NULL AND credit_grant_id IS NULL
@@ -227,7 +228,7 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
     )
     const releasable: string[] = []
     for (const row of stale) {
-      if (row.offer_type !== 'discount' || row.subscription_id === subscriptionId) {
+      if (row.offer_type !== 'discount') {
         releasable.push(row.id)
         continue
       }
@@ -341,6 +342,14 @@ async function reserveOffer(c: Context, customerId: string, offerId: string): Pr
       [offerId, customerId],
     )
     const row = (await select()).rows[0]
+    if (row?.outcome === 'accepting') {
+      // A retry rejoins the reservation: restart its stale clock, so the cleanup never
+      // frees it while this attempt is still talking to Stripe.
+      await pg.query(
+        `UPDATE public.cancel_save_offers SET responded_at = now() WHERE id = $1 AND customer_id = $2 AND outcome = 'accepting'`,
+        [offerId, customerId],
+      )
+    }
     if (row?.outcome !== 'offered')
       return row ?? null
     try {
