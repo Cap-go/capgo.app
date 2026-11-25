@@ -1216,9 +1216,10 @@ jobs:
             "file:${{ github.workspace }}/.context/playwright/gha-backend.ready" \
             http-get://localhost:5173 \
             --timeout 420000 --interval 500 --log
-      - name: "Experiment (agents-work#63): route queue wakeups to the outbox, nothing drains it"
-        run: |
-          bun scripts/supabase-worktree.ts with-env bun -e 'const { Client } = require("pg"); const c = new Client({ connectionString: process.env.SUPABASE_DB_URL }); await c.connect(); await c.query("INSERT INTO public.http_dispatch_targets (target) VALUES ($1) ON CONFLICT DO NOTHING", ["*"]); await c.end(); console.log("routed * to the outbox")'
+      # Nothing here needs queue processing (checked with every wakeup sent to an
+      # undrained outbox), so stop the scheduler like the other backend jobs.
+      - name: Quiesce test scheduler
+        run: bun scripts/supabase-worktree.ts with-env bun scripts/quiesce-test-scheduler.ts
       - name: Run Playwright tests
         env:
           SKIP_STRIPE_EMULATOR_START: 'true'
@@ -1660,9 +1661,10 @@ jobs:
         run: |
           export BACKGROUND_WAIT_ON="${SUPABASE_FUNCTIONS_HEALTH_URL:?Missing isolated Supabase health URL}"
           bash .github/scripts/start-background-service.sh
-      - name: "Experiment (agents-work#63): route queue wakeups to the outbox, nothing drains it"
-        run: |
-          bun scripts/supabase-worktree.ts with-env bun -e 'const { Client } = require("pg"); const c = new Client({ connectionString: process.env.SUPABASE_DB_URL }); await c.connect(); await c.query("INSERT INTO public.http_dispatch_targets (target) VALUES ($1) ON CONFLICT DO NOTHING", ["*"]); await c.end(); console.log("routed * to the outbox")'
+      # Nothing here needs queue processing (checked with every wakeup sent to an
+      # undrained outbox), so stop the scheduler like the other backend jobs.
+      - name: Quiesce test scheduler
+        run: bun scripts/supabase-worktree.ts with-env bun scripts/quiesce-test-scheduler.ts
       - name: Run Capgo CLI integration tests
         run: |
           bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/cli* --exclude=tests/cli-min-version.test.ts --exclude=tests/cli-new-encryption.test.ts
@@ -1772,9 +1774,10 @@ jobs:
         run: |
           export BACKGROUND_WAIT_ON="${SUPABASE_FUNCTIONS_HEALTH_URL:?Missing isolated Supabase health URL}"
           bash .github/scripts/start-background-service.sh
-      - name: "Experiment (agents-work#63): route queue wakeups to the outbox, nothing drains it"
-        run: |
-          bun scripts/supabase-worktree.ts with-env bun -e 'const { Client } = require("pg"); const c = new Client({ connectionString: process.env.SUPABASE_DB_URL }); await c.connect(); await c.query("INSERT INTO public.http_dispatch_targets (target) VALUES ($1) ON CONFLICT DO NOTHING", ["*"]); await c.end(); console.log("routed * to the outbox")'
+      # Nothing here needs queue processing (checked with every wakeup sent to an
+      # undrained outbox), so stop the scheduler like the other backend jobs.
+      - name: Quiesce test scheduler
+        run: bun scripts/supabase-worktree.ts with-env bun scripts/quiesce-test-scheduler.ts
       - name: Run published CLI contract unit checks
         run: bunx vitest run tests/published-cli-rpc-contract.unit.test.ts
       - name: Run published CLI contract against PR schema

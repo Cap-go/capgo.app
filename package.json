@@ -68,7 +68,7 @@
     "serve:preprod": "BRANCH=preprod vite",
     "ios:dev": "cap sync && cap run ios",
     "appstore:screenshots": "bun scripts/generate-app-store-screenshots.ts",
-    "backend": "bun run supabase:start && bun run supabase:functions:serve",
+    "backend": "bun run supabase:start && bun scripts/local-backend.ts",
     "backend:playwright": "bun scripts/serve-backend-playwright.ts",
     "backend:workers": "./scripts/start-cloudflare-workers.sh",
     "reset": "bun run supabase:db:reset",
