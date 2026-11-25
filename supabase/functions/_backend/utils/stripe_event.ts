@@ -6,6 +6,16 @@ import { cloudlog, cloudlogErr } from './logging.ts'
 import { getExtraMau, getStripe, isExtraMauItem, parsePriceIds } from './stripe.ts'
 import { getStripeWebhookSecret } from './stripe_billing.ts'
 
+export {
+  TRANSFER_INVOICE_FOOTER,
+  TRANSFER_INVOICE_FOOTER_MARKER,
+  TRANSFER_INVOICE_FOOTER_MAX_LENGTH,
+  buildTransferInvoiceFooter,
+  getTransferInvoiceFooterUpdate,
+  isTransferInvoice,
+  shouldStampTransferInvoiceFooter,
+} from './transfer_invoice.ts'
+
 export function parseStripeEvent(c: Context, body: string, signature: string, billingAccount: BillingAccount = 'ee') {
   const webhookKey = getStripeWebhookSecret(c, billingAccount)
 
@@ -141,69 +151,6 @@ function invoiceUpcoming(event: Stripe.InvoiceUpcomingEvent, data: StripeData['d
     }
   }
   return data
-}
-
-export const TRANSFER_INVOICE_FOOTER = 'For US bank wires: instruct your bank to send OUR (sender pays all correspondent/intermediary fees) so the full invoice amount arrives. Do not use SHA/shared fees.'
-export const TRANSFER_INVOICE_FOOTER_MARKER = 'OUR (sender pays all correspondent'
-export const TRANSFER_INVOICE_FOOTER_MAX_LENGTH = 5000
-
-const TRANSFER_INVOICE_PAYMENT_METHOD_TYPES = new Set([
-  'customer_balance',
-  'us_bank_account',
-  'ach_credit_transfer',
-])
-
-interface TransferInvoiceShape {
-  collection_method?: Stripe.Invoice.CollectionMethod | null
-  payment_settings?: {
-    payment_method_types?: string[] | null
-  } | null
-}
-
-type TransferInvoiceFooterShape = TransferInvoiceShape & {
-  footer?: string | null
-  status?: Stripe.Invoice.Status | null
-}
-
-export function isTransferInvoice(invoice: TransferInvoiceShape) {
-  if (invoice.collection_method === 'send_invoice')
-    return true
-
-  const paymentMethodTypes = invoice.payment_settings?.payment_method_types ?? []
-  return paymentMethodTypes.some(type => TRANSFER_INVOICE_PAYMENT_METHOD_TYPES.has(type))
-}
-
-export function buildTransferInvoiceFooter(existingFooter?: string | null) {
-  const trimmedExisting = existingFooter?.trim()
-  if (!trimmedExisting)
-    return TRANSFER_INVOICE_FOOTER
-
-  const combined = `${trimmedExisting}\n\n${TRANSFER_INVOICE_FOOTER}`
-  if (combined.length > TRANSFER_INVOICE_FOOTER_MAX_LENGTH)
-    return null
-
-  return combined
-}
-
-export function getTransferInvoiceFooterUpdate(
-  invoice: TransferInvoiceFooterShape,
-) {
-  if (!shouldStampTransferInvoiceFooter(invoice))
-    return null
-
-  return buildTransferInvoiceFooter(invoice.footer)
-}
-
-export function shouldStampTransferInvoiceFooter(
-  invoice: TransferInvoiceFooterShape,
-) {
-  if (invoice.status !== 'draft')
-    return false
-  if (!isTransferInvoice(invoice))
-    return false
-  if (invoice.footer?.includes(TRANSFER_INVOICE_FOOTER_MARKER))
-    return false
-  return buildTransferInvoiceFooter(invoice.footer) !== null
 }
 
 function invoiceCreatedOrUpdated(event: Stripe.InvoiceCreatedEvent | Stripe.InvoiceUpdatedEvent, data: StripeData['data']) {

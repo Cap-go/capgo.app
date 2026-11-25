@@ -35,6 +35,7 @@ import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { buildTransferInvoiceFooter, getStripeCustomerEmailFromEvent, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
+import { invoicedSubscriptionGrantsAccessBeforePayment } from '../utils/transfer_invoice.ts'
 import type { TrialPlanFirstInvoiceState } from '../utils/stripe_trial_plan.ts'
 import { cancelTrialPlanScheduleForSubscription, isTrialPlanFirstInvoiceUnpaid, isTrialPlanSubscription, settleTrialPlanFirstInvoice } from '../utils/stripe_trial_plan.ts'
 import { checkPlanStatusOnly } from '../utils/plans.ts'
@@ -2404,9 +2405,10 @@ async function handleCanceledSubscriptionStripeEvent(
 /**
  * Whether an active subscription event proves the org paid. Stripe marks a
  * subscription `active` while an ACH debit is still processing, so the latest
- * invoice decides. Stripe-managed trials and invoiced (send_invoice) customers
- * keep access without a payment, as before. Only orgs without a confirmed
- * payment hit Stripe: renewals of a paid subscription skip the lookup.
+ * invoice decides. Stripe-managed trials and manually invoiced customers
+ * keep access without a payment, as before. A yearly bank transfer started
+ * from the plans page waits until that invoice is paid. Only orgs without a
+ * confirmed payment hit Stripe: renewals of a paid subscription skip the lookup.
  */
 async function getSubscriptionPaymentState(
   c: Context<MiddlewareKeyVariablesStripe>,
@@ -2426,7 +2428,7 @@ async function getSubscriptionPaymentState(
   if (!isPastDue && isPaidSubscriptionUpdate(customer, stripeData.data.subscription_id))
     return 'paid'
   const subscription = stripeEvent.data.object
-  if (!isPastDue && (subscription.status === 'trialing' || subscription.collection_method === 'send_invoice'))
+  if (!isPastDue && invoicedSubscriptionGrantsAccessBeforePayment(subscription))
     return 'paid'
   const invoiceId = typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : subscription.latest_invoice?.id
   if (!invoiceId)
@@ -2634,6 +2636,7 @@ export const stripeEventTestUtils = {
   shouldReplaceOrgManagementEmail,
   shouldTrackOrganizationUpgrade,
   isTransferInvoice,
+  invoicedSubscriptionGrantsAccessBeforePayment,
   shouldStampTransferInvoiceFooter,
   buildTransferInvoiceFooter,
   getTransferInvoiceFooterUpdate,

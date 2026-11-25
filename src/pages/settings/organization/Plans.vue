@@ -25,7 +25,7 @@ import { checkPermissions } from '~/services/permissions'
 import { formatPlanAmount, usePlanPrices } from '~/services/planPrices'
 import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getSignupAttributionEventTags } from '~/services/signupAttribution'
-import { CheckoutAmountLimitError, startSubscriptionCheckout } from '~/services/stripe'
+import { BankTransferCheckoutError, CheckoutAmountLimitError, startSubscriptionCheckout } from '~/services/stripe'
 import { openSupport } from '~/services/support'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -275,7 +275,7 @@ function showUsdPrices() {
   checkoutAmountLimit.value = null
 }
 
-async function startPlanCheckout(plan: Plan, isYear: boolean) {
+async function startPlanCheckout(plan: Plan, isYear: boolean, paymentMethod: 'card' | 'bank_transfer' = 'card') {
   if (!plan.stripe_id)
     return null
   // Strip a previous ?success/?cancel so Stripe returns to a clean plans URL.
@@ -294,6 +294,7 @@ async function startPlanCheckout(plan: Plan, isYear: boolean) {
       currency: amountsFor(plan.stripe_id) ? priceCurrency.value ?? undefined : undefined,
       // The page shows the full price (opt-out, or a currency the discount is not sold in): checkout sells it.
       standardPrice: showsStandardPrice(plan.stripe_id),
+      paymentMethod,
     })
   }
   catch (error) {
@@ -381,13 +382,79 @@ async function openChangePlan(plan: Plan, index: number) {
       embeddedCheckout.value = { ...session, planName: plan.name }
       trackPlanCheckoutStarted(plan, checkoutIsYearly, 'embedded')
     }
-    else {
+    else if (session.kind === 'hosted') {
       // Local Stripe emulator only serves hosted pages.
       trackPlanCheckoutStarted(plan, checkoutIsYearly, 'hosted')
       globalThis.location.href = session.url
     }
   }
   isSubscribeLoading.value[index] = false
+}
+
+function showBankTransfer(plan: Plan) {
+  return isCheckoutYearly(plan) && !isMobile
+}
+
+function isBankTransferDisabled(plan: Plan) {
+  if (isEnterprisePlan(plan) && enterpriseMauIndex.value > 0 && !enterpriseQuote.value)
+    return true
+  return !pricesReady.value || lockedCurrencyUnavailable.value || !hasPricesFor(plan.stripe_id)
+}
+
+function bankTransferErrorMessage(code: string) {
+  switch (code) {
+    case 'billing_email_required':
+      return t('billing-bank-transfer-email-required')
+    case 'billing_address_required':
+      return t('billing-bank-transfer-address-required')
+    case 'bank_transfer_unavailable':
+      return t('billing-bank-transfer-unavailable')
+    case 'bank_transfer_yearly_only':
+      return t('billing-bank-transfer-yearly-only')
+    case 'bank_transfer_schedule':
+      return t('billing-bank-transfer-schedule')
+    default:
+      return t('billing-checkout-error')
+  }
+}
+
+async function openBankTransfer(plan: Plan, index: number) {
+  const orgId = currentOrganization.value?.gid
+  if (!orgId || !(await checkPermissions('org.update_billing', { orgId }))) {
+    showAdminModal.value = true
+    return
+  }
+  if (isBankTransferDisabled(plan))
+    return
+
+  isSubscribeLoading.value[index] = true
+  try {
+    const session = await startPlanCheckout(plan, true, 'bank_transfer')
+    if (!session) {
+      if (!checkoutAmountLimit.value)
+        toast.error(t('billing-checkout-error'))
+      return
+    }
+    trackPlanCheckoutStarted(plan, true, 'bank_transfer')
+    if (session.kind === 'bank_transfer_renewal') {
+      toast.success(t('billing-bank-transfer-renewal'))
+      return
+    }
+    if (session.kind === 'hosted') {
+      globalThis.location.href = session.url
+      return
+    }
+    toast.error(t('billing-checkout-error'))
+  }
+  catch (error) {
+    if (error instanceof BankTransferCheckoutError)
+      toast.error(bankTransferErrorMessage(error.code))
+    else if (!(error instanceof CheckoutAmountLimitError))
+      toast.error(t('billing-checkout-error'))
+  }
+  finally {
+    isSubscribeLoading.value[index] = false
+  }
 }
 
 // Like the card buttons, a deep-linked checkout waits for the billing currency; a failed lookup keeps it
@@ -936,9 +1003,9 @@ function buttonStyle(p: Plan) {
           <button
             type="button"
             data-test="plan-action-button"
-            :class="buttonStyle(p)"
-            class="flex items-center justify-center w-full gap-2 px-4 py-2 mb-6 text-sm font-semibold transition-all duration-200 rounded-lg shadow-sm shrink-0"
-            :disabled="isDisabled(p)"
+            :class="[buttonStyle(p), showBankTransfer(p) ? 'mb-2' : 'mb-6']"
+            class="flex items-center justify-center w-full gap-2 px-4 py-2 text-sm font-semibold transition-all duration-200 rounded-lg shadow-sm shrink-0"
+            :disabled="isDisabled(p) || isSubscribeLoading[index]"
             @click="openChangePlan(p, index)"
           >
             <svg v-if="isSubscribeLoading[index]" class="w-4 h-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -947,6 +1014,19 @@ function buttonStyle(p: Plan) {
             </svg>
             {{ buttonName(p) }}
           </button>
+          <button
+            v-if="showBankTransfer(p)"
+            type="button"
+            data-test="plan-bank-transfer"
+            class="d-btn d-btn-outline d-btn-sm mb-2 w-full"
+            :disabled="isBankTransferDisabled(p) || isSubscribeLoading[index]"
+            @click="openBankTransfer(p, index)"
+          >
+            {{ t('billing-bank-transfer') }}
+          </button>
+          <p v-if="showBankTransfer(p)" class="mb-6 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('billing-bank-transfer-note') }}
+          </p>
 
           <!-- Features -->
           <div class="px-2 -mx-2 overflow-y-auto grow custom-scrollbar">
