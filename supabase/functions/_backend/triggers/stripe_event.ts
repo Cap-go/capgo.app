@@ -30,7 +30,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { bankTransferInvoiceCoversSubscription, bankTransferPlanAlreadyStored, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceLinePriceQuantities, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { bankTransferInvoiceSettlesUpgrade, bankTransferPlanAlreadyStored, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
@@ -2140,8 +2140,8 @@ async function applyBankTransferPlanAfterPayment(
   const subscription = await stripe.subscriptions.retrieve(subscriptionId)
   if (!isSelfServeBankTransfer(subscription.metadata))
     return
-  const lines = await paidInvoiceSubscriptionLines(stripe, invoice)
-  if (!bankTransferInvoiceCoversSubscription(invoiceLinePriceQuantities(lines), subscriptionItemPriceQuantities(subscription.items.data)))
+  const lines = invoiceBillLines(await paidInvoiceSubscriptionLines(stripe, invoice))
+  if (!bankTransferInvoiceSettlesUpgrade(lines, subscriptionItemPriceQuantities(subscription.items.data), { priceId: customer.price_id, extraMau: customer.extra_mau }))
     return
   const { priceId, productId } = parsePriceIds(c, subscription.items.data)
   const extraMau = getExtraMau(subscription.items.data)

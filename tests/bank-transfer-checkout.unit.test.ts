@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferInvoiceCoversSubscription, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, buildBankTransferItems, invoiceAcceptsBankTransfer, invoiceLinePriceQuantities, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, buildBankTransferItems, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, pickBankTransferSubscription, shouldReissueUnpaidCardInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
 describe('yearly bank transfer', () => {
@@ -67,14 +67,28 @@ describe('yearly bank transfer', () => {
       { productId: 'prod_enterprise', priceId: 'price_year', extraMau: 2000 },
     )).toBe(true)
     const paidLines = invoiceLinePriceQuantities([
-      { quantity: 1, pricing: { price_details: { price: 'price_year' } }, parent: { subscription_item_details: { proration: false } } },
+      { amount: 39600, quantity: 1, pricing: { price_details: { price: 'price_year' } }, parent: { subscription_item_details: { proration: false } } },
     ])
     const currentItems = subscriptionItemPriceQuantities([{ price: { id: 'price_team' }, quantity: 1 }])
     expect(bankTransferInvoiceCoversSubscription(paidLines, currentItems)).toBe(false)
     expect(bankTransferInvoiceCoversSubscription(paidLines, subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }]))).toBe(true)
     expect(invoiceLinePriceQuantities([
-      { quantity: 1, pricing: { price_details: { price: 'price_year' } }, parent: { invoice_item_details: { proration: true } } },
+      { amount: -1000, quantity: 1, pricing: { price_details: { price: 'price_year' } }, parent: { invoice_item_details: { proration: true } } },
     ])).toEqual([])
+    const proration = invoiceBillLines([
+      { amount: -10000, quantity: 1, pricing: { price_details: { price: 'price_maker' } }, parent: { subscription_item_details: { proration: true } } },
+      { amount: 20000, quantity: 1, pricing: { price_details: { price: 'price_team' } }, parent: { subscription_item_details: { proration: true } } },
+    ])
+    const team = subscriptionItemPriceQuantities([{ price: { id: 'price_team' }, quantity: 1 }])
+    expect(bankTransferInvoiceSettlesUpgrade(proration, team, { priceId: 'price_maker', extraMau: 0 })).toBe(true)
+    expect(bankTransferInvoiceSettlesUpgrade(proration, subscriptionItemPriceQuantities([{ price: { id: 'price_enterprise' }, quantity: 1 }]), { priceId: 'price_maker', extraMau: 0 })).toBe(false)
+    const extraPrice = { id: 'price_extra', metadata: { capgo_kind: 'extra_mau' } }
+    const extraUpgrade = invoiceBillLines([
+      { amount: 6000, quantity: 2, pricing: { price_details: { price: 'price_extra' } }, parent: { subscription_item_details: { proration: true } } },
+    ])
+    const withExtra = subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }, { price: extraPrice, quantity: 2 }])
+    expect(bankTransferInvoiceSettlesUpgrade(extraUpgrade, withExtra, { priceId: 'price_year', extraMau: 0 })).toBe(true)
+    expect(bankTransferInvoiceSettlesUpgrade(extraUpgrade, subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }, { price: extraPrice, quantity: 5 }]), { priceId: 'price_year', extraMau: 0 })).toBe(false)
 
     const same = buildBankTransferItems(
       [{ id: 'si_plan', quantity: 1, price: { id: 'price_year' } }],

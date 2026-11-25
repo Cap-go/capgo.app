@@ -1392,6 +1392,16 @@ export function bankTransferPlanAlreadyStored(
 export interface BilledPriceQuantity {
   priceId: string
   quantity: number
+  extra: boolean
+}
+
+export interface InvoiceBillLine extends BilledPriceQuantity {
+  amount: number
+  proration: boolean
+}
+
+function billedKey(priceId: string, quantity: number) {
+  return `${priceId}\0${quantity}`
 }
 
 // The paid invoice must bill the subscription's current prices and quantities.
@@ -1399,37 +1409,72 @@ export interface BilledPriceQuantity {
 export function bankTransferInvoiceCoversSubscription(invoiceLines: BilledPriceQuantity[], subscriptionItems: BilledPriceQuantity[]) {
   if (invoiceLines.length === 0 || invoiceLines.length !== subscriptionItems.length)
     return false
-  const invoiceKeys = invoiceLines.map(line => `${line.priceId}\0${line.quantity}`).sort()
-  const subscriptionKeys = subscriptionItems.map(line => `${line.priceId}\0${line.quantity}`).sort()
+  const invoiceKeys = invoiceLines.map(line => billedKey(line.priceId, line.quantity)).sort()
+  const subscriptionKeys = subscriptionItems.map(line => billedKey(line.priceId, line.quantity)).sort()
   return invoiceKeys.every((key, index) => key === subscriptionKeys[index])
 }
 
-export function subscriptionItemPriceQuantities(items: Array<{ price?: { id?: string | null } | null, quantity?: number | null }>): BilledPriceQuantity[] {
+// A paid mid-cycle upgrade is a proration invoice: a credit for the old item and a debit
+// for the new one. Debit quantity is the subscription quantity being purchased.
+export function bankTransferInvoiceSettlesUpgrade(
+  lines: InvoiceBillLine[],
+  subscriptionItems: BilledPriceQuantity[],
+  stored: { priceId?: string | null, extraMau?: number | null },
+) {
+  const plan = subscriptionItems.find(item => !item.extra)
+  if (!plan)
+    return false
+  const debits = new Set(lines.filter(line => line.amount > 0).map(line => billedKey(line.priceId, line.quantity)))
+  const extraItems = subscriptionItems.filter(item => item.extra)
+  const nextExtra = extraItems.reduce((total, item) => total + item.quantity, 0) * EXTRA_MAU_UNIT
+  const storedExtra = stored.extraMau ?? 0
+  const priceChanged = plan.priceId !== (stored.priceId ?? null)
+  const extraChanged = nextExtra !== storedExtra
+  if (!priceChanged && !extraChanged)
+    return true
+  if (priceChanged && !debits.has(billedKey(plan.priceId, plan.quantity)))
+    return false
+  if (extraChanged && nextExtra > 0 && extraItems.some(item => !debits.has(billedKey(item.priceId, item.quantity))))
+    return false
+  if (nextExtra < storedExtra) {
+    const credited = lines.some(line => line.amount < 0 && line.proration && line.priceId !== plan.priceId && line.quantity * EXTRA_MAU_UNIT === storedExtra)
+    if (!credited)
+      return false
+  }
+  return true
+}
+
+export function subscriptionItemPriceQuantities(items: Array<{ price?: (TaggedPrice & { id?: string | null }) | null, quantity?: number | null }>): BilledPriceQuantity[] {
   return items.flatMap((item) => {
     if (!item.price?.id)
       return []
-    return [{ priceId: item.price.id, quantity: item.quantity ?? 1 }]
+    return [{ priceId: item.price.id, quantity: item.quantity ?? 1, extra: isExtraMauPrice(item.price) }]
   })
 }
 
-export function invoiceLinePriceQuantities(lines: Array<{
+export function invoiceBillLines(lines: Array<{
+  amount?: number | null
   quantity?: number | null
   pricing?: { price_details?: { price?: string | { id?: string | null } | null } | null } | null
   parent?: {
     subscription_item_details?: { proration?: boolean } | null
     invoice_item_details?: { proration?: boolean } | null
   } | null
-}>): BilledPriceQuantity[] {
+}>): InvoiceBillLine[] {
   return lines.flatMap((line) => {
     const details = line.parent?.subscription_item_details
-    if (!details || details.proration)
+    if (!details)
       return []
     const price = line.pricing?.price_details?.price
     const priceId = typeof price === 'string' ? price : price?.id
     if (!priceId)
       return []
-    return [{ priceId, quantity: line.quantity ?? 1 }]
+    return [{ priceId, quantity: line.quantity ?? 1, amount: line.amount ?? 0, proration: !!details.proration, extra: false }]
   })
+}
+
+export function invoiceLinePriceQuantities(lines: Parameters<typeof invoiceBillLines>[0]): BilledPriceQuantity[] {
+  return invoiceBillLines(lines).filter(line => !line.proration).map(({ priceId, quantity, extra }) => ({ priceId, quantity, extra }))
 }
 
 // An unpaid invoice must not be credited as unused time. That credit can zero out a
