@@ -11,8 +11,9 @@
 -- Copies auth rows into auth_cf. p_replace first empties auth_cf (test data)
 -- and copies everything. Without it (catch-up after the switch, run by hand:
 -- SELECT public.copy_auth_to_auth_cf(false);) it only adds the accounts and
--- SSO providers created on hosted Auth after the first copy, with their own
--- rows, so nothing removed on our GoTrue meanwhile comes back.
+-- SSO providers created on hosted Auth after the first copy (its time is kept
+-- in private.settings), with their own rows, so nothing removed on our GoTrue
+-- meanwhile comes back.
 CREATE OR REPLACE FUNCTION public.copy_auth_to_auth_cf(p_replace boolean)
 RETURNS void
 LANGUAGE plpgsql
@@ -25,6 +26,7 @@ DECLARE
   v_filter text := '';
   v_new_users uuid[];
   v_new_providers uuid[];
+  v_copied_at timestamptz;
 BEGIN
   IF (SELECT relkind FROM pg_catalog.pg_class WHERE oid = to_regclass('auth_cf.users')) IS DISTINCT FROM 'r' THEN
     RAISE EXCEPTION 'auth_cf.users is not a GoTrue table';
@@ -38,21 +40,21 @@ BEGIN
       RAISE EXCEPTION 'refusing to empty auth_cf: other schemas reference auth_cf.users';
     END IF;
     TRUNCATE auth_cf.users, auth_cf.sso_providers CASCADE;
+    INSERT INTO private.settings (name, value) VALUES ('AUTH_CF_COPIED_AT', now()::text)
+    ON CONFLICT (name) DO UPDATE SET value = excluded.value, updated_at = now();
   ELSE
-    -- Accounts and SSO providers newer than every one both schemas share were
-    -- created on hosted Auth after the first copy (ones deleted here are older).
+    -- Only what hosted Auth created after the first copy; anything older and
+    -- missing here was deleted here.
+    SELECT value::timestamptz INTO v_copied_at FROM private.settings WHERE name = 'AUTH_CF_COPIED_AT';
+    IF v_copied_at IS NULL THEN
+      RAISE EXCEPTION 'no first copy recorded (AUTH_CF_COPIED_AT)';
+    END IF;
     SELECT coalesce(array_agg(a.id), '{}') INTO v_new_users
     FROM auth.users AS a
-    WHERE a.created_at > (
-      SELECT max(c.created_at) FROM auth_cf.users AS c JOIN auth.users AS b ON b.id = c.id
-    )
-      AND NOT EXISTS (SELECT 1 FROM auth_cf.users AS c WHERE c.id = a.id);
+    WHERE a.created_at > v_copied_at AND NOT EXISTS (SELECT 1 FROM auth_cf.users AS c WHERE c.id = a.id);
     SELECT coalesce(array_agg(a.id), '{}') INTO v_new_providers
     FROM auth.sso_providers AS a
-    WHERE a.created_at > coalesce((
-      SELECT max(c.created_at) FROM auth_cf.sso_providers AS c JOIN auth.sso_providers AS b ON b.id = c.id
-    ), '-infinity')
-      AND NOT EXISTS (SELECT 1 FROM auth_cf.sso_providers AS c WHERE c.id = a.id);
+    WHERE a.created_at > v_copied_at AND NOT EXISTS (SELECT 1 FROM auth_cf.sso_providers AS c WHERE c.id = a.id);
   END IF;
 
   -- Parents first. Generated columns are skipped; enums are cast by name
