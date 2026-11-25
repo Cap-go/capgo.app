@@ -47,6 +47,8 @@ DROP TABLE public.http_dispatch_targets;
 -- Hourly truncate of pg_net's response table (20260722082019_fix_supabase_swap_memory).
 DELETE FROM public.cron_tasks WHERE name = 'cleanup_net_http_response';
 DROP FUNCTION public.cleanup_net_http_response();
+-- Unused helper from the baseline that deletes one pg_net response row.
+DROP FUNCTION public.delete_http_response(bigint);
 
 -- No CASCADE: if anything still depends on pg_net, this migration fails
 -- instead of silently dropping it.

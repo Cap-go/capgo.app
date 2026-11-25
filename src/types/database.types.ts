@@ -4678,7 +4678,6 @@ export type Database = {
         Args: { group_id: string }
         Returns: undefined
       }
-      delete_http_response: { Args: { request_id: number }; Returns: undefined }
       delete_non_compliant_bundles: {
         Args: { org_id: string; required_key?: string }
         Returns: number
