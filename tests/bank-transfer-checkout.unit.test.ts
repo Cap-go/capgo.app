@@ -163,7 +163,7 @@ describe('yearly bank transfer', () => {
     const laterOneOffEnd = Math.floor(Date.parse('2028-01-01T00:00:00.000Z') / 1000)
     expect(settledPaidThrough(anchor, [
       { amount: 39600, period: { start: upgradeAt, end: prorationEnd }, parent: { subscription_item_details: { proration: true } } },
-      { amount: 500, period: { start: upgradeAt, end: laterOneOffEnd }, parent: { invoice_item_details: { proration: false } } },
+      { amount: 500, period: { start: upgradeAt, end: laterOneOffEnd } },
     ])).toEqual({ start: anchor.start, end: new Date(prorationEnd * 1000).toISOString() })
     expect(paidThroughWrite('2027-01-01T00:00:00.000Z', { start: anchor.start, end: '2026-07-01T00:00:00.000Z' })).toEqual({})
     expect(paidThroughWrite('2026-07-01T00:00:00.000Z', { start: anchor.start, end: '2027-01-01T00:00:00.000Z' })).toEqual({
