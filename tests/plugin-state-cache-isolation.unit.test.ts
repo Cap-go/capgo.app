@@ -22,7 +22,7 @@ afterEach(() => {
 })
 
 describe('plugin state canary cache isolation', () => {
-  it.each(['updates', 'stats'])('never fills shared caches and teaches the %s snippet only a KV cohort answer', async (endpoint) => {
+  it.each(['updates', 'stats'])('fills no shared cache from KV; teaches the %s snippet only a KV cohort answer', async (endpoint) => {
     const entries = new Map<string, Response>()
     vi.stubGlobal('caches', { open: async () => ({
       put: async (request: Request, response: Response) => { entries.set(request.url, response.clone()) },

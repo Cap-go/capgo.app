@@ -70,13 +70,18 @@ KV answers teach the snippet too, so the canary skips the Worker like the
 database cohort does. Every fill carries `ks`, the Worker's KV share
 (`PLUGIN_STATE_KV`, 0 without the binding). A KV canary answer is a version 4
 fill with `kv: true`; older snippets reject version 4, so they never share it.
-One snippet entry holds both answers: `fill` (database) and `kvFill` (KV). The
-snippet computes the Worker's `pluginStateBucket` for the device and gives
-`kvFill` only to devices inside the share and `fill` only to devices outside
-it. Storing one answer keeps the other cohort's live answer it already read,
-so this costs no extra subrequest. A KV fill also carries the plugin-state
-tag, so a publication evicts the entry with its snapshot. Database purges
-still evict it through the app tags.
+Each cohort has its own snippet entry: the database answer under
+`/__internal__/edge-v4/...`, the KV answer under `/__internal__/edge-v4-kv/...`.
+The snippet computes the Worker's `pluginStateBucket` for the device with the
+database answer's `ks`: devices outside the share use the database answer, and
+only devices inside it read the KV entry (one more cache read, no Worker
+call). Without a database answer in that data center the KV cohort reaches the
+Worker; at 100% use `PLUGIN_STATE_KV_AUTHORITATIVE` (below). Entries are never
+merged, so a purge of one cohort cannot be undone by the other's fill. A KV
+fill carries the plugin-state tag, so a publication evicts only the KV entry,
+and it lasts at most 30 seconds (`PLUGIN_STATE_FILL_MAX_TTL_SECONDS`), the
+window a document read racing a publication can land the old snapshot.
+Database purges evict both entries through the app tags.
 
 A KV-marked Worker response may only fill `kvFill`, and the snippet still
 refuses on-prem/plan-response learning from it. With

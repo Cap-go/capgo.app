@@ -148,6 +148,9 @@ describe('cloudflare snippet edge answers per KV cohort', () => {
   }
 
   it('serves a KV canary answer only to the KV cohort', async () => {
+    // A database answer tells the snippet the KV share.
+    installFetch(workerAnswer(dbFill, false))
+    await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: DB_DEVICE_2 })))
     const fetchMock = workerAnswer(kvFill, true)
     installFetch(fetchMock)
     await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: KV_DEVICE })))
@@ -157,6 +160,9 @@ describe('cloudflare snippet edge answers per KV cohort', () => {
     expect(cohort.headers.get('X-Capgo-Edge')).toBe('answer')
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
+    // The database answer purged: its devices never fall back to the KV one.
+    for (const key of [...cache.store.keys()].filter(key => key.includes('/edge-v4/')))
+      cache.store.delete(key)
     await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: DB_DEVICE })))
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
@@ -173,7 +179,7 @@ describe('cloudflare snippet edge answers per KV cohort', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-  it('keeps both cohorts in one entry within the subrequest budget', async () => {
+  it('keeps each cohort under its own key and purge tags, within the subrequest budget', async () => {
     installFetch(workerAnswer(dbFill, false))
     await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: DB_DEVICE })))
     const fetchMock = workerAnswer(kvFill, true)
@@ -181,9 +187,10 @@ describe('cloudflare snippet edge answers per KV cohort', () => {
     await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: KV_DEVICE })))
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
-    const tags = [...cache.store.values()].map(response => response.headers.get('Cache-Tag') ?? '').join(',')
-    expect(tags).toContain('capgo-plugin-state-com.edge.app')
-    expect(tags).toContain('capgo-updates-com.edge.app:versions')
+    const tagsOf = (part: string) => [...cache.store.entries()].filter(([key]) => key.includes(part)).map(([, response]) => response.headers.get('Cache-Tag') ?? '')
+    // A snapshot publication evicts only the KV answer, never the database one.
+    expect(tagsOf('/edge-v4-kv/').join(',')).toContain('capgo-plugin-state-com.edge.app')
+    expect(tagsOf('/edge-v4/').join(',')).not.toContain('capgo-plugin-state-com.edge.app')
 
     cache.match.mockClear()
     cache.put.mockClear()
@@ -192,7 +199,9 @@ describe('cloudflare snippet edge answers per KV cohort', () => {
       expect(answer.headers.get('X-Capgo-Edge')).toBe('answer')
     }
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(subrequests(cache, fetchMock)).toBeLessThanOrEqual(10)
+    // KV device: both entries + IP limit; database device: its entry + IP limit.
+    expect(cache.match).toHaveBeenCalledTimes(5)
+    expect(cache.put).not.toHaveBeenCalled()
   })
 
   it('refuses a KV canary response that carries a database fill', async () => {

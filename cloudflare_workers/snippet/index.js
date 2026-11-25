@@ -170,6 +170,14 @@ function getEdgeCacheKey(hostname, appId, endpoint, method, variant) {
   return `https://${hostname}/__internal__/edge-v4/${encodeURIComponent(appId)}/${endpoint}/${method}${variant ? `/${variant}` : ''}`
 }
 
+/**
+ * KV canary answers live under their own key, so neither cohort's purge or
+ * fill touches the other's answer.
+ */
+function kvEdgeCacheKey(edgeKey) {
+  return edgeKey.replace('/__internal__/edge-v4/', '/__internal__/edge-v4-kv/')
+}
+
 /** /updates answers depend on platform and default channel; null when the channel is too long to key on. */
 function getEdgeVariant(endpoint, method, body) {
   if (endpoint !== 'updates' || method !== 'POST' || !isPlainObject(body))
@@ -548,8 +556,8 @@ function isKvCohort(fill, appId, deviceId) {
 }
 
 /**
- * Entry answer for this device: the KV canary answer (kvFill) to its cohort,
- * the database answer (fill) to the other devices. Never one for the other.
+ * Answer for this device: the KV canary answer (kvFill, own key) to its
+ * cohort, the database answer (fill) to the other devices. Never one for the other.
  */
 function edgeFillFor(doc, appId, deviceId) {
   if (isPlainObject(doc.kvFill) && isKvCohort(doc.kvFill, appId, deviceId))
@@ -805,20 +813,14 @@ function parseEdgeFill(value, endpoint) {
 }
 
 /** Stores the fill as the entry's only answer (one subrequest). */
-async function storeEdgeFill(budget, edgeKey, appId, endpoint, fill, responseText, previous) {
+async function storeEdgeFill(budget, edgeKey, appId, endpoint, fill, responseText) {
   const entry = { ...fill, exp: Date.now() + fill.ttl * 1000 }
   if (endpoint === 'updates')
     entry.r = responseText
-  // One entry holds both cohorts: keep the other cohort's live answer read
-  // before this request (no extra subrequest). A lost race only relearns.
-  const slot = fill.kv === true ? 'kvFill' : 'fill'
-  const other = slot === 'kvFill' ? 'fill' : 'kvFill'
-  const doc = { [slot]: entry }
-  const kept = isPlainObject(previous) ? previous[other] : null
-  if (isPlainObject(kept) && typeof kept.exp === 'number' && kept.exp > Date.now() && typeof kept.tags === 'string')
-    doc[other] = kept
-  // Either answer's purge must evict the entry.
-  const tags = [...new Set([entry.tags, doc[other]?.tags].filter(Boolean).join(',').split(','))].join(',')
+  // Each cohort has its own key: no merge, so a purge of one never comes back.
+  const key = fill.kv === true ? kvEdgeCacheKey(edgeKey) : edgeKey
+  const doc = { fill: entry }
+  const tags = fill.tags
   const response = new Response(JSON.stringify(doc), {
     headers: {
       'Content-Type': 'application/json',
@@ -827,7 +829,7 @@ async function storeEdgeFill(budget, edgeKey, appId, endpoint, fill, responseTex
       [EDGE_KIND_HEADER]: 'answers',
     },
   })
-  if (await cachePut(budget, edgeKey, response))
+  if (await cachePut(budget, key, response))
     console.log(`Edge answer SET for ${appId}/${endpoint}`)
 }
 
@@ -841,7 +843,7 @@ async function storeIpLimit(budget, hostname, ip, resetAtSec) {
 }
 
 /** Worker answer: learn the edge fill / IP limit it carries, without exposing them to the client. */
-async function handleEdgeHints(budget, response, request, hostname, edgeKey, appId, endpoint, canCache, previous = null, kvCanary = false) {
+async function handleEdgeHints(budget, response, request, hostname, edgeKey, appId, endpoint, canCache, kvCanary = false) {
   const fillHeader = response.headers.get(EDGE_FILL_HEADER)
   const ipLimitHeader = response.headers.get(EDGE_IP_LIMIT_HEADER)
   if (!fillHeader && !ipLimitHeader)
@@ -859,7 +861,7 @@ async function handleEdgeHints(budget, response, request, hostname, edgeKey, app
     // A KV canary answer may only fill the cohort's own slot, and only it may.
     if (fill && (fill.kv === true) === kvCanary) {
       const text = await response.text()
-      await storeEdgeFill(budget, edgeKey, appId, endpoint, fill, text, previous)
+      await storeEdgeFill(budget, edgeKey, appId, endpoint, fill, text)
       return new Response(text, { status: response.status, statusText: response.statusText, headers })
     }
   }
@@ -887,7 +889,6 @@ export default {
     const forwardedHeaders = new Headers(request.headers)
     forwardedHeaders.delete('x-capgo-serving-ingress')
     let edgeKey = null
-    let edgeDoc = null
     if (isCacheableEndpoint(url.pathname) || /\/(?:plugin\/)?updates\/manifest_size$/.test(url.pathname)) {
       endpoint = getEndpointName(url.pathname)
       body = parseJsonBody(requestBody)
@@ -930,14 +931,27 @@ export default {
       if (edgeKey) {
         // null: the lookup failed, which must not read as nothing learned.
         const entry = await readEdgeCache(budget, edgeKey)
-        edgeDoc = isPlainObject(entry.document) ? entry.document : null
+        // The KV cohort's answer only for its devices, as the database
+        // answer's share (ks) says: other devices spend no subrequest. Without
+        // a database answer here, the KV cohort reaches the worker (at 100%
+        // KV, PLUGIN_STATE_KV_AUTHORITATIVE shares the answers instead).
+        const answerPath = method === 'POST' && EDGE_ANSWERS_ENABLED && EDGE_ANSWER_PATHS.has(url.pathname)
+        const mainFill = isPlainObject(entry.document) ? entry.document.fill : null
+        const deviceId = Array.isArray(body) ? body[0]?.device_id : body?.device_id
+        const kvEntry = answerPath && isPlainObject(mainFill) && isKvCohort(mainFill, appId, deviceId)
+          ? await readEdgeCache(budget, kvEdgeCacheKey(edgeKey))
+          : {}
+        const kvDoc = isPlainObject(kvEntry.document) ? kvEntry.document : null
+        const edgeDoc = isPlainObject(entry.document) || kvDoc
+          ? { fill: entry.document?.fill, kvFill: kvDoc?.fill }
+          : null
         if (entry.response) {
           console.log(`Edge cache HIT (${entry.kind}) for ${appId}/${endpoint}/${method}`)
           return entry.response
         }
-        if (isPlainObject(entry.document) && method === 'POST') {
+        if (edgeDoc && method === 'POST') {
           const rawBody = new TextDecoder().decode(requestBody)
-          const answer = await tryEdgeAnswer(budget, request, url, endpoint, appId, body, rawBody, entry.document)
+          const answer = await tryEdgeAnswer(budget, request, url, endpoint, appId, body, rawBody, edgeDoc)
           if (answer)
             return answer
         }
@@ -1105,7 +1119,7 @@ export default {
           catch {
             // Response is not JSON or parsing failed - skip on-prem cache check and return original response
           }
-          return await handleEdgeHints(budget, response, request, hostname, edgeKey, appId, endpoint, !fallbackFailure && !response.headers.has('X-Serving-Regions'), edgeDoc, kvCanary)
+          return await handleEdgeHints(budget, response, request, hostname, edgeKey, appId, endpoint, !fallbackFailure && !response.headers.has('X-Serving-Regions'), kvCanary)
         }
 
         return response
