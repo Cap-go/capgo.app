@@ -171,4 +171,15 @@ describe('declining a discount offer while its accept is in flight', () => {
     expect((await offer(discountOffer)).outcome).toBe('accepting')
   })
 
+
+  it('keeps a discount reservation on a changed subscription while Stripe shows its discount', async () => {
+    // The active subscription is not the offer's: the accept stops, but the discount an
+    // earlier attempt applied keeps the save reserved.
+    await expect(acceptCancelSaveOffer(c, discountCtx([{ start: 1, source: { coupon: 'capgo_cancel_save_50_3m' } }]), discountOffer)).rejects.toThrow('no longer available')
+    expect((await offer(discountOffer)).outcome).toBe('accepting')
+    await expect(acceptCancelSaveOffer(c, discountCtx(new Error('stripe down')), discountOffer)).rejects.toThrow('no longer available')
+    expect((await offer(discountOffer)).outcome).toBe('accepting')
+    await expect(acceptCancelSaveOffer(c, discountCtx([]), discountOffer)).rejects.toThrow('no longer available')
+    expect((await offer(discountOffer)).outcome).toBe('offered')
+  })
 })

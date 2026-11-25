@@ -494,12 +494,18 @@ export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext
     activeSubscriptionId = lookup.subscriptionId
   }
   catch (error) {
-    // Nothing reached Stripe yet: let the customer try again.
-    await releaseOffer(c, ctx.customerId, offerId)
+    // Credits are not granted yet, so that reservation can go. An earlier attempt of a
+    // discount may have reached Stripe: keep it, the stale cleanup reconciles it later.
+    if (offer.offer_type === 'credits')
+      await releaseOffer(c, ctx.customerId, offerId)
     throw error
   }
   if (activeSubscriptionId !== offer.subscription_id) {
-    await releaseOffer(c, ctx.customerId, offerId)
+    // A discount is released only once Stripe shows its subscription never got it.
+    const discounted = offer.offer_type === 'discount'
+      && await retrieveSubscription(ctx, offer.subscription_id).then(subscription => !!discountFor(subscription)).catch(() => true)
+    if (!discounted)
+      await releaseOffer(c, ctx.customerId, offerId)
     throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
   }
 
