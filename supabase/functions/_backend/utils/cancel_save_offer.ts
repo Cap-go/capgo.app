@@ -215,22 +215,34 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
     const offerType = offerTypeFor(reason, planCredits)
     const credits = offerType === 'credits' ? planCredits : null
 
-    // A stale reservation whose subscription has no discount never reached Stripe: give
-    // it back instead of blocking this customer forever. The current subscription has
-    // none (checked above); any other one is read first, and kept if it has the discount
-    // or cannot be read.
-    const { rows: stale } = await pg.query<{ id: string, subscription_id: string }>(
-      `SELECT id::text, subscription_id FROM public.cancel_save_offers
+    // A stale reservation that never reached Stripe goes back, instead of blocking this
+    // customer forever. Credits without a grant never did. A discount on the current
+    // subscription did not either (it has none, checked above). Any other subscription is
+    // read: its discount found there is recorded as accepted; unreadable, it waits.
+    const { rows: stale } = await pg.query<{ id: string, subscription_id: string, offer_type: CancelSaveOfferType, duration_months: number | null }>(
+      `SELECT id::text, subscription_id, offer_type, duration_months FROM public.cancel_save_offers
        WHERE customer_id = $1 AND outcome = 'accepting' AND discount_start IS NULL AND credit_grant_id IS NULL
          AND responded_at < now() - make_interval(mins => $2::int)`,
       [ctx.customerId, STALE_ACCEPTING_MINUTES],
     )
     const releasable: string[] = []
     for (const row of stale) {
-      const discounted = row.subscription_id !== subscriptionId
-        && await retrieveSubscription(ctx, row.subscription_id).then(other => !!discountFor(other)).catch(() => true)
-      if (!discounted)
+      if (row.offer_type !== 'discount' || row.subscription_id === subscriptionId) {
         releasable.push(row.id)
+        continue
+      }
+      const discount = await retrieveSubscription(ctx, row.subscription_id).then(other => discountFor(other)).catch(() => undefined)
+      if (discount === undefined)
+        continue
+      if (!discount) {
+        releasable.push(row.id)
+        continue
+      }
+      await pg.query(
+        `UPDATE public.cancel_save_offers SET outcome = 'accepted', discount_start = $2, discount_end = $3
+         WHERE id = $1 AND outcome = 'accepting' AND discount_start IS NULL`,
+        [row.id, new Date(discount.start * 1000).toISOString(), discount.end ? new Date(discount.end * 1000).toISOString() : addMonths(discount.start, row.duration_months ?? CANCEL_SAVE_OFFER_DURATION_MONTHS)],
+      )
     }
     if (releasable.length > 0) {
       await pg.query(

@@ -190,7 +190,7 @@ describe('declining a discount offer while its accept is in flight', () => {
     expect((await offer(discountOffer)).outcome).toBe('offered')
   })
 
-  it('frees a stale reservation of another subscription only once Stripe shows no discount there', async () => {
+  it('reconciles a stale reservation of another subscription with Stripe', async () => {
     await pool.query(`UPDATE public.cancel_save_offers SET outcome = 'accepting', responded_at = now() - interval '1 hour' WHERE id = $1`, [discountOffer])
     // The current subscription is saveable; the offer's old one answers as given.
     const prepareCtx = (old: unknown[] | Error) => ({
@@ -203,11 +203,17 @@ describe('declining a discount offer while its accept is in flight', () => {
         return { discounts: old }
       } } },
     }) as any
-    await prepareCancelSaveOffer(c, prepareCtx([{ start: 1, source: { coupon: 'capgo_cancel_save_50_3m' } }]), staleOrgId, 'too_expensive')
-    expect((await offer(discountOffer)).outcome).toBe('accepting')
+    // Unreadable: kept. No discount there: freed.
     await prepareCancelSaveOffer(c, prepareCtx(new Error('stripe down')), staleOrgId, 'too_expensive')
     expect((await offer(discountOffer)).outcome).toBe('accepting')
     await prepareCancelSaveOffer(c, prepareCtx([]), staleOrgId, 'too_expensive')
     expect((await offer(discountOffer)).outcome).not.toBe('accepting')
+    // Discount found there: recorded as accepted with its dates.
+    await pool.query(`UPDATE public.cancel_save_offers SET outcome = 'accepting', responded_at = now() - interval '1 hour' WHERE id = $1`, [discountOffer])
+    await pool.query(`DELETE FROM public.cancel_save_offers WHERE customer_id = $1 AND id <> $2`, [discountCustomer, discountOffer])
+    await prepareCancelSaveOffer(c, prepareCtx([{ start: 1767225600, end: 1775001600, source: { coupon: 'capgo_cancel_save_50_3m' } }]), staleOrgId, 'too_expensive')
+    const { rows } = await pool.query<{ outcome: string, discount_end: Date }>('SELECT outcome, discount_end FROM public.cancel_save_offers WHERE id = $1', [discountOffer])
+    expect(rows[0].outcome).toBe('accepted')
+    expect(rows[0].discount_end.toISOString()).toBe('2026-04-01T00:00:00.000Z')
   })
 })
