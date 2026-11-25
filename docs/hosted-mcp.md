@@ -125,3 +125,5 @@ The separate upload sends a user-prepared JSON file directly to Capgo, where cre
 ## ChatGPT / Codex plugin
 
 The OpenAI plugin package for this server lives at the repo root (`plugin.json`, `mcp.json`, `skills/`, `assets/plugin/`); its notes are in `integrations/openai-plugin/`. Build the submission ZIP with `bun scripts/build-openai-plugin.ts`. OpenAI domain verification is served from `/.well-known/openai-apps-challenge` using the `OPENAI_APPS_CHALLENGE_TOKEN` worker secret.
+
+Muse connector verification is served from `/.well-known/muse-challenge/<token>` as plain text `muse-challenge=<token>`. The current challenge is built into that route and expires on 2026-12-02. Set the `MUSE_CHALLENGE_TOKEN` worker secret to publish a later challenge without a code change.
