@@ -1565,8 +1565,9 @@ export function bankTransferInvoiceSettlesUpgrade(
   const storedExtra = stored.extraMau ?? 0
   const priceChanged = plan.priceId !== (stored.priceId ?? null)
   const extraChanged = nextExtra !== storedExtra
+  // Same prices are not proof this invoice covers them. An older invoice must not settle the renewal.
   if (!priceChanged && !extraChanged)
-    return true
+    return paidInvoiceMatchesSubscription(lines, subscriptionItems)
   if (priceChanged && !debits.has(billedKey(plan.priceId, plan.quantity)))
     return false
   if (extraChanged && nextExtra > 0 && extraItems.some(item => !debits.has(billedKey(item.priceId, item.quantity))))

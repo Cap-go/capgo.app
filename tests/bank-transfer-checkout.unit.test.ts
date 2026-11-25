@@ -4,7 +4,7 @@ import { invoiceRecordsSelfServeBankTransfer } from '../supabase/functions/_back
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
 describe('yearly bank transfer', () => {
-  it('keeps manual invoices paid before the wire and waits for a plans-page bank transfer', () => {
+  it.concurrent('keeps manual invoices paid before the wire and waits for a plans-page bank transfer', () => {
     expect(invoicedSubscriptionGrantsAccessBeforePayment({ status: 'active', collection_method: 'send_invoice' })).toBe(true)
     expect(invoicedSubscriptionGrantsAccessBeforePayment({ status: 'trialing', collection_method: 'charge_automatically' })).toBe(true)
     expect(invoicedSubscriptionGrantsAccessBeforePayment({ status: 'active', collection_method: 'charge_automatically' })).toBe(false)
@@ -15,12 +15,12 @@ describe('yearly bank transfer', () => {
     })).toBe(false)
   })
 
-  it('offers bank transfer in the currencies Stripe can collect', () => {
+  it.concurrent('offers bank transfer in the currencies Stripe can collect', () => {
     expect(['usd', 'eur', 'gbp', 'jpy', 'mxn'].every(isBankTransferCurrency)).toBe(true)
     expect(isBankTransferCurrency('brl')).toBe(false)
   })
 
-  it('reuses an active subscription before a trial', () => {
+  it.concurrent('reuses an active subscription before a trial', () => {
     expect(pickBankTransferSubscription([
       { id: 'sub_trial', status: 'trialing' },
       { id: 'sub_live', status: 'active' },
@@ -28,7 +28,7 @@ describe('yearly bank transfer', () => {
     expect(pickBankTransferSubscription([{ id: 'sub_incomplete', status: 'incomplete' }])).toBeNull()
   })
 
-  it('replaces the plan item, keeps one extra MAU item, and invoices only when the price changes', () => {
+  it.concurrent('replaces the plan item, keeps one extra MAU item, and invoices only when the price changes', () => {
     const existing = [
       { id: 'si_plan', quantity: 1, price: { id: 'price_month', metadata: { capgo_kind: 'plan' } } },
       { id: 'si_extra', quantity: 2, price: { id: 'price_extra_month', metadata: { capgo_kind: 'extra_mau' } } },
@@ -99,6 +99,9 @@ describe('yearly bank transfer', () => {
     ])
     const fewerExtra = subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }, { price: extraPrice, quantity: 1 }])
     expect(bankTransferInvoiceSettlesUpgrade(reduced, fewerExtra, { priceId: 'price_year', extraMau: 2000 })).toBe(true)
+  })
+
+  it.concurrent('keeps an unpaid bank transfer off the paid plan during sync', () => {
     const unpaidTransfer = { selfServeBankTransfer: true, status: 'active', latestInvoiceStatus: 'open', subscriptionId: 'sub_1' }
     expect(bankTransferSyncAction(unpaidTransfer, { status: 'succeeded', subscriptionId: 'sub_1' })).toBe('keep_stored_plan')
     expect(bankTransferSyncAction(unpaidTransfer, { status: 'created', subscriptionId: null })).toBe('wait_for_payment')
@@ -110,6 +113,9 @@ describe('yearly bank transfer', () => {
     expect(bankTransferSyncDbStatus('wait_for_payment', { status: 'canceled' }, 'succeeded', '2999-01-01T00:00:00.000Z')).toBe('canceled')
     expect(bankTransferSyncDbStatus('keep_stored_plan', { status: 'canceled' }, 'canceled', '2999-01-01T00:00:00.000Z')).toBe('succeeded')
     expect(bankTransferSyncDbStatus('keep_stored_plan', { status: 'canceled' }, 'succeeded', '2000-01-01T00:00:00.000Z')).toBe('canceled')
+  })
+
+  it.concurrent('matches a paid invoice to the current subscription', () => {
     const currentPlan = subscriptionItemPriceQuantities([{ price: { id: 'price_team' }, quantity: 1 }])
     const oldInvoice = invoiceBillLines([
       { amount: 39600, quantity: 1, pricing: { price_details: { price: 'price_maker' } }, parent: { subscription_item_details: { proration: false } } },
@@ -122,6 +128,9 @@ describe('yearly bank transfer', () => {
     expect(storedPlanConflictsWithPaidInvoice('price_team', ['price_maker'])).toBe(true)
     expect(storedPlanConflictsWithPaidInvoice('price_team', ['price_team', 'price_extra'])).toBe(false)
     expect(storedPlanConflictsWithPaidInvoice(null, ['price_maker'])).toBe(false)
+  })
+
+  it.concurrent('moves paid-through only through the invoice period', () => {
     expect(paidThroughNeedsUpdate({ start: '2026-01-01T00:00:00.000Z', end: '2026-11-01T00:00:00.000Z' }, { start: '2026-11-01T00:00:00.000Z', end: '2027-11-01T00:00:00.000Z' })).toBe(true)
     expect(paidThroughNeedsUpdate({ start: '2026-11-01T00:00:00.000Z', end: '2027-11-01T00:00:00.000Z' }, { start: '2026-11-01T00:00:00.000Z', end: '2027-11-01T00:00:00.000Z' })).toBe(false)
     expect(paidThroughNeedsUpdate({ end: '2027-11-01T00:00:00.000Z' }, { start: '2025-11-01T00:00:00.000Z', end: '2026-11-01T00:00:00.000Z' })).toBe(false)
@@ -138,6 +147,24 @@ describe('yearly bank transfer', () => {
     expect(settledPaidThrough(anchor, [
       { amount: 20000, period: { start: upgradeAt, end: prorationEnd }, parent: { subscription_item_details: { proration: true } } },
     ])).toEqual({ start: anchor.start, end: new Date(prorationEnd * 1000).toISOString() })
+    const storedYear = { start: '2026-01-01T00:00:00.000Z', end: '2027-01-01T00:00:00.000Z' }
+    const oldStart = Math.floor(Date.parse('2025-01-01T00:00:00.000Z') / 1000)
+    const oldEnd = Math.floor(Date.parse('2026-01-01T00:00:00.000Z') / 1000)
+    expect(settledPaidThrough(storedYear, [
+      { amount: 39600, period: { start: oldStart, end: oldEnd }, parent: { subscription_item_details: { proration: false } } },
+    ])).toBeNull()
+    const current = subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }])
+    const unrelated = invoiceBillLines([
+      { amount: 100, quantity: 1, pricing: { price_details: { price: 'price_other' } }, parent: { subscription_item_details: { proration: false } } },
+    ])
+    expect(bankTransferInvoiceSettlesUpgrade(unrelated, current, { priceId: 'price_year', extraMau: 0 })).toBe(false)
+    const renewal = invoiceBillLines([
+      { amount: 39600, quantity: 1, pricing: { price_details: { price: 'price_year' } }, parent: { subscription_item_details: { proration: false } } },
+    ])
+    expect(bankTransferInvoiceSettlesUpgrade(renewal, current, { priceId: 'price_year', extraMau: 0 })).toBe(true)
+  })
+
+  it.concurrent('keeps a bank transfer unpaid until this subscription is paid', () => {
     expect(canceledBankTransferKeepsStoredPlan(true, true, false)).toBe(true)
     expect(canceledBankTransferKeepsStoredPlan(true, true, true)).toBe(false)
     expect(canceledBankTransferKeepsStoredPlan(true, false, false)).toBe(false)
@@ -145,7 +172,9 @@ describe('yearly bank transfer', () => {
     expect(bankTransferPaymentState(true, 'unpaid', true)).toBe('bank_transfer_due')
     expect(bankTransferPaymentState(true, 'paid', false)).toBe('paid')
     expect(bankTransferPaymentState(false, 'unpaid', false)).toBe('unpaid')
+  })
 
+  it.concurrent('does not invoice a same-plan bank transfer that is already paid', () => {
     const same = buildBankTransferItems(
       [{ id: 'si_plan', quantity: 1, price: { id: 'price_year' } }],
       [{ price: 'price_year', quantity: 1 }],
