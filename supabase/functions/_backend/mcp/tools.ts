@@ -1870,9 +1870,9 @@ const mobileAppTools: McpTool[] = [
     name: 'capgo_recommend_plugins',
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_recommend_plugins,
     title: 'Recommend Capacitor plugins',
-    description: 'Pick Capacitor plugins for native features: camera, files, push and local notifications, location, biometrics, social login, passkeys, in-app purchases, Apple/Google Pay, deep links, offline storage, SQLite, share, scanners, maps, contacts, calendar, health, Bluetooth, NFC, audio, video, ads, native navigation and live updates. '
-      + 'Use it when the app needs a device capability the browser cannot give it, before writing native code or adding permissions. '
-      + 'Uses official @capacitor plugins, and Capgo @capgo plugins where they cover more. Returns each package with its install command, iOS purpose-string keys and capabilities, Android permissions, store rules, docs and alternatives, plus one install command for packages not already in packages. Read-only.',
+    description: 'List Capacitor plugins for native features: camera, files, push and local notifications, location, biometrics, social login, passkeys, in-app purchases, Apple Pay and Google Pay, deep links, offline storage, SQLite, share, scanners, maps, contacts, calendar, health, Bluetooth, NFC, audio, video, ads, native navigation and live updates. '
+      + 'Call it when the app needs a device capability the browser cannot provide, before writing native code or adding permissions. '
+      + 'Returns each package with its install command, iOS purpose-string keys and capabilities, Android permissions, store rules and documentation, plus one install command for packages not already present. Read-only.',
     inputSchema: recommendPluginsInputSchema as unknown as z.ZodObject<z.ZodRawShape>,
     annotations: { title: 'Recommend Capacitor plugins', ...READ },
     run: async (input) => {

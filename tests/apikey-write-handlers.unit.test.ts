@@ -20,7 +20,6 @@ const {
   requireJwtMfaForPrivilegedActionMock,
   sanitizeClientBindingsMock,
   selectOwnedApiKeyByIdentifierMock,
-  supabaseWithAuthMock,
 } = vi.hoisted(() => ({
   assertApiKeyManagerCanAssignBindingsMock: vi.fn(),
   assertCanKeepOrgCreateMock: vi.fn(),
@@ -40,7 +39,6 @@ const {
   requireJwtMfaForPrivilegedActionMock: vi.fn(),
   sanitizeClientBindingsMock: vi.fn(),
   selectOwnedApiKeyByIdentifierMock: vi.fn(),
-  supabaseWithAuthMock: vi.fn(),
 }))
 
 const ORG_ID = '00000000-0000-4000-8000-000000000111'
@@ -107,8 +105,6 @@ vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   assertExpirationMatchesOrgPolicies: assertExpirationMatchesOrgPoliciesMock,
-  supabaseAdmin: vi.fn(() => ({})),
-  supabaseWithAuth: supabaseWithAuthMock,
   validateExpirationAgainstOrgPolicies: vi.fn(),
   validateExpirationDate: vi.fn(),
 }))
@@ -125,7 +121,6 @@ beforeEach(() => {
   checkPermissionMock.mockResolvedValue(true)
   closeClientMock.mockResolvedValue(undefined)
   getPgClientMock.mockReturnValue({ id: 'pg-client' })
-  supabaseWithAuthMock.mockReturnValue({ id: 'supabase-auth' })
   lockRbacOrgsMock.mockResolvedValue(undefined)
 })
 
@@ -187,7 +182,6 @@ describe('api key create postgres round trips', () => {
     expect(requireJwtMfaForPrivilegedActionMock).toHaveBeenCalledTimes(1)
     expect(getPgClientMock).toHaveBeenCalledTimes(1)
     expect(checkPermissionMock).not.toHaveBeenCalled()
-    expect(supabaseWithAuthMock).not.toHaveBeenCalled()
     expect(assertExpirationMatchesOrgPoliciesMock).toHaveBeenCalledTimes(1)
     expect(assertExpirationMatchesOrgPoliciesMock).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({

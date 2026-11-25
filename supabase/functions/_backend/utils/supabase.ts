@@ -1,7 +1,6 @@
 import type { Context } from 'hono'
 // @ts-types="npm:@types/pg"
 import type { BillingPlanBentoState } from './billing_bento_tags.ts'
-import type { AuthInfo } from './hono.ts'
 import type { PgClient, PgQueryClient } from './pg.ts'
 import type { RlsPrincipal } from './pg_rls.ts'
 import type { Database } from './supabase.types.ts'
@@ -31,7 +30,7 @@ const DEFAULT_LIMIT = 1000
 /** PostgREST `max_rows`: reads that went through PostgREST on main never returned more rows. */
 const POSTGREST_MAX_ROWS = 1000
 
-/** Runs `run` on a service-role (RLS-bypassing) connection, like the old `supabaseAdmin(c)` calls. */
+/** Runs `run` on a service-role (RLS-bypassing) connection. */
 async function withAdminPg<T>(c: Context, run: (pg: PgClient) => Promise<T>): Promise<T> {
   const pg = await getPgClient(c)
   try {
@@ -298,31 +297,6 @@ export interface DeletePayload<T extends keyof Database['public']['Tables']> {
   occurred_at?: string
 }
 
-export function supabaseClient(c: Context, jwt: string) {
-  const options = {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-    global: { headers: { Authorization: jwt } },
-  }
-  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), options)
-}
-
-export function supabaseWithAuth(c: Context, auth: AuthInfo) {
-  if (auth.authType === 'jwt' && auth.jwt) {
-    return supabaseClient(c, auth.jwt)
-  }
-  else if (auth.authType === 'apikey' && auth.apikey) {
-    // supabaseApikey now handles the fallback to capgkey for hashed keys
-    return supabaseApikey(c, auth.apikey.key)
-  }
-  else {
-    throw simpleError('not_authorized', 'Not authorized')
-  }
-}
-
 export function emptySupabase(c: Context) {
   const options = {
     auth: {
@@ -348,38 +322,6 @@ export function emptySupabaseWithClientIP(c: Context) {
       : {}),
   }
   return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), options)
-}
-
-// WARNING: The service role key has admin privileges and should only be used in secure server environments!
-export function supabaseAdmin(c: Context) {
-  const serviceRoleKey = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
-  const options = {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  }
-  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), serviceRoleKey, options)
-}
-
-export function supabaseApikey(c: Context, apikey: string | null | undefined) {
-  // For hashed keys, the key column is null, so we use the capgkey from the request header
-  const effectiveApikey = apikey ?? c.get('capgkey')
-  if (!effectiveApikey) {
-    throw new Error('No API key available for authentication')
-  }
-  cloudlog({ requestId: c.get('requestId'), message: 'supabaseApikey', apikeyPrefix: effectiveApikey.substring(0, 8) })
-  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), {
-    auth: {
-      persistSession: false,
-    },
-    global: {
-      headers: {
-        capgkey: effectiveApikey,
-      },
-    },
-  })
 }
 
 export async function getAppsFromSB(c: Context, referenceDate?: Date): Promise<string[]> {

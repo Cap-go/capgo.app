@@ -2,12 +2,12 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { PgClient, PgQueryClient } from '../../utils/pg.ts'
 import type { Database } from '../../utils/supabase.types.ts'
+import { listStorageObjects, removeStorageObjects } from '../../utils/bundle_storage.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { apikeyPrincipal, queryJsonOne, withRlsTransaction } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 import { expireSimulatorSessions } from '../build/concurrency.ts'
 
@@ -15,8 +15,7 @@ const STORAGE_LIST_PAGE_SIZE = 100
 const STORAGE_REMOVE_BATCH_SIZE = 1000
 const STORAGE_MAX_FOLDER_DEPTH = 5
 
-// Supabase Storage reports failures through `{ error }` instead of throwing, and
-// `list()` is paginated (100 entries by default) and not recursive.
+// Supabase Storage's folder listing is paginated and not recursive.
 async function listSupabaseStorageFiles(
   c: Context<MiddlewareKeyVariables>,
   bucket: string,
@@ -25,13 +24,7 @@ async function listSupabaseStorageFiles(
 ): Promise<string[]> {
   const paths: string[] = []
   for (let offset = 0; ; offset += STORAGE_LIST_PAGE_SIZE) {
-    const { data, error } = await supabaseAdmin(c)
-      .storage
-      .from(bucket)
-      .list(prefix, { limit: STORAGE_LIST_PAGE_SIZE, offset })
-    if (error)
-      throw error
-    const entries = data ?? []
+    const entries = await listStorageObjects(c, bucket, prefix, { limit: STORAGE_LIST_PAGE_SIZE, offset })
     for (const entry of entries) {
       const path = `${prefix}/${entry.name}`
       // Folders are returned as placeholder entries without an id.
@@ -57,14 +50,8 @@ async function removeSupabaseStorageFolder(
 ): Promise<void> {
   try {
     const paths = await listSupabaseStorageFiles(c, bucket, prefix)
-    for (let i = 0; i < paths.length; i += STORAGE_REMOVE_BATCH_SIZE) {
-      const { error } = await supabaseAdmin(c)
-        .storage
-        .from(bucket)
-        .remove(paths.slice(i, i + STORAGE_REMOVE_BATCH_SIZE))
-      if (error)
-        throw error
-    }
+    for (let i = 0; i < paths.length; i += STORAGE_REMOVE_BATCH_SIZE)
+      await removeStorageObjects(c, bucket, paths.slice(i, i + STORAGE_REMOVE_BATCH_SIZE))
     if (paths.length > 0)
       cloudlog({ requestId: c.get('requestId'), message: `deleted ${label}`, count: paths.length, app_id: appId })
   }

@@ -1,27 +1,12 @@
 import type { Page } from '@playwright/test'
-import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
-import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
-import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { expect, test } from '../support/commands'
-
-const { ports: supabasePorts } = getSupabaseWorktreeConfig()
-const localSupabaseUrl = `http://127.0.0.1:${supabasePorts.api}`
-
-function localAdminClient() {
-  const configured = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY
-  const status = configured ? null : getSupabaseStatus()
-  const key = configured || status?.SERVICE_ROLE_KEY || status?.SECRET_KEY
-  if (!key)
-    throw new Error('Local Supabase service key is required for AI onboarding fixtures')
-  return createClient(localSupabaseUrl, key, { auth: { persistSession: false } })
-}
+import { deleteAuthUser, localSqlClient, localSupabaseUrl } from '../support/localSupabase'
 
 // Every test signs up a fresh user; remove it and everything it created afterwards.
 const createdEmails: string[] = []
 
 async function deleteSignup(email: string) {
-  const admin = localAdminClient()
+  const admin = localSqlClient()
   const { data: user } = await admin.from('users').select('id').eq('email', email).maybeSingle()
   if (!user)
     return
@@ -34,7 +19,7 @@ async function deleteSignup(email: string) {
       await admin.from('stripe_info').delete().eq('customer_id', org.customer_id)
   }
   await admin.from('apikeys').delete().eq('user_id', user.id)
-  await admin.auth.admin.deleteUser(user.id)
+  await deleteAuthUser(user.id)
 }
 
 async function registerAndName(page: Page, email: string) {
@@ -101,7 +86,7 @@ test.describe('AI onboarding', () => {
     await page.goto('/dashboard')
     await page.waitForURL(/\/onboarding\/ai$/)
 
-    const admin = localAdminClient()
+    const admin = localSqlClient()
     const { data: user } = await admin.from('users').select('id, onboarding').eq('email', email).single()
 
     // What /private/events records when the agent's CLI logs in and its MCP starts.
@@ -200,7 +185,7 @@ test.describe('AI onboarding', () => {
     await page.click('[data-test="onboarding-setup-mode-manual"]')
     await expect(page.locator('[data-test="onboarding-intent-ota"]')).toBeVisible()
     await expect.poll(async () => {
-      const { data } = await localAdminClient().from('users').select('onboarding').eq('email', email).single()
+      const { data } = await localSqlClient().from('users').select('onboarding').eq('email', email).single()
       return (data?.onboarding as { setup_method?: string } | null)?.setup_method
     }).toBe('manual')
 

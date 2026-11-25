@@ -24,6 +24,34 @@ export function serviceHeaders(c: Context, extra: Record<string, string> = {}) {
   return { Authorization: `Bearer ${key}`, apikey: key, ...extra }
 }
 
+/** An entry of a Storage REST folder listing; folders have `id: null`. */
+export interface StorageListEntry {
+  id: string | null
+  name: string
+  updated_at?: string | null
+  created_at?: string | null
+}
+
+async function storageJson<T>(c: Context, url: string, method: 'POST' | 'DELETE', body: unknown): Promise<T> {
+  const response = await fetch(url, { method, headers: serviceHeaders(c, { 'Content-Type': 'application/json' }), body: JSON.stringify(body) })
+  if (!response.ok)
+    throw new Error(`Storage ${method} returned ${response.status}: ${await response.text()}`)
+  return await response.json() as T
+}
+
+/** One page of a folder listing (not recursive), with supabase-js `list()` defaults. */
+export function listStorageObjects(c: Context, bucket: string, prefix: string, options: { limit?: number, offset?: number, search?: string } = {}): Promise<StorageListEntry[]> {
+  const base = getEnv(c, 'SUPABASE_URL').replace(/\/+$/, '')
+  const body = { limit: 100, offset: 0, sortBy: { column: 'name', order: 'asc' }, ...options, prefix }
+  return storageJson(c, `${base}/storage/v1/object/list/${bucket}`, 'POST', body)
+}
+
+/** Deletes objects by full path; missing paths are ignored by Storage. */
+export async function removeStorageObjects(c: Context, bucket: string, paths: string[]): Promise<void> {
+  const base = getEnv(c, 'SUPABASE_URL').replace(/\/+$/, '')
+  await storageJson(c, `${base}/storage/v1/object/${bucket}`, 'DELETE', { prefixes: paths })
+}
+
 function isMissing(status: number) {
   // Supabase Storage answers 400 with an "object not found" body for missing objects.
   return status === 404 || status === 400

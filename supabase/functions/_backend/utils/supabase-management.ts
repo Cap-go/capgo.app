@@ -1,5 +1,7 @@
 import type { Context } from 'hono'
+import type { Bindings } from './cloudflare.ts'
 import { SSO_ATTRIBUTE_CLAIM_PREFIX } from '../private/sso/role-mapping.ts'
+import { gotrueFetch } from './gotrue_admin.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getEnv } from './utils.ts'
 
@@ -75,12 +77,35 @@ function getProjectRef(c: Context): string | null {
 
 const MANAGEMENT_API_TIMEOUT_MS = 8_000
 
-async function callManagementAPI(
-  c: Context,
-  method: string,
-  path: string,
-  body?: any,
-): Promise<any> {
+const hasGoTrueBinding = (c: Context) => Boolean((c.env as Partial<Bindings> | undefined)?.GOTRUE)
+
+// Hosted Supabase: the Management API. With a GOTRUE binding (our self-hosted
+// GoTrue): its admin API, which the Management API wraps (same bodies and
+// responses).
+function sendSSOProviderRequest(c: Context, method: string, providerPath: string, body: any): Promise<Response> {
+  const init: RequestInit = {
+    method,
+    // Callers can hold a provider row lock across this call: fail fast
+    // instead of relying on database timeouts.
+    signal: AbortSignal.timeout(MANAGEMENT_API_TIMEOUT_MS),
+    body: body ? JSON.stringify(body) : undefined,
+  }
+
+  if (hasGoTrueBinding(c)) {
+    const key = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
+    if (!key) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'SUPABASE_SERVICE_ROLE_KEY not configured',
+      })
+      throw new ManagementAPIError(500, 'management_api_not_configured', 'Service role key not configured')
+    }
+    return gotrueFetch(c, `admin/sso/providers${providerPath}`, {
+      ...init,
+      headers: { 'apikey': key, 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+    })
+  }
+
   const token = getEnv(c, 'SB_MANAGEMENT_API_TOKEN')
   const projectRef = getProjectRef(c)
 
@@ -100,23 +125,21 @@ async function callManagementAPI(
     throw new ManagementAPIError(500, 'project_ref_not_configured', 'Project reference not configured')
   }
 
-  const url = `https://api.supabase.com/v1/projects/${projectRef}${path}`
+  return fetch(`https://api.supabase.com/v1/projects/${projectRef}/config/auth/sso/providers${providerPath}`, {
+    ...init,
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  })
+}
 
-  const options: RequestInit = {
-    method,
-    // Callers can hold a provider row lock across this call: fail fast
-    // instead of relying on database timeouts.
-    signal: AbortSignal.timeout(MANAGEMENT_API_TIMEOUT_MS),
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  }
-
-  if (body) {
-    options.body = JSON.stringify(body)
-  }
-
+// `providerPath` is '' for the collection or `/<provider id>`.
+async function callManagementAPI(
+  c: Context,
+  method: string,
+  providerPath: string,
+  body?: any,
+): Promise<any> {
+  // The path actually called, so logs tell GoTrue apart from the Management API.
+  const path = hasGoTrueBinding(c) ? `admin/sso/providers${providerPath}` : `/config/auth/sso/providers${providerPath}`
   try {
     cloudlog({
       requestId: c.get('requestId'),
@@ -125,7 +148,7 @@ async function callManagementAPI(
       path,
     })
 
-    const response = await fetch(url, options)
+    const response = await sendSSOProviderRequest(c, method, providerPath, body)
 
     if (!response.ok) {
       let errorData: any = {}
@@ -145,7 +168,8 @@ async function callManagementAPI(
       throw new ManagementAPIError(
         response.status,
         errorData?.error_code || 'management_api_error',
-        errorData?.message || `Management API returned ${response.status}`,
+        // GoTrue answers with `msg`, the Management API with `message`.
+        errorData?.message || errorData?.msg || `Management API returned ${response.status}`,
         errorData,
       )
     }
@@ -218,7 +242,7 @@ export async function createSSOProvider(
     ...(attributeMapping && { attribute_mapping: toManagementAttributeMapping(attributeMapping) }),
   }
 
-  const response = await callManagementAPI(c, 'POST', '/config/auth/sso/providers', body)
+  const response = await callManagementAPI(c, 'POST', '', body)
   return response as SSOProviderResponse
 }
 
@@ -226,7 +250,7 @@ export async function getSSOProvider(
   c: Context,
   providerId: string,
 ): Promise<SSOProviderResponse> {
-  const response = await callManagementAPI(c, 'GET', `/config/auth/sso/providers/${providerId}`)
+  const response = await callManagementAPI(c, 'GET', `/${providerId}`)
   return response as SSOProviderResponse
 }
 
@@ -247,7 +271,7 @@ export async function updateSSOProvider(
     body.attribute_mapping = toManagementAttributeMapping(updates.attribute_mapping)
   }
 
-  const response = await callManagementAPI(c, 'PUT', `/config/auth/sso/providers/${providerId}`, body)
+  const response = await callManagementAPI(c, 'PUT', `/${providerId}`, body)
   return response as SSOProviderResponse
 }
 
@@ -263,12 +287,12 @@ export async function snapshotSSOProvider(c: Context, providerId: string): Promi
 }
 
 export async function restoreSSOProvider(c: Context, providerId: string, snapshot: SSOProviderSnapshot): Promise<void> {
-  await callManagementAPI(c, 'PUT', `/config/auth/sso/providers/${providerId}`, snapshot)
+  await callManagementAPI(c, 'PUT', `/${providerId}`, snapshot)
 }
 
 export async function deleteSSOProvider(
   c: Context,
   providerId: string,
 ): Promise<void> {
-  await callManagementAPI(c, 'DELETE', `/config/auth/sso/providers/${providerId}`)
+  await callManagementAPI(c, 'DELETE', `/${providerId}`)
 }
