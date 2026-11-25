@@ -40,6 +40,9 @@ export function scheduledTriggerUrl(apiPort: number): string {
 async function withDb<T>(dbUrl: string, run: (client: Client) => Promise<T>): Promise<T> {
   // A fresh connection per tick survives a Supabase restart.
   const client = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 5_000, query_timeout: 10_000 })
+  // A dropped connection also rejects the pending query, which the loop handles;
+  // without a listener the separate 'error' event would crash the process.
+  client.on('error', () => {})
   await client.connect()
   try {
     return await run(client)
