@@ -30,7 +30,8 @@ export function pickSavedOutput(outputs: BuilderOutput[] | undefined, platform: 
   return undefined
 }
 
-export async function savedOutputsForJobs(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobIds: string[]): Promise<Record<string, SavedBuildOutput>> {
+// Jobs whose builder lookup failed go to `failed`: their saved file is unknown, not absent.
+export async function savedOutputsForJobs(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobIds: string[], failed: string[] = []): Promise<Record<string, SavedBuildOutput>> {
   const ids = [...new Set(jobIds)].filter(id => /^[A-Za-z0-9._:-]{1,80}$/.test(id)).slice(0, 20)
   if (ids.length === 0)
     return {}
@@ -49,6 +50,9 @@ export async function savedOutputsForJobs(c: Context, principal: RlsPrincipal, a
       })
       if (!response.ok) {
         await response.body?.cancel()
+        // The builder no longer knows the job: its file is gone for good.
+        if (response.status !== 404)
+          failed.push(row.builder_job_id)
         return
       }
       const body = await response.json().catch(() => undefined) as { outputs?: BuilderOutput[] } | undefined
@@ -58,6 +62,7 @@ export async function savedOutputsForJobs(c: Context, principal: RlsPrincipal, a
     }
     catch {
       // One stalled job must not hide the downloads that already succeeded.
+      failed.push(row.builder_job_id)
     }
   }))
   return outputs

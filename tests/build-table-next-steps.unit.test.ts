@@ -346,6 +346,21 @@ describe('builds table after a successful build', () => {
     expect(fetchMock.mock.calls.length).toBe(calls)
   })
 
+  it('asks again for a build whose builder lookup failed instead of calling it not saved', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    mocks.builds = [succeeded]
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ outputs: {}, failed: ['job_1'] }), { status: 200 }))
+      .mockImplementation(async () => new Response(JSON.stringify({ outputs: { job_1: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } }, failed: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const host = mount()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(host.querySelector('[data-test="saved-build-not-saved"]')).toBeNull()
+    vi.advanceTimersByTime(10_000)
+    await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-download"]')).not.toBeNull())
+  })
+
   it('offers build details instead of a download when no file is saved', async () => {
     mocks.builds = [succeeded]
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: {} }), { status: 200 })))

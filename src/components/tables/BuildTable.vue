@@ -412,12 +412,14 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean, silen
     })
     if (!response.ok)
       throw new Error(`saved outputs lookup failed (${response.status})`)
-    const body = await response.json() as { outputs?: Record<string, { url: string, kind: string, expires_at: string }> }
+    const body = await response.json() as { outputs?: Record<string, { url: string, kind: string, expires_at: string }>, failed?: string[] }
     if (current()) {
       savedOutputs.value = body.outputs ?? {}
-      savedOutputsReady.value = true
-      savedOutputsKey = key
-      outputsFailures.value = 0
+      // A builder lookup that failed leaves its build unknown, and the next refresh asks again.
+      const complete = !body.failed?.length
+      savedOutputsReady.value = complete
+      savedOutputsKey = complete ? key : ''
+      outputsFailures.value = complete ? 0 : Math.max(outputsFailures.value, 1)
     }
   }
   catch {
