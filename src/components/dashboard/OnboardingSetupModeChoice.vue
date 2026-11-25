@@ -26,6 +26,7 @@ import OnboardingToolPattern from '~/components/dashboard/OnboardingToolPattern.
 import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
+import { isDirectOfferMetadata, onboardingPlanSubtitleKey } from '~/services/paymentRequired'
 import { replaceUserOnboardingWithRetry, serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -49,6 +50,11 @@ const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
 // The AI agent comes first unless the user last picked the manual way.
 const modeCards = computed(() => manualFirst.value ? ['manual', 'ai', 'invite'] as const : ['ai', 'invite', 'manual'] as const)
 const isInvite = computed(() => screen.value === 'invite')
+const isDirectOfferUser = computed(() => isDirectOfferMetadata(main.auth?.app_metadata))
+const planSubtitleKey = computed(() => onboardingPlanSubtitleKey({
+  isInvite: isInvite.value,
+  isDirectOfferUser: isDirectOfferUser.value,
+}))
 const goalCopyPrefix = computed(() => isInvite.value ? 'invite' : 'ai')
 // Organization to invite into. A refresh after the invite flow created it lands back on the
 // invite step instead of offering to create a second one. Only that saved organization counts,
@@ -409,7 +415,7 @@ function onInviteSuccess(invite: { email: string }) {
               {{ t('ai-onboarding-plan-title') }}
             </h2>
             <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {{ isInvite ? t('invite-onboarding-plan-subtitle') : t('ai-onboarding-plan-subtitle') }}
+              {{ t(planSubtitleKey) }}
             </p>
           </div>
 

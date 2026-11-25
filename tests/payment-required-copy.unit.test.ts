@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isZeroLengthTrial, resolveBillingPaidAt, shouldShowExpiredTrialCopy, shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '../src/services/paymentRequired'
+import { isDirectOfferMetadata, isZeroLengthTrial, onboardingPlanSubtitleKey, resolveBillingPaidAt, resolveUnpaidCopyVariant, shouldShowExpiredTrialCopy, shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '../src/services/paymentRequired'
 
 describe('payment required copy', () => {
   it.concurrent('shows expired-trial copy for a never-paid web organization', () => {
@@ -51,5 +51,40 @@ describe('payment required copy', () => {
     expect(isZeroLengthTrial(createdAt, null)).toBe(false)
     expect(isZeroLengthTrial(null, '2026-10-20T12:00:00.000Z')).toBe(false)
     expect(isZeroLengthTrial(createdAt, 'not-a-date')).toBe(false)
+  })
+
+  it.concurrent('detects direct-offer metadata only for the exact offer value', () => {
+    expect(isDirectOfferMetadata({ offer: 'direct' })).toBe(true)
+    expect(isDirectOfferMetadata({ offer: 'other' })).toBe(false)
+    expect(isDirectOfferMetadata({})).toBe(false)
+    expect(isDirectOfferMetadata(null)).toBe(false)
+    expect(isDirectOfferMetadata(undefined)).toBe(false)
+  })
+
+  it.concurrent('selects unpaid copy for a fresh org that never had a trial', () => {
+    expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: null, trialSkipped: true })).toBe('no_trial')
+    expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: undefined, trialSkipped: false, isDirectOfferUser: true })).toBe('no_trial')
+    expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: null, trialSkipped: false, isDirectOfferUser: true })).toBe('no_trial')
+  })
+
+  it.concurrent('keeps expired-trial copy for a never-paid org that had a trial', () => {
+    expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: null, trialSkipped: false })).toBe('expired_trial')
+  })
+
+  it.concurrent('keeps lapsed-subscription copy for previously paid orgs and while billing loads', () => {
+    expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: '2026-01-15T12:00:00.000Z', trialSkipped: false })).toBe('lapsed')
+    expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: '2026-01-15T12:00:00.000Z', trialSkipped: false, isDirectOfferUser: true })).toBe('lapsed')
+    expect(resolveUnpaidCopyVariant({ isNative: false, paidAt: undefined, trialSkipped: false })).toBe('lapsed')
+  })
+
+  it.concurrent('keeps native copy in the native app even for direct-offer users', () => {
+    expect(resolveUnpaidCopyVariant({ isNative: true, paidAt: null, trialSkipped: true, isDirectOfferUser: true })).toBe('native')
+  })
+
+  it.concurrent('selects the no-trial onboarding plan subtitle for direct-offer users', () => {
+    expect(onboardingPlanSubtitleKey({ isInvite: false, isDirectOfferUser: false })).toBe('ai-onboarding-plan-subtitle')
+    expect(onboardingPlanSubtitleKey({ isInvite: true, isDirectOfferUser: false })).toBe('invite-onboarding-plan-subtitle')
+    expect(onboardingPlanSubtitleKey({ isInvite: false, isDirectOfferUser: true })).toBe('ai-onboarding-plan-subtitle-no-trial')
+    expect(onboardingPlanSubtitleKey({ isInvite: true, isDirectOfferUser: true })).toBe('invite-onboarding-plan-subtitle-no-trial')
   })
 })
