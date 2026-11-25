@@ -806,8 +806,8 @@ describe('cloudflare snippet on-prem fallback', () => {
     expect(tags.some(tag => tag.split(',').includes('capgo-plugin-state-com.example.shared'))).toBe(true)
     // A read racing a publication purge may be stale: no longer than the KV document window.
     const ttls = [...cache.store.values()].map(response => response.headers.get('Cache-Control') ?? '')
-    expect(ttls.some(value => value.includes('max-age=30'))).toBe(true)
-    expect(ttls.some(value => value.includes('max-age=60'))).toBe(false)
+    expect(ttls).toContain('public, max-age=30')
+    expect(ttls).not.toContain('public, max-age=60')
   })
 
   it('returns on-prem from a fallback worker without caching when the primary fails', async () => {
