@@ -117,7 +117,9 @@ Capgo is deployed to production on Cloudflare workers and Supabase.
 Cloudflare workers take 99% of the traffic. Supabase is used for internal calls,
 for internal tasks such as CRON jobs that call functions.
 
-When self-hosted, installing only Supabase is sufficient.
+When self-hosted, run Supabase plus the Cloudflare API worker
+(`cloudflare_workers/api`): its `QueueDispatcher` Durable Object is what wakes
+the queue consumers.
 
 ## Why Cloudflare Workers + Supabase
 
@@ -155,7 +157,8 @@ If you're self-hosting, the key pieces live in a few top-level directories:
   - `supabase/migrations/` - Database schema and RLS policies
   - `supabase/seed.sql` - Local seed data for tests/dev
 - `supabase/schemas/prod.sql` - Production schema dump (reference only)
-- `cloudflare_workers/` - **Optional** Cloudflare Workers deployment (prod traffic)
+- `cloudflare_workers/` - Cloudflare Workers deployment (prod traffic). The API
+  worker is required everywhere: its `QueueDispatcher` wakes the queue consumers
   - `cloudflare_workers/snippet/` - Geo routing for replicas ([automatic deployment of all snippets](docs/snippets-deployment.md))
   - Worker entry points and deploy config live here
 - `src/` - Frontend Vue 3 web console (Vite + Tailwind + DaisyUI)
@@ -177,10 +180,12 @@ branding; see
 
 Quick self-hosting path:
 
-1. `supabase/` is enough to run the backend locally.
+1. `supabase/` plus the API worker (`cloudflare_workers/api`) run the backend;
+   `bun run backend` starts both locally. Without the API worker's
+   `QueueDispatcher`, queued work is never picked up.
 2. `src/` is the web console you point to your own backend.
-3. `cloudflare_workers/` is only needed if you want to run the Workers layer
-   instead of (or in front of) Supabase.
+3. The other `cloudflare_workers/` (plugin, files) are only needed if you want
+   to run the Workers layer instead of (or in front of) Supabase.
 
 ## Backend endpoints (what lives where)
 
