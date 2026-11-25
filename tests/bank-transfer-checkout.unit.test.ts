@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, invoiceServicePeriod, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, pickBankTransferSubscription, settledPaidThrough, shouldReissueUnpaidCardInvoice, storedPlanConflictsWithPaidInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, invoiceServicePeriod, paidInvoiceExtraMau, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, pickBankTransferSubscription, settledPaidThrough, shouldReissueUnpaidCardInvoice, storedPlanConflictsWithPaidInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoiceRecordsSelfServeBankTransfer } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
@@ -128,6 +128,13 @@ describe('yearly bank transfer', () => {
     expect(storedPlanConflictsWithPaidInvoice('price_team', ['price_maker'])).toBe(true)
     expect(storedPlanConflictsWithPaidInvoice('price_team', ['price_team', 'price_extra'])).toBe(false)
     expect(storedPlanConflictsWithPaidInvoice(null, ['price_maker'])).toBe(false)
+    expect(paidInvoiceExtraMau([
+      { amount: 39600, priceId: 'price_year', quantity: 1 },
+      { amount: 6000, priceId: 'price_extra', quantity: 2 },
+    ], 'price_year')).toBe(2000)
+    expect(paidInvoiceExtraMau([
+      { amount: 39600, priceId: 'price_year', quantity: 1 },
+    ], 'price_year')).toBe(0)
   })
 
   it.concurrent('moves paid-through only through the invoice period', () => {

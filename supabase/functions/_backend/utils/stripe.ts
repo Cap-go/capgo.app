@@ -383,6 +383,13 @@ export function storedPlanConflictsWithPaidInvoice(storedPriceId: string | null 
   return !invoicePriceIds.includes(storedPriceId)
 }
 
+// Lines that are not the plan price are the extra-MAU packs on a bank-transfer invoice.
+export function paidInvoiceExtraMau(lines: Array<{ amount: number, priceId: string, quantity: number }>, planPriceId: string | null | undefined) {
+  return lines
+    .filter(line => line.amount > 0 && line.priceId !== planPriceId)
+    .reduce((total, line) => total + line.quantity, 0) * EXTRA_MAU_UNIT
+}
+
 export type SubscriptionLookupResult =
   | { ok: true, data: SubscriptionSyncData }
   | { ok: false, reason: 'missing_subscription_id' }
