@@ -1409,8 +1409,9 @@ function billedKey(priceId: string, quantity: number) {
 export function bankTransferInvoiceCoversSubscription(invoiceLines: BilledPriceQuantity[], subscriptionItems: BilledPriceQuantity[]) {
   if (invoiceLines.length === 0 || invoiceLines.length !== subscriptionItems.length)
     return false
-  const invoiceKeys = invoiceLines.map(line => billedKey(line.priceId, line.quantity)).sort()
-  const subscriptionKeys = subscriptionItems.map(line => billedKey(line.priceId, line.quantity)).sort()
+  const compare = (left: string, right: string) => left.localeCompare(right)
+  const invoiceKeys = invoiceLines.map(line => billedKey(line.priceId, line.quantity)).sort(compare)
+  const subscriptionKeys = subscriptionItems.map(line => billedKey(line.priceId, line.quantity)).sort(compare)
   return invoiceKeys.every((key, index) => key === subscriptionKeys[index])
 }
 
@@ -1669,6 +1670,18 @@ async function discardUnpaidInvoice(stripe: Stripe, invoice: Stripe.Invoice) {
     await stripe.invoices.voidInvoice(invoice.id, {}, billingRequestOptions)
 }
 
+// A failed void leaves the old invoice collectible. The next checkout lists it again
+// and retires every unpaid invoice except the subscription's latest one.
+async function discardSupersededInvoices(stripe: Stripe, subscriptionId: string, keepInvoiceId: string | undefined) {
+  if (!keepInvoiceId)
+    return
+  const listed = await Promise.all((['draft', 'open', 'uncollectible'] as const).map(status =>
+    stripe.invoices.list({ subscription: subscriptionId, status, limit: 100 }, billingRequestOptions),
+  ))
+  const stale = listed.flatMap(page => page.data).filter(invoice => invoice.id !== keepInvoiceId && invoiceAwaitingPayment(invoice.status))
+  await Promise.all(stale.map(invoice => discardUnpaidInvoice(stripe, invoice)))
+}
+
 async function finalizeBankTransferInvoice(stripe: Stripe, subscription: Stripe.Subscription) {
   const latest = subscription.latest_invoice
   if (!latest)
@@ -1737,9 +1750,6 @@ export async function createBankTransferSubscription(c: Context, customerId: str
           ...(reusable.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] === 'true' ? { metadata: { ...billing.metadata, [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: '' } } : {}),
           expand: ['latest_invoice'],
         }, billingRequestOptions)
-        const latestId = typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : subscription.latest_invoice?.id
-        if (openInvoice && replaceUnpaidInvoice && openInvoice.id !== latestId)
-          await discardUnpaidInvoice(stripe, openInvoice)
       }
       else {
         subscription = await stripe.subscriptions.create({
@@ -1750,6 +1760,8 @@ export async function createBankTransferSubscription(c: Context, customerId: str
           expand: ['latest_invoice'],
         }, billingRequestOptions)
       }
+      const latestId = typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : subscription.latest_invoice?.id
+      await discardSupersededInvoices(stripe, subscription.id, latestId)
       await cancelPendingTrialSchedules(stripe, customerId)
       await cancelOtherOpenSubscriptions(stripe, customerId, subscription.id)
       const invoice = await finalizeBankTransferInvoice(stripe, subscription)

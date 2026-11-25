@@ -2145,7 +2145,7 @@ async function applyBankTransferPlanAfterPayment(
     return
   const { priceId, productId } = parsePriceIds(c, subscription.items.data)
   const extraMau = getExtraMau(subscription.items.data)
-  if (bankTransferPlanAlreadyStored(
+  if (!productId || bankTransferPlanAlreadyStored(
     { productId: customer.product_id, priceId: customer.price_id, extraMau: customer.extra_mau },
     { productId, priceId, extraMau },
   ))
@@ -2161,7 +2161,20 @@ async function applyBankTransferPlanAfterPayment(
   const stripeEventId = c.get('stripeEvent')?.id
   if (!stripeEventId)
     return
-  await persistStripeInfoAndRevenueMovement(c, customer.customer_id, stripeEventId, updateData, eventOccurredAtIso, movement)
+  const { status: didPersist } = await persistStripeInfoAndRevenueMovement(c, customer.customer_id, stripeEventId, updateData, eventOccurredAtIso, movement)
+  const extraChanged = extraMau !== (customer.extra_mau ?? 0)
+  await refreshPlanStatusAfterStripeSubscriptionChange(c, org, {
+    data: {
+      customer_id: customer.customer_id,
+      product_id: productId,
+      ...(priceId ? { price_id: priceId } : {}),
+      status: 'succeeded',
+    },
+    isUpgrade: false,
+    // The refresh gate only compares product and price. Extra MAU still changes the allowance.
+    previousProductId: extraChanged && productId === customer.product_id ? 'stored-plan' : customer.product_id ?? undefined,
+    previousPriceId: customer.price_id ?? undefined,
+  }, didPersist, customer)
   await syncBillingBentoTagsFromStoredStripeInfo(c, org, customer.customer_id)
   await backgroundTask(c, Promise.all([
     purgePlanCacheForOrg(c, org.id),
