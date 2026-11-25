@@ -13,6 +13,7 @@ const REST_PATH_ALLOWED: Record<string, string> = {
   'tests/cli-preview-lifecycle.test.ts': 'asserts the CLI does not call PostgREST',
   'tests/console-auth-proxy.unit.test.ts': 'path traversal input for the auth proxy',
   'tests/http-dispatch.unit.test.ts': 'origin parsing input',
+  'tests/legacy-cli-manifest-warning-snippet.unit.test.ts': 'request URLs for the edge snippet, fetch is stubbed',
   'tests/no-postgrest-in-tests.unit.test.ts': 'this guard',
   'tests/sql-data-client.ts': 'documents the rule',
   'tests/sql-rest-request.ts': 'documents the request shape it replaces',
