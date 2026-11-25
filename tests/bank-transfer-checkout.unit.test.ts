@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, invoiceServicePeriod, paidInvoiceExtraMau, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, paidThroughWrite, pickBankTransferSubscription, settledPaidThrough, shouldReissueUnpaidCardInvoice, storedPlanConflictsWithPaidInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
+import { bankTransferAfterPaymentAction, bankTransferInvoiceCoversSubscription, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferProration, bankTransferResetsUnpaidCycle, bankTransferResumeUpdate, bankTransferSubscriptionStillCurrent, bankTransferSyncAction, bankTransferSyncDbStatus, buildBankTransferItems, canceledBankTransferKeepsStoredPlan, invoiceAcceptsBankTransfer, invoiceBillLines, invoiceLinePriceQuantities, invoiceServicePeriod, paidInvoiceExtraMau, paidInvoiceMatchesSubscription, paidThroughNeedsUpdate, paidThroughWrite, pickBankTransferSubscription, settledPaidThrough, shouldReissueUnpaidCardInvoice, storedPlanConflictsWithPaidInvoice, subscriptionItemPriceQuantities } from '../supabase/functions/_backend/utils/stripe.ts'
 import { invoiceRecordsSelfServeBankTransfer } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 import { invoicedSubscriptionGrantsAccessBeforePayment, isBankTransferCurrency } from '../supabase/functions/_backend/utils/transfer_invoice.ts'
 
@@ -170,6 +170,13 @@ describe('yearly bank transfer', () => {
       subscription_anchor_start: anchor.start,
       subscription_anchor_end: '2027-01-01T00:00:00.000Z',
     })
+    expect(bankTransferAfterPaymentAction(false, false, false)).toBe('ignore')
+    expect(bankTransferAfterPaymentAction(false, true, false)).toBe('sync')
+    expect(bankTransferAfterPaymentAction(true, true, false)).toBe('sync')
+    expect(bankTransferAfterPaymentAction(true, false, true)).toBe('write')
+    expect(bankTransferSubscriptionStillCurrent(null, 'sub_invoice')).toBe(true)
+    expect(bankTransferSubscriptionStillCurrent('sub_invoice', 'sub_invoice')).toBe(true)
+    expect(bankTransferSubscriptionStillCurrent('sub_newer', 'sub_invoice')).toBe(false)
     const current = subscriptionItemPriceQuantities([{ price: { id: 'price_year' }, quantity: 1 }])
     const unrelated = invoiceBillLines([
       { amount: 100, quantity: 1, pricing: { price_details: { price: 'price_other' } }, parent: { subscription_item_details: { proration: false } } },

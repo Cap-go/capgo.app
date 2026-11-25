@@ -30,7 +30,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, paidInvoiceExtraMau, paidThroughWrite, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, settledPaidThrough, storedPlanConflictsWithPaidInvoice, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { bankTransferAfterPaymentAction, bankTransferInvoiceSettlesUpgrade, bankTransferPaymentState, bankTransferPlanAlreadyStored, bankTransferSubscriptionStillCurrent, canceledBankTransferKeepsStoredPlan, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, invoiceBillLines, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, paidInvoiceExtraMau, paidThroughWrite, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, settledPaidThrough, storedPlanConflictsWithPaidInvoice, subscriptionInvoicePaymentStateFromInvoice, subscriptionItemPriceQuantities, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
@@ -981,7 +981,7 @@ async function persistStripeInfoAndRevenueMovement(
   updateData: StripeInfoUpdate,
   eventOccurredAtIso: string,
   movement: RevenueMovement,
-  options?: { preserveLaterPaidThrough?: boolean },
+  options?: { preserveLaterPaidThrough?: boolean, subscriptionId?: string },
 ): Promise<PersistRevenueMovementResult> {
   const transactionUpdateData: StripeInfoUpdate = {
     ...updateData,
@@ -1005,8 +1005,8 @@ async function persistStripeInfoAndRevenueMovement(
     // Lock the row so concurrent retries serialize before we classify
     // the event as missing/stale/duplicate. The admin dashboard derives revenue
     // movement from the persisted stripe_info changes.
-    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'past_due_at' | 'status'> & { paid_at: string | Date | null, subscription_anchor_end: string | Date | null }>(
-      'SELECT last_stripe_event_at, past_due_at, status, paid_at, subscription_anchor_end FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
+    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'past_due_at' | 'status' | 'subscription_id'> & { paid_at: string | Date | null, subscription_anchor_end: string | Date | null }>(
+      'SELECT last_stripe_event_at, past_due_at, status, paid_at, subscription_anchor_end, subscription_id FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
       [customerId],
     )
     const lockedStripeInfo = stripeInfoRow.rows[0]
@@ -1017,6 +1017,12 @@ async function persistStripeInfoAndRevenueMovement(
     }
 
     if (isStaleStripeEvent(lockedStripeInfo, eventOccurredAtIso)) {
+      await pgClient.query('ROLLBACK')
+      return { status: 'stale', firstPaidAt: null }
+    }
+
+    if (options?.subscriptionId && !bankTransferSubscriptionStillCurrent(lockedStripeInfo.subscription_id, options.subscriptionId)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'Bank-transfer invoice does not match the locked subscription', customerId, lockedSubscriptionId: lockedStripeInfo.subscription_id, invoiceSubscriptionId: options.subscriptionId })
       await pgClient.query('ROLLBACK')
       return { status: 'stale', firstPaidAt: null }
     }
@@ -2168,8 +2174,6 @@ async function applyBankTransferPlanAfterPayment(
     return
   const rawLines = await paidInvoiceSubscriptionLines(stripe, invoice)
   const lines = invoiceBillLines(rawLines)
-  if (!bankTransferInvoiceSettlesUpgrade(lines, subscriptionItemPriceQuantities(subscription.items.data), { priceId: customer.price_id, extraMau: customer.extra_mau }))
-    return
   const { priceId, productId } = parsePriceIds(c, subscription.items.data)
   const extraMau = getExtraMau(subscription.items.data)
   const storedPeriod = { start: customer.subscription_anchor_start, end: customer.subscription_anchor_end }
@@ -2178,7 +2182,11 @@ async function applyBankTransferPlanAfterPayment(
     { productId: customer.product_id, priceId: customer.price_id, extraMau: customer.extra_mau },
     { productId, priceId, extraMau },
   )
-  if (!(planAlreadyStored && !period)) {
+  const settles = bankTransferInvoiceSettlesUpgrade(lines, subscriptionItemPriceQuantities(subscription.items.data), { priceId: customer.price_id, extraMau: customer.extra_mau })
+  const action = bankTransferAfterPaymentAction(settles, planAlreadyStored, !!period)
+  if (action === 'ignore')
+    return
+  if (action === 'write') {
     const updateData: StripeInfoUpdate = {
       product_id: productId ?? customer.product_id ?? undefined,
       price_id: priceId ?? customer.price_id ?? undefined,
@@ -2192,7 +2200,7 @@ async function applyBankTransferPlanAfterPayment(
     const stripeEventId = c.get('stripeEvent')?.id
     if (!stripeEventId)
       return
-    const { status: didPersist } = await persistStripeInfoAndRevenueMovement(c, customer.customer_id, stripeEventId, updateData, eventOccurredAtIso, movement, { preserveLaterPaidThrough: true })
+    const { status: didPersist } = await persistStripeInfoAndRevenueMovement(c, customer.customer_id, stripeEventId, updateData, eventOccurredAtIso, movement, { preserveLaterPaidThrough: true, subscriptionId })
     const extraChanged = extraMau !== (customer.extra_mau ?? 0)
     const planProductId = productId ?? customer.product_id
     if (planProductId) {

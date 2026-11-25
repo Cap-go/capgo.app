@@ -1535,6 +1535,20 @@ export function shouldReissueUnpaidCardInvoice(unpaid: boolean, itemsChanged: bo
   return unpaid && !itemsChanged && !acceptsBankTransfer
 }
 
+// The grant stays behind a settling invoice. A retry whose write already committed only needs the sync.
+export function bankTransferAfterPaymentAction(settles: boolean, planAlreadyStored: boolean, periodAdvances: boolean) {
+  if (!settles && !planAlreadyStored)
+    return 'ignore' as const
+  if (!settles || (planAlreadyStored && !periodAdvances))
+    return 'sync' as const
+  return 'write' as const
+}
+
+// A null stored subscription is the first invoice. A different id belongs to a newer subscription.
+export function bankTransferSubscriptionStillCurrent(lockedSubscriptionId: string | null | undefined, invoiceSubscriptionId: string) {
+  return !lockedSubscriptionId || lockedSubscriptionId === invoiceSubscriptionId
+}
+
 export function bankTransferPlanAlreadyStored(
   stored: { productId?: string | null, priceId?: string | null, extraMau?: number | null },
   next: { productId?: string | null, priceId?: string | null, extraMau?: number | null },
