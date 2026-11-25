@@ -1378,6 +1378,17 @@ export function shouldReissueUnpaidCardInvoice(unpaid: boolean, itemsChanged: bo
   return unpaid && !itemsChanged && !acceptsBankTransfer
 }
 
+export function bankTransferPlanAlreadyStored(
+  stored: { productId?: string | null, priceId?: string | null, extraMau?: number | null },
+  next: { productId?: string | null, priceId?: string | null, extraMau?: number | null },
+) {
+  if (!next.productId)
+    return true
+  return next.productId === stored.productId
+    && (next.priceId ?? null) === (stored.priceId ?? null)
+    && (next.extraMau ?? 0) === (stored.extraMau ?? 0)
+}
+
 // An unpaid invoice must not be credited as unused time. That credit can zero out a
 // downgrade and look like a paid invoice while the original bill is still open.
 export function bankTransferProration(status: string, itemsChanged: boolean, unpaidInvoice = false): Stripe.SubscriptionUpdateParams.ProrationBehavior {
@@ -1628,8 +1639,6 @@ export async function createBankTransferSubscription(c: Context, customerId: str
         const unpaidInvoice = invoiceAwaitingPayment(openInvoice?.status) && reusable.status !== 'trialing'
         const reissueCardInvoice = !!openInvoice && shouldReissueUnpaidCardInvoice(unpaidInvoice, changed, invoiceAcceptsBankTransfer(openInvoice))
         const replaceUnpaidInvoice = bankTransferResetsUnpaidCycle(reusable.status, changed, unpaidInvoice) || reissueCardInvoice
-        if (openInvoice && replaceUnpaidInvoice)
-          await discardUnpaidInvoice(stripe, openInvoice)
         subscription = await stripe.subscriptions.update(reusable.id, {
           ...billing,
           items,
@@ -1640,6 +1649,9 @@ export async function createBankTransferSubscription(c: Context, customerId: str
           ...(reusable.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] === 'true' ? { metadata: { ...billing.metadata, [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: '' } } : {}),
           expand: ['latest_invoice'],
         }, billingRequestOptions)
+        const latestId = typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : subscription.latest_invoice?.id
+        if (openInvoice && replaceUnpaidInvoice && openInvoice.id !== latestId)
+          await discardUnpaidInvoice(stripe, openInvoice)
       }
       else {
         subscription = await stripe.subscriptions.create({

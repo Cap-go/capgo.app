@@ -30,7 +30,7 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
-import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { bankTransferPlanAlreadyStored, ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getExtraMau, getLatestOpenSubscriptionInvoice, getStripe, getSubscriptionInvoicePaymentIntent, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, parsePriceIds, planProductIdOrFilter, resolvePlanCreditProductId, subscriptionInvoicePaymentStateFromInvoice, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
@@ -2133,12 +2133,16 @@ async function applyBankTransferPlanAfterPayment(
   if (!isSelfServeBankTransfer(subscription.metadata))
     return
   const { priceId, productId } = parsePriceIds(c, subscription.items.data)
-  if (!productId || (productId === customer.product_id && priceId === customer.price_id))
+  const extraMau = getExtraMau(subscription.items.data)
+  if (bankTransferPlanAlreadyStored(
+    { productId: customer.product_id, priceId: customer.price_id, extraMau: customer.extra_mau },
+    { productId, priceId, extraMau },
+  ))
     return
   const updateData: StripeInfoUpdate = {
-    product_id: productId,
+    product_id: productId ?? undefined,
     price_id: priceId ?? undefined,
-    extra_mau: getExtraMau(subscription.items.data),
+    extra_mau: extraMau,
     status: 'succeeded',
   }
   const revenuePlans = await getRevenuePlans(c)
