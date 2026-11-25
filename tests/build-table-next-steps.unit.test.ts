@@ -361,6 +361,33 @@ describe('builds table after a successful build', () => {
     await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-download"]')).not.toBeNull())
   })
 
+  it('starts the retries over when a reload fails again after they ran out', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    mocks.builds = [succeeded]
+    const partial = () => new Response(JSON.stringify({ outputs: {}, failed: ['job_1'] }), { status: 200 })
+    let builderUp = false
+    const fetchMock = vi.fn(async () => builderUp
+      ? new Response(JSON.stringify({ outputs: { job_1: { url: 'https://dl.example.test/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } }, failed: [] }), { status: 200 })
+      : partial())
+    vi.stubGlobal('fetch', fetchMock)
+    const host = mount()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    for (let tick = 0; tick < 5; tick++) {
+      vi.advanceTimersByTime(10_000)
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    const exhausted = fetchMock.mock.calls.length
+    vi.advanceTimersByTime(30_000)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(fetchMock.mock.calls.length).toBe(exhausted)
+    ;(host.querySelector('[data-test="table-reload"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBe(exhausted + 1))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    builderUp = true
+    vi.advanceTimersByTime(10_000)
+    await vi.waitFor(() => expect(host.querySelector('[data-test="saved-build-download"]')).not.toBeNull())
+  })
+
   it('offers build details instead of a download when no file is saved', async () => {
     mocks.builds = [succeeded]
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outputs: {} }), { status: 200 })))

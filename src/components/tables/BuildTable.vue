@@ -59,6 +59,7 @@ let savedOutputsKey = ''
 // 0 = nothing to recover; each recovery tick counts, whether the lookup or the builds query fails.
 const OUTPUT_RETRIES = 3
 const outputsFailures = ref(0)
+let failedOutputsKey = ''
 // The build whose details replace the table (live progress, result, download, error).
 const openedBuild = shallowRef<Element | null>(null)
 // The opened build's latest row when the listing leaves it out (search, another page).
@@ -386,6 +387,12 @@ function getStatusColor(status: string): string {
   }
 }
 
+// Retry ticks for the same builds count toward the limit; a user load or another set of builds starts over.
+function noteOutputsFailure(key: string, silent: boolean) {
+  outputsFailures.value = silent && key === failedOutputsKey ? Math.max(outputsFailures.value, 1) : 1
+  failedOutputsKey = key
+}
+
 async function loadSavedOutputs(builds: Element[], current: () => boolean, silent = false) {
   const jobIds = builds.filter(build => isBuildSucceeded(build.status) && build.builder_job_id).map(build => build.builder_job_id as string)
   const key = jobIds.join(',')
@@ -419,7 +426,10 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean, silen
       const complete = !body.failed?.length
       savedOutputsReady.value = complete
       savedOutputsKey = complete ? key : ''
-      outputsFailures.value = complete ? 0 : Math.max(outputsFailures.value, 1)
+      if (complete)
+        outputsFailures.value = 0
+      else
+        noteOutputsFailure(key, silent)
     }
   }
   catch {
@@ -428,7 +438,7 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean, silen
       savedOutputs.value = {}
       savedOutputsReady.value = false
       savedOutputsKey = ''
-      outputsFailures.value = Math.max(outputsFailures.value, 1)
+      noteOutputsFailure(key, silent)
     }
   }
 }
