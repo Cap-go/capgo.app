@@ -23,7 +23,6 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   checkKey: checkKeyMock,
-  supabaseAdmin: vi.fn(() => ({})),
 }))
 
 function createContext(env: Record<string, unknown> = {}) {

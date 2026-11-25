@@ -3,18 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const cancelSubscription = vi.fn(async () => undefined)
 const pgQuery = vi.fn(async (_sql: string, _params?: unknown[]) => ({ rows: [], rowCount: 0 }))
 const STRIPE_INFO_DELETE = 'DELETE FROM public.stripe_info WHERE customer_id = $1'
-const storageList = vi.fn(async () => ({ data: [], error: null }))
-const storageFrom = vi.fn(() => ({ list: storageList }))
-const supabaseAdmin = vi.fn(() => ({
-  storage: { from: storageFrom },
-}))
 
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
   cancelSubscription,
-}))
-
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -43,7 +34,6 @@ describe('on_organization_delete', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     pgQuery.mockResolvedValue({ rows: [], rowCount: 0 })
-    storageList.mockResolvedValue({ data: [], error: null })
   })
 
   afterEach(() => {

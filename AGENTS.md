@@ -361,20 +361,13 @@ Do:
   - Never create migration files manually.
   - Always use `bunx supabase migration new <feature_slug>`.
   - Manual creation of migration files is not allowed.
-- **Supabase admin client + sign-in pitfall:** if you call
-  `supabaseAdmin.auth.signInWithPassword(...)`, that client becomes authenticated
-  as the user (it is no longer a pure service-role client). Always use a
-  **separate admin client** for sign-in, and keep a clean admin client for
-  service-role writes. Example:
-  - `const loginAdmin = supabaseAdmin(c)` → use for `signInWithPassword`
-  - `const adminClient = supabaseAdmin(c)` → use for admin writes
 - **Backend DB access style:** prefer `getPgClient()` / `getDrizzleClient()` for
   multi-step SQL, transactions, joins, schema-backed writes, or code that
   benefits from explicit pool lifecycle handling. Do **not** force every simple
-  one-statement internal helper write into Drizzle just for consistency. A
-  small service-role helper that is already a single clear `supabaseAdmin(c)`
-  call may stay on `supabaseAdmin` when that keeps the code smaller and equally
-  correct.
+  one-statement internal helper write into Drizzle just for consistency.
+- The backend has no service-role supabase-js client: GoTrue admin calls go
+  through `gotrueAdmin()` (`utils/gotrue_admin.ts`) and Supabase Storage through
+  plain `fetch` helpers in `utils/bundle_storage.ts`. Don't add one back.
 
 ### AI model freshness (HARD RULE)
 

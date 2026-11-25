@@ -50,16 +50,23 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   withPgTransaction: async (_pg: unknown, run: (client: unknown) => Promise<unknown>) => run(pgClient),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({
-    storage: {
-      from: (bucket: string) => ({
-        list: (prefix: string, options: unknown) => mocks.list(bucket, prefix, options),
-        remove: (paths: string[]) => mocks.remove(bucket, paths),
-      }),
-    },
-  }),
+vi.mock('../supabase/functions/_backend/utils/utils.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/utils.ts')>(),
+  getEnv: (_c: unknown, key: string) => ({ SUPABASE_URL: 'https://sb.example', SUPABASE_SERVICE_ROLE_KEY: 'service-key' } as Record<string, string>)[key] ?? '',
 }))
+
+// Supabase Storage REST: `list` gets (bucket, prefix, body), `remove` gets (bucket, paths);
+// each returns the Response the endpoint would send.
+const STORAGE = 'https://sb.example/storage/v1/object'
+const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => {
+  const body = JSON.parse(init.body as string)
+  if (url.startsWith(`${STORAGE}/list/`))
+    return mocks.list(url.slice(`${STORAGE}/list/`.length), body.prefix, body)
+  if (init.method === 'DELETE')
+    return mocks.remove(url.slice(`${STORAGE}/`.length), body.prefixes)
+  throw new Error(`unexpected fetch ${url}`)
+})
+vi.stubGlobal('fetch', fetchMock)
 
 const { deleteApp } = await import('../supabase/functions/_backend/public/app/delete.ts')
 
@@ -80,8 +87,8 @@ describe('app delete storage cleanup', () => {
     pgClient.query.mockImplementation(async text => ({ rows: text.includes('SELECT owner_org FROM public.apps') ? [{ row: { owner_org: ORG_ID } }] : [] }))
     mocks.checkPermission.mockResolvedValue(true)
     mocks.deleteObjectsWithPrefix.mockResolvedValue(0)
-    mocks.remove.mockResolvedValue({ data: [], error: null })
-    mocks.list.mockResolvedValue({ data: [], error: null })
+    mocks.remove.mockImplementation(async () => Response.json([]))
+    mocks.list.mockImplementation(async () => Response.json([]))
     mocks.removeImageFolder.mockResolvedValue(0)
     mocks.expireSimulatorSessions.mockResolvedValue(undefined)
   })
@@ -89,10 +96,10 @@ describe('app delete storage cleanup', () => {
   it('leaves R2 cleanup to on_app_delete and paginates the legacy apps bucket', async () => {
     mocks.list.mockImplementation(async (bucket: string, prefix: string) => {
       if (bucket === 'apps' && prefix === `${USER_ID}/${APP_ID}`)
-        return { data: [{ id: null, name: 'versions' }], error: null }
+        return Response.json([{ id: null, name: 'versions' }])
       if (bucket === 'apps' && prefix === `${USER_ID}/${APP_ID}/versions`)
-        return { data: [file('1.0.0.zip'), file('1.0.1.zip')], error: null }
-      return { data: [], error: null }
+        return Response.json([file('1.0.0.zip'), file('1.0.1.zip')])
+      return Response.json([])
     })
 
     const response = await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
@@ -110,17 +117,61 @@ describe('app delete storage cleanup', () => {
       `${USER_ID}/${APP_ID}/versions/1.0.0.zip`,
       `${USER_ID}/${APP_ID}/versions/1.0.1.zip`,
     ])
+    expect(mocks.list).toHaveBeenCalledWith('apps', `${USER_ID}/${APP_ID}`, {
+      limit: 100,
+      offset: 0,
+      sortBy: { column: 'name', order: 'asc' },
+      prefix: `${USER_ID}/${APP_ID}`,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(`${STORAGE}/apps`, expect.objectContaining({
+      method: 'DELETE',
+      headers: expect.objectContaining({ Authorization: 'Bearer service-key', apikey: 'service-key' }),
+    }))
     expect(mocks.cloudlogErr).not.toHaveBeenCalled()
     expect(pgClient.query).toHaveBeenCalledWith('DELETE FROM public.apps WHERE app_id = $1', [APP_ID])
   })
 
-  it('logs legacy apps bucket errors returned by storage', async () => {
-    mocks.list.mockResolvedValue({ data: null, error: { message: 'storage unavailable' } })
+  it('pages through the legacy apps bucket and removes in batches of 1000', async () => {
+    const prefix = `${USER_ID}/${APP_ID}`
+    const names = Array.from({ length: 1150 }, (_, i) => `f${String(i).padStart(4, '0')}.zip`)
+    mocks.list.mockImplementation(async (bucket: string, listPrefix: string, body: { offset: number, limit: number }) => {
+      if (bucket !== 'apps' || listPrefix !== prefix)
+        return Response.json([])
+      return Response.json(names.slice(body.offset, body.offset + body.limit).map(file))
+    })
+
+    const response = await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
+
+    expect(response.status).toBe(200)
+    const appsOffsets = mocks.list.mock.calls.filter(([bucket]) => bucket === 'apps').map(([, , body]) => body.offset)
+    expect(appsOffsets).toEqual([0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100])
+    const batches = mocks.remove.mock.calls.filter(([bucket]) => bucket === 'apps').map(([, paths]) => paths)
+    expect(batches.map(paths => paths.length)).toEqual([1000, 150])
+    expect(batches.flat()).toEqual(names.map(name => `${prefix}/${name}`))
+  })
+
+  it.each([
+    ['an error status from list', () => mocks.list.mockImplementation(async () => new Response('storage unavailable', { status: 503 }))],
+    ['a network error from list', () => mocks.list.mockRejectedValue(new TypeError('fetch failed'))],
+  ])('logs legacy apps bucket errors (%s) and still deletes the app', async (_label, fail) => {
+    fail()
 
     const response = await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
 
     expect(response.status).toBe(200)
     expect(mocks.remove).not.toHaveBeenCalled()
+    expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'error deleting legacy user-scoped app storage' }))
+    expect(pgClient.query).toHaveBeenCalledWith('DELETE FROM public.apps WHERE app_id = $1', [APP_ID])
+  })
+
+  it('logs a failed legacy apps bucket remove', async () => {
+    mocks.list.mockImplementation(async (bucket: string, prefix: string) =>
+      Response.json(bucket === 'apps' && prefix === `${USER_ID}/${APP_ID}` ? [file('1.0.0.zip')] : []))
+    mocks.remove.mockImplementation(async () => new Response('denied', { status: 403 }))
+
+    const response = await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
+
+    expect(response.status).toBe(200)
     expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'error deleting legacy user-scoped app storage' }))
   })
 
