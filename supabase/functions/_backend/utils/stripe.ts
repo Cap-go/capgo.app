@@ -253,6 +253,21 @@ function stripeTimestampToIso(seconds: number | null | undefined) {
   return seconds ? new Date(seconds * 1000).toISOString() : null
 }
 
+export function subscriptionBillingPeriod(subscription: { items?: { data?: Stripe.SubscriptionItem[] } | null }): { start: string | null, end: string | null } {
+  const item = getLicensedSubscriptionItem(subscription.items?.data)
+  return {
+    start: stripeTimestampToIso(item?.current_period_start),
+    end: stripeTimestampToIso(item?.current_period_end),
+  }
+}
+
+export function paidThroughNeedsUpdate(
+  stored: { start?: string | null, end?: string | null },
+  next: { start: string | null, end: string | null },
+) {
+  return !!next.end && (stored.end !== next.end || (!!next.start && stored.start !== next.start))
+}
+
 function getSubscriptionEndDate(subscription: Stripe.Subscription, item: Stripe.SubscriptionItem | null) {
   const endSeconds = subscription.ended_at
     ?? subscription.cancel_at
