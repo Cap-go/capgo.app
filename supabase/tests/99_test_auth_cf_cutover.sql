@@ -14,9 +14,12 @@ SELECT ok(
     WHERE p.pronamespace = 'public'::regnamespace
       AND p.prokind IN ('f', 'p')
       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend AS d WHERE d.objid = p.oid AND d.deptype = 'e')
+      -- seed.sql (local only) fills Supabase Auth's own tables on purpose.
+      AND p.proname !~ '^(reset_|seed_)'
+      AND p.proname <> 'copy_auth_to_auth_cf'
       AND pg_get_functiondef(p.oid) ~ '(^|[^[:alnum:]_."])"?auth"?\.("?)(users|identities|mfa_factors|sessions|sso_providers|sso_domains|saml_providers|one_time_tokens)\M'
   ),
-  'no public function reads auth.* tables: they read auth_cf'
+  'no migration-defined public function reads auth.* tables: they read auth_cf'
 );
 
 SELECT ok(

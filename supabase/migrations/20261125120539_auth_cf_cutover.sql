@@ -8,9 +8,11 @@
 -- auth_cf table is a plain view of the auth table with the same name.
 -- In both cases every public function then reads auth_cf instead of auth.
 
--- Copies auth rows into auth_cf. p_replace first empties auth_cf (test data);
--- without it, only rows missing from auth_cf are added (catch-up after the
--- switch, run by hand: SELECT public.copy_auth_to_auth_cf(false);).
+-- Copies auth rows into auth_cf. p_replace first empties auth_cf (test data)
+-- and copies everything. Without it (catch-up after the switch, run by hand:
+-- SELECT public.copy_auth_to_auth_cf(false);) it only adds the accounts created
+-- on hosted Auth after the first copy, with their identities, factors and
+-- tokens, so nothing removed on our GoTrue meanwhile comes back.
 CREATE OR REPLACE FUNCTION public.copy_auth_to_auth_cf(p_replace boolean)
 RETURNS void
 LANGUAGE plpgsql
@@ -20,6 +22,8 @@ DECLARE
   v_table text;
   v_columns text;
   v_values text;
+  v_filter text := '';
+  v_new_users uuid[];
 BEGIN
   IF (SELECT relkind FROM pg_catalog.pg_class WHERE oid = to_regclass('auth_cf.users')) IS DISTINCT FROM 'r' THEN
     RAISE EXCEPTION 'auth_cf.users is not a GoTrue table';
@@ -33,15 +37,28 @@ BEGIN
       RAISE EXCEPTION 'refusing to empty auth_cf: other schemas reference auth_cf.users';
     END IF;
     TRUNCATE auth_cf.users, auth_cf.sso_providers CASCADE;
+  ELSE
+    -- Accounts newer than every account both schemas share were created on
+    -- hosted Auth after the first copy (accounts deleted here are older).
+    SELECT array_agg(a.id) INTO v_new_users
+    FROM auth.users AS a
+    WHERE a.created_at > (
+      SELECT max(c.created_at) FROM auth_cf.users AS c JOIN auth.users AS b ON b.id = c.id
+    )
+      AND NOT EXISTS (SELECT 1 FROM auth_cf.users AS c WHERE c.id = a.id);
+    IF v_new_users IS NULL THEN
+      RETURN;
+    END IF;
   END IF;
-
-  -- The copied rows already passed these checks on auth.
-  ALTER TABLE auth_cf.users DISABLE TRIGGER USER;
-  ALTER TABLE auth_cf.mfa_factors DISABLE TRIGGER USER;
 
   -- Parents first. Generated columns are skipped; enums are cast by name
   -- because auth and auth_cf each have their own enum types.
   FOREACH v_table IN ARRAY ARRAY['sso_providers', 'sso_domains', 'saml_providers', 'users', 'identities', 'mfa_factors', 'one_time_tokens'] LOOP
+    IF NOT p_replace THEN
+      CONTINUE WHEN v_table IN ('sso_providers', 'sso_domains', 'saml_providers');
+      v_filter := format(' WHERE s.%I = ANY (%L::uuid[])', CASE WHEN v_table = 'users' THEN 'id' ELSE 'user_id' END, v_new_users);
+    END IF;
+
     SELECT
       string_agg(format('%I', a.attname), ', ' ORDER BY a.attnum),
       string_agg(CASE
@@ -63,11 +80,8 @@ BEGIN
           AND NOT s.attisdropped
       );
 
-    EXECUTE format('INSERT INTO auth_cf.%I (%s) SELECT %s FROM auth.%I AS s ON CONFLICT DO NOTHING', v_table, v_columns, v_values, v_table);
+    EXECUTE format('INSERT INTO auth_cf.%I (%s) SELECT %s FROM auth.%I AS s%s ON CONFLICT DO NOTHING', v_table, v_columns, v_values, v_table, v_filter);
   END LOOP;
-
-  ALTER TABLE auth_cf.users ENABLE TRIGGER USER;
-  ALTER TABLE auth_cf.mfa_factors ENABLE TRIGGER USER;
 END;
 $$;
 
@@ -114,6 +128,7 @@ $$;
 -- Point every Capgo function at auth_cf (auth.users and "auth"."users" alike,
 -- plus the information_schema check in password_signup_blocked_for_email).
 -- auth.uid(), auth.jwt() and the other claim helpers are not tables and stay.
+-- copy_auth_to_auth_cf reads auth on purpose.
 DO $$
 DECLARE
   v_pattern constant text := '(^|[^[:alnum:]_."])"?auth"?\.("?)(users|identities|mfa_factors|sessions|sso_providers|sso_domains|saml_providers|one_time_tokens)\M';
@@ -125,6 +140,7 @@ BEGIN
     WHERE p.pronamespace = 'public'::regnamespace
       AND p.prokind IN ('f', 'p')
       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend AS d WHERE d.objid = p.oid AND d.deptype = 'e')
+      AND p.proname <> 'copy_auth_to_auth_cf'
       AND pg_get_functiondef(p.oid) ~ v_pattern
   LOOP
     EXECUTE replace(
@@ -140,6 +156,7 @@ BEGIN
     WHERE p.pronamespace = 'public'::regnamespace
       AND p.prokind IN ('f', 'p')
       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend AS d WHERE d.objid = p.oid AND d.deptype = 'e')
+      AND p.proname <> 'copy_auth_to_auth_cf'
       AND pg_get_functiondef(p.oid) ~ v_pattern
   ) THEN
     RAISE EXCEPTION 'public functions still read auth tables';
