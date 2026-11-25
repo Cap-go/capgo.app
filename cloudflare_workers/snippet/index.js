@@ -412,8 +412,19 @@ function cacheTagFor(tag, appId, responseHeaders) {
   return responseHeaders?.get('X-Plugin-State-Shared') === '1' ? `${tag},${pluginStateAppCacheTag(appId)}` : tag
 }
 
+/**
+ * Same bound as the worker's KV fills (PLUGIN_STATE_FILL_MAX_TTL_SECONDS): a
+ * read racing a publication purge can land the old snapshot for 30 s, and an
+ * entry written after that purge is not evicted by it.
+ */
+const SHARED_KV_MAX_TTL_SECONDS = 30
+
+function boundSharedKvTtl(responseHeaders, ttl) {
+  return ttl && responseHeaders?.get('X-Plugin-State-Shared') === '1' ? Math.min(ttl, SHARED_KV_MAX_TTL_SECONDS) : ttl
+}
+
 async function setOnPremCache(budget, edgeKey, appId, endpoint, method, responseBody, status, responseHeaders) {
-  const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
+  const cacheTtl = boundSharedKvTtl(responseHeaders, getCacheTtlSeconds(responseHeaders, responseBody))
   if (!cacheTtl) {
     console.log(`On-prem cache SKIP for ${appId}/${endpoint}/${method} (missing cache TTL)`)
     return
@@ -464,7 +475,7 @@ function buildOnPremResponse(appId, responseBody, status, responseHeaders) {
 }
 
 async function setPlanUpgradeCache(budget, edgeKey, appId, endpoint, method, responseBody, status, responseHeaders) {
-  const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
+  const cacheTtl = boundSharedKvTtl(responseHeaders, getCacheTtlSeconds(responseHeaders, responseBody))
   if (!cacheTtl) {
     console.log(`Plan-upgrade cache SKIP for ${appId}/${endpoint}/${method} (missing cache TTL)`)
     return

@@ -804,6 +804,10 @@ describe('cloudflare snippet on-prem fallback', () => {
     // A snapshot publication purges only the plugin-state tag: it must evict this answer.
     const tags = [...cache.store.values()].map(response => response.headers.get('Cache-Tag') ?? '')
     expect(tags.some(tag => tag.split(',').includes('capgo-plugin-state-com.example.shared'))).toBe(true)
+    // A read racing a publication purge may be stale: no longer than the KV document window.
+    const ttls = [...cache.store.values()].map(response => response.headers.get('Cache-Control') ?? '')
+    expect(ttls.some(value => value.includes('max-age=30'))).toBe(true)
+    expect(ttls.some(value => value.includes('max-age=60'))).toBe(false)
   })
 
   it('returns on-prem from a fallback worker without caching when the primary fails', async () => {

@@ -83,12 +83,15 @@ and it lasts at most 30 seconds (`PLUGIN_STATE_FILL_MAX_TTL_SECONDS`), the
 window a document read racing a publication can land the old snapshot.
 Database purges evict both entries through the app tags.
 
-A KV-marked Worker response may only fill `kvFill`, and the snippet still
-refuses on-prem/plan-response learning from it. With
-`PLUGIN_STATE_KV_AUTHORITATIVE=true` every device reads KV: fills become
-ordinary shared answers (`ks: 0`, plugin-state tag kept), and the Worker marks
-KV responses `X-Plugin-State-Shared: 1` so on-prem/plan answers are learned
-again.
+A KV-marked Worker response may only fill the KV entry, and the snippet still
+refuses on-prem/plan-response learning from it. KV answers become shared only
+when both conditions hold: `PLUGIN_STATE_KV_AUTHORITATIVE=true` and
+`PLUGIN_STATE_KV` at 100% (`on`). Authoritative mode with a partial share keeps
+the cohort split. Shared fills are ordinary answers (`ks: 0`, plugin-state tag
+kept, at most 30 seconds). The Worker then marks pure KV responses
+(`X-Plugin-State: kv`, never `kv-escaped`) with `X-Plugin-State-Shared: 1`, so
+the snippet learns on-prem/plan answers again, tagged with the plugin-state
+tag and cached for at most 30 seconds.
 
 Read failures, invalid documents, missing bundle-name keys, and missing manifest
 keys use the existing replica path, including in authoritative app mode.
