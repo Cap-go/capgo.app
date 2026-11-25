@@ -163,7 +163,7 @@ jobs:
         # `supabase link` wrote the session pooler URL (no password); runners have no IPv6.
         run: |
           password=$(jq -rn --arg p "$SUPABASE_DB_PASSWORD" '$p|@uri')
-          echo "::add-mask::$password"
+          echo "::add-mask::${password//%/%25}"
           pooler_url=$(cat supabase/.temp/pooler-url)
           export DATABASE_URL="${pooler_url/@/:$password@}"
           bash scripts/push-release-migrations.sh
