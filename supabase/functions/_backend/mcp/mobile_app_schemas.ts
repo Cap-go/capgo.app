@@ -137,7 +137,7 @@ const pluginRecommendation = z.object({
   store_notes: strings('Store review rules that apply when using this plugin.'),
   checklist_ids: strings('Related ids from capgo_get_mobile_checklist.'),
   skill: skillName,
-  alternatives: strings('Other packages that cover the same need and when to prefer them.'),
+  alternatives: strings('Other packages for the same capability.'),
 })
 
 const checklistItem = z.object({
@@ -232,7 +232,7 @@ export const planMobileAppOutputSchema = z.object({
 })
 
 export const recommendPluginsOutputSchema = z.object({
-  plugins: z.array(pluginRecommendation).describe('One entry per package, official first where it covers the need.'),
+  plugins: z.array(pluginRecommendation).describe('One entry per matching package.'),
   install_command: z.string().nullable().describe('One command installing every package not already in packages, or null when all are installed.'),
   sync_command: text('Command to run after installing plugins.'),
   ios_usage_keys: strings('All Info.plist purpose-string keys these plugins can trigger.'),

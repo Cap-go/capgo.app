@@ -1148,7 +1148,7 @@ export function buildPlan(input: PlanInput, release: CapacitorRelease) {
       step({
         id: 'install_plugins',
         title: 'Install the recommended plugins',
-        detail: `Official @capacitor plugins first, Capgo @capgo plugins where they cover more. See plugins in this result (${featurePlugins.plugins.length} packages here; the updater is set up in the Capgo phase). Call capgo_recommend_plugins again when a new feature comes up.`,
+        detail: `See plugins in this result (${featurePlugins.plugins.length} packages here; the updater is set up in the Capgo phase). Call capgo_recommend_plugins again when a new feature comes up.`,
         // Rebuild so the design and feature edits made since the Capacitor phase reach the native projects.
         commands: [...(featurePlugins.install_command ? [featurePlugins.install_command] : []), syncCommand, 'npx cap ls'],
         files: featurePlugins.ios_usage_keys.length && platforms.includes('ios') ? [{ path: 'ios/App/App/Info.plist', change: `Add ${featurePlugins.ios_usage_keys.join(', ')} with specific purpose strings.` }] : [],
