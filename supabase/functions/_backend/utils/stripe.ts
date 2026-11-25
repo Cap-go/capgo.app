@@ -942,6 +942,23 @@ export function shouldBlockPastDueForProcessingPayment(paymentProcessing: boolea
   return paymentProcessing
 }
 
+// A plan change replaces the first bank-transfer invoice with billing_reason
+// subscription_update. A customer who has never paid still must not get access.
+export function bankTransferPaymentState(
+  selfServeBankTransfer: boolean,
+  invoiceState: 'paid' | 'unpaid' | 'first_invoice_unpaid',
+  alreadyPaidThisSubscription: boolean,
+  neverPaid: boolean,
+): 'paid' | 'unpaid' | 'first_invoice_unpaid' | 'bank_transfer_due' {
+  if (!selfServeBankTransfer || invoiceState === 'paid')
+    return invoiceState
+  if (alreadyPaidThisSubscription)
+    return 'bank_transfer_due'
+  if (neverPaid)
+    return 'first_invoice_unpaid'
+  return invoiceState
+}
+
 export function subscriptionInvoicePaymentStateFromInvoice(
   invoice: Pick<Stripe.Invoice, 'status' | 'billing_reason'>,
   paymentIntentStatus: Stripe.PaymentIntent.Status | null | undefined,
