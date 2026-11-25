@@ -449,26 +449,34 @@ async function acceptDiscount(c: Context, ctx: InAppBillingContext, offer: Accep
  * Grants the offer's credits once: the grant id is stored on the offer row in the
  * same transaction, so a retried accept never grants twice.
  */
-async function grantOfferCredits(c: Context, offer: AcceptRow) {
+/**
+ * Grants the offer's credits once, and returns the amount granted. The amount is read
+ * from the row locked here (or from the existing grant), never from an earlier read:
+ * a released and re-offered row can carry a newer amount than the caller saw.
+ */
+async function grantOfferCredits(c: Context, offer: AcceptRow): Promise<number> {
   return await withPg(c, pg => withPgTransaction(pg, async (tx) => {
-    const { rows } = await tx.query<{ credit_grant_id: string | null, outcome: string }>(
-      'SELECT credit_grant_id::text, outcome FROM public.cancel_save_offers WHERE id = $1 FOR UPDATE',
+    const { rows } = await tx.query<{ credit_grant_id: string | null, outcome: string, credits: string | number | null, granted: string | number | null }>(
+      `SELECT o.credit_grant_id::text, o.outcome, o.credits, g.credits_total AS granted
+       FROM public.cancel_save_offers AS o
+       LEFT JOIN public.usage_credit_grants AS g ON g.id = o.credit_grant_id
+       WHERE o.id = $1 FOR UPDATE OF o`,
       [offer.id],
     )
-    const existing = rows[0]?.credit_grant_id
-    if (existing)
-      return existing
+    if (rows[0]?.credit_grant_id)
+      return Number(rows[0].granted ?? rows[0].credits)
     // Grant only while this accept still holds the customer's one save: a concurrent
     // cancel may have declined or released the offer since it was reserved.
     if (rows[0]?.outcome !== 'accepting')
       throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
+    const credits = Number(rows[0].credits)
     const notes = 'Cancel flow: credits instead of the monthly plan'
     const sourceRef = JSON.stringify({ cancelSaveOfferId: offer.id })
     const { rows: grant } = await tx.query<{ id: string }>(
       `INSERT INTO public.usage_credit_grants (org_id, credits_total, credits_consumed, granted_at, expires_at, source, source_ref, notes)
        VALUES ($1, $2, 0, now(), now() + make_interval(months => $3::int), 'cancel_save_offer', $4::jsonb, $5)
        RETURNING id::text`,
-      [offer.org_id, offer.credits, CANCEL_SAVE_CREDITS_EXPIRY_MONTHS, sourceRef, notes],
+      [offer.org_id, credits, CANCEL_SAVE_CREDITS_EXPIRY_MONTHS, sourceRef, notes],
     )
     const grantId = grant[0].id
     await tx.query(
@@ -476,22 +484,22 @@ async function grantOfferCredits(c: Context, offer: AcceptRow) {
        SELECT $1, $2, 'manual_grant', $3,
          COALESCE((SELECT available_credits FROM public.usage_credit_balances WHERE org_id = $1), 0),
          $4, $5::jsonb`,
-      [offer.org_id, grantId, offer.credits, notes, sourceRef],
+      [offer.org_id, grantId, credits, notes, sourceRef],
     )
     await tx.query('UPDATE public.cancel_save_offers SET credit_grant_id = $2 WHERE id = $1', [offer.id, grantId])
-    return grantId
+    return credits
   }))
 }
 
 async function acceptCredits(c: Context, ctx: InAppBillingContext, offer: AcceptRow, comment?: string): Promise<{ credits: number }> {
-  const credits = Number(offer.credits)
+  let credits = Number(offer.credits)
   try {
     // A first grant needs the subscription to still qualify, as when the offer was
     // shown (active, not ending, monthly, no discount). A grant-backed retry only
     // finishes the cancellation, so it skips this check.
     if (!offer.credit_grant_id && !getSaveableMonthlyAmount(await retrieveSubscription(ctx, offer.subscription_id)))
       throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
-    await grantOfferCredits(c, offer)
+    credits = await grantOfferCredits(c, offer)
     // The monthly plan stops at period end; the credits take over from there.
     await scheduleSubscriptionCancel(c, ctx, offer.reason, comment, offer.subscription_id)
   }
