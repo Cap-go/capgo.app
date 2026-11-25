@@ -22,7 +22,7 @@ afterEach(() => {
 })
 
 describe('plugin state canary cache isolation', () => {
-  it.each(['updates', 'stats'])('never fills shared caches or teaches the %s snippet from KV', async (endpoint) => {
+  it.each(['updates', 'stats'])('never fills shared caches and teaches the %s snippet only a KV cohort answer', async (endpoint) => {
     const entries = new Map<string, Response>()
     vi.stubGlobal('caches', { open: async () => ({
       put: async (request: Request, response: Response) => { entries.set(request.url, response.clone()) },
@@ -42,12 +42,18 @@ describe('plugin state canary cache isolation', () => {
       return c.json({ status: 'ok' })
     })
     const env = { PLUGIN_STATE_KV: '0.1%', PLUGIN_STATE: {} }
+    // Outside workerd, getEnv reads process.env.
+    vi.stubEnv('PLUGIN_STATE_KV', '0.1%')
     const kv = await app.request('/kv', undefined, env)
-    expect(kv.headers.get(SNIPPET_EDGE_FILL_HEADER)).toBeNull()
+    // Version 4 + kv: older snippets reject it, newer ones keep it for the cohort.
+    const kvFill = JSON.parse(decodeURIComponent(kv.headers.get(SNIPPET_EDGE_FILL_HEADER)!))
+    expect(kvFill).toMatchObject({ v: 4, kv: true, ks: 10 })
     expect(entries.size).toBe(0)
 
     const db = await app.request('/db', undefined, env)
-    expect(db.headers.get(SNIPPET_EDGE_FILL_HEADER)).not.toBeNull()
+    const dbFill = JSON.parse(decodeURIComponent(db.headers.get(SNIPPET_EDGE_FILL_HEADER)!))
+    expect(dbFill.kv).toBeUndefined()
+    expect(dbFill.ks).toBe(10)
     expect([...entries.keys()].sort()).toEqual([
       `http://localhost/.app-status-v3?app_id=${APP_ID}`,
       `http://localhost/.update-read-v2?app_id=${APP_ID}&platform=ios&channel=production`,

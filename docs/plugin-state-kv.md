@@ -62,12 +62,28 @@ be trusted when authoritative mode is enabled; a published `exists: false` app
 document remains an explicit deletion in either mode. Plugin-state
 entries use their own app tag, separate from DB/control and snippet caches.
 Writer publications purge only that namespace; they do not use the replica-lag
-re-purge ladder. KV-sourced answers must not fill the shared DB read cache or
-teach the snippet answers that can be served outside the KV cohort.
-The snippet must also refuse direct on-prem/plan-response cache learning from
-KV-marked Worker responses; skipping only the snippet fill header is not enough.
-Deploy that snippet guard before enabling any read cohort, while preserving
-all existing DB-sourced snippet cache behavior and response contracts.
+re-purge ladder. KV-sourced answers must not fill the shared DB read cache.
+
+## Snippet edge answers per cohort
+
+KV answers teach the snippet too, so the canary skips the Worker like the
+database cohort does. Every fill carries `ks`, the Worker's KV share
+(`PLUGIN_STATE_KV`, 0 without the binding). A KV canary answer is a version 4
+fill with `kv: true`; older snippets reject version 4, so they never share it.
+One snippet entry holds both answers: `fill` (database) and `kvFill` (KV). The
+snippet computes the Worker's `pluginStateBucket` for the device and gives
+`kvFill` only to devices inside the share and `fill` only to devices outside
+it. Storing one answer keeps the other cohort's live answer it already read,
+so this costs no extra subrequest. A KV fill also carries the plugin-state
+tag, so a publication evicts the entry with its snapshot. Database purges
+still evict it through the app tags.
+
+A KV-marked Worker response may only fill `kvFill`, and the snippet still
+refuses on-prem/plan-response learning from it. With
+`PLUGIN_STATE_KV_AUTHORITATIVE=true` every device reads KV: fills become
+ordinary shared answers (`ks: 0`, plugin-state tag kept), and the Worker marks
+KV responses `X-Plugin-State-Shared: 1` so on-prem/plan answers are learned
+again.
 
 Read failures, invalid documents, missing bundle-name keys, and missing manifest
 keys use the existing replica path, including in authoritative app mode.

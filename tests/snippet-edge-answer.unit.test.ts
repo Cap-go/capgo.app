@@ -6,6 +6,7 @@ import { SNIPPET_EDGE_ANSWERS_TAG as SETTER_PURGE_TAG } from '../scripts/set-upd
 
 import { PROVIDER_INFRA_ASNS } from '../supabase/functions/_backend/plugin_runtime/utils/providerAsns.ts'
 import { resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
+import { markPluginStateServed } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
 import { isStaleSnippetEdgeReplay, markSnippetEdgeReplay, setSnippetIpLimitHeader, setSnippetStatsFill, setSnippetUpdatesFill, SNIPPET_EDGE_ANSWERS_TAG, SNIPPET_EDGE_FILL_HEADER, SNIPPET_EDGE_IP_LIMIT_HEADER, SNIPPET_EDGE_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeAnswer.ts'
 import { buildReplayRequest, chunkSnippetEdgeRecords, decodeSnippetEdgeStat, getR2NotificationObjectKey, groupForSendBatch, handleSnippetEdgeStatsMessage, isSnippetEdgeFileResumeMessage, isSnippetEdgeReplayMessage, parseLogpushLine, readLogpushRecords, recordSize, replaySnippetEdgeRecords } from '../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 
@@ -45,7 +46,7 @@ function encodeStat(value: unknown) {
   return Buffer.from(JSON.stringify(value)).toString('base64url')
 }
 
-const ENV_KEYS = ['SNIPPET_EDGE_ANSWER', 'SNIPPET_EDGE_ANSWER_TTL_SECONDS', 'CF_CACHE_PURGE_TOKEN', 'CF_ANALYTICS_TOKEN', 'UPDATES_CACHE_LOCAL_PURGE_URL', 'LIMITED_APPS']
+const ENV_KEYS = ['PLUGIN_STATE_KV_AUTHORITATIVE', 'SNIPPET_EDGE_ANSWER', 'SNIPPET_EDGE_ANSWER_TTL_SECONDS', 'CF_CACHE_PURGE_TOKEN', 'CF_ANALYTICS_TOKEN', 'UPDATES_CACHE_LOCAL_PURGE_URL', 'LIMITED_APPS']
 
 // Outside workerd, getEnv reads process.env.
 async function fillFrom(env: Record<string, string>, handler: (c: any) => unknown) {
@@ -78,6 +79,7 @@ describe('snippet edge answer fills', () => {
       v: 2,
       bps: 10000,
       ttl: 900,
+      ks: 0,
       tags: 'capgo-updates-com.edge.app,capgo-updates-com.edge.app:versions,capgo-snippet-edge-answers',
       e: 'updates',
       n: 'v1 é',
@@ -393,5 +395,38 @@ describe('snippet edge stats queue', () => {
 
     await handleSnippetEdgeStatsMessage(env, 'm2', { snippetEdgeStats: [records[0]], attempt: 2 }, handler)
     expect(sent).toHaveLength(1)
+  })
+})
+
+describe('snippet fills from KV-served answers', () => {
+  const update = (c: any) => setSnippetUpdatesFill(c, 'com.example.app', ANSWER, { blockProviderInfraRequests: false, legacyChannelSelfStore: false })
+
+  it('teaches the KV canary cohort its own answer, purged with the snapshot', async () => {
+    const fill = readFill(await fillFrom(ENABLED_ENV, async (c) => {
+      markPluginStateServed(c)
+      await update(c)
+    }))
+    expect(fill.v).toBe(4)
+    expect(fill.kv).toBe(true)
+    expect(fill.tags.split(',')).toContain('capgo-plugin-state-com.example.app')
+    expect(fill.tags.split(',')).toContain('capgo-updates-com.example.app')
+  })
+
+  it('shares KV answers with every device once KV is authoritative', async () => {
+    const fill = readFill(await fillFrom({ ...ENABLED_ENV, PLUGIN_STATE_KV_AUTHORITATIVE: 'true' }, async (c) => {
+      markPluginStateServed(c)
+      await update(c)
+    }))
+    expect(fill.v).toBe(2)
+    expect(fill.kv).toBeUndefined()
+    expect(fill.ks).toBe(0)
+    expect(fill.tags.split(',')).toContain('capgo-plugin-state-com.example.app')
+  })
+
+  it('keeps database answers as before', async () => {
+    const fill = readFill(await fillFrom(ENABLED_ENV, update))
+    expect(fill.v).toBe(2)
+    expect(fill.kv).toBeUndefined()
+    expect(fill.tags.split(',')).not.toContain('capgo-plugin-state-com.example.app')
   })
 })

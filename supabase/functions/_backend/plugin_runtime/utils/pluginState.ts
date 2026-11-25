@@ -30,7 +30,7 @@ import { PLUGIN_STATE_FORMAT, pluginStateAppKey, pluginStateDeviceKey, pluginSta
 import { withPluginStateDocument } from './pluginStateReadBudget.ts'
 import { bindPluginStateQueries, PluginStateColdMiss, PluginStateMiss } from './pluginStateRegistry.ts'
 import { LATE_READ_TIMEOUT_MS, readPublishedPluginState } from './pluginStateStore.ts'
-import { isPluginStateStrict, markPluginStateServed, parsePluginStateShareBps, pluginStateBucket, unmarkPluginStateServed } from './pluginStateSwitch.ts'
+import { isPluginStateAuthoritative, isPluginStateStrict, markPluginStateServed, parsePluginStateShareBps, pluginStateBucket, unmarkPluginStateServed } from './pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateDevice, parsePluginStateManifestStorage, parsePluginStateVersion } from './pluginStateValidation.ts'
 import { pluginStateAppCacheTag } from './updatesCacheTag.ts'
 import { backgroundTask, getEnv } from './utils.ts'
@@ -86,13 +86,12 @@ function getStore(c: AnyContext): KVNamespace | null {
   return (c.env as { PLUGIN_STATE?: KVNamespace } | undefined)?.PLUGIN_STATE ?? null
 }
 
+export { isPluginStateAuthoritative }
+
 function isLocalEnv(c: AnyContext) {
   return getEnv(c, 'ENV_NAME').endsWith('-local')
 }
 
-export function isPluginStateAuthoritative(c: AnyContext) {
-  return getEnv(c, 'PLUGIN_STATE_KV_AUTHORITATIVE').trim().toLowerCase() === 'true'
-}
 
 
 /**

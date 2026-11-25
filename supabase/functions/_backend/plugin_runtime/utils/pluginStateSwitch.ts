@@ -32,6 +32,22 @@ export function pluginStateBucket(appId: string, deviceId: string) {
   return (hash >>> 0) % 10_000
 }
 
+/** Every device reads KV and published deletions are trusted (rollout complete). */
+export function isPluginStateAuthoritative(c: AnyContext) {
+  return getEnv(c, 'PLUGIN_STATE_KV_AUTHORITATIVE').trim().toLowerCase() === 'true'
+}
+
+/**
+ * Share of devices this worker serves from KV, in basis points (0 without the
+ * PLUGIN_STATE binding). The snippet uses it to keep each cohort on its own
+ * edge answers (snippetEdgeAnswer.ts).
+ */
+export function pluginStateShareBps(c: AnyContext) {
+  if (!(c.env as { PLUGIN_STATE?: unknown } | undefined)?.PLUGIN_STATE)
+    return 0
+  return parsePluginStateShareBps(getEnv(c, 'PLUGIN_STATE_KV'))
+}
+
 /** Tests: a request served from the plugin state must never open a database connection. */
 export function isPluginStateStrict(c: AnyContext) {
   return getEnv(c, 'PLUGIN_STATE_KV_STRICT').trim().toLowerCase() === 'true'
