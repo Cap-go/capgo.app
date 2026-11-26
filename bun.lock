@@ -178,6 +178,7 @@
         "@smithy/fetch-http-handler": "5.6.9",
         "@standard-schema/spec": "^1.1.0",
         "@stylistic/eslint-plugin": "5.10.0",
+        "@supabase/postgrest-js": "2.110.8",
         "@tailwindcss/aspect-ratio": "^0.4.2",
         "@tailwindcss/vite": "^4.3.3",
         "@types/adm-zip": "^0.5.8",
