@@ -521,6 +521,7 @@ onUnmounted(() => {
         task="request-build"
         :app-id="appId"
         :platform="selectedPlatform"
+        :xcode-version="selectedPlatform === 'ios' ? selectedXcodeVersion : undefined"
         or-separator="after"
         @copied="waitForDelegatedBuild"
       />
@@ -604,6 +605,7 @@ onUnmounted(() => {
         task="request-build"
         :app-id="appId"
         :platform="selectedPlatform"
+        :xcode-version="selectedPlatform === 'ios' ? selectedXcodeVersion : undefined"
         or-separator="before"
         @copied="waitForDelegatedBuild"
       />

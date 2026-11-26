@@ -369,6 +369,17 @@ describe('AI agent task prompts', () => {
     expect(unnamed).toContain('Ask me for the channel name')
   })
 
+  it.concurrent('pins the Xcode picked in the console for iOS builds only', () => {
+    expect(buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'ios', xcodeVersion: '26.2' }))
+      .toContain('{CAPGO_CLI_RUNNER} build request com.acme.app --platform ios --xcode-version 26.2 --use-stored-credentials')
+    expect(buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'ios', xcodeVersion: '' }))
+      .toContain('--platform ios --use-stored-credentials')
+    expect(buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'ios', xcodeVersion: '26; rm -rf ~' }))
+      .not.toContain('--xcode-version')
+    expect(buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'android', xcodeVersion: '26.2' }))
+      .not.toContain('--xcode-version')
+  })
+
   it.concurrent('requests the build with stored signing first, without handling credentials', () => {
     const prompt = buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'android' })
     // Signing saved on Capgo must be usable even when it is not on the agent's machine.
