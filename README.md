@@ -117,14 +117,16 @@ Capgo is deployed to production on Cloudflare workers and Supabase.
 Cloudflare workers take 99% of the traffic. Supabase is used for internal calls,
 for internal tasks such as CRON jobs that call functions.
 
-When self-hosted, installing only Supabase is sufficient.
+When self-hosted, run Supabase plus the Cloudflare API worker
+(`cloudflare_workers/api`): its `QueueDispatcher` Durable Object is what wakes
+the queue consumers.
 
 ## Why Cloudflare Workers + Supabase
 
 We support both deployments for practical reasons:
 
-- **Supabase** is the legacy backend and the only required piece for
-  self-hosting.
+- **Supabase** is the legacy backend. Self-hosting needs it plus the API
+  worker, whose `QueueDispatcher` wakes the queue consumers.
 - **Cloudflare Workers** runs the same backend code (via the Hono adapter) but is
   much cheaper at Capgo scale. With ~50M devices, Supabase Edge Functions are
   cost-prohibitive because they follow AWS pricing. Cloudflare is ~10x cheaper
@@ -134,9 +136,11 @@ In production, we route most traffic through Cloudflare Workers for cost and
 scale, while Supabase remains the reference backend and the default for
 self-hosted deployments. Capgo cloud console and current CLI calls go to the
 Cloudflare API hosts (`VITE_API_HOST` / `hostApi`). Capgo cloud still publishes
-a small Supabase function allowlist for Postgres `pg_net` (`triggers`) and for
+a small Supabase function allowlist for the queue consumer (`triggers`) and for
 legacy CLI compatibility via `/functions/v1` through 2026-10-28. Self-hosted
-deployments keep using `/functions/v1`. Plugin hot paths and other unused Capgo
+deployments keep using `/functions/v1`, and also run the Cloudflare API worker:
+its `QueueDispatcher` Durable Object is what wakes the queue consumers (the
+database no longer uses `pg_net`). Plugin hot paths and other unused Capgo
 cloud endpoints are not published on Supabase.
 
 ## Project structure (self-hosting map)
@@ -153,7 +157,8 @@ If you're self-hosting, the key pieces live in a few top-level directories:
   - `supabase/migrations/` - Database schema and RLS policies
   - `supabase/seed.sql` - Local seed data for tests/dev
 - `supabase/schemas/prod.sql` - Production schema dump (reference only)
-- `cloudflare_workers/` - **Optional** Cloudflare Workers deployment (prod traffic)
+- `cloudflare_workers/` - Cloudflare Workers deployment (prod traffic). The API
+  worker is required everywhere: its `QueueDispatcher` wakes the queue consumers
   - `cloudflare_workers/snippet/` - Geo routing for replicas ([automatic deployment of all snippets](docs/snippets-deployment.md))
   - Worker entry points and deploy config live here
 - `src/` - Frontend Vue 3 web console (Vite + Tailwind + DaisyUI)
@@ -175,10 +180,12 @@ branding; see
 
 Quick self-hosting path:
 
-1. `supabase/` is enough to run the backend locally.
+1. `supabase/` plus the API worker (`cloudflare_workers/api`) run the backend;
+   `bun run backend` starts both locally. Without the API worker's
+   `QueueDispatcher`, queued work is never picked up.
 2. `src/` is the web console you point to your own backend.
-3. `cloudflare_workers/` is only needed if you want to run the Workers layer
-   instead of (or in front of) Supabase.
+3. The other `cloudflare_workers/` (plugin, files) are only needed if you want
+   to run the Workers layer instead of (or in front of) Supabase.
 
 ## Backend endpoints (what lives where)
 
@@ -517,7 +524,7 @@ supabase secrets set --env-file supabase/functions/.env
 Capgo Cloud (prod / preprod / alpha) only publishes allowlisted Supabase
 functions from `scripts/supabase-cloud-functions.ts`:
 
-- `triggers` forever (`pg_net` queue consumer)
+- `triggers` forever (queue consumer, called by the `QueueDispatcher`)
 - `bundle`, `channel`, `files`, `private` until **2026-10-28** (old Capgo CLI
   still called these via `supabase.functions.invoke` on `sb.capgo.app`; new
   CLI uses `api.capgo.app` / `files.capgo.app`)

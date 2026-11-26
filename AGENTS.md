@@ -121,9 +121,9 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `bun test:cloudflare:backend` - Run backend tests against Cloudflare Workers
 - `bun test:cloudflare:updates` - Run update tests against Cloudflare Workers
 - `./scripts/start-cloudflare-workers.sh` - Start local Cloudflare Workers for
-  testing. With `LOCAL_QUEUE_DISPATCHER=true` (what `bun backend` sets) it also
-  runs `scripts/local-queue-dispatcher.ts`: queue wakeups go to the outbox and
-  the local `QueueDispatcher` instead of pg_net, and stopping it puts pg_net back
+  testing. It also runs `scripts/local-queue-dispatcher.ts` (skip it with
+  `LOCAL_QUEUE_DISPATCHER=false`), which starts the local `QueueDispatcher`:
+  without it nothing drains the queue wakeup outbox
 
 Note: Prefer Tinbase (`bun test:db` / `tests/tinbase-db-tests.txt`) for
 data/auth-only coverage so Docker/Cloudflare shards stay small and can
@@ -288,24 +288,23 @@ backfill code, design for this scale:
   do not burn queue reads as a fake progress budget. `/queue_health` treats
   `read_ct > 5` as unhealthy (`stuck_high_read_ct`); `cleanup_queue_messages`
   deletes those poison rows.
-- **Queue wakeups (pg_net vs Durable Object):** pgmq stays the queue
-  everywhere. `process_function_queue` and `wake_updates_cache_purge` send
-  their HTTP wakeups through `public.http_dispatch_post`: by default (self-host,
-  quiesced CI jobs) that is `net.http_post`. Targets listed in
-  `public.http_dispatch_targets` (a queue name, or `*`) go to the unlogged
-  `public.http_dispatch_outbox` instead, which the `QueueDispatcher` Durable
-  Object (`cloudflare_workers/api/queue_dispatcher.ts`) claims every second via
-  `POST /triggers/http_dispatch/claim` and sends. Prod routes `*`; locally
-  `bun backend` does the same through `scripts/local-queue-dispatcher.ts`
-  (it sets `db_url` to the host Supabase URL while it runs). Roll a target
-  back by deleting its row. The dispatcher only sends to origins in
+- **Queue wakeups (Durable Object, no pg_net):** pgmq stays the queue
+  everywhere. `process_function_queue`, `wake_updates_cache_purge` and the
+  other wakers call `public.http_dispatch_post`, which writes to the unlogged
+  `public.http_dispatch_outbox`. The `QueueDispatcher` Durable Object
+  (`cloudflare_workers/api/queue_dispatcher.ts`) claims it every second via
+  `POST /triggers/http_dispatch/claim` and sends the calls, so every install
+  (prod, self-host, local, CI) needs the API worker. The pg_net extension was
+  dropped in `20261125134644_drop_pg_net`; do not add it back. Locally and in
+  CI, `scripts/start-cloudflare-workers.sh` starts the dispatcher and points
+  `db_url` at the host Supabase URL. The dispatcher only sends to origins in
   `SUPABASE_URL` / `HTTP_DISPATCH_ALLOWED_ORIGINS`.
 - Do not assume a `202` HTTP response means queue work finished. If the handler
   uses background work, prove the work can finish inside the runtime limits and
   that successful queue messages are deleted before visibility timeout expires.
 - For high-volume internal queue dispatch, avoid routing through unstable or
   low-timeout paths. Use the production Cloudflare path when that is the runtime
-  intended to handle the traffic, and make database `pg_net` timeouts match the
+  intended to handle the traffic, and make the outbox `timeout_ms` match the
   real batch duration.
 - For data repair scripts, use indexed pagination over the owning table's key
   path, keep DB writes batched, make work resumable, and write failed records to

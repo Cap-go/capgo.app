@@ -8,9 +8,8 @@ SELECT plan(4);
 
 CREATE TEMP VIEW cron_email_dispatch_requests AS
 SELECT count(*) AS requests
-FROM net.http_request_queue
-WHERE
-    pg_catalog.convert_from(body, 'utf8')::jsonb ->> 'queue_name' = 'cron_email';
+FROM public.http_dispatch_outbox
+WHERE target = 'cron_email';
 
 CREATE TEMP TABLE dispatch_baseline AS
 SELECT requests FROM cron_email_dispatch_requests;

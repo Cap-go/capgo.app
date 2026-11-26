@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { parseJsonc } from '../scripts/generate-plugin-route-hosts.ts'
-import { hostDbUrl, LOCAL_API_WORKER, restorePgNet, routeToOutbox, scheduledTriggerUrl, SEED_DB_URL } from '../scripts/local-queue-dispatcher.ts'
+import { hostDbUrl, LOCAL_API_WORKER, pointDbUrlAtHost, scheduledTriggerUrl } from '../scripts/local-queue-dispatcher.ts'
 
 const API_CONFIG = fileURLToPath(new URL('../cloudflare_workers/api/wrangler.jsonc', import.meta.url))
 
@@ -12,17 +12,6 @@ interface LocalApiConfig {
     durable_objects: { bindings: { name: string, class_name: string }[] }
     services?: { binding: string, service: string }[]
   } }
-}
-
-function recordingClient() {
-  const queries: { sql: string, params?: unknown[] }[] = []
-  return {
-    queries,
-    client: { query: async (sql: string, params?: unknown[]) => {
-      queries.push({ sql, params })
-      return { rows: [] }
-    } } as never,
-  }
 }
 
 describe('local queue dispatcher', () => {
@@ -42,22 +31,15 @@ describe('local queue dispatcher', () => {
     expect(scheduledTriggerUrl(8787)).toBe(`http://127.0.0.1:8787/cdn-cgi/local/explorer/api/local/scheduled?worker=${LOCAL_API_WORKER}`)
   })
 
-  it('routes every target to the outbox with the host db_url', async () => {
-    const { client, queries } = recordingClient()
-    await routeToOutbox(client, 'http://127.0.0.1:54321')
-    // One statement: the route and db_url never disagree.
+  it('points db_url at the host Supabase URL', async () => {
+    const queries: { sql: string, params?: unknown[] }[] = []
+    const client = { query: async (sql: string, params?: unknown[]) => {
+      queries.push({ sql, params })
+      return { rows: [] }
+    } } as never
+    await pointDbUrlAtHost(client, 'http://127.0.0.1:54321')
     expect(queries).toHaveLength(1)
-    expect(queries[0].sql).toContain(`INSERT INTO public.http_dispatch_targets (target) VALUES ('*')`)
     expect(queries[0].sql).toContain('INSERT INTO private.settings')
     expect(queries[0].params).toEqual(['http://127.0.0.1:54321'])
-  })
-
-  it('restores the seed db_url only when it is still ours, and drops the * route', async () => {
-    const { client, queries } = recordingClient()
-    await restorePgNet(client, 'http://127.0.0.1:54321')
-    expect(queries).toHaveLength(1)
-    expect(queries[0].sql).toContain(`DELETE FROM public.http_dispatch_targets WHERE target = '*'`)
-    expect(queries[0].sql).toContain(`AND value = $2`)
-    expect(queries[0].params).toEqual([SEED_DB_URL, 'http://127.0.0.1:54321'])
   })
 })

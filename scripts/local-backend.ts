@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // `bun run backend` after `supabase:start`: the Supabase edge functions and the
-// Cloudflare Workers side by side, with queue wakeups going through the local
-// QueueDispatcher like prod. Stops both when either one exits or on Ctrl+C.
+// Cloudflare Workers side by side; the workers include the QueueDispatcher that
+// drains the queue wakeup outbox, like prod. Stops both when either one exits or on Ctrl+C.
 import type { ChildProcess } from 'node:child_process'
 import { spawn } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
@@ -15,12 +15,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // the real server running. Signals go to the whole group instead.
 const children: ChildProcess[] = [
   spawn('bun', ['scripts/supabase-worktree.ts', 'functions', 'serve'], { cwd: ROOT, stdio: 'inherit', detached: true }),
-  spawn('./scripts/start-cloudflare-workers.sh', [], {
-    cwd: ROOT,
-    stdio: 'inherit',
-    detached: true,
-    env: { ...process.env, LOCAL_QUEUE_DISPATCHER: 'true' },
-  }),
+  spawn('./scripts/start-cloudflare-workers.sh', [], { cwd: ROOT, stdio: 'inherit', detached: true }),
 ]
 
 let exitCode: number | undefined

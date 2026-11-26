@@ -16,7 +16,7 @@ export { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.t
  * Entries live in the Cloudflare Cache API (free, per data center) and carry
  * a per-app `Cache-Tag` (bundle-name lookups use a second per-app tag, see
  * updatesCacheTag.ts). Any database write that changes a cached read fires a
- * statement-level trigger -> pg_net -> triggers/updates_cache_purge, which
+ * statement-level trigger -> QueueDispatcher -> triggers/updates_cache_purge, which
  * purges the tag in every data center through the zone purge API, then
  * purges again once read replicas caught up. The TTL is only the backstop for
  * a lost purge.
