@@ -15,7 +15,7 @@ vi.mock('../supabase/functions/_backend/mcp/oauth_shared.ts', async original => 
   withPg: async () => ({ rows: [] }),
 }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', async original => ({ ...await original<typeof import('../supabase/functions/_backend/utils/utils.ts')>(), backgroundTask: async (_c: unknown, task: unknown) => await task }))
-vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEventBatch: async () => true }))
+vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: async () => true, trackPosthogEventBatch: async () => true }))
 
 const uri = 'skill://capgo/ship-live-update/SKILL.md'
 const meta = { [PROTOCOL_VERSION_META]: LATEST_PROTOCOL_VERSION, [CLIENT_CAPABILITIES_META]: {} }

@@ -9,7 +9,7 @@ import { CLI_CI_HEADER, readCliCiProvider } from '../utils/cicdDetection.ts'
 import { setApiKeyAuthContext } from '../utils/hono_middleware.ts'
 import { markInternalRequestVerified } from '../utils/internal_dispatch_auth.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { trackPosthogEventBatch } from '../utils/posthog.ts'
+import { trackPosthogEvent, trackPosthogEventBatch } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { checkKey } from '../utils/supabase.ts'
 import type { Database } from '../utils/supabase.types.ts'
@@ -20,6 +20,7 @@ import { isModernRequest, modernErrorStatus, record, validateModernHttpRequest }
 import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
 import { withPg } from './oauth_shared.ts'
 import { handleJsonRpcMessage, JSON_RPC_ERRORS, jsonRpcError } from './protocol.ts'
+import { MCP_TOOLS_BY_NAME } from './tools.ts'
 
 /**
  * Hosted Capgo MCP server (Streamable HTTP, stateless, JSON responses).
@@ -202,8 +203,9 @@ interface McpExchange {
 }
 
 /**
- * Sends the PostHog events for every tool that ran in this HTTP request in one batch: the legacy
- * `Hosted MCP Tool Invoked` (tagged with the OAuth client) and PostHog MCP Analytics' `$mcp_tool_call`.
+ * Sends the PostHog events for every tool that ran in this HTTP request: one `Hosted MCP Tool Invoked`
+ * per call (tagged with the OAuth client), plus PostHog MCP Analytics' `$mcp_tool_call` events in one
+ * batch, so a slow analytics request cannot drop the established event.
  */
 async function trackHostedMcpToolCalls(c: Context<MiddlewareKeyVariables>, caller: McpCaller, exchanges: McpExchange[]) {
   const toolCalls = exchanges.flatMap((exchange) => {
@@ -218,11 +220,14 @@ async function trackHostedMcpToolCalls(c: Context<MiddlewareKeyVariables>, calle
     vendorClient: c.req.header('x-anthropic-client'),
     protocolVersion: c.req.header('MCP-Protocol-Version'),
   }
-  const events = toolCalls.flatMap(({ legacy, ...exchange }) => {
-    const analytics = mcpToolCallEvent({ ...exchange, userId: caller.userId, apikeyId: caller.apikeyId, oauthClient: client, headers })
-    return [{ ...legacy, nonPersonTags: { ...legacy.nonPersonTags, client } }, ...(analytics ? [analytics] : [])]
-  })
-  await trackPosthogEventBatch(c, events)
+  const isKnownTool = (name: string) => MCP_TOOLS_BY_NAME.has(name)
+  const analytics = toolCalls
+    .map(({ legacy: _legacy, ...exchange }) => mcpToolCallEvent({ ...exchange, userId: caller.userId, apikeyId: caller.apikeyId, oauthClient: client, isKnownTool, headers }))
+    .filter(event => event !== null)
+  await Promise.all([
+    ...toolCalls.map(({ legacy }) => trackPosthogEvent(c, { ...legacy, nonPersonTags: { ...legacy.nonPersonTags, client } })),
+    trackPosthogEventBatch(c, analytics),
+  ])
 }
 
 export function createMcpApp(dispatch: McpDispatch) {

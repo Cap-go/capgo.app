@@ -98,12 +98,13 @@ export function errorType(response: JsonRpcResponse): { type: string, status?: n
 }
 
 function fnv1aHex(input: string): string {
-  let h1 = 0x84222325
+  // Two 32-bit FNV-1a passes with different offset bases give a 64-bit id.
+  let h1 = 0x811C9DC5
   let h2 = 0xCBF29CE4
   for (let i = 0; i < input.length; i++) {
     const c = input.codePointAt(i) ?? 0
-    h1 = Math.imul(h1 ^ c, 0x000001B3)
-    h2 = Math.imul(h2 ^ c, 0x00000193)
+    h1 = Math.imul(h1 ^ c, 0x01000193)
+    h2 = Math.imul(h2 ^ c, 0x01000193)
   }
   return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0')
 }
@@ -124,6 +125,8 @@ export interface McpToolCallEventInput {
   apikeyId: number
   /** OAuth client that minted the key, or `api_key` for pasted keys. */
   oauthClient: string
+  /** Whether the server has a tool by this name; other names are reported as `unknown` to keep the property low-cardinality. */
+  isKnownTool: (name: string) => boolean
   headers: { userAgent?: string, vendorClient?: string, protocolVersion?: string }
 }
 
@@ -136,7 +139,8 @@ export function mcpToolCallEvent(input: McpToolCallEventInput): PostHogCapturePa
   const params = record(message.params)
   const meta = record(params?._meta)
   const clientInfo = record(meta?.[CLIENT_INFO_META])
-  const toolName = text(params?.name) ?? 'unknown'
+  const requestedName = text(params?.name)
+  const toolName = requestedName && input.isKnownTool(requestedName) ? requestedName : 'unknown'
   const clientName = text(clientInfo?.name) ?? text(input.oauthClient) ?? 'unknown'
   const clientVersion = text(clientInfo?.version)
   const protocolVersion = text(meta?.[PROTOCOL_VERSION_META]) ?? text(input.headers.protocolVersion)

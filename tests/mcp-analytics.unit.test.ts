@@ -1,8 +1,9 @@
-import type { McpApiRequest, McpToolContext } from '../supabase/functions/_backend/mcp/tools.ts'
-import { describe, expect, it } from 'vitest'
+import type { McpToolContext } from '../supabase/functions/_backend/mcp/tools.ts'
+import { describe, expect, it, vi } from 'vitest'
 import { LLM_MODEL_ARGUMENT, MCP_ANALYTICS_SOURCE, mcpSessionId, mcpToolCallEvent, resolveModel, withModelArgument, withoutModelArgument } from '../supabase/functions/_backend/mcp/analytics.ts'
 import { MCP_SERVER_INFO } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { handleJsonRpcMessage, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
+import { MCP_TOOLS_BY_NAME } from '../supabase/functions/_backend/mcp/tools.ts'
 
 const call = (args: Record<string, unknown> = {}, meta?: Record<string, unknown>) => ({
   jsonrpc: '2.0',
@@ -17,6 +18,7 @@ const baseInput = {
   userId: 'user-1',
   apikeyId: 42,
   oauthClient: 'Claude',
+  isKnownTool: (name: string) => name === 'capgo_list_apps',
   headers: { userAgent: 'claude-code/2.1.0', vendorClient: 'claude-code', protocolVersion: '2025-11-25' },
 }
 
@@ -35,19 +37,26 @@ describe('hosted MCP PostHog analytics', () => {
     expect(withModelArgument(union)).toBe(union)
   })
 
-  it.concurrent('strips llm_model before the tool sees its arguments', async () => {
-    const calls: McpApiRequest[] = []
+  // Not concurrent: it spies on a shared tool schema.
+  it('strips llm_model before the tool validates its arguments', async () => {
+    const tool = MCP_TOOLS_BY_NAME.get('capgo_list_apps')
+    if (!tool)
+      throw new Error('capgo_list_apps is missing')
+    const safeParse = vi.spyOn(tool.inputSchema, 'safeParse')
     const ctx: McpToolContext = {
-      call: async (request) => {
-        calls.push(request)
-        return { ok: true, status: 200, data: [] }
-      },
+      call: async () => ({ ok: true, status: 200, data: [] }),
       caller: { userId: 'user-1', apikeyId: 42, apikeyName: 'MCP · Test', apikeyExpiresAt: null },
     }
-    const response = await handleJsonRpcMessage(call({ llm_model: 'claude-opus-5-5' }), ctx)
-    expect(response?.error).toBeUndefined()
-    expect(response?.result).not.toHaveProperty('isError')
-    expect(JSON.stringify(calls)).not.toContain('llm_model')
+    try {
+      const response = await handleJsonRpcMessage(call({ llm_model: 'claude-opus-5-5' }), ctx)
+      expect(response?.error).toBeUndefined()
+      expect(response?.result).not.toHaveProperty('isError')
+      expect(safeParse).toHaveBeenCalledTimes(1)
+      expect(safeParse.mock.calls[0][0]).not.toHaveProperty(LLM_MODEL_ARGUMENT)
+    }
+    finally {
+      safeParse.mockRestore()
+    }
     expect(withoutModelArgument({ a: 1, llm_model: 'x' })).toEqual({ a: 1 })
     expect(withoutModelArgument(undefined)).toBeUndefined()
   })
@@ -102,6 +111,12 @@ describe('hosted MCP PostHog analytics', () => {
     expect(typeOf(toolError({ error: 'tool_failed' }))).toMatchObject({ $mcp_error_type: 'internal' })
     expect(typeOf({ jsonrpc: '2.0', id: 1, result: { isError: true, content: [{ type: 'text', text: 'plain failure' }] } })).toMatchObject({ $mcp_error_type: 'tool_error' })
     expect(typeOf({ jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'bad' } })).toMatchObject({ $mcp_is_error: true, $mcp_error_type: 'validation' })
+  })
+
+  it.concurrent('reports names the server does not know as unknown', () => {
+    const message = { ...call(), params: { name: 'capgo_typo_123', arguments: {} } }
+    expect(mcpToolCallEvent({ ...baseInput, message, response: { jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'Unknown tool' } } })?.nonPersonTags)
+      .toMatchObject({ $mcp_tool_name: 'unknown', $mcp_resource_name: 'unknown' })
   })
 
   it.concurrent('ignores non-tool messages and notifications', () => {
