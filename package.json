@@ -356,7 +356,6 @@
     "@pinia/colada": "1.4.8",
     "@std/semver": "npm:@jsr/std__semver@1.0.8",
     "@stripe/stripe-js": "^10.1.0",
-    "@supabase/supabase-js": "2.110.8",
     "@vuepic/vue-datepicker": "^14.0.0",
     "@vueuse/core": "^14.3.0",
     "better-qr": "^0.1.2",
