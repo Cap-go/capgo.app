@@ -6,7 +6,7 @@ const {
   cloudlogMock,
   createUserMock,
   deleteUserMock,
-  emptySupabaseMock,
+  gotrueAuthMock,
   getPgClientMock,
   signInMock,
   gotrueAdminMock,
@@ -16,7 +16,7 @@ const {
   cloudlogMock: vi.fn(),
   createUserMock: vi.fn(),
   deleteUserMock: vi.fn(),
-  emptySupabaseMock: vi.fn(),
+  gotrueAuthMock: vi.fn(),
   getPgClientMock: vi.fn(),
   signInMock: vi.fn(),
   gotrueAdminMock: vi.fn(),
@@ -42,8 +42,8 @@ vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
   gotrueAdmin: gotrueAdminMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  emptySupabase: emptySupabaseMock,
+vi.mock('../supabase/functions/_backend/utils/gotrue_auth.ts', () => ({
+  gotrueAuth: gotrueAuthMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/user_preferences.ts', () => ({
@@ -130,7 +130,7 @@ describe('accept invitation logging', () => {
     vi.clearAllMocks()
     gotrueAdminMock.mockReturnValue(adminClient)
     getPgClientMock.mockResolvedValue(buildPgClient())
-    emptySupabaseMock.mockReturnValue({})
+    gotrueAuthMock.mockReturnValue({})
     createUserMock.mockResolvedValue({
       data: null,
       error: { message: 'stop after validated log' },
@@ -159,7 +159,7 @@ describe('magic-link invitation acceptance telemetry', () => {
     vi.clearAllMocks()
     captureInvitationEventMock.mockResolvedValue(true)
     gotrueAdminMock.mockReturnValue(adminClient)
-    emptySupabaseMock.mockReturnValue({ auth: { signInWithPassword: signInMock } })
+    gotrueAuthMock.mockReturnValue({ signInWithPassword: signInMock })
     signInMock.mockResolvedValue({
       data: {
         session: { access_token: 'access-token', refresh_token: 'refresh-token' },

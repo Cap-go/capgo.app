@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { z } from 'zod'
 import { safeParseSchema } from '../utils/schema_validation.ts'
+import { gotrueAuth } from '../utils/gotrue_auth.ts'
 import { createHono, parseBody, quickError, simpleError, simpleRateLimit, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -8,7 +9,6 @@ import { clearFailedAccountAuth, isAccountRateLimited, recordFailedAccountAuth }
 import { buildRateLimitInfo } from '../utils/rateLimitInfo.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { withRlsContext } from '../utils/pg_rls.ts'
-import { emptySupabase } from '../utils/supabase.ts'
 import { version } from '../utils/version.ts'
 
 const bodySchema = z.object({
@@ -90,11 +90,11 @@ app.post('/', middlewareAuth, async (c) => {
     return quickError(400, 'missing_email', 'Email is required to verify OTP')
   }
 
-  const supabase = emptySupabase(c)
-  let verifyData: Awaited<ReturnType<typeof supabase.auth.verifyOtp>>['data']
-  let verifyError: Awaited<ReturnType<typeof supabase.auth.verifyOtp>>['error']
+  const gotrue = gotrueAuth(c)
+  let verifyData: Awaited<ReturnType<typeof gotrue.verifyOtp>>['data']
+  let verifyError: Awaited<ReturnType<typeof gotrue.verifyOtp>>['error']
   if (tokenHash) {
-    ({ data: verifyData, error: verifyError } = await supabase.auth.verifyOtp({
+    ({ data: verifyData, error: verifyError } = await gotrue.verifyOtp({
       token_hash: tokenHash,
       type: otpType,
     }))
@@ -103,7 +103,7 @@ app.post('/', middlewareAuth, async (c) => {
     if (!email) {
       return quickError(400, 'missing_email', 'Email is required to verify OTP')
     }
-    ({ data: verifyData, error: verifyError } = await supabase.auth.verifyOtp({
+    ({ data: verifyData, error: verifyError } = await gotrue.verifyOtp({
       email,
       token,
       type: otpType,

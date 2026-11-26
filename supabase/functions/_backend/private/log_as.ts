@@ -5,12 +5,12 @@ import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { gotrueAdmin } from '../utils/gotrue_admin.ts'
+import { gotrueAuth } from '../utils/gotrue_auth.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { authPrincipal, withRlsContext } from '../utils/pg_rls.ts'
-import { emptySupabase } from '../utils/supabase.ts'
 
 export const bodySchema = z.object({
   user_id: z.string().optional(),
@@ -257,8 +257,7 @@ app.post('/', middlewareAuth, async (c) => {
     throw simpleError('generate_magic_link_error', 'Generate magic link error', { magicError })
   }
 
-  const tmpSupabaseClient = emptySupabase(c)
-  const { data: authData, error: authError } = await tmpSupabaseClient.auth.verifyOtp({ token_hash: magicLink.properties.hashed_token, type: 'email' })
+  const { data: authData, error: authError } = await gotrueAuth(c).verifyOtp({ token_hash: magicLink.properties.hashed_token, type: 'email' })
 
   if (authError) {
     throw simpleError('auth_error', 'Auth error', { authError })

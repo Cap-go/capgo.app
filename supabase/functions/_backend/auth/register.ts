@@ -7,11 +7,11 @@ import { normalizeOpenAIClickReference } from '../../shared/openai-click-referen
 import { checkRegistrationEmail, deleteUserProfile, getCaptchaSecret, isAuthRateLimitError, isCaptchaFailedError, isLeakedPasswordError, isWeakPasswordError, provisionUserProfile } from '../utils/accountProvisioning.ts'
 import { isDirectOfferMetadata, persistDirectOffer } from '../utils/direct_offer.ts'
 import { gotrueAdmin } from '../utils/gotrue_admin.ts'
+import { gotrueAuth } from '../utils/gotrue_auth.ts'
 import { parseBody, simpleErrorWithStatus, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { emptySupabaseWithClientIP } from '../utils/supabase.ts'
 
 const DEFAULT_PASSWORD_POLICY = {
   min_length: 6,
@@ -152,8 +152,7 @@ app.post('/', async (c) => {
   if (body.registration_browser)
     userMetadata.registration_browser = body.registration_browser
 
-  const authClient = emptySupabaseWithClientIP(c)
-  const { data: signupData, error: signupError } = await authClient.auth.signUp({
+  const { data: signupData, error: signupError } = await gotrueAuth(c, { forwardClientIp: true }).signUp({
     email: normalizedEmail,
     password: body.password,
     options: {
