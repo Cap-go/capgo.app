@@ -142,4 +142,19 @@ describe('China reach locale hint', () => {
     })
     expect(looksLikeChinaReachLocaleHint()).toBe(true)
   })
+
+  it.concurrent('returns false for non-China locale hints', () => {
+    vi.stubGlobal('navigator', {
+      language: 'en-US',
+      languages: ['en-US', 'fr-FR'],
+    })
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      locale: 'en-US',
+      calendar: 'gregory',
+      numberingSystem: 'latn',
+      timeZone: 'America/New_York',
+      hour12: true,
+    })
+    expect(looksLikeChinaReachLocaleHint()).toBe(false)
+  })
 })

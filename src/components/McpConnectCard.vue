@@ -3,11 +3,15 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconClipboard from '~icons/heroicons/clipboard-document'
 import IconSparkles from '~icons/heroicons/sparkles'
-import { getConsoleApiHost } from '~/services/consoleApiHost'
+import { PROD_API_URL } from '~/services/console'
+import { CHINA_API_HOST, getConsoleApiHost, isChinaCapgoConsoleHostname } from '~/services/consoleApiHost'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
 
-const hostedMcpUrl = `${getConsoleApiHost().replace(/\/$/, '')}/mcp`
+const mcpApiBase = typeof window !== 'undefined' && isChinaCapgoConsoleHostname(window.location.hostname)
+  ? CHINA_API_HOST
+  : (getConsoleApiHost() !== PROD_API_URL ? getConsoleApiHost() : PROD_API_URL)
+const hostedMcpUrl = `${mcpApiBase.replace(/\/$/, '')}/mcp`
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 

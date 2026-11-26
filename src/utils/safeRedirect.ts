@@ -148,7 +148,9 @@ export function getAllowedConfirmationHosts() {
     addConfiguredHost(hosts, 'api.capgo.com.cn')
   }
   else {
-    addConfiguredHost(hosts, 'console.capgo.com.cn')
+    const apiHost = getConsoleApiHost().replace(/\/$/, '')
+    if (apiHost === 'https://api.capgo.app' || apiHost === 'https://api.capgo.com.cn')
+      addConfiguredHost(hosts, 'console.capgo.com.cn')
   }
 
   return [...hosts]

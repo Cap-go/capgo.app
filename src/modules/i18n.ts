@@ -77,10 +77,11 @@ export const i18n = createI18n({
   locale: FALLBACK_LOCALE,
   messages: {
     [FALLBACK_LOCALE]: sourceMessages,
+    'zh-cn': applyCommittedLocaleOverrides('zh-cn', sourceMessages) as typeof sourceMessages,
   },
 })
 
-const loadedLanguages = new Set<string>([FALLBACK_LOCALE])
+const loadedLanguages = new Set<string>([FALLBACK_LOCALE, 'zh-cn'])
 // Last locale asked for; a late response for another locale must not take its cache slot.
 let requestedLanguage: string = FALLBACK_LOCALE
 const pendingLanguageLoads = new Map<string, Promise<MessageCatalog | null>>()

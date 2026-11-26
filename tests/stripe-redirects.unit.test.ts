@@ -119,6 +119,7 @@ afterEach(() => {
   delete mockedEnv.STRIPE_API_BASE_URL
   delete mockedEnv.STRIPE_PUBLISHABLE_KEY
   mockedEnv.ENV = 'local'
+  mockedEnv.WEBAPP_URL = 'https://capgo.test'
   mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
   mockedSupabaseAdmin.mockReset()
   vi.restoreAllMocks()

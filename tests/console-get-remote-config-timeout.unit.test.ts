@@ -162,7 +162,33 @@ describe('getRemoteConfig config fetch timeouts', () => {
 
     const { getRemoteConfig, suggestChinaConsole } = await import('../src/services/console')
     await getRemoteConfig()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'https://api.capgo.com.cn/private/config', expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(suggestChinaConsole.value).toBe(false)
+  })
+
+  it('treats a 200 empty JSON object on the main API as unreachable and probes China', async () => {
+    vi.stubGlobal('window', {
+      location: { hostname: 'console.capgo.app', origin: 'https://console.capgo.app' },
+    })
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      locale: 'zh-CN',
+      calendar: 'gregory',
+      numberingSystem: 'latn',
+      timeZone: 'Asia/Shanghai',
+      hour12: false,
+    })
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.capgo.com.cn/'))
+        return new Response(JSON.stringify({ stripeEnabled: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { getRemoteConfig, suggestChinaConsole } = await import('../src/services/console')
+    await getRemoteConfig()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(suggestChinaConsole.value).toBe(true)
   })
 
   it('aborts a slow /private/config JSON body read within the config probe budget', async () => {

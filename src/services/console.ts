@@ -216,7 +216,7 @@ export async function getRemoteConfig() {
     return localConfig
   try {
     const result = await fetchPrivateConfigWithTimeout(`${apiHost}/private/config`)
-    if (!result.ok) {
+    if (!result.ok || !isValidRemoteConfigPayload(result.payload)) {
       console.log('Local config', localConfig)
       stripeEnabled.value = localConfig.stripeEnabled ?? stripeEnabled.value
       const chinaReachable = await chinaReachableAfterMainFailure()

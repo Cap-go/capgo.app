@@ -29,6 +29,14 @@ describe('console API host resolver', () => {
     expect(getConsoleWebOrigin()).toBe('https://console.capgo.com.cn')
   })
 
+  it('treats a trailing dot on the China console hostname as China', () => {
+    vi.stubGlobal('window', {
+      location: { hostname: 'console.capgo.com.cn.', origin: 'https://console.capgo.com.cn' },
+    })
+    expect(isChinaCapgoConsoleHostname('console.capgo.com.cn.')).toBe(true)
+    expect(getConsoleApiHost()).toBe('https://api.capgo.com.cn')
+  })
+
   it('uses the build API host on localhost preview', () => {
     vi.stubEnv('VITE_API_HOST', 'http://127.0.0.1:57671/functions/v1')
     vi.stubGlobal('window', {

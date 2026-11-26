@@ -3,9 +3,15 @@ import { Capacitor } from '@capacitor/core'
 export const CHINA_API_HOST = 'https://api.capgo.com.cn'
 export const CHINA_CONSOLE_URL = 'https://console.capgo.com.cn'
 export const GLOBAL_CONSOLE_WEB_HOST = 'console.capgo.app'
+export const GLOBAL_API_HOST = 'https://api.capgo.app'
+
+function normalizeConsoleHostname(hostname: string): string {
+  return hostname.replace(/\.$/, '').toLowerCase()
+}
 
 export function isChinaCapgoConsoleHostname(hostname: string): boolean {
-  return hostname === 'capgo.com.cn' || hostname.endsWith('.capgo.com.cn')
+  const normalized = normalizeConsoleHostname(hostname)
+  return normalized === 'capgo.com.cn' || normalized.endsWith('.capgo.com.cn')
 }
 
 export function getConsoleApiHost(): string {
@@ -18,6 +24,17 @@ export function getConsoleApiHost(): string {
 export function buildChinaConsoleCliApiHostArg(): string {
   if (getConsoleApiHost() === CHINA_API_HOST)
     return ` --api-host ${CHINA_API_HOST}`
+  return ''
+}
+
+/** CLI `--api-host` for China consoles, or for local, preprod, and self-hosted API backends. */
+export function buildConsoleCliApiHostArg(apiHost: string): string {
+  const chinaArg = buildChinaConsoleCliApiHostArg()
+  if (chinaArg)
+    return chinaArg
+  const normalized = apiHost.replace(/\/$/, '')
+  if (normalized && normalized !== GLOBAL_API_HOST && normalized !== CHINA_API_HOST)
+    return ` --api-host ${normalized}`
   return ''
 }
 

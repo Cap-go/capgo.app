@@ -50,8 +50,12 @@ describe('console web origins', () => {
   })
 
   it.concurrent('documents all Capgo-hosted console origins', () => {
-    for (const origin of DEFAULT_CONSOLE_WEB_ORIGINS)
-      expect(typeof origin).toBe('string')
+    expect([...DEFAULT_CONSOLE_WEB_ORIGINS]).toEqual([
+      'https://console.capgo.app',
+      'https://console.capgo.com.cn',
+      'https://console.preprod.capgo.app',
+      'https://console.development.capgo.app',
+    ])
   })
 
   it('parses comma separated extra console origins with whitespace', () => {

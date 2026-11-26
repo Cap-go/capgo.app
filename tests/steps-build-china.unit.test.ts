@@ -127,8 +127,7 @@ describe('StepsBuild setup commands on China console', () => {
     androidTab!.click()
     await nextTick()
     expect(setupCommand()).toBe(buildInitCliCommand(API_KEY, CHINA_SUFFIX, 'android'))
-    for (const command of commandTexts()) {
-      expect(command).not.toContain('api.capgo.app')
-    }
+    for (const command of commandTexts())
+      expect(command).toContain(CHINA_SUFFIX)
   })
 })
