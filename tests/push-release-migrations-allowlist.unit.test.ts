@@ -1,15 +1,19 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-const PROD_LATEST_VERSION = '20261117115240'
+const PROD_LATEST_VERSION = '20261126121720'
 
-/** Pending in prod as of release train 22.63.0; timestamp sorts before PROD_LATEST_VERSION. */
+/**
+ * Pending in prod when it landed (22.63.0 for the 20261117 group, 22.75.0 for
+ * drop_pg_net); each timestamp sorts before PROD_LATEST_VERSION.
+ */
 const PENDING_OUT_OF_ORDER = [
   'supabase/migrations/20261117014348_console_request_fanout.sql',
   'supabase/migrations/20261117014945_stats_rollout_cron_load.sql',
   'supabase/migrations/20261117030227_app_storage_cleanup_passes.sql',
   'supabase/migrations/20261117031521_billing_profile_currency.sql',
   'supabase/migrations/20261117032322_simulator_idle_stop.sql',
+  'supabase/migrations/20261125134644_drop_pg_net.sql',
 ]
 
 function extractPushReleaseAllowlist(script: string): string[] {
