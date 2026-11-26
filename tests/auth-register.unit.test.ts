@@ -5,6 +5,7 @@ const {
   getClientIPMock,
   rpcMock,
   signUpMock,
+  gotrueAuthMock,
   usersUpsertMock,
   deleteUserMock,
   updateUserByIdMock,
@@ -31,6 +32,7 @@ const {
     },
     error: null,
   })),
+  gotrueAuthMock: vi.fn((_c: unknown, _options?: { forwardClientIp?: boolean }) => ({ signUp: signUpMock })),
   usersUpsertMock: vi.fn(async (_row: unknown) => ({ error: null })),
   deleteUserMock: vi.fn(async () => ({ error: null })),
   updateUserByIdMock: vi.fn<(id: string, attributes: unknown) => Promise<{ error: Error | null }>>(async () => ({ error: null })),
@@ -45,12 +47,8 @@ vi.mock('../supabase/functions/_backend/utils/rate_limit.ts', () => ({
   getClientIP: getClientIPMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  emptySupabaseWithClientIP: () => ({
-    auth: {
-      signUp: signUpMock,
-    },
-  }),
+vi.mock('../supabase/functions/_backend/utils/gotrue_auth.ts', () => ({
+  gotrueAuth: gotrueAuthMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/gotrue_admin.ts', () => ({
@@ -145,6 +143,7 @@ describe('pOST /auth/register unit', () => {
   it('forwards captcha_token to GoTrue signUp without local siteverify', async () => {
     const response = await postRegister(validBody)
     expect(response.status).toBe(200)
+    expect(gotrueAuthMock).toHaveBeenCalledWith(expect.anything(), { forwardClientIp: true })
     expect(signUpMock).toHaveBeenCalledWith({
       email: validBody.email,
       password: validBody.password,

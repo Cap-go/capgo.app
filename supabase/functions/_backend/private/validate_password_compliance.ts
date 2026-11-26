@@ -10,9 +10,9 @@ import { clearFailedAccountAuth, isAccountRateLimited, isIPRateLimited, recordFa
 import { buildRateLimitInfo } from '../utils/rateLimitInfo.ts'
 import type { RlsPrincipal } from '../utils/pg_rls.ts'
 import { getClaimsFromJWT } from '../utils/hono_jwt.ts'
+import { gotrueAuth } from '../utils/gotrue_auth.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { withRlsTransaction } from '../utils/pg_rls.ts'
-import { emptySupabase } from '../utils/supabase.ts'
 import { collectConsoleWebOrigins } from '../utils/console_web_origins.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -154,8 +154,7 @@ app.post('/', async (c) => {
   cloudlog({ requestId: c.get('requestId'), context: 'validate_password_compliance raw body', rawBody: bodyWithoutPassword })
 
   // Authenticate first to avoid leaking org existence to unauthenticated callers.
-  const loginClient = emptySupabase(c)
-  const { data: signInData, error: signInError } = await loginClient.auth.signInWithPassword({
+  const { data: signInData, error: signInError } = await gotrueAuth(c).signInWithPassword({
     email: body.email,
     password: body.password,
     options: body.captcha_token

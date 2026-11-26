@@ -5,7 +5,6 @@ import type { PgClient, PgQueryClient } from './pg.ts'
 import type { RlsPrincipal } from './pg_rls.ts'
 import type { Database } from './supabase.types.ts'
 import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
-import { createClient } from '@supabase/supabase-js'
 import { HTTPException } from 'hono/http-exception'
 import { applyDirectOfferBentoTags, buildBillingPlanBentoTags } from './billing_bento_tags.ts'
 import { buildChannelInsertOrExistingSql, resolveChannelInsert } from './channel_insert.ts'
@@ -20,10 +19,9 @@ import { isTransientPgError } from './pg_errors.ts'
 import { authPrincipal, queryJson, withRlsContext } from './pg_rls.ts'
 import { getPlanPriceInterval } from './plan_price_interval.ts'
 import { devicesOffsetClause } from './devicesPageOffset.ts'
-import { getClientIP } from './rate_limit.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { Constants } from './supabase.types.ts'
-import { getEnv, isStripeConfigured } from './utils.ts'
+import { isStripeConfigured } from './utils.ts'
 import { buildVersionCompareSql } from './versionCompare.ts'
 
 const DEFAULT_LIMIT = 1000
@@ -295,33 +293,6 @@ export interface DeletePayload<T extends keyof Database['public']['Tables']> {
   old_record: Database['public']['Tables'][T]['Row']
   /** When the row was deleted, set by trigger_http_queue_post_to_function. */
   occurred_at?: string
-}
-
-export function emptySupabase(c: Context) {
-  const options = {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  }
-  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), options)
-}
-
-/** Anon GoTrue client that forwards the trusted client IP for auth rate limiting. */
-export function emptySupabaseWithClientIP(c: Context) {
-  const clientIp = getClientIP(c)
-  const options = {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-    ...(clientIp !== 'unknown'
-      ? { global: { headers: { 'X-Forwarded-For': clientIp } } }
-      : {}),
-  }
-  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), options)
 }
 
 export async function getAppsFromSB(c: Context, referenceDate?: Date): Promise<string[]> {
