@@ -8,7 +8,7 @@ import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import EmptyState from '~/components/EmptyState.vue'
 import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatBytes } from '~/services/conversion'
 import { useDisplayStore } from '~/stores/display'
 
@@ -248,10 +248,10 @@ function isManifestDownloadSizeResult(value: unknown): value is ManifestDownload
 }
 
 async function fetchManifestDownloadSize(entries: ManifestEntry[]): Promise<ManifestDownloadSizeResult | null> {
-  if (!defaultApiHost || !packageId.value || !version.value?.name)
+  if (!getConsoleApiHost() || !packageId.value || !version.value?.name)
     return null
 
-  const response = await fetch(`${defaultApiHost}/updates/manifest_size`, {
+  const response = await fetch(`${getConsoleApiHost()}/updates/manifest_size`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

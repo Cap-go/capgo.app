@@ -14,6 +14,7 @@ import { timingSafeEqual } from 'hono/utils/buffer'
 import { accessLog, cloudlog } from './logging.ts'
 import { onError } from './on_error.ts'
 import { redactSensitiveUrl } from './sensitive_url.ts'
+import { collectConsoleWebOrigins } from './console_web_origins.ts'
 import { getEnv } from './utils.ts'
 
 import { version as CapgoVersion } from './version.ts'
@@ -139,6 +140,7 @@ function isLocalHttpOrigin(origin: string) {
 
 function getConfiguredCorsAllowedOrigins(c: Context) {
   return [
+  ...[...collectConsoleWebOrigins(c)],
     getEnv(c, 'WEBAPP_URL'),
     ...getEnv(c, 'CORS_ALLOWED_ORIGINS').split(','),
   ]

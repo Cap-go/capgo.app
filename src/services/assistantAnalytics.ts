@@ -1,5 +1,5 @@
 import { Capacitor } from '@capacitor/core'
-import { defaultApiHost } from '~/services/console'
+import { getConsoleApiHost } from '~/services/console'
 import { pushEvent } from '~/services/posthog'
 
 export type AssistantOutcome = 'success' | 'error' | 'cancelled'
@@ -24,7 +24,9 @@ export function createAssistantAnalytics(
 ) {
   function emit(event: string, properties: Record<string, string | number | boolean> = {}) {
     try {
-      capture(event, { ...properties, platform: ['ios', 'android'].includes(platform) ? platform : 'web', schema_version: 1, deployment: defaultApiHost?.replace(/\/$/, '') === 'https://api.capgo.app' ? 'production' : 'non-production' })
+      const apiOrigin = getConsoleApiHost()?.replace(/\/$/, '')
+      const deployment = apiOrigin === 'https://api.capgo.app' || apiOrigin === 'https://api.capgo.com.cn' ? 'production' : 'non-production'
+      capture(event, { ...properties, platform: ['ios', 'android'].includes(platform) ? platform : 'web', schema_version: 1, deployment })
     }
     catch {
       // Analytics must never prevent a connection, response or tool from completing.
@@ -58,6 +60,6 @@ export function createAssistantAnalytics(
 }
 
 export const assistantAnalytics = createAssistantAnalytics(
-  (event, properties) => pushEvent(event, defaultApiHost, properties),
+  (event, properties) => pushEvent(event, getConsoleApiHost(), properties),
   Capacitor.getPlatform(),
 )

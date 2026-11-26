@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 
 export interface CheckDomainResponse {
   has_sso: boolean
@@ -28,7 +28,7 @@ export function useSSORouting() {
         headers.Authorization = `Bearer ${token}`
       }
 
-      const response = await fetch(`${defaultApiHost}/private/sso/check-domain`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/sso/check-domain`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ email }),

@@ -8,7 +8,7 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('~icons/lucide/smartphone', () => ({ default: { name: 'IconSmartphone', setup: () => () => null } }))
 vi.mock('~/services/date', () => ({ formatLocalDateTime: (value: string | null) => value ?? '' }))
 vi.mock('~/services/console', () => ({
-  defaultApiHost: 'https://api.example.test',
+  getConsoleApiHost: () => 'https://api.example.test',
   useConsole: () => ({
     auth: {
       getSession: async () => ({ data: { session: { access_token: 'token' } } }),

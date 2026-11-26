@@ -42,7 +42,7 @@ vi.mock('@capgo/capacitor-inappbrowser', () => ({
   },
 }))
 vi.mock('~/services/posthog', () => ({ pushEvent: vi.fn() }))
-vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.test', useConsole: () => ({}) }))
+vi.mock('~/services/console', () => ({ getConsoleApiHost: () => 'https://api.capgo.test', useConsole: () => ({}) }))
 vi.mock('~/stores/main', () => ({ useMainStore: () => ({ user: { id: 'assistant-ui-test-user' } }) }))
 vi.mock('~/stores/organization', () => ({
   useOrganizationStore: () => ({ currentOrganization: null, organizations: [], awaitInitialLoad: async () => {} }),

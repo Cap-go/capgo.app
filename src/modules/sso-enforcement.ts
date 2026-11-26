@@ -1,5 +1,5 @@
 import type { UserModule } from '~/types'
-import { defaultApiHost, getSpoofedAdminJwt, useConsole } from '~/services/console'
+import { getConsoleApiHost, getSpoofedAdminJwt, useConsole } from '~/services/console'
 
 interface SsoEnforcementResponse {
   allowed: boolean
@@ -88,7 +88,7 @@ async function runCheck(session: NonNullable<Awaited<ReturnType<typeof currentSe
     if (spoofedAdminJwt)
       headers[SPOOF_ADMIN_AUTHORIZATION_HEADER] = `Bearer ${spoofedAdminJwt}`
 
-    const response = await fetch(`${defaultApiHost}/private/sso/check-enforcement`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/sso/check-enforcement`, {
       method: 'POST',
       headers,
       body: JSON.stringify({

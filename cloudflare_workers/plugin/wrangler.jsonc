@@ -66,6 +66,22 @@
         {
           "pattern": "api.capgo.app/stats",
           "zone_name": "capgo.app"
+        },
+        {
+          "pattern": "api.capgo.com.cn/plugin/*",
+          "zone_name": "capgo.app"
+        },
+        {
+          "pattern": "api.capgo.com.cn/updates*",
+          "zone_name": "capgo.app"
+        },
+        {
+          "pattern": "api.capgo.com.cn/channel_self",
+          "zone_name": "capgo.app"
+        },
+        {
+          "pattern": "api.capgo.com.cn/stats",
+          "zone_name": "capgo.app"
         }
         // end of TODO
       ],

@@ -4,6 +4,7 @@
 /** Hostnames the plugin worker is routed on (custom domains and route patterns). */
 export const PLUGIN_ROUTE_HOSTS: readonly string[] = [
   'api.capgo.app',
+  'api.capgo.com.cn',
   'plugin.af.capgo.app',
   'plugin.as.capgo.app',
   'plugin.capgo.app',

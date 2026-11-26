@@ -54,6 +54,10 @@
         {
           "pattern": "api.usecapgo.com",
           "custom_domain": true
+        },
+        {
+          "pattern": "api.capgo.com.cn/*",
+          "zone_name": "capgo.app"
         }
       ],
       "observability": {

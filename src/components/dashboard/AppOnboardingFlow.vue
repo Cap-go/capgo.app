@@ -51,7 +51,8 @@ import {
 import { isBuilderTodoListSelected } from '~/services/builderOnboardingChecklist'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
-import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
+import { getLocalConfig, useConsole } from '~/services/console'
+import { buildConsoleCliApiHostArg, CHINA_API_HOST, getConsoleApiHost } from '~/services/consoleApiHost'
 import { APP_ONBOARDING_READY_EVENT, sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -105,7 +106,7 @@ import {
   readOnboardingSetupHandoff,
 } from '~/utils/onboardingRedirect'
 import { openOnboardingResumeDialog } from '~/utils/onboardingResumeDialog'
-import { checklistTaskListMode, manualSetupCliCommand, manualSetupUsesBuilder } from '~/utils/onboardingSetupMode'
+import { buildInitCliCommand, checklistTaskListMode, manualSetupCliCommand, manualSetupUsesBuilder } from '~/utils/onboardingSetupMode'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
   buildUserOnboardingProgress,
@@ -299,7 +300,7 @@ const publishAppQuestionPrimaryActionLabel = computed(() => hasSelectedDevelopme
   ? t('unified-onboarding-continue-intent')
   : t('organization-onboarding-development-environment-skip'))
 
-const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ''
+const localCommand = buildConsoleCliApiHostArg(config.apiHost)
 // TODO(2027-03-19): Remove v3 compatibility after all existing OTA checklists have migrated.
 const usesOtaTodoList = computed(() => !!createdApp.value && hasSupportedOtaTodoList(parseAppOnboarding(createdApp.value.onboarding)))
 const usesDualTodoList = computed(() => !!createdApp.value && hasDualOnboardingChecklists(createdApp.value.onboarding))
@@ -452,7 +453,7 @@ watch(() => props.initialChecklistPath, (path) => {
     setupStage.value = 'cli'
   }
 })
-const builderCliCommand = computed(() => apiKey.value ? `npx @capgo/cli@latest build init -a ${apiKey.value}` : '')
+const builderCliCommand = computed(() => apiKey.value ? buildInitCliCommand(apiKey.value, localCommand) : '')
 const cliCommand = computed(() => {
   const key = apiKey.value
   if (!key)
@@ -469,8 +470,8 @@ const cliCommandArgs = computed(() => {
   if (usesBuilderSetupCommand.value && apiKey.value)
     args.push('-a', apiKey.value)
 
-  if (isLocal(config.apiHost))
-    args.push('--api-host', defaultApiHost)
+  if (getConsoleApiHost() === CHINA_API_HOST)
+    args.push('--api-host', CHINA_API_HOST)
 
   return args
 })

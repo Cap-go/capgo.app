@@ -3,16 +3,21 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconClipboard from '~icons/heroicons/clipboard-document'
 import IconSparkles from '~icons/heroicons/sparkles'
+import { PROD_API_URL } from '~/services/console'
+import { CHINA_API_HOST, getConsoleApiHost, isChinaCapgoConsoleHostname } from '~/services/consoleApiHost'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
 
-const HOSTED_MCP_URL = 'https://api.capgo.app/mcp'
+const mcpApiBase = typeof window !== 'undefined' && isChinaCapgoConsoleHostname(window.location.hostname)
+  ? CHINA_API_HOST
+  : (getConsoleApiHost() !== PROD_API_URL ? getConsoleApiHost() : PROD_API_URL)
+const hostedMcpUrl = `${mcpApiBase.replace(/\/$/, '')}/mcp`
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 
 async function copyHostedUrl() {
   try {
-    await navigator.clipboard.writeText(HOSTED_MCP_URL)
+    await navigator.clipboard.writeText(hostedMcpUrl)
     toast.success(t('mcp-connect-url-copied'))
   }
   catch {
@@ -61,7 +66,7 @@ async function copyHostedUrl() {
         :aria-label="t('mcp-connect-copy-url')"
         @click="copyHostedUrl"
       >
-        <code class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{{ HOSTED_MCP_URL }}</code>
+        <code class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{{ hostedMcpUrl }}</code>
         <span class="flex shrink-0 items-center gap-2 text-xs font-semibold text-primary-500 dark:text-slate-300">
           <IconClipboard class="h-4 w-4" aria-hidden="true" />
           {{ t('copy') }}

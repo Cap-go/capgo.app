@@ -1,7 +1,7 @@
 import type { AssistantAction, AssistantCard, AssistantContext, AssistantResponse, AssistantTurn } from '~/services/assistant'
 import { assistantAnalytics } from '~/services/assistantAnalytics'
 import { assistantOpenAIRequest, assistantRequest } from '~/services/assistantHttp'
-import { defaultApiHost } from '~/services/console'
+import { getConsoleApiHost } from '~/services/console'
 
 /**
  * The console assistant runs locally; browser model requests pass through the authenticated Capgo
@@ -38,7 +38,7 @@ let rpcId = 0
 const toolsCache = new Map<string, McpToolInfo[]>()
 
 async function mcpRpc(apikey: string, method: string, params: Record<string, unknown>): Promise<unknown> {
-  const response = await assistantRequest(`${defaultApiHost}/mcp`, {
+  const response = await assistantRequest(`${getConsoleApiHost()}/mcp`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'accept': 'application/json, text/event-stream', 'authorization': `Bearer ${apikey}` },
     body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }),

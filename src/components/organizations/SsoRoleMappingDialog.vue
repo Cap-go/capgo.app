@@ -5,7 +5,7 @@ import { toast } from 'vue-sonner'
 import IconPlus from '~icons/heroicons/plus'
 import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getRbacRoleI18nKey } from '~/stores/organization'
 
@@ -83,8 +83,8 @@ function addApp(rule: SsoRoleMapping['rules'][number]) {
 async function save(roleMapping: SsoRoleMapping | null): Promise<boolean> {
   const { data: session } = await capgo.auth.getSession()
   const url = shared.value
-    ? `${defaultApiHost}/private/sso/providers/${providerId.value}/links/${props.orgId}`
-    : `${defaultApiHost}/private/sso/providers/${providerId.value}`
+    ? `${getConsoleApiHost()}/private/sso/providers/${providerId.value}/links/${props.orgId}`
+    : `${getConsoleApiHost()}/private/sso/providers/${providerId.value}`
   const response = await fetch(url, {
     method: shared.value ? 'PUT' : 'PATCH',
     headers: {

@@ -11,7 +11,7 @@ import IconInformationCircle from '~icons/heroicons/information-circle'
 import IconSmartphone from '~icons/lucide/smartphone'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import DateRangePicker from '~/components/DateRangePicker.vue'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import {
   DEVICES_TABLE_DATE_RANGE_DEFAULT,
@@ -398,7 +398,7 @@ async function countDevices(options?: { includeDateRange?: boolean }): Promise<n
   const currentJwt = currentSession.session.access_token
 
   try {
-    const response = await fetch(`${defaultApiHost}/private/devices`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/devices`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -568,7 +568,7 @@ async function fetchDevicesPage(cursor: string | undefined | null, pageOffset = 
     return
   const currentJwt = currentSession.session.access_token
 
-  const response = await fetch(`${defaultApiHost}/private/devices`, {
+  const response = await fetch(`${getConsoleApiHost()}/private/devices`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -806,7 +806,7 @@ async function exportDevices(format: 'csv' | 'json') {
       toast.error(t('not-logged-in'))
       return
     }
-    const response = await fetch(`${defaultApiHost}/private/devices/export`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/devices/export`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
