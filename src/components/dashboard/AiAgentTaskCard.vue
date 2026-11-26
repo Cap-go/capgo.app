@@ -28,6 +28,8 @@ const props = defineProps<{
   channelName?: string
   /** `request-build` only: the platform to build. */
   platform?: 'ios' | 'android'
+  /** `request-build` on iOS only: the Xcode version picked in the build steps (empty = any machine). */
+  xcodeVersion?: string
   compact?: boolean
   /** Shows an "or" line next to the card: `before` under a manual form, `after` above one. */
   orSeparator?: 'before' | 'after'
@@ -99,7 +101,7 @@ async function buildPrompt(): Promise<string | null> {
   if (props.task === 'upload-bundle')
     return buildAiUploadBundlePrompt({ apiKey, organization, app: appInfo })
   if (props.task === 'request-build')
-    return buildAiRequestBuildPrompt({ apiKey, organization, app: appInfo, platform: props.platform ?? 'ios' })
+    return buildAiRequestBuildPrompt({ apiKey, organization, app: appInfo, platform: props.platform ?? 'ios', xcodeVersion: props.xcodeVersion })
   return buildAiCreateChannelPrompt({ apiKey, organization, app: appInfo, channelName: props.channelName })
 }
 

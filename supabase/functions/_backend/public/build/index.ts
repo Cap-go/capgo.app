@@ -34,6 +34,7 @@ import { getBuildStatus } from './status.ts'
 import { uploadSupportLogs } from './support_logs.ts'
 import { tusProxy } from './upload.ts'
 import { getBuildUploadUrl } from './upload_url.ts'
+import { getBuildVariants } from './variants.ts'
 
 export const app = honoFactory.createApp()
 
@@ -108,6 +109,9 @@ app.get('/logs/:jobId', middlewareKey(['all', 'read']), async (c) => {
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return streamBuildLogs(c, jobId, appId, apikey, c.req.query('snapshot') === 'true')
 })
+
+// GET /build/variants?platform=ios - macOS / Xcode variants builds can be pinned to, live from the builder (console JWT or API key)
+app.get('/variants', middlewareAuth(), c => getBuildVariants(c, c.req.query('platform')))
 
 // GET /build/logs_token/:jobId - Read-only live log stream token (console JWT or API key, app.read_logs)
 app.get('/logs_token/:jobId', middlewareAuth(), c => getBuildLogsToken(c, c.req.param('jobId')))

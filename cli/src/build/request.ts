@@ -78,6 +78,7 @@ import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseAndroidPlayStoreRe
 import { buildProvisioningMap } from './credentials-command'
 import { withCwd } from './cwd'
 import { parseDebugSymbolsUrl, writeBuildOutputRecord } from './output-record'
+import { promptXcodeVersion } from './variants'
 import { getPlatformDirFromCapacitorConfig } from './platform-paths'
 import { handleCustomMsg } from './qr.js'
 import { prepareBuildSupportLogBundle } from './support-log-bundle.js'
@@ -1261,6 +1262,16 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     const nativeProjectDir = getPlatformDirFromCapacitorConfig(config?.config, platform)
     if (mergedCredentials && nativeProjectDir)
       Object.assign(mergedCredentials, nativeProjectDirCredentials(platform, nativeProjectDir))
+
+    // No Xcode pinned (flag, env or saved credentials): in a terminal, offer the variants the
+    // builder has right now. Stored credentials may carry their own pin, so leave those alone.
+    if (platform === 'ios' && mergedCredentials && !useStoredCredentials
+      && mergedCredentials.CAPGO_IOS_XCODE_VERSION === undefined
+      && options.apikey && canPromptInteractively({ silent })) {
+      const picked = await promptXcodeVersion(host, options.apikey)
+      if (picked)
+        mergedCredentials.CAPGO_IOS_XCODE_VERSION = picked
+    }
 
     // Prepare request payload for Capgo backend
     // (payload structure will be finalized after credential validation below)

@@ -141,7 +141,7 @@ interface BuildLogger {
 - `--app-store-connect-team-id <id>`
 - `--ios-scheme <scheme>`
 - `--ios-target <target>`
-- `--xcode-version <version>`: build on a machine with this Xcode (e.g. `26`, `26.0.1`, `27`; a major accepts any minor). Env `CAPGO_IOS_XCODE_VERSION`. Fails fast with the available versions when no machine matches.
+- `--xcode-version <version>`: build on a machine with this Xcode (e.g. `26`, `26.0.1`, `27`; a major accepts any minor). Env `CAPGO_IOS_XCODE_VERSION`. Fails fast with the available versions when no machine matches. List the versions with `build variants`. In an interactive terminal, an iOS `build request` with no Xcode version set (flag, env or saved credentials) and without `--use-stored-credentials` offers that list; the first choice, "Any available machine", keeps the build unpinned. CI and non-TTY runs never prompt, and a failed lookup never blocks the build.
 - `--ios-distribution <mode>`: `app_store` (default, uploads to TestFlight) or `ad_hoc` (skips store upload; use with `--output-upload` for IPA-only when the App Store app does not exist yet)
 - `--ios-provisioning-profile <mapping>`: repeatable path or `bundleId=path`
 
@@ -174,6 +174,15 @@ interface BuildLogger {
 - `--cache-key <key>`: custom compilation cache namespace for this build (e.g. `rc`, `prod`, `feature/my-branch`). Use to share cache within an environment or isolate cache between RC and production. Ignored when `--no-cache` is set. Example RC vs PROD:
   - RC: `npx @capgo/cli@latest build request com.example.app --platform ios --cache-key rc`
   - PROD: `npx @capgo/cli@latest build request com.example.app --platform ios --cache-key prod`
+
+### `build variants`
+
+- Lists the macOS / Xcode variants iOS cloud builds can be pinned to with `--xcode-version`, read live from the Capgo build machines (`GET /build/variants`), newest Xcode first, with each variant's machine (macOS version or Linux builder), online/total machines, and whether it is on the default Xcode major for unpinned builds.
+- Examples: `npx @capgo/cli@latest build variants`, `npx @capgo/cli@latest build variants --json`, then pin one with `npx @capgo/cli@latest build request com.example.app --platform ios --xcode-version 26.2`.
+- Options:
+  - `--platform <platform>`: `ios` (default) or `android`. Android has no variants.
+  - `--json`: print `{ default_xcode_major, variants: [{ id, xcode_version, macos_version, backend, runners, online, default }] }`.
+  - `-a, --apikey <apikey>`, `--api-host <apiHost>`.
 
 ### `build zip [appId]`
 

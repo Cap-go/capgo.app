@@ -35,6 +35,7 @@ import { createAppleKeyCommand } from './build/onboarding/asc-key/command'
 import { onboardingBuilderCommand } from './build/onboarding/command'
 import { prescanCommand } from './build/prescan/command'
 import { requestBuildCommand } from './build/request'
+import { listBuildVariantsCommand } from './build/variants'
 import { zipBuildCommand } from './build/zip-command'
 import { cleanupBundle } from './bundle/cleanup'
 import { checkCompatibility } from './bundle/compatibility'
@@ -1348,6 +1349,25 @@ Examples:
   .option('--path <path>', 'Path to the JSON record written by --output-record (required)')
   .option('--field <field>', 'Print a single field (one of: jobId, appId, platform, buildMode, status, outputUrl, symbolsUrl, qrCodeAscii, qrCodePngPath, finishedAt, schemaVersion)')
   .option('--qr', 'Print the rendered ASCII QR code (shortcut for --field qrCodeAscii)')
+
+build
+  .command('variants')
+  .summary('List the macOS / Xcode variants iOS builds can use')
+  .description(`List the macOS / Xcode variants iOS cloud builds can be pinned to.
+
+The list comes live from the Capgo build machines, so it always shows what is
+available right now. Pin a build to one with \`build request --xcode-version <version>\`.
+In an interactive terminal, \`build request\` offers the same list when no Xcode
+version is set.
+
+Examples:
+  npx @capgo/cli@latest build variants
+  npx @capgo/cli@latest build variants --json`)
+  .action(listBuildVariantsCommand)
+  .option('--platform <platform>', 'Platform to list variants for: ios or android (default: ios)')
+  .option('--json', 'Print the variants as JSON')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
 
 const buildCredentials = build
   .command('credentials')

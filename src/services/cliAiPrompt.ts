@@ -903,9 +903,13 @@ When it succeeds, tell me the channel name and its settings. The channel appears
  * stored on Capgo, so the agent first requests the build with the stored signing and only
  * falls back to Capgo MCP Builder onboarding (which owns signing) when it is missing.
  */
-export function buildAiRequestBuildPrompt(input: AiAppTaskPromptInput & { platform: 'ios' | 'android' }): string {
+export function buildAiRequestBuildPrompt(input: AiAppTaskPromptInput & { platform: 'ios' | 'android', xcodeVersion?: string }): string {
   const appId = input.app.appId
   const platformLabel = input.platform === 'ios' ? 'iOS' : 'Android'
+  // Only an iOS dotted version ("26", "26.2") chosen in the console's Xcode selector pins the machine.
+  const xcodeArg = input.platform === 'ios' && input.xcodeVersion && /^\d{1,3}(?:\.\d{1,3}){0,2}$/.test(input.xcodeVersion)
+    ? ` --xcode-version ${input.xcodeVersion}`
+    : ''
   return [
     buildAuthenticationSection(input.apiKey, 'task'),
     `## 2. Request a native build
@@ -915,7 +919,7 @@ ${appTaskContext(input)}
 1. ${projectAppIdCheck(appId, true)}
 2. Request a ${platformLabel} build with the selected runner. \`--use-stored-credentials\` uses the signing setup saved on Capgo for this app; signing already configured on this machine still takes precedence:
 
-{CAPGO_CLI_RUNNER} build request ${appId} --platform ${input.platform} --use-stored-credentials
+{CAPGO_CLI_RUNNER} build request ${appId} --platform ${input.platform}${xcodeArg} --use-stored-credentials
 
 3. Never ask me to paste certificates, passwords or store keys into the chat, and never pass them on the command line.
 4. If the request fails because ${platformLabel} signing or credentials are missing, do not configure them by hand: follow the Capgo MCP section below and pass the \`${input.platform}\` platform to \`start_capgo_builder_onboarding\`. When it reports completion, request the build again with the command above.
