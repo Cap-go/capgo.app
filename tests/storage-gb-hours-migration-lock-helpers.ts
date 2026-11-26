@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 
 export const STORAGE_MIGRATION_PATH = new URL(
-  '../supabase/migrations/20261120001201_storage_gb_hours_billing.sql',
+  './fixtures/storage-gb-hours-atomic-migration.sql',
   import.meta.url,
 )
 

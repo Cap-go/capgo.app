@@ -163,18 +163,6 @@ is_failed_migration_hotfix() {
   esac
 }
 
-# capgo-22.63.1: 20261117152120 never applied in prod; atomic replacement at
-# 20261120001201 after #4193/#4057 on main (R085 rename of 152120 on this branch).
-is_storage_gb_hours_152120_repair() {
-  local file="$1"
-  local blob
-  blob="$(git hash-object "$file")"
-  case "${file}:${blob}" in
-    supabase/migrations/20261120001201_storage_gb_hours_billing.sql:a2bcd8fc3bb09e516e570675aa75533acfb2f023) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 # Branch-only split of failed 152120; never applied in prod (capgo-22.63.1).
 is_storage_gb_hours_split_delete() {
   case "$1" in
@@ -193,6 +181,16 @@ is_storage_gb_hours_restamp_delete() {
   esac
 }
 
+# 20261120001201 is #4190's rename of the prod-applied 20261117152120 and was
+# never applied in prod. Deletion only (never edits), and only together with
+# the byte-for-byte restore of 152120.
+is_storage_gb_hours_001201_delete() {
+  local restored='supabase/migrations/20261117152120_storage_gb_hours_billing.sql'
+  [[ "$1" == 'supabase/migrations/20261120001201_storage_gb_hours_billing.sql' ]] || return 1
+  [[ -f "$restored" ]] || return 1
+  [[ "$(git hash-object "$restored")" == '7b34c6e483664c47fd0910b37a0d10a53eaadc89' ]]
+}
+
 # Prod-applied migrations restored from remote schema_migrations.statements.
 # Exact blob hashes keep this allowlist from accepting later edits.
 is_prod_history_restore() {
@@ -205,6 +203,7 @@ is_prod_history_restore() {
     supabase/migrations/20260725111931_fix_reclaim_cron_catch_canceled.sql:4226e0cab969bbefc7ca622e34821ae12a0c8c3a) return 0 ;;
     supabase/migrations/20260725162854_skip_audit_dual_storage_manifest_count.sql:ea3b1c49c5469aa9ba0d74bef34eba35f78d934f) return 0 ;;
     supabase/migrations/20260725182614_slim_audit_logs_skip_bookkeeping.sql:1856f7dced19a929e4ea3548e75e2a17b8a99863) return 0 ;;
+    supabase/migrations/20261117152120_storage_gb_hours_billing.sql:7b34c6e483664c47fd0910b37a0d10a53eaadc89) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -236,8 +235,10 @@ if [[ -n "$modified_files" ]]; then
       continue
     fi
 
-    if is_storage_gb_hours_152120_repair "$file"; then
-      echo "⚠️  Allowing audited repair of failed unapplied 20261117152120: $file"
+    # A restore can show up as a rename when the replaced file is deleted
+    # (20261120001201 -> 20261117152120); the exact blob hash still applies.
+    if is_prod_history_restore "$file"; then
+      echo "⚠️  Allowing audited prod-history restore: $file"
       continue
     fi
 
@@ -302,6 +303,10 @@ if [[ -n "$deleted_files" && "$allow_migration_squash" -ne 1 ]]; then
     fi
     if is_storage_gb_hours_restamp_delete "$file"; then
       echo "⚠️  Allowing removal of unapplied storage gb-hours restamp: $file"
+      continue
+    fi
+    if is_storage_gb_hours_001201_delete "$file"; then
+      echo "⚠️  Allowing removal of unapplied 20261120001201 (152120 restored): $file"
       continue
     fi
     disallowed_deleted_files+="${file}"$'\n'

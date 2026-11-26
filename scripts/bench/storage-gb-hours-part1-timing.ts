@@ -1,5 +1,5 @@
 /**
- * Tinbase timing for 20261120001201 (excludes final apps/app_versions lock window).
+ * Tinbase timing for 20261117152120, the storage GB-hours migration applied in prod.
  * Seeds ~1.3% of prod row counts plus minimal live app_versions rows so
  * backfill_missing_storage_lifetimes has representative work. Timing excludes
  * that backfill until app_versions rows are seeded (see seed_app_versions).
@@ -9,7 +9,7 @@ import { loadSupabaseProject } from 'tinbase/node'
 
 const BENCH_USER = '00000000-0000-4000-8000-000000000002'
 const BENCH_ORG = '00000000-0000-4000-8000-000000000001'
-const MIGRATION_TS = 20261120001201
+const MIGRATION_TS = 20261117152120
 
 const PROD = {
   daily_storage_hourly: 392_876,
@@ -24,10 +24,10 @@ const SEED_LIVE_VERSIONS = Math.min(200, SEED_VM)
 const database = await Database.create(await createPgliteEngine())
 const project = await loadSupabaseProject(process.cwd())
 const migration = project.migrations.find((m) =>
-  m.name.startsWith('20261120001201_storage_gb_hours_billing'),
+  m.name.startsWith('20261117152120_storage_gb_hours_billing'),
 )
 if (!migration)
-  throw new Error('migration 20261120001201 not found')
+  throw new Error('migration 20261117152120 not found')
 
 try {
   const prior = project.migrations.filter((m) => {
@@ -149,8 +149,8 @@ try {
     seed_daily_storage_hourly: SEED_DSH,
     seed_version_meta: SEED_VM,
     seed_app_versions: SEED_LIVE_VERSIONS,
-    migration: '20261120001201_storage_gb_hours_billing.sql',
-    note: 'Full atomic migration; includes final apps/app_versions lock window (short on Tinbase).',
+    migration: '20261117152120_storage_gb_hours_billing.sql',
+    note: 'Migration as applied in prod (no atomic lock wrapper).',
     seconds_tinbase: Number(seconds.toFixed(2)),
     extrapolated_seconds_at_prod_dsh_rows: Number(extrapolatedSeconds.toFixed(0)),
     prod_row_estimates: PROD,
