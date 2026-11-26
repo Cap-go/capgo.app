@@ -173,15 +173,22 @@ is_storage_gb_hours_split_delete() {
 }
 
 # Branch-only restamp deletes for storage gb-hours billing (capgo.app#4190).
-# 20261120001201 is #4190's rename of the prod-applied 20261117152120; it was
-# never applied in prod, and 152120 is restored (see is_prod_history_restore).
 is_storage_gb_hours_restamp_delete() {
   case "$1" in
     supabase/migrations/20261118193000_storage_gb_hours_billing.sql) return 0 ;;
     supabase/migrations/20261119233941_storage_gb_hours_billing.sql) return 0 ;;
-    supabase/migrations/20261120001201_storage_gb_hours_billing.sql) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# 20261120001201 is #4190's rename of the prod-applied 20261117152120 and was
+# never applied in prod. Deletion only (never edits), and only together with
+# the byte-for-byte restore of 152120.
+is_storage_gb_hours_001201_delete() {
+  local restored='supabase/migrations/20261117152120_storage_gb_hours_billing.sql'
+  [[ "$1" == 'supabase/migrations/20261120001201_storage_gb_hours_billing.sql' ]] || return 1
+  [[ -f "$restored" ]] || return 1
+  [[ "$(git hash-object "$restored")" == '7b34c6e483664c47fd0910b37a0d10a53eaadc89' ]]
 }
 
 # Prod-applied migrations restored from remote schema_migrations.statements.
@@ -296,6 +303,10 @@ if [[ -n "$deleted_files" && "$allow_migration_squash" -ne 1 ]]; then
     fi
     if is_storage_gb_hours_restamp_delete "$file"; then
       echo "⚠️  Allowing removal of unapplied storage gb-hours restamp: $file"
+      continue
+    fi
+    if is_storage_gb_hours_001201_delete "$file"; then
+      echo "⚠️  Allowing removal of unapplied 20261120001201 (152120 restored): $file"
       continue
     fi
     disallowed_deleted_files+="${file}"$'\n'
