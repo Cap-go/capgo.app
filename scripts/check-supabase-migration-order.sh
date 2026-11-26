@@ -163,20 +163,6 @@ is_failed_migration_hotfix() {
   esac
 }
 
-# 20261117152120 IS applied in prod (#4171). #4190 renamed it to 20261120001201,
-# which blocked `supabase db push` (remote version missing locally). 152120 is
-# restored byte for byte (see is_prod_history_restore) and 20261120001201 is a
-# no-op follow-up; the atomic SQL moved to tests/fixtures.
-is_storage_gb_hours_152120_repair() {
-  local file="$1"
-  local blob
-  blob="$(git hash-object "$file")"
-  case "${file}:${blob}" in
-    supabase/migrations/20261120001201_storage_gb_hours_billing.sql:35e76182a769a768077bad2c3aab6cac76c92f08) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 # Branch-only split of failed 152120; never applied in prod (capgo-22.63.1).
 is_storage_gb_hours_split_delete() {
   case "$1" in
@@ -187,10 +173,13 @@ is_storage_gb_hours_split_delete() {
 }
 
 # Branch-only restamp deletes for storage gb-hours billing (capgo.app#4190).
+# 20261120001201 is #4190's rename of the prod-applied 20261117152120; it was
+# never applied in prod, and 152120 is restored (see is_prod_history_restore).
 is_storage_gb_hours_restamp_delete() {
   case "$1" in
     supabase/migrations/20261118193000_storage_gb_hours_billing.sql) return 0 ;;
     supabase/migrations/20261119233941_storage_gb_hours_billing.sql) return 0 ;;
+    supabase/migrations/20261120001201_storage_gb_hours_billing.sql) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -239,8 +228,10 @@ if [[ -n "$modified_files" ]]; then
       continue
     fi
 
-    if is_storage_gb_hours_152120_repair "$file"; then
-      echo "⚠️  Allowing audited no-op follow-up to restored 20261117152120: $file"
+    # A restore can show up as a rename when the replaced file is deleted
+    # (20261120001201 -> 20261117152120); the exact blob hash still applies.
+    if is_prod_history_restore "$file"; then
+      echo "⚠️  Allowing audited prod-history restore: $file"
       continue
     fi
 
