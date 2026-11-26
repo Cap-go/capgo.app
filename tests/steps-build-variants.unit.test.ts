@@ -116,6 +116,14 @@ describe('StepsBuild Xcode variant selector', () => {
     expect(requestCommand()).not.toContain('--xcode-version')
   })
 
+  it('lets a first iOS build pick an Xcode on the setup step, where the AI card is shown', async () => {
+    invokeCapgoApiMock.mockResolvedValue({ data: { variants: [variant('27.1'), variant('26.2')] }, error: null })
+    await mount({ ios: 0, android: 0 })
+    await vi.waitFor(() => expect(selector()).toBeTruthy())
+    expect(container.querySelector('#build_step_0')?.textContent).toContain('build init')
+    expect(selector()!.disabled).toBe(false)
+  })
+
   it('drops versions that are not dotted numbers so they never reach the command', async () => {
     invokeCapgoApiMock.mockResolvedValue({ data: { variants: [variant('26; rm -rf ~'), variant('26.2')] }, error: null })
     await mount()

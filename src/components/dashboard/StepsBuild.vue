@@ -514,6 +514,28 @@ onUnmounted(() => {
             </span>
           </button>
         </div>
+
+        <label
+          v-if="selectedPlatform === 'ios' && xcodeChoices.length > 0"
+          class="block text-sm font-medium text-slate-700 dark:text-slate-200"
+          data-test="build-xcode-variant"
+        >
+          {{ t('build-variant-label') }}
+          <select
+            v-model="selectedXcodeVersion"
+            class="d-select mt-1 w-full rounded-lg border-slate-300 bg-white text-slate-950 dark:border-white/20 dark:bg-slate-900 dark:text-white"
+          >
+            <option value="">
+              {{ t('build-variant-any') }}
+            </option>
+            <option v-for="choice in xcodeChoices" :key="choice.xcodeVersion" :value="choice.xcodeVersion">
+              {{ choice.label }}
+            </option>
+          </select>
+          <span class="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
+            {{ t('build-variant-help') }}
+          </span>
+        </label>
       </header>
 
       <AiAgentTaskCard
@@ -558,29 +580,6 @@ onUnmounted(() => {
                   {{ i + 1 }} / {{ steps.length }}
                 </span>
               </div>
-
-              <label
-                v-if="s.key === 'request-build' && selectedPlatform === 'ios' && xcodeChoices.length > 0"
-                class="mt-4 block text-sm font-medium text-slate-700 dark:text-slate-200"
-                data-test="build-xcode-variant"
-              >
-                {{ t('build-variant-label') }}
-                <select
-                  v-model="selectedXcodeVersion"
-                  class="d-select mt-1 w-full rounded-lg border-slate-300 bg-white text-slate-950 dark:border-white/20 dark:bg-slate-900 dark:text-white"
-                  :disabled="step !== i"
-                >
-                  <option value="">
-                    {{ t('build-variant-any') }}
-                  </option>
-                  <option v-for="choice in xcodeChoices" :key="choice.xcodeVersion" :value="choice.xcodeVersion">
-                    {{ choice.label }}
-                  </option>
-                </select>
-                <span class="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
-                  {{ t('build-variant-help') }}
-                </span>
-              </label>
 
               <button
                 v-if="s.command"
