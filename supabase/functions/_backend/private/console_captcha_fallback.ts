@@ -10,14 +10,11 @@ import {
   normalizeRateLimitAccountIdentifier,
   reserveCaptchaFallbackQuota,
 } from '../utils/rate_limit.ts'
+import { collectConsoleWebOrigins } from '../utils/console_web_origins.ts'
 import { getEnv } from '../utils/utils.ts'
 import { isEmailDomainSsoEnforced } from './sso/domain-enforcement.ts'
 
 const BRES = { status: 'ok' as const }
-
-const DEFAULT_CAPTCHA_FALLBACK_ALLOWED_ORIGINS = [
-  'https://console.capgo.com.cn',
-] as const
 
 const bodySchema = z.object({
   email: z.string().email().max(320),
@@ -33,24 +30,7 @@ function trimTrailingSlashes(value: string) {
 }
 
 function collectCaptchaFallbackAllowedOrigins(c: Context<MiddlewareKeyVariables>): Set<string> {
-  const allowed = new Set<string>()
-  const webapp = getEnv(c, 'WEBAPP_URL')
-  if (webapp) {
-    try {
-      allowed.add(new URL(webapp).origin)
-    }
-    catch {
-      // ignore invalid WEBAPP_URL
-    }
-  }
-  for (const origin of DEFAULT_CAPTCHA_FALLBACK_ALLOWED_ORIGINS) {
-    try {
-      allowed.add(new URL(origin).origin)
-    }
-    catch {
-      // ignore invalid default
-    }
-  }
+  const allowed = collectConsoleWebOrigins(c)
   for (const extra of getEnv(c, 'CAPTCHA_FALLBACK_ALLOWED_ORIGINS').split(',')) {
     const trimmed = extra.trim()
     if (!trimmed)

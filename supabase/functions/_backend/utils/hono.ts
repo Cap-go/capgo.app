@@ -14,6 +14,7 @@ import { timingSafeEqual } from 'hono/utils/buffer'
 import { accessLog, cloudlog } from './logging.ts'
 import { onError } from './on_error.ts'
 import { redactSensitiveUrl } from './sensitive_url.ts'
+import { collectConsoleWebOrigins } from './console_web_origins.ts'
 import { getEnv } from './utils.ts'
 
 import { version as CapgoVersion } from './version.ts'
@@ -76,7 +77,6 @@ const CAPGO_CONSOLE_SUBDOMAIN = 'console'
 
 const DEFAULT_CORS_ALLOWED_ORIGINS = new Set([
   ...['capgo.app', 'preprod.capgo.app', 'development.capgo.app'].map(domain => `https://${CAPGO_CONSOLE_SUBDOMAIN}.${domain}`),
-  'https://console.capgo.com.cn',
   'https://capgo.app',
   'https://preprod.capgo.app',
   'https://development.capgo.app',
@@ -140,6 +140,7 @@ function isLocalHttpOrigin(origin: string) {
 
 function getConfiguredCorsAllowedOrigins(c: Context) {
   return [
+  ...[...collectConsoleWebOrigins(c)],
     getEnv(c, 'WEBAPP_URL'),
     ...getEnv(c, 'CORS_ALLOWED_ORIGINS').split(','),
   ]

@@ -39,6 +39,7 @@ Standalone: `build prescan` accepts `--skip` / `--warn`. Full catalog: `webdocs/
 - Backward compatibility: `npx @capgo/cli@latest build onboarding` still works.
 - Options:
   - `-a, --apikey <apikey>` — Capgo API key to authenticate with (alternative to the `CAPGO_TOKEN` env var or `~/.capgo` / local `.capgo` file). Takes precedence over a saved key when both are present. Lets the SaaS onboarding wizard render a single copy-pasteable command across bash, zsh, fish, PowerShell, and cmd.exe.
+  - `--api-host <apiHost>` — Override the Capgo API host (for example `npx @capgo/cli@latest build init -a cap_xxx --api-host https://api.capgo.com.cn` on the China console).
   - `--no-analytics` — Disable build onboarding analytics and terminal replay for this run.
   - Example: `npx @capgo/cli@latest build init -a cap_xxx`
 - Notes:
@@ -125,6 +126,7 @@ interface BuildLogger {
   - `--platform <platform>`: `ios` or `android`. If omitted in an interactive terminal, the CLI prompts for the platform; non-interactive runs must pass it explicitly.
   - `--build-mode <buildMode>`: `debug` or `release`.
   - `-a, --apikey <apikey>`
+  - `--api-host <apiHost>` (for example `--api-host https://api.capgo.com.cn` on the China console)
   - `--verbose`
 
 #### iOS request options
