@@ -125,8 +125,10 @@ describe('credit usage PostHog backfill helpers', () => {
   })
 
   it('builds a resume filter after the last processed occurred_at and id pair', () => {
-    expect(buildCheckpointResumeFilter('2026-03-01T10:00:00.000Z', 123))
-      .toBe('occurred_at.gt.2026-03-01T10:00:00.000Z,and(occurred_at.eq.2026-03-01T10:00:00.000Z,id.gt.123)')
+    expect(buildCheckpointResumeFilter('2026-03-01T10:00:00.000Z', 123, 3)).toEqual({
+      sql: '(occurred_at > $3 OR (occurred_at = $3 AND id > $4))',
+      params: ['2026-03-01T10:00:00.000Z', 123],
+    })
   })
 
   it('normalizes explicit cutovers before they are used as query bounds', () => {

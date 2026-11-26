@@ -1,5 +1,19 @@
 import { exit } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+
+// Same request as supabase-js `auth.admin.generateLink`, returned in its
+// { properties, user } shape.
+async function generateLink(supabaseUrl, serviceKey, params) {
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/auth/v1/admin/generate_link`, {
+    method: 'POST',
+    headers: { 'apikey': serviceKey, 'Authorization': `Bearer ${serviceKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  const body = await response.json().then(json => json ?? {}, () => ({}))
+  if (!response.ok)
+    return { data: null, error: { status: response.status, message: body.msg || body.message || body.error_description || body.error || `HTTP ${response.status}` } }
+  const { action_link, email_otp, hashed_token, redirect_to, verification_type, ...user } = body
+  return { data: { properties: { action_link, email_otp, hashed_token, redirect_to, verification_type }, user }, error: null }
+}
 
 async function run() {
   // Get email from command line arguments
@@ -21,18 +35,10 @@ async function run() {
   }
 
   try {
-    // Create Supabase admin client
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    })
-
     console.log(`Generating magic link for ${email}...`)
 
     // Generate magic link
-    const { data: magicLink, error: magicError } = await supabaseAdmin.auth.admin.generateLink({
+    const { data: magicLink, error: magicError } = await generateLink(supabaseUrl, supabaseServiceKey, {
       type: 'magiclink',
       email,
     })

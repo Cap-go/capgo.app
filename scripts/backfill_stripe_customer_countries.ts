@@ -15,16 +15,16 @@
  */
 import type Stripe from 'stripe'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import type pg from 'pg'
 import { mkdir, writeFile } from 'node:fs/promises'
 import process from 'node:process'
-import { asyncPool, createStripeClient, createSupabaseServiceClient, DEFAULT_ENV_FILE, getArgValue, getRequiredEnv, isActionableStripeCustomerId, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
+import { asyncPool, connectAdminDb, createStripeClient, DEFAULT_ENV_FILE, getArgValue, getRequiredEnv, isActionableStripeCustomerId, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
 
 const DEFAULT_CONCURRENCY = 8
 const DEFAULT_PAGE_SIZE = 1000
 const FAILURE_OUTPUT = './tmp/stripe_customer_country_backfill_failures.json'
 const ISO_COUNTRY_CODE_REGEX = /^[A-Z]{2}$/
 
-type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
 type StripeInfoCountryRow = Pick<
   Database['public']['Tables']['stripe_info']['Row'],
   'customer_id' | 'customer_country'
@@ -67,7 +67,7 @@ export function shouldUpdateCustomerCountry(currentCountry: string | null | unde
 }
 
 async function fetchStripeInfoCountryRows(
-  supabase: SupabaseClient,
+  db: pg.Pool,
   options: {
     customerId?: string | null
     missingOnly: boolean
@@ -77,24 +77,16 @@ async function fetchStripeInfoCountryRows(
   let lastSeenCustomerId: string | null = null
 
   while (true) {
-    let query = supabase
-      .from('stripe_info')
-      .select('customer_id, customer_country')
-      .order('customer_id', { ascending: true })
-      .limit(DEFAULT_PAGE_SIZE)
-
-    if (options.customerId)
-      query = query.eq('customer_id', options.customerId)
-    else if (lastSeenCustomerId)
-      query = query.gt('customer_id', lastSeenCustomerId)
-
-    if (options.missingOnly)
-      query = query.is('customer_country', null)
-
-    const { data, error } = await query
-    if (error)
-      throw error
-    if (!data?.length)
+    const { rows: data }: { rows: StripeInfoCountryRow[] } = await db.query<StripeInfoCountryRow>(
+      `SELECT customer_id, customer_country
+       FROM public.stripe_info
+       WHERE ($1::text IS NULL OR customer_id = $1) AND ($2::text IS NULL OR customer_id > $2)
+         AND (NOT $3::boolean OR customer_country IS NULL)
+       ORDER BY customer_id ASC
+       LIMIT $4`,
+      [options.customerId || null, lastSeenCustomerId, options.missingOnly, DEFAULT_PAGE_SIZE],
+    )
+    if (!data.length)
       break
 
     rows.push(...data)
@@ -107,14 +99,8 @@ async function fetchStripeInfoCountryRows(
   return rows
 }
 
-async function updateCustomerCountry(supabase: SupabaseClient, customerId: string, country: string | null) {
-  const { error } = await supabase
-    .from('stripe_info')
-    .update({ customer_country: country })
-    .eq('customer_id', customerId)
-
-  if (error)
-    throw error
+async function updateCustomerCountry(db: pg.Pool, customerId: string, country: string | null) {
+  await db.query('UPDATE public.stripe_info SET customer_country = $1 WHERE customer_id = $2', [country, customerId])
 }
 
 async function writeFailures(failures: BackfillFailure[]) {
@@ -141,13 +127,31 @@ async function main(args = process.argv.slice(2), runtimeEnv: Record<string, str
     ...runtimeEnv,
   }
 
-  const supabase = createSupabaseServiceClient(env)
   const stripe = createStripeClient(
     getRequiredEnv(env, 'STRIPE_SECRET_KEY'),
     env.STRIPE_API_BASE_URL?.trim(),
   )
+  const db = await connectAdminDb(env)
+  try {
+    await backfill(db, stripe, { apply, concurrency, customerId, envFile, limit, refreshExisting })
+  }
+  finally {
+    await db.end()
+  }
+}
 
-  const rows = await fetchStripeInfoCountryRows(supabase, {
+interface BackfillOptions {
+  apply: boolean
+  concurrency: number
+  customerId: string | null
+  envFile: string
+  limit: number | null
+  refreshExisting: boolean
+}
+
+async function backfill(db: pg.Pool, stripe: ReturnType<typeof createStripeClient>, { apply, concurrency, customerId, envFile, limit, refreshExisting }: BackfillOptions) {
+
+  const rows = await fetchStripeInfoCountryRows(db, {
     customerId,
     missingOnly: !refreshExisting,
   })
@@ -211,7 +215,7 @@ async function main(args = process.argv.slice(2), runtimeEnv: Record<string, str
   let updated = 0
   await asyncPool(concurrency, candidates, async (candidate) => {
     try {
-      await updateCustomerCountry(supabase, candidate.customer_id, candidate.next_country)
+      await updateCustomerCountry(db, candidate.customer_id, candidate.next_country)
       updated++
       if (updated % 100 === 0 || updated === candidates.length)
         console.log(`Updated ${updated}/${candidates.length}`)

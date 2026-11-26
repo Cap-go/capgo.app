@@ -9,12 +9,13 @@
  * Apply deletions:
  *   bun run stripe:cleanup-orphaned-stripe-info --apply
  */
+import type pg from 'pg'
 import type Stripe from 'stripe'
 import process from 'node:process'
 import {
   asyncPool,
+  connectAdminDb,
   createStripeClient,
-  createSupabaseServiceClient,
   DEFAULT_ENV_FILE,
   getArgValue,
   getRequiredEnv,
@@ -28,32 +29,26 @@ const DEFAULT_OUTPUT = './tmp/orphaned_stripe_info.csv'
 const DEFAULT_PAGE_SIZE = 1000
 const DEFAULT_CONCURRENCY = 8
 
-type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
-
 interface OrphanRow {
   customerId: string
   status: string | null
   subscriptionId: string | null
 }
 
-async function fetchStripeInfoRows(supabase: SupabaseClient) {
+async function fetchStripeInfoRows(db: pg.Pool) {
   const rows: OrphanRow[] = []
   let lastSeenCustomerId: string | null = null
 
   while (true) {
-    let query = supabase
-      .from('stripe_info')
-      .select('customer_id, status, subscription_id')
-      .order('customer_id', { ascending: true })
-      .limit(DEFAULT_PAGE_SIZE)
-
-    if (lastSeenCustomerId)
-      query = query.gt('customer_id', lastSeenCustomerId)
-
-    const { data, error } = await query
-    if (error)
-      throw error
-    if (!data?.length)
+    const { rows: data } = await db.query<{ customer_id: string, status: string | null, subscription_id: string | null }>(
+      `SELECT customer_id, status, subscription_id
+       FROM public.stripe_info
+       WHERE $1::text IS NULL OR customer_id > $1
+       ORDER BY customer_id ASC
+       LIMIT $2`,
+      [lastSeenCustomerId, DEFAULT_PAGE_SIZE],
+    )
+    if (!data.length)
       break
 
     rows.push(...data.map(row => ({
@@ -70,20 +65,17 @@ async function fetchStripeInfoRows(supabase: SupabaseClient) {
   return rows
 }
 
-async function fetchLinkedCustomerIds(supabase: SupabaseClient, customerIds: string[]) {
+async function fetchLinkedCustomerIds(db: pg.Pool, customerIds: string[]) {
   const linked = new Set<string>()
 
   for (let index = 0; index < customerIds.length; index += 200) {
     const chunk = customerIds.slice(index, index + 200)
-    const { data, error } = await supabase
-      .from('orgs')
-      .select('customer_id')
-      .in('customer_id', chunk)
+    const { rows: data } = await db.query<{ customer_id: string | null }>(
+      'SELECT customer_id FROM public.orgs WHERE customer_id = ANY($1)',
+      [chunk],
+    )
 
-    if (error)
-      throw error
-
-    for (const row of data ?? []) {
+    for (const row of data) {
       if (row.customer_id)
         linked.add(row.customer_id)
     }
@@ -92,24 +84,20 @@ async function fetchLinkedCustomerIds(supabase: SupabaseClient, customerIds: str
   return linked
 }
 
-async function fetchLinkedOrgIds(supabase: SupabaseClient) {
+async function fetchLinkedOrgIds(db: pg.Pool) {
   const linkedOrgIds = new Set<string>()
   let lastSeenOrgId: string | null = null
 
   while (true) {
-    let query = supabase
-      .from('orgs')
-      .select('id')
-      .order('id', { ascending: true })
-      .limit(DEFAULT_PAGE_SIZE)
-
-    if (lastSeenOrgId)
-      query = query.gt('id', lastSeenOrgId)
-
-    const { data, error } = await query
-    if (error)
-      throw error
-    if (!data?.length)
+    const { rows: data } = await db.query<{ id: string }>(
+      `SELECT id
+       FROM public.orgs
+       WHERE $1::uuid IS NULL OR id > $1::uuid
+       ORDER BY id ASC
+       LIMIT $2`,
+      [lastSeenOrgId, DEFAULT_PAGE_SIZE],
+    )
+    if (!data.length)
       break
 
     for (const row of data) {
@@ -166,18 +154,27 @@ async function main(args = process.argv.slice(2), runtimeEnv: Record<string, str
   const concurrency = parsePositiveInteger(getArgValue(args, '--concurrency'), '--concurrency', DEFAULT_CONCURRENCY)
 
   const env = { ...(await loadEnv(envFile)), ...runtimeEnv }
-  const supabase = createSupabaseServiceClient(env)
   const stripe = createStripeClient(
     getRequiredEnv(env, 'STRIPE_SECRET_KEY'),
     env.STRIPE_API_BASE_URL?.trim(),
   )
+  const db = await connectAdminDb(env)
+  try {
+    await cleanup(db, stripe, { apply, concurrency, outputPath })
+  }
+  finally {
+    await db.end()
+  }
+}
 
-  const stripeInfoRows = await fetchStripeInfoRows(supabase)
+async function cleanup(db: pg.Pool, stripe: Stripe, { apply, concurrency, outputPath }: { apply: boolean, concurrency: number, outputPath: string }) {
+
+  const stripeInfoRows = await fetchStripeInfoRows(db)
   const linkedCustomerIds = await fetchLinkedCustomerIds(
-    supabase,
+    db,
     stripeInfoRows.map(row => row.customerId),
   )
-  const linkedOrgIds = await fetchLinkedOrgIds(supabase)
+  const linkedOrgIds = await fetchLinkedOrgIds(db)
 
   const orphans = stripeInfoRows.filter(row =>
     isOrphanedStripeInfoRow(row, linkedCustomerIds, linkedOrgIds))
@@ -197,12 +194,7 @@ async function main(args = process.argv.slice(2), runtimeEnv: Record<string, str
     try {
       if (isActionableStripeCustomerId(row.customerId))
         await cancelStripeSubscriptions(stripe, row.customerId)
-      const { error } = await supabase
-        .from('stripe_info')
-        .delete()
-        .eq('customer_id', row.customerId)
-      if (error)
-        throw error
+      await db.query('DELETE FROM public.stripe_info WHERE customer_id = $1', [row.customerId])
     }
     catch (error) {
       failures.push({

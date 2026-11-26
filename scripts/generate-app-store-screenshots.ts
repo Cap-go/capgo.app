@@ -7,11 +7,11 @@ import { pathToFileURL } from 'node:url'
 import net from 'node:net'
 import type { Browser, Page } from '@playwright/test'
 import { chromium } from '@playwright/test'
-import { createClient } from '@supabase/supabase-js'
 import { Client } from 'pg'
 import { installMocks, maskIdentities } from './marketing-screenshots/mocks'
 import { getPlaywrightStripeApiBaseUrl, getStripeEmulatorPort } from './playwright-stripe'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
+import { signInWithPassword } from './gotrue_password_sign_in'
 
 interface ManagedProcess {
   child: ChildProcessWithoutNullStreams
@@ -435,27 +435,26 @@ async function seedDemoData() {
 }
 
 async function prepareScreenshotData(supabaseUrl: string, supabaseAnon: string) {
-  const supabase = createClient(supabaseUrl, supabaseAnon, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
+  let accessToken: string
+  try {
+    accessToken = (await signInWithPassword(supabaseUrl, supabaseAnon, 'test@capgo.app', 'testtest')).access_token
+  }
+  catch (error) {
+    throw new Error(`Unable to sign in for screenshot data setup: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  // Same PostgREST update supabase-js sent, as the signed-in user (RLS applies).
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/apps?app_id=eq.com.demo.app`, {
+    method: 'PATCH',
+    headers: {
+      'apikey': supabaseAnon,
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
     },
+    body: JSON.stringify({ allow_preview: true }),
   })
-
-  const { error: signInError } = await supabase.auth.signInWithPassword({
-    email: 'test@capgo.app',
-    password: 'testtest',
-  })
-  if (signInError)
-    throw new Error(`Unable to sign in for screenshot data setup: ${signInError.message}`)
-
-  const { error } = await supabase
-    .from('apps')
-    .update({ allow_preview: true })
-    .eq('app_id', 'com.demo.app')
-  if (error)
-    throw new Error(`Unable to enable demo preview for screenshots: ${error.message}`)
+  if (!response.ok)
+    throw new Error(`Unable to enable demo preview for screenshots: ${await response.text()}`)
 }
 
 // Runs in the browser before every navigation: keep first-run hints, the
