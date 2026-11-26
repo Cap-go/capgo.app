@@ -186,17 +186,12 @@
     },
     "gotrue": {
       "success": {
-        "tag": "capgo-22.58.0",
-        "sha": "2c94ed8c944cd00974ff87f2d5093710ede592c6",
-        "runId": "43996069203",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.73.0",
         "sha": "84ad4e3e3015691dfcb926e2aa22b091b41954e0",
         "runId": "45808291726",
         "attempt": 1
-      }
+      },
+      "pending": null
     }
   }
 }
