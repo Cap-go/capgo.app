@@ -68,6 +68,46 @@ describe('china build_logs_direct proxy on api worker', () => {
     await expect(response.json()).resolves.toMatchObject({ error: 'not_found' })
   })
 
+  it('forwards WebSocket upgrade headers to the builder origin', async () => {
+    fetchMock.mockImplementation((url: string | URL, init?: RequestInit) => {
+      expect(String(url)).toBe('https://api.capgo.app/build_logs_direct/job-ws/stream?token=tok')
+      const headers = new Headers(init?.headers)
+      expect(headers.get('upgrade')).toBe('websocket')
+      expect(headers.get('connection')?.toLowerCase()).toContain('upgrade')
+      return Promise.resolve(new Response(null, {
+        status: 200,
+        headers: { upgrade: 'websocket', connection: 'Upgrade' },
+      }))
+    })
+
+    const apiWorker = await loadApiWorker()
+    const response = await apiWorker.fetch(new Request(
+      'https://api.capgo.com.cn/build_logs_direct/job-ws/stream?token=tok',
+      {
+        headers: {
+          Upgrade: 'websocket',
+          Connection: 'Upgrade',
+        },
+      },
+    ))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('upgrade')).toBe('websocket')
+    expect(response.headers.get('connection')).toBe('Upgrade')
+  })
+
+  it('uses BUILDER_URL origin when configured on the worker env', async () => {
+    vi.stubEnv('BUILDER_URL', 'https://builder.custom.example/jobs/')
+    fetchMock.mockResolvedValue(new Response('ok', { status: 200 }))
+
+    const apiWorker = await loadApiWorker()
+    await apiWorker.fetch(new Request('https://api.capgo.com.cn/build_logs_direct/job-env/snapshot'))
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe('https://builder.custom.example/build_logs_direct/job-env/snapshot')
+    vi.unstubAllEnvs()
+  })
+
   it('does not proxy unrelated paths on the China API host', async () => {
     const apiWorker = await loadApiWorker()
     const response = await apiWorker.fetch(new Request('https://api.capgo.com.cn/ok', { method: 'POST' }))

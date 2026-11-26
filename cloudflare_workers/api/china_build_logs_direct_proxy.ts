@@ -7,27 +7,27 @@ const DEFAULT_BUILDER_ORIGIN = 'https://api.capgo.app'
 const BUILD_LOGS_DIRECT_PREFIX = '/build_logs_direct/'
 
 const HOP_BY_HOP_REQUEST = new Set([
-  'connection',
   'keep-alive',
   'proxy-authenticate',
   'proxy-authorization',
   'te',
   'trailer',
   'transfer-encoding',
-  'upgrade',
   'host',
 ])
 
 const HOP_BY_HOP_RESPONSE = new Set([
-  'connection',
   'keep-alive',
   'proxy-authenticate',
   'proxy-authorization',
   'te',
   'trailer',
   'transfer-encoding',
-  'upgrade',
 ])
+
+function isWebSocketUpgrade(request: Request) {
+  return request.headers.get('Upgrade')?.toLowerCase() === 'websocket'
+}
 
 function builderLogStreamOrigin(c: Parameters<MiddlewareHandler<MiddlewareKeyVariables>>[0]) {
   const configured = getEnv(c, 'BUILDER_URL').trim()
@@ -47,10 +47,15 @@ export const chinaBuildLogsDirectProxy: MiddlewareHandler<MiddlewareKeyVariables
     return next()
 
   const upstreamUrl = new URL(`${url.pathname}${url.search}`, builderLogStreamOrigin(c))
+  const wsUpgrade = isWebSocketUpgrade(c.req.raw)
   const headers = new Headers()
   c.req.raw.headers.forEach((value, key) => {
-    if (!HOP_BY_HOP_REQUEST.has(key.toLowerCase()))
-      headers.append(key, value)
+    const lower = key.toLowerCase()
+    if (HOP_BY_HOP_REQUEST.has(lower))
+      return
+    if (!wsUpgrade && (lower === 'connection' || lower === 'upgrade'))
+      return
+    headers.append(key, value)
   })
 
   const init: RequestInit = {
@@ -63,15 +68,22 @@ export const chinaBuildLogsDirectProxy: MiddlewareHandler<MiddlewareKeyVariables
     init.body = c.req.raw.body
 
   const upstream = await fetch(upstreamUrl, init)
+  if (upstream.webSocket)
+    return upstream
   if (upstream.status >= 300 && upstream.status < 400) {
     await upstream.body?.cancel()
     return c.json({ error: 'builder_proxy_error', message: 'Unexpected builder redirect' }, 502)
   }
 
   const responseHeaders = new Headers()
+  const passConnectionHeaders = wsUpgrade || upstream.status === 101
   upstream.headers.forEach((value, key) => {
-    if (!HOP_BY_HOP_RESPONSE.has(key.toLowerCase()))
-      responseHeaders.append(key, value)
+    const lower = key.toLowerCase()
+    if (HOP_BY_HOP_RESPONSE.has(lower))
+      return
+    if (!passConnectionHeaders && (lower === 'connection' || lower === 'upgrade'))
+      return
+    responseHeaders.append(key, value)
   })
 
   return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
