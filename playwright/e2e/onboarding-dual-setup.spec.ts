@@ -145,7 +145,7 @@ test('keeps AI setup available for later tasks and copies the active checklist p
   await page.getByRole('button', { name: /Builder Build/ }).click()
   await page.locator('[data-test="builder-method-terminal"]').click()
   await page.locator('[data-test="builder-checklist-command-copy"]').click()
-  await expect.poll(() => page.evaluate(() => (window as any).copiedSetupText)).toMatch(/@capgo\/cli@latest build init -a \S+$/)
+  await expect.poll(() => page.evaluate(() => (window as any).copiedSetupText)).toMatch(/@capgo\/cli@latest build init -a \S+(?: --api-host \S+)?$/)
   await page.getByRole('tab', { name: 'Live Updates', exact: true }).click()
   await page.locator('[data-test="app-onboarding-command-copy"]').click()
   await expect.poll(() => page.evaluate(() => (window as any).copiedSetupText)).toContain('@capgo/cli@latest i ')
