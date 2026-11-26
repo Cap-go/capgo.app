@@ -1,11 +1,7 @@
 import type { OptionsBase } from '../src/schemas/base'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { describePrewarmRegion, prewarmApp } from '../src/app/prewarm'
-import { withCwd } from '../src/build/cwd'
-import { getConfig } from '../src/utils'
+import * as utils from '../src/utils'
 
 const base = { region: 'na', placement: 'remote-CMH', revision: '7', cached: 0, skipped: null, error: null }
 
@@ -21,7 +17,7 @@ test('describes what the prewarm did in each region', () => {
   expect(describePrewarmRegion({ ...base, cached: 1, placement: 'local-LHR', pinned: true })).toBe('wrote 1 document to the cache')
 })
 
-test('prewarms an explicit app id outside a Capacitor project', async () => {
+test('prewarms an explicit app id without loading a Capacitor config', async () => {
   const requests: { path: string, apikey: string | null }[] = []
   const server = Bun.serve({
     port: 0,
@@ -30,17 +26,20 @@ test('prewarms an explicit app id outside a Capacitor project', async () => {
       return Response.json({ app_id: 'com.example.prewarm', regions: [{ ...base, cached: 2 }] })
     },
   })
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'capgo-prewarm-')))
+  // Behave as if no Capacitor project exists, whatever folder the test runs in.
+  // The API host lookup tolerates that (it falls back to Capgo cloud); prewarm
+  // must too when the app id is given.
+  const getConfig = spyOn(utils, 'getConfig').mockImplementation(async () => {
+    throw new Error('no Capacitor project')
+  })
+  const options = { apikey: 'test-key', apiHost: server.url.origin } as OptionsBase
   try {
-    await withCwd(dir, async () => {
-      // Capacitor looks for a config in parent folders too: a temp folder inside
-      // a project would let a regression that still loads the config pass.
-      await expect(getConfig(true)).rejects.toThrow()
-      await prewarmApp('com.example.prewarm', { apikey: 'test-key', apiHost: server.url.origin } as OptionsBase)
-    })
+    await prewarmApp('com.example.prewarm', options)
+    // Without an app id, the project config is the only source: it still fails.
+    await expect(prewarmApp(undefined, options)).rejects.toThrow('no Capacitor project')
   }
   finally {
-    rmSync(dir, { recursive: true, force: true })
+    getConfig.mockRestore()
     server.stop(true)
   }
   expect(requests.map(request => request.path)).toEqual(['/app/com.example.prewarm/prewarm'])
