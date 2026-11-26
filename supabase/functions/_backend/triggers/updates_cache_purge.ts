@@ -11,7 +11,9 @@
 // rate stays bounded whatever the backlog. A successful first purge schedules
 // re-purges (+3s / +10s / +60s / +180s) for replica lag; failed apps go back to the
 // queue at their Retry-After. A purged plugin_state scope is then prewarmed in
-// every plugin region (utils/pluginStatePrewarm.ts). Claims lease rows, so a crash before the ack
+// every plugin region (utils/pluginStatePrewarm.ts); a runtime without regions
+// (the Supabase function) forwards that to the API worker's /prewarm route
+// below. Claims lease rows, so a crash before the ack
 // only delays them. Every failure is soft: the cache TTL is the backstop.
 //
 // Token: CF_CACHE_PURGE_TOKEN, else the existing CF_ANALYTICS_TOKEN once it is
@@ -25,11 +27,11 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { PLUGIN_ROUTE_HOSTS, PLUGIN_ROUTE_ZONE_NAMES } from '../plugin_runtime/utils/pluginRouteHosts.generated.ts'
 import { updatesCacheTagForScope } from '../plugin_runtime/utils/updatesCacheTag.ts'
-import { BRES, middlewareAPISecret } from '../utils/hono.ts'
+import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
-import { schedulePluginStatePrewarm } from '../utils/pluginStatePrewarm.ts'
-import { backgroundTask, getEnv } from '../utils/utils.ts'
+import { PREWARM_AFTER_PURGE_DELAY_MS, pluginStatePrewarmTargets, schedulePluginStatePrewarm } from '../utils/pluginStatePrewarm.ts'
+import { backgroundTask, getEnv, isValidAppId } from '../utils/utils.ts'
 
 /** Cloudflare purge API accepts at most 100 tags per call on every plan. */
 const PURGE_TAGS_PER_CALL = 100
@@ -371,4 +373,20 @@ app.post('/', middlewareAPISecret, async (c) => {
   // Answer the wake right away; draining runs in the background.
   await backgroundTask(c, nudgeUpdatesCachePurgeDrain(c))
   return c.json(BRES)
+})
+
+/**
+ * A prewarm forwarded by a purge drain that has no regions (Supabase function,
+ * see pluginStatePrewarmForwardUrl). Runs the fan-out with this worker's regions,
+ * in the background like after a local purge, and never forwards it again.
+ */
+app.post('/prewarm', middlewareAPISecret, async (c) => {
+  // A null or malformed body falls through to the validation below (400).
+  const body: unknown = await c.req.raw.clone().json().catch(() => null)
+  const raw = body && typeof body === 'object' ? (body as { app_ids?: unknown }).app_ids : undefined
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > CLAIM_LIMIT || !raw.every(id => typeof id === 'string' && isValidAppId(id)))
+    throw quickError(400, 'invalid_app_ids', `app_ids must list 1 to ${CLAIM_LIMIT} valid app ids`)
+  const appIds = [...new Set(raw as string[])]
+  schedulePluginStatePrewarm(c, appIds, PREWARM_AFTER_PURGE_DELAY_MS, false)
+  return c.json({ ...BRES, apps: appIds.length, regions: pluginStatePrewarmTargets(c).length })
 })

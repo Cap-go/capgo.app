@@ -154,9 +154,19 @@ the device keys.
 
 ### Fan-out
 
-After the purge queue (`triggers/updates_cache_purge.ts`) purges a
-`plugin_state` batch, the API worker waits one second for the purge to reach
-every data center. It then posts the batch's app ids, 10 per call, to
+The database wakes the purge queue's drain (`triggers/updates_cache_purge.ts`)
+at `SUPABASE_URL`, so in production it mostly runs as a Supabase function. That
+runtime has no `ENV_NAME`, so no regions: after it purges a `plugin_state`
+batch, it posts the batch's app ids to the API worker
+(`CLOUDFLARE_FUNCTION_URL` + `/triggers/updates_cache_purge/prewarm`, with the
+API secret and `redirect: 'manual'`). The API worker runs the fan-out below
+with its own environment and never forwards it again. Cloudflare workers and
+runtimes with explicit `PLUGIN_REGION_TARGETS` never forward. The forward log
+is `plugin state prewarm forwarded` (or `forward failed`, with the status).
+
+After a purge of a `plugin_state` batch, or on receiving a forwarded batch,
+the API worker waits one second for the purge to reach every data center. It
+then posts the batch's app ids, 10 per call, to
 `https://plugin.<region>.capgo.app/plugin_state/prewarm` with the API secret
 and `redirect: 'manual'`, so a redirect never carries the secret elsewhere.
 Workers allow six open connections per invocation, and the drain also holds

@@ -7,9 +7,16 @@ import { app as prewarmRoute } from '../supabase/functions/_backend/plugin_runti
 import { resetPluginStateMemory, startPluginStateRequest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginState.ts'
 import { pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { prewarmBundles, prewarmOperations, prewarmPluginStateApp, prewarmSlotsForTests, shouldReplaceCachedGeneration } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
-import { drainUpdatesCachePurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
+import { drainUpdatesCachePurge, app as purgeTrigger } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { PLUGIN_REGIONS } from '../supabase/functions/_backend/utils/pluginRegionTargets.ts'
-import { isPinnedPlacement, pluginStatePrewarmTargets, PrewarmNotConfigured, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
+import { isPinnedPlacement, pluginStatePrewarmForwardUrl, pluginStatePrewarmTargets, PrewarmNotConfigured, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
+
+// Node by default; a test sets 'workerd' to run as a Cloudflare worker.
+const runtime = vi.hoisted(() => ({ key: null as string | null }))
+vi.mock('hono/adapter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('hono/adapter')>()
+  return { ...actual, getRuntimeKey: () => runtime.key ?? actual.getRuntimeKey() }
+})
 
 const APP_ID = 'com.example.prewarm'
 const OWNER = '00000000-0000-4000-8000-000000000001'
@@ -19,6 +26,9 @@ const inheritedTargets = process.env.PLUGIN_REGION_TARGETS
 
 beforeEach(() => {
   delete process.env.PLUGIN_REGION_TARGETS
+  runtime.key = null
+  // Only the forwarding tests forward: never toward a URL the parent environment set.
+  vi.stubEnv('CLOUDFLARE_FUNCTION_URL', '')
   // crypto.subtle settles on the real event loop, outside fake timers, so a busy
   // CI runner could let the fake clock run ahead of it. Hash synchronously
   // instead: the same digest, settled within the awaited microtasks.
@@ -1178,5 +1188,168 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     expect(fetchMock).toHaveBeenCalledTimes(PLUGIN_REGIONS.length)
+  })
+})
+
+describe('plugin state prewarm forwarding (purge drain without regions)', () => {
+  const FORWARD_URL = 'https://api.capgo.app/triggers/updates_cache_purge/prewarm'
+
+  function context() {
+    const raw = new Request('https://project.supabase.co/functions/v1/triggers/updates_cache_purge', { method: 'POST' })
+    return { env: {}, req: { url: raw.url, raw, header: () => undefined }, get: () => 'req-forward', set: () => {}, executionCtx: undefined } as any
+  }
+
+  /** The Supabase function: no ENV_NAME, a Cloudflare API URL, the shared API secret. */
+  function supabaseFunctionEnv() {
+    vi.stubEnv('ENV_NAME', '')
+    vi.stubEnv('CLOUDFLARE_FUNCTION_URL', 'https://api.capgo.app/')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+  }
+
+  it('hands the apps of a runtime without regions to the API worker, once and without redirects', async () => {
+    supabaseFunctionEnv()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ status: 'ok' }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(pluginStatePrewarmTargets(context())).toEqual([])
+    expect(pluginStatePrewarmForwardUrl(context())).toBe(FORWARD_URL)
+
+    schedulePluginStatePrewarm(context(), [APP_ID, 'com.example.two', APP_ID], 0)
+    await vi.waitFor(() => expect(log.mock.calls.flat()).toContain('plugin state prewarm forwarded'))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(FORWARD_URL)
+    expect(new Headers(init.headers).get('apisecret')).toBe('prewarm-secret')
+    expect(init.redirect).toBe('manual')
+    expect(JSON.parse(String(init.body))).toEqual({ app_ids: [APP_ID, 'com.example.two'] })
+  })
+
+  it('logs a refused forward with its status, and does not forward without the API secret', async () => {
+    supabaseFunctionEnv()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 401 }))
+    vi.stubGlobal('fetch', fetchMock)
+    schedulePluginStatePrewarm(context(), [APP_ID], 0)
+    await vi.waitFor(() => expect(error.mock.calls.flat().join(' ')).toContain('plugin state prewarm forward failed'))
+    expect(error.mock.calls.flat()).toContain(401)
+
+    error.mockClear()
+    fetchMock.mockClear()
+    vi.stubEnv('API_SECRET', '')
+    schedulePluginStatePrewarm(context(), [APP_ID], 0)
+    await vi.waitFor(() => expect(error.mock.calls.flat().join(' ')).toContain('API_SECRET is not set'))
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('never forwards from a Cloudflare worker, with explicit targets, from the forwarded route, or without a URL', async () => {
+    supabaseFunctionEnv()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const fetchMock = vi.fn(async () => Response.json({ status: 'ok' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    // A Cloudflare worker without regions (preprod API): its ENV_NAME decides.
+    runtime.key = 'workerd'
+    expect(pluginStatePrewarmForwardUrl(context())).toBeNull()
+    schedulePluginStatePrewarm(context(), [APP_ID], 0)
+    runtime.key = null
+
+    // The forwarded route itself.
+    schedulePluginStatePrewarm(context(), [APP_ID], 0, false)
+
+    // Explicitly configured targets, even invalid ones, disable the prewarm.
+    vi.stubEnv('PLUGIN_REGION_TARGETS', 'not json')
+    expect(pluginStatePrewarmForwardUrl(context())).toBeNull()
+    schedulePluginStatePrewarm(context(), [APP_ID], 0)
+    vi.unstubAllEnvs()
+    delete process.env.PLUGIN_REGION_TARGETS
+
+    supabaseFunctionEnv()
+    vi.stubEnv('CLOUDFLARE_FUNCTION_URL', '')
+    expect(pluginStatePrewarmForwardUrl(context())).toBeNull()
+    schedulePluginStatePrewarm(context(), [APP_ID], 0)
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('forwards only the plugin_state apps of a purge the Supabase function drained', async () => {
+    supabaseFunctionEnv()
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const order: string[] = []
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url === FORWARD_URL) {
+        order.push(`forward:${JSON.parse(String(init.body)).app_ids.join(',')}`)
+        return Response.json({ status: 'ok' })
+      }
+      order.push(url.includes('/plugin_state/prewarm') ? 'regional' : 'purge')
+      return Response.json({ success: true })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const claims: unknown[] = [{
+      status: 'ok',
+      lease_token: 'lease-1',
+      apps: [
+        { app_id: 'com.example.snapshot', scope: 'plugin_state', initial: true },
+        { app_id: 'com.example.db', scope: 'app', initial: true },
+      ],
+      has_more: false,
+    }]
+    const rpc = vi.fn(async (fn: string) => ({ data: fn === 'claim_updates_cache_purge' ? claims.shift() ?? { status: 'empty' } : null, error: null }))
+
+    await drainUpdatesCachePurge(context(), rpc)
+    await vi.waitFor(() => expect(order).toContain('forward:com.example.snapshot'))
+    // Purge first, then one forward; this runtime calls no region itself.
+    expect(order).toEqual(['purge', 'forward:com.example.snapshot'])
+  })
+
+  describe('forwarded prewarm route (API worker)', () => {
+    async function call(body: unknown, secret?: string) {
+      const app = new Hono()
+      app.route('/triggers/updates_cache_purge', purgeTrigger)
+      return app.request(FORWARD_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(secret ? { apisecret: secret } : {}) },
+        body: JSON.stringify(body),
+      })
+    }
+
+    it('prewarms every region of this worker after the purge delay, without forwarding again', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+      vi.stubEnv('API_SECRET', 'prewarm-secret')
+      vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+      // Set in the shared env file: it must not send the prewarm back out.
+      vi.stubEnv('CLOUDFLARE_FUNCTION_URL', 'https://api.capgo.app')
+      vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ placement: null, results: [] }))
+      vi.stubGlobal('fetch', fetchMock)
+
+      const response = await call({ app_ids: [APP_ID, APP_ID, 'com.example.two'] }, 'prewarm-secret')
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ status: 'ok', apps: 2, regions: PLUGIN_REGIONS.length })
+      await vi.advanceTimersByTimeAsync(999)
+      expect(fetchMock).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(PLUGIN_REGIONS.length))
+      expect(fetchMock.mock.calls.every(([url]) => String(url).endsWith('/plugin_state/prewarm'))).toBe(true)
+      expect(fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init.body)).app_ids)).toEqual(PLUGIN_REGIONS.map(() => [APP_ID, 'com.example.two']))
+    })
+
+    it('requires the API secret and 1 to 100 valid app ids', async () => {
+      vi.stubEnv('API_SECRET', 'prewarm-secret')
+      vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+      vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      expect((await call({ app_ids: [APP_ID] })).status).toBe(400)
+      expect((await call({ app_ids: [APP_ID] }, 'wrong')).status).toBe(400)
+      for (const app_ids of [[], APP_ID, ['not an app id'], Array.from({ length: 101 }, (_, i) => `com.example.app${i}`)])
+        expect((await call({ app_ids }, 'prewarm-secret')).status).toBe(400)
+      expect((await call(null, 'prewarm-secret')).status).toBe(400)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
   })
 })
