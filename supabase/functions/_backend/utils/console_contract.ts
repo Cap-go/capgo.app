@@ -1,9 +1,9 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { PostgrestClient } from '@supabase/postgrest-js'
 import type { Database } from './supabase.types.ts'
 
 // Transport types shared by the console client and the console API. They are
 // erased at build time; the console bundle never loads a Supabase SDK.
-export type ConsoleDataClient<T = Database> = Pick<SupabaseClient<T>, 'from' | 'rpc'>
+export type ConsoleDataClient<T = Database> = Pick<PostgrestClient<T>, 'from' | 'rpc'>
 
 // GoTrue response shapes, limited to the fields the console reads.
 export type AuthChangeEvent = 'INITIAL_SESSION' | 'PASSWORD_RECOVERY' | 'SIGNED_IN' | 'SIGNED_OUT' | 'TOKEN_REFRESHED' | 'USER_UPDATED' | 'MFA_CHALLENGE_VERIFIED'
