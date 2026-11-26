@@ -1,12 +1,13 @@
-import type { SupabaseClient, SupabaseClientOptions } from '@supabase/supabase-js'
 import type { PoolClient } from 'pg'
 import type { CatalogFunctionRow, CompiledConsoleQuery, ConsoleQueryOperation, ConsoleQueryRequest, ConsoleQueryResult, QueryCatalog, QueryColumn, QueryForeignKey } from '../supabase/functions/_backend/private/console_query_sql.ts'
+import type { ConsoleDataClient } from '../supabase/functions/_backend/utils/console_contract.ts'
+import type { LocalStackHttp } from './local-stack-http'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createClient as createSupabaseClient, PostgrestError } from '@supabase/supabase-js'
 import { decodeJwt } from 'jose'
 import { escapeLiteral, Pool } from 'pg'
 import { compileConsoleQuery, ConsoleQueryError, functionFromCatalogRow, shapeConsoleQueryResult } from '../supabase/functions/_backend/private/console_query_sql.ts'
+import { createLocalStackHttp } from './local-stack-http'
 
 /**
  * Test data access without PostgREST.
@@ -19,9 +20,24 @@ import { compileConsoleQuery, ConsoleQueryError, functionFromCatalogRow, shapeCo
  * `request.method` (the `app_versions` SELECT policy reads it), `request.path`
  * and the role's own settings such as `statement_timeout`.
  *
- * `auth` (GoTrue), `storage` and `functions` are not PostgREST and stay on
- * supabase-js; see `withSqlData`.
+ * `auth` (GoTrue), `storage` and `functions` are not PostgREST: they go to the
+ * local stack over plain fetch (./local-stack-http). No supabase-js.
  */
+
+/** Same fields as supabase-js `PostgrestError`. */
+export class PostgrestError extends Error {
+  readonly details: string
+  readonly hint: string
+  readonly code: string
+
+  constructor(context: { message: string, details: string, hint: string, code: string }) {
+    super(context.message)
+    this.name = 'PostgrestError'
+    this.details = context.details
+    this.hint = context.hint
+    this.code = context.code
+  }
+}
 
 type DbRole = 'anon' | 'authenticated' | 'service_role'
 
@@ -577,44 +593,43 @@ function headerRecord(headers: unknown): Record<string, string> {
   return Object.fromEntries(entries.map(([key, value]) => [key.toLowerCase(), String(value)]))
 }
 
-/**
- * Wraps a supabase-js client: `from()` / `rpc()` run as SQL with the identity
- * PostgREST would have derived from the request (signed-in session, the
- * Authorization header, or the API key); everything else (`auth`, `storage`,
- * `functions`) is the original supabase-js client.
- */
-function withSqlData<T extends SupabaseClient<any, any, any>>(client: T, apiKey: string, options: { global?: { headers?: unknown } } = {}): T {
-  const globalHeaders = headerRecord(options.global?.headers)
-  const identity = async (): Promise<DbIdentity> => {
-    let token: string | undefined = globalHeaders.authorization?.replace(/^Bearer\s+/i, '')
-    if (!token) {
-      const { data } = await client.auth.getSession()
-      token = data.session?.access_token
-    }
-    const headers: Record<string, string> = { apikey: apiKey, ...globalHeaders }
-    if (token)
-      headers.authorization = `Bearer ${token}`
-    return identityFromToken(token ?? apiKey, headers)
-  }
-  const data = createSqlDataClient(identity)
-  return new Proxy(client, {
-    get(target, property, receiver) {
-      if (property === 'from')
-        return data.from
-      if (property === 'rpc')
-        return data.rpc
-      if (property === 'schema')
-        throw new Error('Tests must not query other schemas through PostgREST; use executeSQL')
-      return Reflect.get(target, property, receiver)
-    },
-  })
+/** The supabase-js client surface tests use: typed `from()` / `rpc()` like the console, plus local-stack auth, storage and functions. */
+export type TestClient<Database = any> = ConsoleDataClient<Database> & LocalStackHttp
+
+/** The supabase-js `createClient` options tests pass; only `global.headers` changes behaviour. */
+export interface TestClientOptions {
+  auth?: { persistSession?: boolean, autoRefreshToken?: boolean, detectSessionInUrl?: boolean }
+  global?: { headers?: Record<string, string> | Headers }
+  db?: { schema?: string }
+  realtime?: unknown
 }
 
 /**
- * Drop-in for supabase-js `createClient` in tests: same signature and the same
- * client, except `from()` / `rpc()` run as SQL instead of going to PostgREST.
+ * Drop-in for supabase-js `createClient` in tests: `from()` / `rpc()` run as
+ * SQL with the identity PostgREST would have derived from the request (the
+ * Authorization header, the signed-in session, or the API key); `auth`,
+ * `storage` and `functions` call the local stack over fetch.
  */
-export function createClient<Database = any>(url: string, key: string, options?: SupabaseClientOptions<any>): SupabaseClient<Database> {
-  const client = createSupabaseClient<Database>(url, key, options as any)
-  return withSqlData(client as SupabaseClient<any, any, any>, key, options as { global?: { headers?: unknown } }) as unknown as SupabaseClient<Database>
+export function createClient<Database = any>(url: string, key: string, options: TestClientOptions = {}): TestClient<Database> {
+  const globalHeaders = headerRecord(options.global?.headers)
+  const stack = createLocalStackHttp(url, key, { headers: globalHeaders })
+  const identity = (): DbIdentity => {
+    const token = globalHeaders.authorization?.replace(/^Bearer\s+/i, '') || stack.session()?.access_token
+    const headers: Record<string, string> = { apikey: key, ...globalHeaders }
+    if (token)
+      headers.authorization = `Bearer ${token}`
+    return identityFromToken(token ?? key, headers)
+  }
+  const data = createSqlDataClient(identity)
+  const client = {
+    from: data.from,
+    rpc: data.rpc,
+    auth: stack.auth,
+    storage: stack.storage,
+    functions: stack.functions,
+    schema: () => {
+      throw new Error('Tests must not query other schemas through PostgREST; use executeSQL')
+    },
+  }
+  return client as unknown as TestClient<Database>
 }

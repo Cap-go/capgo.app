@@ -144,12 +144,14 @@ and the test suite has to keep running once it is gone.
   supabase-js, but `from()` / `rpc()` run as SQL in one transaction with the
   role, JWT claims, `request.headers` (`capgkey`) and `request.method`
   PostgREST would have set, so RLS and triggers behave the same. `auth`
-  (GoTrue) and `storage` stay on supabase-js.
+  (GoTrue), `storage` and `functions` call the local stack over plain fetch
+  (`tests/local-stack-http.ts`), with supabase-js' request and result shapes.
 - Tests that assert raw HTTP status and JSON body: `sqlRestRequest` from
   `tests/sql-rest-request.ts`.
 - Raw SQL: `executeSQL` / `getPostgresClient` from `tests/test-utils.ts`.
-- Never import `createClient` from `@supabase/supabase-js` in a test and never
-  build a `/rest/v1` URL. `tests/no-postgrest-in-tests.unit.test.ts` fails if
+- Never import `@supabase/supabase-js` in a test (types included; take
+  `TestClient` from `tests/sql-data-client.ts`) and never build a `/rest/v1`
+  URL. `tests/no-postgrest-in-tests.unit.test.ts` fails if
   you do, and `getEndpointUrl('/rest/...')` throws.
 - Only exception: `tests/cli-compat.test.ts` runs the pinned published CLI
   (`MIN_CLI_VERSION`), which calls PostgREST itself. That is the product
