@@ -94,6 +94,35 @@ export async function writeAppVersionRow(
 }
 
 /**
+ * Updates an existing app_versions row by id with the given columns (name and app_id are the
+ * row identity and are never rewritten) and returns it as PostgREST did. A plain UPDATE is
+ * used instead of INSERT ... ON CONFLICT DO UPDATE because BEFORE INSERT triggers (such as
+ * enforce_encrypted_bundle_trigger) fire on the proposed insert row before the conflict is
+ * resolved, so a partial body like the TUS finish call ({ app_id, name, r2_path }) would be
+ * rejected as unencrypted even though the existing row is encrypted. The row must still carry
+ * the requested name and app_id, so a concurrent rename never redirects the write. Returns
+ * null when no such row exists.
+ */
+export async function updateAppVersionRow(
+  client: PgQueryClient,
+  id: number,
+  row: Database['public']['Tables']['app_versions']['Insert'],
+): Promise<AppVersionRow | null> {
+  const columns = Object.entries(row)
+    .filter(([column, value]) => value !== undefined && column !== 'name' && column !== 'app_id')
+    .map(([column]) => `"${column.replaceAll('"', '""')}"`)
+  return queryJsonOne<AppVersionRow>(
+    client,
+    `UPDATE public.app_versions AS target
+    SET ${columns.map(column => `${column} = source.${column}`).join(', ')}
+    FROM pg_catalog.json_populate_record(NULL::public.app_versions, $1::json) AS source
+    WHERE target.id = $2 AND target.app_id = source.app_id AND target.name = source.name
+    RETURNING target.*`,
+    [JSON.stringify(row), id],
+  )
+}
+
+/**
  * Validation shared by every API write of an app_versions row (upsert and insert-only
  * create): body checks, app.upload_bundle, deleted-name guard and the org encryption policy.
  */
@@ -150,7 +179,7 @@ async function prepareBundleWrite(
     )
   }
 
-  return { principal, existingVersion, row: buildUpsertRow(body, appWithOrg.owner_org, apikey.user_id) }
+  return { principal, existingVersion, appWithOrg, row: buildUpsertRow(body, appWithOrg.owner_org, apikey.user_id) }
 }
 
 export async function upsertBundle(
@@ -158,13 +187,29 @@ export async function upsertBundle(
   body: UpsertBundleBody,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<Response> {
-  const { principal, row } = await prepareBundleWrite(c, body, apikey)
+  const { principal, row, existingVersion, appWithOrg } = await prepareBundleWrite(c, body, apikey)
   let upserted: AppVersionRow | null = null
-  try {
-    upserted = await withRlsContext(c, principal, client => writeAppVersionRow(client, row, { upsert: true }))
+  if (existingVersion) {
+    // An existing version is updated in place so BEFORE INSERT triggers do not judge the
+    // partial body as a new row (encrypted TUS uploads, #4209).
+    try {
+      upserted = await withRlsContext(c, principal, client => updateAppVersionRow(client, existingVersion.id, row))
+    }
+    catch (updateError) {
+      throw simpleError('cannot_upsert_bundle', 'Cannot upsert bundle', { supabaseError: updateError })
+    }
+    // The version vanished or was renamed since the lookup, so the upsert below may create a
+    // new row: apply the policy check prepareBundleWrite runs for new versions.
+    if (!upserted)
+      checkEncryptedBundleEnforcement(appWithOrg, body.session_key, body.key_id)
   }
-  catch (upsertError) {
-    throw simpleError('cannot_upsert_bundle', 'Cannot upsert bundle', { supabaseError: upsertError })
+  if (!upserted) {
+    try {
+      upserted = await withRlsContext(c, principal, client => writeAppVersionRow(client, row, { upsert: true }))
+    }
+    catch (upsertError) {
+      throw simpleError('cannot_upsert_bundle', 'Cannot upsert bundle', { supabaseError: upsertError })
+    }
   }
   if (!upserted) {
     throw simpleError('cannot_upsert_bundle', 'Cannot upsert bundle', { supabaseError: null })

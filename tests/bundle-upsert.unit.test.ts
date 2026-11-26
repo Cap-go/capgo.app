@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   orgPolicy: vi.fn(),
   existingVersion: vi.fn(),
   upsert: vi.fn(),
+  update: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
@@ -22,6 +23,8 @@ vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
   queryJsonOne: async (_client: unknown, text: string, values: unknown[]) => {
     if (text.startsWith('INSERT'))
       return mocks.upsert(text, JSON.parse(values[0] as string))
+    if (text.startsWith('UPDATE'))
+      return mocks.update(text, JSON.parse(values[0] as string), values[1])
     return mocks.existingVersion()
   },
 }))
@@ -49,6 +52,12 @@ function mockOrgPolicy(enforce: boolean, requiredKey: string | null = null) {
 function mockVersions(existingVersion: unknown) {
   mocks.existingVersion.mockReturnValue(existingVersion)
   mocks.upsert.mockReturnValue({
+    id: 99,
+    app_id: 'com.example.app',
+    name: '1.0.0',
+    storage_provider: 'r2-direct',
+  })
+  mocks.update.mockReturnValue({
     id: 99,
     app_id: 'com.example.app',
     name: '1.0.0',
@@ -123,9 +132,12 @@ describe('bundle upsert endpoint', () => {
     expect(mocks.upsert).not.toHaveBeenCalled()
   })
 
-  it('allows non-encryption updates on an existing version under an encryption policy', async () => {
+  it('updates an existing encrypted version in place for the TUS finish call (#4209)', async () => {
+    // The CLI finishes a TUS upload with { app_id, name, r2_path }. An INSERT ... ON CONFLICT
+    // would run the BEFORE INSERT encryption trigger on a row without session_key and fail
+    // with 400 encryption_required, so the existing row must be updated by id instead.
     mockOrgPolicy(true)
-    mockVersions({ id: 99, deleted: false, session_key: null, key_id: null })
+    mockVersions({ id: 99, deleted: false, session_key: 'iv-key', key_id: null })
 
     const response = await upsertBundle(
       createContext(),
@@ -134,9 +146,49 @@ describe('bundle upsert endpoint', () => {
     )
 
     expect(response.status).toBe(200)
+    expect(mocks.upsert).not.toHaveBeenCalled()
+    expect(mocks.update).toHaveBeenCalledTimes(1)
+    const [text, row, id] = mocks.update.mock.calls[0]
+    expect(id).toBe(99)
+    expect(text).toContain('UPDATE public.app_versions AS target')
+    expect(text).toContain('"r2_path" = source."r2_path"')
+    expect(text).toContain('WHERE target.id = $2 AND target.app_id = source.app_id AND target.name = source.name')
+    expect(text).not.toContain('"name" = ')
+    expect(text).not.toContain('"app_id" = ')
+    expect(text).not.toContain('"session_key"')
+    expect(row).toMatchObject({ r2_path: 'orgs/org-1/apps/com.example.app/1.0.0.zip' })
+  })
+
+  it('falls back to the upsert when the existing version vanished before the update', async () => {
+    mockOrgPolicy(false)
+    mockVersions({ id: 99, deleted: false, session_key: null, key_id: null })
+    mocks.update.mockReturnValue(null)
+
+    const response = await upsertBundle(
+      createContext(),
+      { app_id: 'com.example.app', name: '1.0.0', r2_path: 'orgs/org-1/apps/com.example.app/1.0.0.zip' },
+      apikey,
+    )
+
+    expect(response.status).toBe(200)
+    expect(mocks.update).toHaveBeenCalledTimes(1)
     expect(mocks.upsert).toHaveBeenCalledWith(
       expect.stringContaining('ON CONFLICT (name, app_id)'),
       expect.objectContaining({ r2_path: 'orgs/org-1/apps/com.example.app/1.0.0.zip' }),
     )
+  })
+
+  it('applies the new version encryption check before the fallback upsert', async () => {
+    mockOrgPolicy(true)
+    mockVersions({ id: 99, deleted: false, session_key: 'iv-key', key_id: null })
+    mocks.update.mockReturnValue(null)
+
+    await expect(upsertBundle(
+      createContext(),
+      { app_id: 'com.example.app', name: '1.0.0', r2_path: 'orgs/org-1/apps/com.example.app/1.0.0.zip' },
+      apikey,
+    )).rejects.toMatchObject({ status: 400, cause: { error: 'encryption_required' } })
+    expect(mocks.update).toHaveBeenCalledTimes(1)
+    expect(mocks.upsert).not.toHaveBeenCalled()
   })
 })

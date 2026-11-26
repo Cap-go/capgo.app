@@ -324,6 +324,43 @@ describe('[Encrypted Bundles Enforcement]', () => {
       })
     })
 
+    it('should finish an encrypted TUS upload through bundle/upsert with only r2_path (#4209)', async () => {
+      await withEncryptedBundleEnforcement(async () => {
+        const bundleName = `1.0.0-tus-finish-${Date.now()}`
+        const r2Path = `orgs/${ORG_ID_ENCRYPTED}/apps/${APP_NAME_ENCRYPTED}/${bundleName}.zip`
+        const createResponse = await fetch(getEndpointUrl('/bundle/upsert'), {
+          method: 'POST',
+          headers: headersEncrypted,
+          body: JSON.stringify({
+            app_id: APP_NAME_ENCRYPTED,
+            name: bundleName,
+            checksum: 'c3d4e5f6789abcdef123456789abcdef123456789abcdef123456789abcdef',
+            storage_provider: 'r2-direct',
+            session_key: 'encrypted-session-key-for-tus-finish',
+          }),
+        })
+        expect(createResponse.status, await createResponse.clone().text()).toBe(200)
+
+        // Same body the CLI sends after the TUS upload reaches 100%.
+        const finishResponse = await fetch(getEndpointUrl('/bundle/upsert'), {
+          method: 'POST',
+          headers: headersEncrypted,
+          body: JSON.stringify({ app_id: APP_NAME_ENCRYPTED, name: bundleName, r2_path: r2Path }),
+        })
+        expect(finishResponse.status, await finishResponse.clone().text()).toBe(200)
+
+        const { data: version, error } = await getSupabaseClient()
+          .from('app_versions')
+          .select('session_key, r2_path')
+          .eq('app_id', APP_NAME_ENCRYPTED)
+          .eq('name', bundleName)
+          .single()
+        expect(error).toBeNull()
+        expect(version?.session_key).toBe('encrypted-session-key-for-tus-finish')
+        expect(version?.r2_path).toBe(r2Path)
+      })
+    })
+
     it('should allow unencrypted bundle via API when enforcement is disabled', async () => {
       // Ensure enforcement is disabled
       await getSupabaseClient()
