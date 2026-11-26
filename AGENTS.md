@@ -149,10 +149,11 @@ and the test suite has to keep running once it is gone.
 - Tests that assert raw HTTP status and JSON body: `sqlRestRequest` from
   `tests/sql-rest-request.ts`.
 - Raw SQL: `executeSQL` / `getPostgresClient` from `tests/test-utils.ts`.
-- Never import `@supabase/supabase-js` in a test (types included; take
-  `TestClient` from `tests/sql-data-client.ts`) and never build a `/rest/v1`
-  URL. `tests/no-postgrest-in-tests.unit.test.ts` fails if
-  you do, and `getEndpointUrl('/rest/...')` throws.
+- The Supabase JS SDK is no longer a dependency anywhere in the repo; take
+  `TestClient` from `tests/sql-data-client.ts` for types. Never build a
+  `/rest/v1` URL. `tests/no-postgrest-in-tests.unit.test.ts` and
+  `tests/no-supabase-js.unit.test.ts` fail if you do, and
+  `getEndpointUrl('/rest/...')` throws.
 - Only exception: `tests/cli-compat.test.ts` runs the pinned published CLI
   (`MIN_CLI_VERSION`), which calls PostgREST itself. That is the product
   behaviour under test, not test plumbing.
