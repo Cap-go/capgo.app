@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { isCaptchaFailedError } from '../supabase/functions/_backend/utils/accountProvisioning.ts'
 import { GotrueAdminError } from '../supabase/functions/_backend/utils/gotrue_admin.ts'
 import { gotrueAuth } from '../supabase/functions/_backend/utils/gotrue_auth.ts'
 
@@ -142,6 +143,15 @@ describe('gotrueAuth errors', () => {
     const { error } = await gotrueAuth(context()).verifyOtp({ token_hash: 'hash', type: 'email' })
 
     expect(error).toMatchObject({ status: 429, code: 'over_request_rate_limit' })
+  })
+
+  it('keeps only the status of a GoTrue server error, like supabase-js', async () => {
+    fetchMock.mockResolvedValue(json({ code: 'unexpected_failure', msg: 'captcha verification process failed' }, 500))
+    const { data, error } = await gotrueAuth(context()).signUp({ email: 'a@b.co', password: 'pw', options: { captchaToken: 'cap' } })
+
+    expect(data).toEqual({ user: null, session: null })
+    expect(error).toMatchObject({ message: 'Auth server error 500', status: 500, code: undefined })
+    expect(isCaptchaFailedError(error)).toBe(false)
   })
 
   it('treats a sign-in without a session as an error, like supabase-js', async () => {

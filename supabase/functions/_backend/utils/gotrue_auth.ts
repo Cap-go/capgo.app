@@ -41,8 +41,14 @@ interface SignUpCredentials {
   options?: { captchaToken?: string, data?: Record<string, unknown> }
 }
 
+// auth-js turns these into a bare retryable error (status only), so callers never
+// classify a GoTrue outage by its message or code (e.g. a 500 "captcha ... failed").
+const SERVER_ERROR_STATUSES = [500, 501, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 528, 529, 530]
+
 // Same as auth-js `_sessionResponse`: a session needs both tokens and expires_in.
 function sessionResponse(result: RawResponse): AuthResponse {
+  if (result.error && SERVER_ERROR_STATUSES.includes(result.error.status))
+    return { data: { user: null, session: null }, error: new GotrueAdminError(`Auth server error ${result.error.status}`, result.error.status) }
   if (result.error)
     return { data: { user: null, session: null }, error: result.error }
   const data = result.data as Record<string, any>
