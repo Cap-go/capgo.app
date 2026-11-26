@@ -13,7 +13,10 @@ import process from 'node:process'
  * on sb.capgo.app. Keep Capgo-cloud publish until 2026-10-28; new CLI uses
  * api.capgo.app / files.capgo.app. Capgo cloud console uses VITE_API_HOST.
  * Self-host / local consoles keep supabase.functions.invoke → /functions/v1.
- * - `bundle`, `channel`, `files`, `private`
+ * - `bundle`, `files`, `private`
+ *
+ * No longer published on Capgo cloud (deleted by the skip-list):
+ * - `channel` — 0 calls/day in prod logs
  *
  * Capgo cloud deploy deletes every other local function name (skip-list).
  * Self-hosted installs still deploy every function under supabase/functions/.
@@ -26,7 +29,6 @@ export const CAPGO_CLOUD_SUPABASE_FUNCTIONS_FOREVER = [
 
 export const CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION = [
   'bundle',
-  'channel',
   'files',
   'private',
 ] as const

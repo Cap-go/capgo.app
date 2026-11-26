@@ -8,7 +8,13 @@ import {
 
 describe('supabase cloud function allowlist', () => {
   it.concurrent('deploys pg_net triggers plus the CLI-deprecated functions by default', () => {
-    expect(buildCapgoCloudSupabaseDeployArgs()).toEqual(['triggers', 'bundle', 'channel', 'files', 'private'])
+    expect(buildCapgoCloudSupabaseDeployArgs()).toEqual(['triggers', 'bundle', 'files', 'private'])
+  })
+
+  it.concurrent('no longer publishes the unused channel function on Capgo cloud Supabase', () => {
+    expect(CAPGO_CLOUD_SUPABASE_FUNCTIONS).not.toContain('channel')
+    expect(listLocalSupabaseFunctions()).toContain('channel')
+    expect(listCapgoCloudSkippedSupabaseFunctions()).toContain('channel')
   })
 
   it.concurrent('no longer publishes console-only invoke targets on Capgo cloud Supabase', () => {
