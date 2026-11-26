@@ -18,17 +18,12 @@
     },
     "api": {
       "success": {
-        "tag": "capgo-22.76.0",
-        "sha": "f5d4b8e4de5f917761bde70c1790d997c5e8fa98",
-        "runId": "45859760584",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.77.0",
         "sha": "a193ea252f3059c63be1cc8af65aaea223caa234",
         "runId": "45868787595",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "files": {
       "success": {
@@ -41,17 +36,12 @@
     },
     "translation": {
       "success": {
-        "tag": "capgo-22.76.0",
-        "sha": "f5d4b8e4de5f917761bde70c1790d997c5e8fa98",
-        "runId": "45859760584",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.77.0",
         "sha": "a193ea252f3059c63be1cc8af65aaea223caa234",
         "runId": "45868787595",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_eu": {
       "success": {
