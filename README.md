@@ -525,9 +525,10 @@ Capgo Cloud (prod / preprod / alpha) only publishes allowlisted Supabase
 functions from `scripts/supabase-cloud-functions.ts`:
 
 - `triggers` forever (queue consumer, called by the `QueueDispatcher`)
-- `bundle`, `channel`, `files`, `private` until **2026-10-28** (old Capgo CLI
-  still called these via `supabase.functions.invoke` on `sb.capgo.app`; new
-  CLI uses `api.capgo.app` / `files.capgo.app`)
+- `bundle`, `files`, `private` until **2026-10-28** (old Capgo CLI still
+  called these via `supabase.functions.invoke` on `sb.capgo.app`; new CLI
+  uses `api.capgo.app` / `files.capgo.app`)
+- `channel` is no longer published (no traffic); the deploy deletes it
 
 The console only talks to the Capgo API (`VITE_API_HOST`): Cloudflare on Capgo
 cloud, the `private` Supabase function on self-host / local. Capgo cloud deploy
