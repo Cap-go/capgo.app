@@ -1,3 +1,5 @@
+import { MAX_RULE_EXPRESSION_LENGTH } from './catalog.ts'
+
 // Zone invariant: all SaaS custom hostnames, including manually configured ones,
 // serve the Live Updates API. Native hosts keep their existing routing branches.
 // Exact paths mirror the public plugin routes, including the legacy aliases and
@@ -76,7 +78,7 @@ export function includeCustomDomainRouting(expression: string): { expression: st
   const tokens = comparisonTokens(branch)
   const changed = !existing.some(alternative => comparisonTokens(alternative) === tokens)
   const updated = changed ? `(${expression}) or ${CUSTOM_DOMAIN_PLUGIN_EXPRESSION}` : expression
-  if (updated.length > 4096)
-    throw new Error(`Custom-domain routing would exceed the 4096-character expression limit (current=${expression.length}, planned=${updated.length})`)
+  if (updated.length > MAX_RULE_EXPRESSION_LENGTH)
+    throw new Error(`Custom-domain routing would exceed the ${MAX_RULE_EXPRESSION_LENGTH}-character expression limit (current=${expression.length}, planned=${updated.length})`)
   return { expression: updated, changed }
 }

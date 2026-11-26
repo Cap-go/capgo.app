@@ -91,6 +91,23 @@ export async function deploySnippets({ token, snippets, apply = false, fetcher =
     routingChanged = plan.changed
     log(`Custom-domain routing: ${routingChanged ? 'stable predicate missing' : 'stable predicate present'}`)
   }
+  // A catalog rule sets the snippet's one live rule; `enabled` stays as it is live.
+  let catalogRulesChanged = false
+  for (const { name, rule } of snippets) {
+    if (!rule)
+      continue
+    const live = desiredRules.filter(entry => entry.snippet_name === name)
+    if (live.length !== 1)
+      throw new Error(`Expected one routing rule for ${name} before setting it from the catalog`)
+    if (live[0].description === rule.name && live[0].expression === rule.expression) {
+      log(`${name}: rule matches the catalog`)
+      continue
+    }
+    live[0].description = rule.name
+    live[0].expression = rule.expression
+    catalogRulesChanged = true
+    log(`${name}: rule ${apply ? 'will be set' : 'would be set'} from the catalog`)
+  }
   // Read all modules before the first write, so inventory or format failures cannot partially deploy.
   const current = await Promise.all(snippets.map(snippet => content(snippet.name)))
   for (const [index, { name, code }] of snippets.entries()) {
@@ -112,11 +129,12 @@ export async function deploySnippets({ token, snippets, apply = false, fetcher =
   }
   if (JSON.stringify(await rules()) !== JSON.stringify(beforeRules))
     throw new Error('Snippet routing rules changed during deployment; inspect the concurrent change')
-  if (routingChanged && apply) {
+  if ((routingChanged || catalogRulesChanged) && apply) {
     await json('/snippet_rules', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rules: desiredRules }) })
     if (JSON.stringify(await rules()) !== JSON.stringify(desiredRules))
-      throw new Error('Custom-domain routing verification failed; inspect the live snippet rules')
-    log('Custom-domain routing: stable predicate added and verified')
+      throw new Error('Snippet routing verification failed; inspect the live snippet rules')
+    log(`Routing rules verified${routingChanged ? '; custom-domain stable predicate added' : ''}${catalogRulesChanged ? '; catalog rules set' : ''}`)
   }
-  log(`${apply ? 'Deployed' : 'Dry run checked'} ${snippets.length} snippets; ${routingChanged ? (apply ? 'custom-domain routing verified' : 'would add stable custom-domain routing') : 'routing rules unchanged'}`)
+  const changes = [routingChanged && 'stable custom-domain routing', catalogRulesChanged && 'catalog rules'].filter(Boolean).join(' and ')
+  log(`${apply ? 'Deployed' : 'Dry run checked'} ${snippets.length} snippets; ${changes ? `${apply ? 'set' : 'would set'} ${changes}` : 'routing rules unchanged'}`)
 }
