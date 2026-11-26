@@ -5,7 +5,8 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
 import { syncBillingProfile } from '../utils/stripe_billing_profile_sync.ts'
 import { Hono } from 'hono/tiny'
-import { acceptCancelSaveOffer, declineCancelSaveOffer, parseOfferId, prepareCancelSaveOffer } from '../utils/cancel_save_offer.ts'
+import { recordCancelAttempt, recordCancelAttemptCanceled, recordFounderCallClick, showsFounderCall } from '../utils/cancel_attempt.ts'
+import { acceptCancelSaveOffer, completeCreditsOfferAfterCancel, declineCancelSaveOffer, parseOfferId, prepareCancelSaveOffer } from '../utils/cancel_save_offer.ts'
 import { getInvoiceDocument } from '../utils/invoice_document.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
@@ -61,11 +62,16 @@ interface CancelBody extends OrgBody {
   comment?: unknown
   // The save offer shown before this cancel, recorded as declined.
   offerId?: unknown
+  // The cancel attempt returned by /cancel-offer, marked canceled.
+  attemptId?: unknown
 }
 
 interface CancelOfferBody extends OrgBody {
   reason?: unknown
   offerId?: unknown
+  // Accepting credits also cancels the plan: the comment goes to Stripe with it.
+  comment?: unknown
+  attemptId?: unknown
 }
 
 type AppContext = Context<MiddlewareKeyVariables>
@@ -218,7 +224,7 @@ app.post('/remove-backup-card', middlewareAuth, async (c) => {
   return c.json(await removeBackupCard(c, ctx, body.paymentMethodId))
 })
 
-// Before canceling: the discount offered to stay, or null when not eligible.
+// Before canceling: the offer to stay (a discount, or credits instead of the plan), or null when not eligible.
 app.post('/cancel-offer', middlewareAuth, async (c) => {
   const body = await parseBody<CancelOfferBody>(c)
   const feedback = parseCancelFeedback(body.reason)
@@ -228,7 +234,20 @@ app.post('/cancel-offer', middlewareAuth, async (c) => {
     cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save offer failed', orgId: body.orgId, error })
     return null
   })
-  return c.json({ offer })
+  const founderCall = showsFounderCall(feedback)
+  const attemptId = await recordCancelAttempt(c, { orgId: body.orgId!, customerId: ctx.customerId, reason: feedback, offerId: offer?.id ?? null, founderCall })
+  return c.json({ offer, founderCall, attemptId })
+})
+
+// The customer opened the booking link of the founder call.
+app.post('/cancel-offer/founder-click', middlewareAuth, async (c) => {
+  const body = await parseBody<CancelOfferBody>(c)
+  const attemptId = parseOfferId(body.attemptId)
+  if (!attemptId)
+    throw simpleError('invalid_attempt_id', 'Missing attemptId')
+  await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  await recordFounderCallClick(c, body.orgId!, attemptId)
+  return c.json({ ok: true })
 })
 
 app.post('/cancel-offer/accept', middlewareAuth, async (c) => {
@@ -237,8 +256,12 @@ app.post('/cancel-offer/accept', middlewareAuth, async (c) => {
   if (!offerId)
     throw simpleError('invalid_offer_id', 'Missing offerId')
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
-  const { discountEnd } = await acceptCancelSaveOffer(c, ctx, offerId)
-  return c.json({ discountEnd, subscription: await getSubscriptionSummary(c, ctx) })
+  const result = await acceptCancelSaveOffer(c, ctx, offerId, parseCancelComment(body.comment))
+  // Credits replace the plan: it ends at period end, so the attempt did cancel it.
+  const attemptId = parseOfferId(body.attemptId)
+  if (result.type === 'credits' && attemptId)
+    await recordCancelAttemptCanceled(c, body.orgId!, attemptId)
+  return c.json({ ...result, subscription: await getSubscriptionSummary(c, ctx) })
 })
 
 app.post('/cancel', middlewareAuth, async (c) => {
@@ -249,7 +272,13 @@ app.post('/cancel', middlewareAuth, async (c) => {
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
   if (offerId)
     await declineCancelSaveOffer(c, ctx, offerId)
-  return c.json({ subscription: await scheduleSubscriptionCancel(c, ctx, feedback, comment) })
+  const subscription = await scheduleSubscriptionCancel(c, ctx, feedback, comment)
+  if (offerId)
+    await completeCreditsOfferAfterCancel(c, ctx, offerId)
+  const attemptId = parseOfferId(body.attemptId)
+  if (attemptId)
+    await recordCancelAttemptCanceled(c, body.orgId!, attemptId)
+  return c.json({ subscription })
 })
 
 app.post('/resume', middlewareAuth, async (c) => {

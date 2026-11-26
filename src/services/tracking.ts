@@ -1,4 +1,4 @@
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 
 const KEEPALIVE_BODY_LIMIT = 64 * 1024
 let reservedKeepaliveBytes = 0
@@ -88,7 +88,7 @@ export async function sendEvent(payload: TrackOptions): Promise<null> {
 
       try {
         // 10 second timeout using AbortSignal
-        const response = await fetch(`${defaultApiHost}/private/events`, {
+        const response = await fetch(`${getConsoleApiHost()}/private/events`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${currentJwt}`,

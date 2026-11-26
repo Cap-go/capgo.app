@@ -13,7 +13,7 @@ import { queryJsonOne } from '../utils/pg_rls.ts'
 import { getRequestCountry } from '../utils/request_country.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { gotrueAdmin } from '../utils/gotrue_admin.ts'
-import { emptySupabase } from '../utils/supabase.ts'
+import { gotrueAuth } from '../utils/gotrue_auth.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -307,8 +307,8 @@ app.post('/', async (c) => {
     // This also recovers from partial failures where the user was created but the invite wasn't finalized.
     if (existingUser?.id) {
       telemetryUserId = existingUser.id
-      const userSupabase = emptySupabase(c)
-      const { data: session, error: sessionError } = await userSupabase.auth.signInWithPassword({
+      const userAuth = gotrueAuth(c)
+      const { data: session, error: sessionError } = await userAuth.signInWithPassword({
         email: invitation.email,
         password: baseBody.password,
         options: captchaSecret.length > 0 && baseBody.captchaToken
@@ -381,8 +381,8 @@ app.post('/', async (c) => {
     if (userError || !user) {
       if (isUserAlreadyExistsAuthError(userError)) {
       // Possible partial state: auth user exists but public.users is missing.
-        const userSupabase = emptySupabase(c)
-        const { data: session, error: sessionError } = await userSupabase.auth.signInWithPassword({
+        const userAuth = gotrueAuth(c)
+        const { data: session, error: sessionError } = await userAuth.signInWithPassword({
           email: invitation.email,
           password: body.password,
           options: captchaSecret.length > 0 && body.captchaToken
@@ -482,8 +482,8 @@ app.post('/', async (c) => {
 
       // let's now login the user in. The rough idea is that we will create a session and then return the session to the client
       // then the client will use the session to redirect to login page.
-      const userSupabase = emptySupabase(c)
-      const { data: session, error: sessionError } = await userSupabase.auth.signInWithPassword({
+      const userAuth = gotrueAuth(c)
+      const { data: session, error: sessionError } = await userAuth.signInWithPassword({
         email: invitation.email,
         password: body.password,
         options: captchaSecret.length > 0 && body.captchaToken

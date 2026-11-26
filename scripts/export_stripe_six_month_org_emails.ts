@@ -13,11 +13,12 @@
  *   bun run stripe:export-six-month-org-emails --env-file=./internal/cloudflare/.env.preprod
  */
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import type pg from 'pg'
 import type { CustomerPaidSummary } from './stripe_paid_invoice_export_utils.ts'
 import process from 'node:process'
 import {
+  connectAdminDb,
   createStripeClient,
-  createSupabaseServiceClient,
   DEFAULT_ENV_FILE,
   getArgValue,
   getRequiredEnv,
@@ -40,7 +41,6 @@ const DB_CHUNK_SIZE = 200
 const DEFAULT_STATUS_FILTER = 'paid'
 const STATUS_FILTERS = ['paid', 'active', 'canceled', 'never_paid', 'all'] as const
 
-type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
 type OrgRow = Pick<Database['public']['Tables']['orgs']['Row'], 'id' | 'customer_id'>
 type RoleBindingRow = Pick<Database['public']['Tables']['role_bindings']['Row'], 'expires_at' | 'org_id' | 'principal_id'>
 type UserEmailRow = Pick<Database['public']['Tables']['users']['Row'], 'email' | 'id'>
@@ -92,27 +92,22 @@ function parseStatusFilter(value: string | null) {
   return statusFilter as StatusFilter
 }
 
-async function fetchActionableOrgs(supabase: SupabaseClient, customerId: string | null) {
+async function fetchActionableOrgs(db: pg.Pool, customerId: string | null) {
   const rows: OrgRow[] = []
   let lastSeenOrgId: string | null = null
 
   while (true) {
-    let query = supabase
-      .from('orgs')
-      .select('id, customer_id')
-      .not('customer_id', 'is', null)
-      .order('id', { ascending: true })
-      .limit(DEFAULT_PAGE_SIZE)
-
-    if (customerId)
-      query = query.eq('customer_id', customerId)
-    else if (lastSeenOrgId)
-      query = query.gt('id', lastSeenOrgId)
-
-    const { data, error } = await query
-    if (error)
-      throw error
-    if (!data?.length)
+    // With a customer id the loop stops after one page, so the cursor stays null.
+    const { rows: data } = await db.query<OrgRow>(
+      `SELECT id, customer_id
+       FROM public.orgs
+       WHERE customer_id IS NOT NULL
+         AND ($1::text IS NULL OR customer_id = $1) AND ($2::uuid IS NULL OR id > $2::uuid)
+       ORDER BY id ASC
+       LIMIT $3`,
+      [customerId || null, lastSeenOrgId, DEFAULT_PAGE_SIZE],
+    )
+    if (!data.length)
       break
 
     rows.push(...data)
@@ -139,38 +134,32 @@ function groupOrgsByCustomerId(orgs: OrgRow[]) {
   return orgsByCustomerId
 }
 
-async function fetchRoleBindingRows(supabase: SupabaseClient, orgIds: string[]) {
+async function fetchRoleBindingRows(db: pg.Pool, orgIds: string[]) {
   const rows: RoleBindingRow[] = []
 
   for (const chunk of chunkItems(orgIds, DB_CHUNK_SIZE)) {
-    const { data, error } = await supabase
-      .from('role_bindings')
-      .select('expires_at, org_id, principal_id')
-      .eq('principal_type', 'user')
-      .in('org_id', chunk)
-
-    if (error)
-      throw error
-    if (data?.length)
-      rows.push(...data)
+    const { rows: data } = await db.query<RoleBindingRow>(
+      `SELECT expires_at, org_id, principal_id
+       FROM public.role_bindings
+       WHERE principal_type = 'user' AND org_id = ANY($1::uuid[])`,
+      [chunk],
+    )
+    rows.push(...data)
   }
 
   return rows
 }
 
-async function fetchUserEmails(supabase: SupabaseClient, userIds: string[]) {
+async function fetchUserEmails(db: pg.Pool, userIds: string[]) {
   const usersById = new Map<string, string>()
 
   for (const chunk of chunkItems(userIds, DB_CHUNK_SIZE)) {
-    const { data, error } = await supabase
-      .from('users')
-      .select('id, email')
-      .in('id', chunk)
+    const { rows: data } = await db.query<UserEmailRow>(
+      'SELECT id, email FROM public.users WHERE id = ANY($1::uuid[])',
+      [chunk],
+    )
 
-    if (error)
-      throw error
-
-    for (const user of (data ?? []) as UserEmailRow[]) {
+    for (const user of data) {
       const email = normalizeEmail(user.email)
       if (email)
         usersById.set(user.id, email)
@@ -180,13 +169,13 @@ async function fetchUserEmails(supabase: SupabaseClient, userIds: string[]) {
   return usersById
 }
 
-async function fetchOrgMemberEmailsByOrgId(supabase: SupabaseClient, orgIds: string[], nowMs: number) {
+async function fetchOrgMemberEmailsByOrgId(db: pg.Pool, orgIds: string[], nowMs: number) {
   const memberIdsByOrgId = new Map<string, Set<string>>()
 
   for (const orgId of orgIds)
     memberIdsByOrgId.set(orgId, new Set())
 
-  const roleBindingRows = await fetchRoleBindingRows(supabase, orgIds)
+  const roleBindingRows = await fetchRoleBindingRows(db, orgIds)
   for (const row of roleBindingRows) {
     if (!row.org_id)
       continue
@@ -196,7 +185,7 @@ async function fetchOrgMemberEmailsByOrgId(supabase: SupabaseClient, orgIds: str
   }
 
   const userIds = [...new Set([...memberIdsByOrgId.values()].flatMap(ids => [...ids]))]
-  const usersById = await fetchUserEmails(supabase, userIds)
+  const usersById = await fetchUserEmails(db, userIds)
   const emailsByOrgId = new Map<string, Set<string>>()
 
   for (const [orgId, memberIds] of memberIdsByOrgId.entries()) {
@@ -311,13 +300,32 @@ async function main(args = process.argv.slice(2), runtimeEnv: Record<string, str
   }
   const nowMs = Date.now()
 
-  const supabase = createSupabaseServiceClient(env)
   const stripe = createStripeClient(
     getRequiredEnv(env, 'STRIPE_SECRET_KEY'),
     env.STRIPE_API_BASE_URL?.trim(),
   )
+  const db = await connectAdminDb(env)
+  try {
+    await exportEmails(db, stripe, { customerId, envFile, invoiceLimit, minMonths, nowMs, outputPath, statusFilter })
+  }
+  finally {
+    await db.end()
+  }
+}
 
-  const orgs = await fetchActionableOrgs(supabase, customerId)
+interface ExportOptions {
+  customerId: string | null
+  envFile: string
+  invoiceLimit: number | null
+  minMonths: number
+  nowMs: number
+  outputPath: string
+  statusFilter: StatusFilter
+}
+
+async function exportEmails(db: pg.Pool, stripe: ReturnType<typeof createStripeClient>, { customerId, envFile, invoiceLimit, minMonths, nowMs, outputPath, statusFilter }: ExportOptions) {
+
+  const orgs = await fetchActionableOrgs(db, customerId)
   const orgsByCustomerId = groupOrgsByCustomerId(orgs)
   const customerIds = new Set(orgsByCustomerId.keys())
 
@@ -358,7 +366,7 @@ async function main(args = process.argv.slice(2), runtimeEnv: Record<string, str
   console.log(`Qualifying Stripe customers: ${customerSummaries.length}`)
   console.log(`Qualifying orgs: ${qualifyingOrgIds.length}`)
 
-  const emailsByOrgId = await fetchOrgMemberEmailsByOrgId(supabase, qualifyingOrgIds, nowMs)
+  const emailsByOrgId = await fetchOrgMemberEmailsByOrgId(db, qualifyingOrgIds, nowMs)
   const exportRows = buildExportRows(customerSummaries, orgsByCustomerId, emailsByOrgId)
   const csv = toCsv(exportRows)
   await writeCsv(outputPath, csv)

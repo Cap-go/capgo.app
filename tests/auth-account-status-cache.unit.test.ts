@@ -45,7 +45,7 @@ vi.mock('~/services/signupAttribution', () => ({ applySignupAttributionToPostHog
 vi.mock('~/services/console', () => ({
   getLocalConfig: () => ({ apiHost: 'https://api.example.com' }),
   getPlans: vi.fn(async () => []),
-  defaultApiHost: 'https://api.example.com',
+  getConsoleApiHost: () => 'https://api.example.com',
   useConsole: () => ({
     auth: {
       getClaims: vi.fn(async () => ({ data: { claims: { sub: user.id } } })),

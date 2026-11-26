@@ -85,6 +85,7 @@ vi.mock('~/services/capgoApi', async (importOriginal) => {
 })
 vi.mock('~/services/console', () => ({
   getLocalConfig: () => ({ apiHost: 'https://api.capgo.app' }),
+  PROD_API_URL: 'https://api.capgo.app',
   isLocal: () => false,
   useConsole: () => {
     return {

@@ -120,6 +120,20 @@ describe('scheduleSubscriptionCancel', () => {
     mockActiveSubscription(null)
     await expect(scheduleSubscriptionCancel(createContext(), createBillingContext(), 'unused')).rejects.toThrow()
   })
+
+  it('cancels nothing when the active subscription is not the expected one', async () => {
+    const stripe = createStripe()
+    mockActiveSubscription('sub_replacement')
+    await expect(scheduleSubscriptionCancel(createContext(), createBillingContext(stripe), 'unused', undefined, 'sub_offer')).rejects.toThrow('subscription changed')
+    expect(stripe.subscriptions.update).not.toHaveBeenCalled()
+  })
+
+  it('cancels nothing when the subscription is replaced before the lock is held', async () => {
+    const stripe = createStripe()
+    mocks.getActiveSubscriptionId.mockResolvedValueOnce('sub_offer').mockResolvedValueOnce('sub_replacement')
+    await expect(scheduleSubscriptionCancel(createContext(), createBillingContext(stripe), 'unused', undefined, 'sub_offer')).rejects.toThrow('subscription changed')
+    expect(stripe.subscriptions.update).not.toHaveBeenCalled()
+  })
 })
 
 describe('resumeSubscription', () => {

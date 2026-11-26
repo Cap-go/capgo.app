@@ -10,6 +10,7 @@ import {
   normalizeRateLimitAccountIdentifier,
   reserveCaptchaFallbackQuota,
 } from '../utils/rate_limit.ts'
+import { collectConsoleWebOrigins } from '../utils/console_web_origins.ts'
 import { getEnv } from '../utils/utils.ts'
 import { isEmailDomainSsoEnforced } from './sso/domain-enforcement.ts'
 
@@ -28,32 +29,28 @@ function trimTrailingSlashes(value: string) {
   return value.slice(0, end)
 }
 
+function collectCaptchaFallbackAllowedOrigins(c: Context<MiddlewareKeyVariables>): Set<string> {
+  const allowed = collectConsoleWebOrigins(c)
+  for (const extra of getEnv(c, 'CAPTCHA_FALLBACK_ALLOWED_ORIGINS').split(',')) {
+    const trimmed = extra.trim()
+    if (!trimmed)
+      continue
+    try {
+      allowed.add(new URL(trimmed).origin)
+    }
+    catch {
+      // ignore invalid configured origin
+    }
+  }
+  return allowed
+}
+
 function consoleOriginAllowed(c: Context<MiddlewareKeyVariables>, origin: string | undefined): boolean {
   if (!origin)
     return false
   try {
     const requestOrigin = new URL(origin).origin
-    const allowed = new Set<string>()
-    const webapp = getEnv(c, 'WEBAPP_URL')
-    if (webapp) {
-      try {
-        allowed.add(new URL(webapp).origin)
-      }
-      catch {
-        // ignore invalid WEBAPP_URL
-      }
-    }
-    for (const extra of getEnv(c, 'CAPTCHA_FALLBACK_ALLOWED_ORIGINS').split(',')) {
-      const trimmed = extra.trim()
-      if (!trimmed)
-        continue
-      try {
-        allowed.add(new URL(trimmed).origin)
-      }
-      catch {
-        // ignore invalid configured origin
-      }
-    }
+    const allowed = collectCaptchaFallbackAllowedOrigins(c)
     if (allowed.size === 0)
       return false
     return allowed.has(requestOrigin)
@@ -63,26 +60,36 @@ function consoleOriginAllowed(c: Context<MiddlewareKeyVariables>, origin: string
   }
 }
 
-function resolveRecoverRedirectTo(c: Context<MiddlewareKeyVariables>, redirectTo?: string): string | undefined {
-  const webapp = getEnv(c, 'WEBAPP_URL').trim()
-  if (!webapp)
+function resolveRecoverRedirectTo(
+  c: Context<MiddlewareKeyVariables>,
+  redirectTo: string | undefined,
+  consoleRequestOrigin: string | undefined,
+): string | undefined {
+  const allowedOrigins = collectCaptchaFallbackAllowedOrigins(c)
+  if (allowedOrigins.size === 0)
     return undefined
 
-  let webappOrigin: string
-  try {
-    webappOrigin = new URL(webapp).origin
+  let defaultBase = getEnv(c, 'WEBAPP_URL').trim()
+  if (consoleRequestOrigin) {
+    try {
+      const requestOrigin = new URL(consoleRequestOrigin).origin
+      if (allowedOrigins.has(requestOrigin))
+        defaultBase = requestOrigin
+    }
+    catch {
+      // ignore invalid Origin header
+    }
   }
-  catch {
+  if (!defaultBase)
     return undefined
-  }
 
-  const defaultRedirect = `${trimTrailingSlashes(webapp)}/forgot_password?step=2`
+  const defaultRedirect = `${trimTrailingSlashes(defaultBase)}/forgot_password?step=2`
   if (!redirectTo)
     return defaultRedirect
 
   try {
     const candidate = new URL(redirectTo)
-    if (candidate.origin !== webappOrigin)
+    if (!allowedOrigins.has(candidate.origin))
       return defaultRedirect
     return candidate.href
   }
@@ -122,7 +129,7 @@ async function relayCaptchaFallbackAuth(
   }
   if (purpose === 'recover') {
     const upstream = new URL(`${base}/recover`)
-    const safeRedirect = resolveRecoverRedirectTo(c, redirectTo)
+    const safeRedirect = resolveRecoverRedirectTo(c, redirectTo, c.req.header('origin'))
     if (safeRedirect)
       upstream.searchParams.set('redirect_to', safeRedirect)
     return await fetch(upstream, {

@@ -1,0 +1,141 @@
+-- Return disposable DBs to the state before the storage GB-hours migration (20261117152120, atomic variant in storage-gb-hours-atomic-migration.sql) so its SQL can re-apply.
+-- Idempotent when the storage migration was never applied on the source.
+
+DROP TRIGGER IF EXISTS close_app_storage_lifetimes ON public.apps;
+DROP TRIGGER IF EXISTS guard_apps_ownership_history ON public.apps;
+DROP TRIGGER IF EXISTS close_version_storage_lifetime ON public.app_versions;
+DROP TRIGGER IF EXISTS close_soft_deleted_version_storage_lifetime ON public.app_versions;
+DROP TRIGGER IF EXISTS open_restored_version_storage_lifetime ON public.app_versions;
+
+DROP TABLE IF EXISTS public.daily_storage_hourly_refreshes CASCADE;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_attribute a
+    INNER JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+    INNER JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'daily_storage_hourly'
+      AND a.attname = 'cycle_start'
+      AND NOT a.attisdropped
+  ) THEN
+    ALTER TABLE public.daily_storage_hourly DROP CONSTRAINT IF EXISTS daily_storage_hourly_pkey;
+    ALTER TABLE public.daily_storage_hourly DROP COLUMN IF EXISTS cycle_start;
+    ALTER TABLE public.daily_storage_hourly DROP COLUMN IF EXISTS segment_start;
+    ALTER TABLE public.daily_storage_hourly ADD CONSTRAINT daily_storage_hourly_pkey PRIMARY KEY (app_id, date);
+    ALTER TABLE public.daily_storage_hourly DROP CONSTRAINT IF EXISTS daily_storage_hourly_app_id_fkey;
+    ALTER TABLE public.daily_storage_hourly
+      ADD CONSTRAINT daily_storage_hourly_app_id_fkey
+      FOREIGN KEY (app_id) REFERENCES public.apps (app_id) ON DELETE CASCADE;
+  END IF;
+END
+$$;
+
+CREATE TABLE IF NOT EXISTS public.daily_storage (
+  app_id character varying,
+  date date,
+  storage bigint
+);
+
+-- Schema-clone DBs have pgmq extension but not every queue table from seed; skip HTTP/audit triggers for fixture rows.
+SET session_replication_role = replica;
+
+INSERT INTO auth.users (
+  instance_id,
+  id,
+  aud,
+  role,
+  email,
+  encrypted_password,
+  email_confirmed_at,
+  raw_app_meta_data,
+  raw_user_meta_data,
+  created_at,
+  updated_at
+)
+VALUES (
+  '00000000-0000-0000-0000-000000000000'::uuid,
+  '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
+  'authenticated',
+  'authenticated',
+  'lock-test-user@example.com',
+  '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi',
+  now(),
+  '{"provider": "email", "providers": ["email"]}'::jsonb,
+  '{"test_identifier": "storage_lock_concurrency"}'::jsonb,
+  now(),
+  now()
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.users (id, email)
+VALUES (
+  '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
+  'lock-test-user@example.com'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.orgs (id, created_by, name, management_email)
+VALUES (
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid,
+  '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
+  'Storage lock test org',
+  'lock-test-org@example.com'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.apps (app_id, owner_org, icon_url, name)
+VALUES (
+  'com.demo.app',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid,
+  '',
+  'Demo'
+)
+ON CONFLICT (app_id) DO NOTHING;
+
+SET session_replication_role = DEFAULT;
+
+-- Pre-storage GB-hours writer installed on the reverted daily_storage_hourly pk (app_id, date).
+CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
+    p_app_id character varying,
+    p_owner_org uuid,
+    p_cycle_start_day date,
+    p_cycle_end_day date,
+    p_end_exclusive_day date,
+    p_segment_start timestamptz,
+    p_rows jsonb,
+    p_written_at timestamptz,
+    p_require_current_owner boolean DEFAULT true,
+    p_app_uuid uuid DEFAULT NULL,
+    p_calculated_until timestamptz DEFAULT NULL,
+    p_transfer_count integer DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+BEGIN
+  IF p_require_current_owner THEN
+    PERFORM 1
+    FROM public.apps
+    WHERE apps.app_id = p_app_id
+      AND apps.owner_org = p_owner_org
+    FOR SHARE;
+    IF NOT FOUND THEN
+      RETURN;
+    END IF;
+  END IF;
+  INSERT INTO public.daily_storage_hourly (app_id, owner_org, date, storage_byte_hours, updated_at)
+  VALUES (p_app_id, p_owner_org, CURRENT_DATE, 1, pg_catalog.clock_timestamp())
+  ON CONFLICT (app_id, date) DO UPDATE
+    SET storage_byte_hours = EXCLUDED.storage_byte_hours,
+        updated_at = EXCLUDED.updated_at;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.replace_app_storage_hourly(
+  character varying, uuid, date, date, date, timestamptz, jsonb, timestamptz, boolean, uuid, timestamptz, integer
+) TO service_role;

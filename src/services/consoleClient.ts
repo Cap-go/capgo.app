@@ -1,5 +1,6 @@
 import type { ConsoleDataClient, ConsoleQuery, FunctionInvokeOptions, RealtimeChannel, RealtimeChannelStatus } from '../../supabase/functions/_backend/utils/console_contract'
 import type { Database } from '~/types/database.types'
+import { getConsoleApiHost } from '~/services/consoleApiHost'
 import { createConsoleAuthClient, resolveConsoleApiBase } from '~/services/consoleAuth'
 
 export type { AuthChangeEvent, AuthError, Factor, RealtimeChannel, Session, User } from '../../supabase/functions/_backend/utils/console_contract'
@@ -33,7 +34,7 @@ export class FunctionsFetchError extends Error {
 }
 
 function resolveBaseURL() {
-  return resolveConsoleApiBase(import.meta.env.VITE_API_HOST as string | undefined)
+  return resolveConsoleApiBase(getConsoleApiHost())
 }
 
 const EVENTS_MAX_BACKOFF_MS = 30_000

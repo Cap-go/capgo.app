@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { expect, test } from '../support/commands'
 import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
-const screenshotDir = resolve(process.cwd(), 'docs/screenshots/pr-3280')
+const screenshotDir = resolve(process.cwd(), 'docs/pr-screenshots/pr-3280')
 
 async function dismissOptionalPrompts(page: import('@playwright/test').Page) {
   await dismissSupportPrompt(page)

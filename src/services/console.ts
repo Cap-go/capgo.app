@@ -4,15 +4,18 @@ import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/database.types'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { CHINA_API_HOST, getConsoleApiHost, isOnGlobalConsoleWebHost, shouldSuggestChinaConsole } from '~/services/consoleApiHost'
 import { createConsoleAuthClient, resolveConsoleApiBase } from '~/services/consoleAuth'
 import { createConsoleClient } from '~/services/consoleClient'
 import { sortCreditPricingSteps } from './creditPricing'
 
+export { CHINA_CONSOLE_URL, getConsoleApiHost } from '~/services/consoleApiHost'
+
 let consoleClient: ConsoleClient<Database> = null as any
 
-export const defaultApiHost = import.meta.env.VITE_API_HOST as string
-
 export const PROD_API_URL = 'https://api.capgo.app'
+
+export const suggestChinaConsole = ref(false)
 
 export interface CapgoConfig {
   /** Capgo API this build talks to; everything (data, auth, files) goes through it. */
@@ -24,13 +27,42 @@ export interface CapgoConfig {
 
 /** Anything that is not the Capgo cloud API (local, preprod, dev, self-host). */
 export function isLocal(apiHost: string) {
-  return apiHost !== PROD_API_URL
+  return apiHost !== PROD_API_URL && apiHost !== CHINA_API_HOST
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname.replace(/\.$/, '').toLowerCase()
+}
+
+/** Loopback console API hosts only (visual-diff / local preview); not preprod or self-hosted APIs. */
+export function isLoopbackConsoleApiHost(apiHost: string): boolean {
+  try {
+    const hostname = normalizeHostname(new URL(apiHost).hostname)
+    if (hostname === 'localhost' || hostname.endsWith('.localhost'))
+      return true
+    if (hostname === '::1' || hostname === '[::1]')
+      return true
+    const ipv4 = /^(\d+)\.\d+\.\d+\.\d+$/.exec(hostname)
+    if (ipv4 && Number(ipv4[1]) === 127)
+      return true
+    return false
+  }
+  catch {
+    return false
+  }
+}
+
+export function isValidRemoteConfigPayload(data: unknown): boolean {
+  if (data === null || typeof data !== 'object' || Array.isArray(data))
+    return false
+  const record = data as Record<string, unknown>
+  return typeof record.stripeEnabled === 'boolean'
 }
 
 export function getLocalConfig() {
   const stripeEnabledEnv = import.meta.env.VITE_STRIPE_ENABLED as string | undefined
   return {
-    apiHost: defaultApiHost,
+    apiHost: getConsoleApiHost(),
     host: import.meta.env.VITE_APP_URL as string,
     hostWeb: import.meta.env.LANDING_URL as string,
     stripeEnabled: stripeEnabledEnv === undefined ? true : stripeEnabledEnv !== 'false',
@@ -107,7 +139,7 @@ function isSpoofedAdminJwtUsable(jwt: string) {
 
 // A throwaway auth client: the admin session must never replace the stored user session.
 function createSpoofAdminAuth() {
-  return createConsoleAuthClient({ baseURL: resolveConsoleApiBase(defaultApiHost), persistSession: false })
+  return createConsoleAuthClient({ baseURL: resolveConsoleApiBase(getConsoleApiHost()), persistSession: false })
 }
 
 async function refreshSpoofedAdminSession(session: SpoofedAdminSession): Promise<SpoofedAdminSession | null> {
@@ -127,27 +159,82 @@ export function mergeRemoteConfig(localConfig: CapgoConfig, remoteConfig: Partia
   }
 }
 
+const CONFIG_PROBE_MS = 4_000
+
+async function fetchPrivateConfigWithTimeout(url: string): Promise<{ ok: true, payload: unknown } | { ok: false }> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), CONFIG_PROBE_MS)
+  try {
+    const response = await fetch(url, { signal: controller.signal })
+    if (!response.ok)
+      return { ok: false }
+    const payload: unknown = await response.json()
+    return { ok: true, payload }
+  }
+  catch {
+    return { ok: false }
+  }
+  finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function probeChinaApiReachable(): Promise<boolean> {
+  if (!chinaConsoleSuggestionGate())
+    return false
+  const result = await fetchPrivateConfigWithTimeout(`${CHINA_API_HOST}/private/config`)
+  return result.ok && isValidRemoteConfigPayload(result.payload)
+}
+
+async function chinaReachableAfterMainFailure(): Promise<boolean> {
+  if (!chinaConsoleSuggestionGate())
+    return false
+  return probeChinaApiReachable()
+}
+
+/** Same gate as updateChinaConsoleSuggestion: web global console only, never native or China hostname. */
+export function chinaConsoleSuggestionGate(): boolean {
+  return isOnGlobalConsoleWebHost() && getConsoleApiHost() === PROD_API_URL
+}
+
+function updateChinaConsoleSuggestion(mainApiReachable: boolean, chinaApiReachable: boolean) {
+  suggestChinaConsole.value = shouldSuggestChinaConsole({
+    onGlobalConsole: chinaConsoleSuggestionGate(),
+    mainApiReachable,
+    chinaApiReachable,
+  })
+}
+
 export async function getRemoteConfig() {
   const localConfig = getLocalConfig()
   if (import.meta.env.MODE === 'development')
     return localConfig
 
+  const apiHost = getConsoleApiHost()
+  // Visual diff / local preview builds point at a loopback API host; skip remote config polling only there.
+  if (isLoopbackConsoleApiHost(apiHost))
+    return localConfig
   try {
-    const response = await fetch(`${defaultApiHost}/private/config`)
-    if (!response.ok) {
+    const result = await fetchPrivateConfigWithTimeout(`${apiHost}/private/config`)
+    if (!result.ok || !isValidRemoteConfigPayload(result.payload)) {
       console.log('Local config', localConfig)
       stripeEnabled.value = localConfig.stripeEnabled ?? stripeEnabled.value
+      const chinaReachable = await chinaReachableAfterMainFailure()
+      updateChinaConsoleSuggestion(false, chinaReachable)
       return localConfig as CapgoConfig
     }
-    const data = await response.json() as Partial<CapgoConfig>
+    const data = result.payload as Partial<CapgoConfig>
     const merged = mergeRemoteConfig(localConfig, data)
     config = merged
     stripeEnabled.value = merged.stripeEnabled ?? stripeEnabled.value
+    updateChinaConsoleSuggestion(true, false)
     return merged
   }
   catch {
     console.log('Local config', localConfig)
     stripeEnabled.value = localConfig.stripeEnabled ?? stripeEnabled.value
+    const chinaReachable = await chinaReachableAfterMainFailure()
+    updateChinaConsoleSuggestion(false, chinaReachable)
     return localConfig as CapgoConfig
   }
 }
@@ -259,7 +346,7 @@ export async function downloadUrl(provider: string, userId: string, appId: strin
   const currentJwt = currentSession.session.access_token
 
   try {
-    const response = await fetch(`${defaultApiHost}/files/download_link`, {
+    const response = await fetch(`${getConsoleApiHost()}/files/download_link`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${currentJwt}`,
@@ -449,7 +536,7 @@ export type Plan = Omit<Database['public']['Tables']['plans']['Row'], 'regional_
 
 export async function getPlans(): Promise<Plan[]> {
   try {
-    const response = await fetch(`${defaultApiHost}/private/plans`)
+    const response = await fetch(`${getConsoleApiHost()}/private/plans`)
 
     if (!response.ok) {
       return []
@@ -504,7 +591,7 @@ export async function getCreditPricingSteps(orgId?: string): Promise<CreditPrici
   try {
     const capgo = useConsole()
     const { data: currentSession } = await capgo.auth.getSession()
-    const endpoint = new URL(`${defaultApiHost}/private/credits`)
+    const endpoint = new URL(`${getConsoleApiHost()}/private/credits`)
 
     if (orgId)
       endpoint.searchParams.set('org_id', orgId)

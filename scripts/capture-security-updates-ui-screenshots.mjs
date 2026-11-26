@@ -2,7 +2,7 @@ import { chromium } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 
 const baseUrl = process.env.CAPGO_URL || 'http://localhost:5173'
-const outputDir = process.env.OUTPUT_DIR || 'docs/screenshots/security-updates-ui'
+const outputDir = process.env.OUTPUT_DIR || 'docs/pr-screenshots/security-updates-ui'
 const phase = process.env.PHASE || 'after'
 
 await mkdir(outputDir, { recursive: true })

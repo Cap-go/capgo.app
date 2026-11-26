@@ -1,8 +1,7 @@
-import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { connectScriptDbPool, getDatabaseUrl } from './script_db.ts'
 
 export const DEFAULT_ENV_FILE = './internal/cloudflare/.env.prod'
 
@@ -53,12 +52,10 @@ export function getSupabaseServiceRoleKey(env: Record<string, string | undefined
   return value
 }
 
-export function createSupabaseServiceClient(env: Record<string, string | undefined>) {
-  return createClient<Database>(
-    getRequiredEnv(env, 'SUPABASE_URL'),
-    getSupabaseServiceRoleKey(env),
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
-  )
+// Direct Postgres access; like the service-role key it replaces, it bypasses RLS.
+// A pool, because most admin scripts query from several asyncPool workers at once.
+export function connectAdminDb(env: Record<string, string | undefined>) {
+  return connectScriptDbPool(getDatabaseUrl(env))
 }
 
 export function createStripeClient(secretKey: string, apiBaseUrl?: string) {

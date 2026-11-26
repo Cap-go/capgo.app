@@ -3,9 +3,9 @@ import type { SimulatorSummary } from '../../services/simulatorSessions'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconSmartphone from '~icons/lucide/smartphone'
-import { defaultApiHost, useConsole } from '../../services/console'
+import { getConsoleApiHost, useConsole } from '../../services/console'
 import { formatLocalDateTime } from '../../services/date'
-import { applySimulatorList, forgetSimulator, formatSimulatorDuration, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorEpoch } from '../../services/simulatorSessions'
+import { applySimulatorList, forgetSimulator, formatSimulatorDuration, noteSimulatorStartError, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorConfigured, simulatorEpoch } from '../../services/simulatorSessions'
 
 const props = defineProps<{ appId: string }>()
 const { t } = useI18n()
@@ -47,15 +47,17 @@ async function loadSessions() {
   const epoch = simulatorEpoch()
   const request = ++listRequest
   try {
-    const response = await fetch(`${defaultApiHost}/private/simulator/?app_id=${encodeURIComponent(appId)}`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/simulator/?app_id=${encodeURIComponent(appId)}`, {
       headers: { authorization: `Bearer ${await sessionToken()}` },
     })
     if (!response.ok)
       return false
-    const payload = await response.json() as { data?: SimulatorSummary[], idle_minutes?: number, max_minutes?: number }
+    const payload = await response.json() as { data?: SimulatorSummary[], idle_minutes?: number, max_minutes?: number, configured?: boolean }
     if (request !== listRequest || epoch !== simulatorEpoch() || appId !== props.appId || !Array.isArray(payload.data))
       return false
     recent.value = payload.data
+    if (typeof payload.configured === 'boolean')
+      simulatorConfigured.value = payload.configured
     limits.value = { idle: payload.idle_minutes ?? limits.value.idle, max: payload.max_minutes ?? limits.value.max }
     applySimulatorList(appId, payload.data, epoch, stoppedHere)
     return true
@@ -71,7 +73,7 @@ async function refreshSessions(listed: boolean) {
   const known = runningSimulators(appId).filter(session => !listed || !recent.value.some(item => item.id === session.id))
   await Promise.all(known.map(async (session) => {
     const remains = await sessionRemainsAfterLookup(async () => {
-      const response = await fetch(`${defaultApiHost}/private/simulator/${session.id}?app_id=${encodeURIComponent(appId)}`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/simulator/${session.id}?app_id=${encodeURIComponent(appId)}`, {
         headers: { authorization: `Bearer ${await sessionToken()}` },
       })
       if (!response.ok)
@@ -121,7 +123,7 @@ async function start(platform: 'ios' | 'android') {
   error.value = ''
   pending.value = platform
   try {
-    const response = await fetch(`${defaultApiHost}/private/simulator/`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/simulator/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -130,8 +132,15 @@ async function start(platform: 'ios' | 'android') {
       body: JSON.stringify({ app_id: props.appId, platform }),
     })
     const payload = await response.json().catch(() => undefined) as { data?: { id?: string, url?: string }, message?: string, error?: string } | undefined
-    if (!response.ok)
+    if (!response.ok) {
+      // A missing simulator host is explained by the hint that replaces the start buttons.
+      if (noteSimulatorStartError(payload)) {
+        // A list sent before this refusal must not bring the start buttons back.
+        listRequest++
+        return
+      }
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-start'))
+    }
     const id = payload?.data?.id
     if (id)
       rememberSimulator(props.appId, { id, url: payload.data?.url || '' }, epoch)
@@ -149,7 +158,7 @@ async function stop(id: string) {
   error.value = ''
   stoppingId.value = id
   try {
-    const response = await fetch(`${defaultApiHost}/private/simulator/${id}/stop`, {
+    const response = await fetch(`${getConsoleApiHost()}/private/simulator/${id}/stop`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -174,7 +183,7 @@ async function stop(id: string) {
 </script>
 
 <template>
-  <section class="p-4 mb-6 bg-white rounded-xl border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
+  <section data-simulator-card class="p-4 mb-6 bg-white rounded-xl border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
     <div class="flex flex-wrap gap-3 items-center">
       <span class="inline-flex gap-1 items-center px-2 py-1 text-xs font-medium text-white bg-slate-900 rounded-full dark:bg-white dark:text-slate-900">
         <IconSmartphone class="w-3.5 h-3.5" />
@@ -187,7 +196,10 @@ async function stop(id: string) {
     <p class="mt-2 text-sm font-medium text-amber-700 dark:text-amber-300">
       {{ t('simulator-auto-stop', { idle: limits.idle, max: limits.max }) }}
     </p>
-    <div class="flex flex-wrap gap-2 mt-4">
+    <p v-if="simulatorConfigured === false" class="mt-4 text-sm text-slate-600 dark:text-slate-300" data-test="simulator-not-configured">
+      {{ t('simulator-not-configured-hint') }}
+    </p>
+    <div v-else class="flex flex-wrap gap-2 mt-4">
       <button type="button" class="text-white d-btn d-btn-primary" :disabled="pending !== '' || stoppingId !== ''" @click="start('ios')">
         {{ pending === 'ios' ? t('simulator-starting') : t('start-ios-simulator') }}
       </button>
@@ -203,7 +215,7 @@ async function stop(id: string) {
       <span v-if="startedAt(session.id)" class="text-sm text-slate-600 dark:text-slate-300">
         {{ t('simulator-started-at', { time: formatLocalDateTime(startedAt(session.id)) }) }}
       </span>
-      <a v-if="session.url" class="text-sm text-blue-600 underline dark:text-blue-400" :href="session.url" target="_blank" rel="noreferrer">
+      <a v-if="session.url" class="text-white d-btn d-btn-primary d-btn-sm" :href="session.url" target="_blank" rel="noreferrer">
         {{ t('simulator-open') }}
       </a>
       <button type="button" class="d-btn" :disabled="pending !== '' || stoppingId !== ''" @click="stop(session.id)">

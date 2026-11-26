@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { BuilderPlatform } from '~/services/builderOnboardingChecklist'
+import type { BuilderSetupMethod } from '~/services/builderOnboardingChecklist'
 import type { CliAiPromptOrganization } from '~/services/cliAiPrompt'
 import type { OrganizationApp } from '~/stores/organization'
 import type { Database, Json } from '~/types/database.types'
@@ -51,7 +51,8 @@ import {
 import { isBuilderTodoListSelected } from '~/services/builderOnboardingChecklist'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
-import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
+import { getLocalConfig, useConsole } from '~/services/console'
+import { buildConsoleCliApiHostArg, CHINA_API_HOST, getConsoleApiHost } from '~/services/consoleApiHost'
 import { APP_ONBOARDING_READY_EVENT, sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -105,7 +106,7 @@ import {
   readOnboardingSetupHandoff,
 } from '~/utils/onboardingRedirect'
 import { openOnboardingResumeDialog } from '~/utils/onboardingResumeDialog'
-import { checklistTaskListMode, manualSetupCliCommand, manualSetupUsesBuilder } from '~/utils/onboardingSetupMode'
+import { buildInitCliCommand, checklistTaskListMode, manualSetupCliCommand, manualSetupUsesBuilder } from '~/utils/onboardingSetupMode'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
   buildUserOnboardingProgress,
@@ -299,7 +300,7 @@ const publishAppQuestionPrimaryActionLabel = computed(() => hasSelectedDevelopme
   ? t('unified-onboarding-continue-intent')
   : t('organization-onboarding-development-environment-skip'))
 
-const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ''
+const localCommand = buildConsoleCliApiHostArg(config.apiHost)
 // TODO(2027-03-19): Remove v3 compatibility after all existing OTA checklists have migrated.
 const usesOtaTodoList = computed(() => !!createdApp.value && hasSupportedOtaTodoList(parseAppOnboarding(createdApp.value.onboarding)))
 const usesDualTodoList = computed(() => !!createdApp.value && hasDualOnboardingChecklists(createdApp.value.onboarding))
@@ -452,7 +453,7 @@ watch(() => props.initialChecklistPath, (path) => {
     setupStage.value = 'cli'
   }
 })
-const builderCliCommand = computed(() => apiKey.value ? `npx @capgo/cli@latest build init -a ${apiKey.value}` : '')
+const builderCliCommand = computed(() => apiKey.value ? buildInitCliCommand(apiKey.value, localCommand) : '')
 const cliCommand = computed(() => {
   const key = apiKey.value
   if (!key)
@@ -469,8 +470,8 @@ const cliCommandArgs = computed(() => {
   if (usesBuilderSetupCommand.value && apiKey.value)
     args.push('-a', apiKey.value)
 
-  if (isLocal(config.apiHost))
-    args.push('--api-host', defaultApiHost)
+  if (getConsoleApiHost() === CHINA_API_HOST)
+    args.push('--api-host', CHINA_API_HOST)
 
   return args
 })
@@ -2464,13 +2465,22 @@ async function copyManualCliCommand() {
     trackSuccessfulCopy('onboarding_cli_command_copied', 'manual_start', manualSetupUsesBuilder(main.user?.onboarding) ? 'builder' : 'ota')
 }
 
-async function copyBuilderCliCommand(platform: BuilderPlatform) {
+async function copyBuilderCliCommand() {
   if (!apiKey.value)
     return
 
-  const copied = await copyText(`${builderCliCommand.value} --platform ${platform}`)
+  // The CLI detects the platform in the project and asks only when both exist.
+  const copied = await copyText(builderCliCommand.value)
   if (copied)
     trackSuccessfulCopy('onboarding_cli_command_copied')
+}
+
+function trackBuilderMethodSelected(method: BuilderSetupMethod) {
+  progressTracker?.trackStepEvent('onboarding_builder_method_selected', 'setup', {
+    method,
+    app_id: createdApp.value?.app_id,
+    intent: selectedIntent.value ?? undefined,
+  })
 }
 
 async function reportOnboardingPatch(patch: { source?: 'manual' | 'cli' | 'mcp' | 'ai', outcome?: 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual' }) {
@@ -3565,6 +3575,7 @@ defineExpose({
               @snapshot="panel.snapshot"
               @platform-changed="panel.selectPlatform"
               @copy-command="copyBuilderCliCommand"
+              @method-selected="trackBuilderMethodSelected"
               @copy-ai="copyAiInstructions"
               @complete="panel.complete"
             />
@@ -3582,6 +3593,7 @@ defineExpose({
           :hiding="isHidingSplash"
           :leaving="isHandingOff"
           @copy-command="copyBuilderCliCommand"
+          @method-selected="trackBuilderMethodSelected"
           @copy-ai="copyAiInstructions"
           @hide="skipOnboardingSplash"
           @explore="openDashboard"

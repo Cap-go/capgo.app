@@ -1,6 +1,7 @@
 import { tryParse } from '@std/semver'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import snippet from '../cloudflare_workers/snippet/index.js'
+import { pluginStateBucket } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
 import { PROVIDER_INFRA_ASNS } from '../supabase/functions/_backend/plugin_runtime/utils/providerAsns.ts'
 import { decodeSnippetEdgeStat } from '../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 import { updatesEdgeCacheBucket } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
@@ -109,6 +110,110 @@ function installFetch(workerFetch: (...args: any[]) => unknown) {
     return workerFetch(input, ...args)
   })
 }
+
+/** A device id whose KV cohort bucket (share 5000) matches. */
+function deviceInKvCohort(inCohort: boolean, skip = 0) {
+  for (let i = 100; ; i++) {
+    const id = `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`
+    if ((pluginStateBucket(APP_ID, id) < 5000) === inCohort && skip-- <= 0)
+      return id
+  }
+}
+
+describe('cloudflare snippet edge answers per KV cohort', () => {
+  let cache: Cache
+  const kvFill = fillHeader({ v: 4, kv: true, ks: 5000, e: 'updates', n: '1.2.3', k: null, cs: true, tags: 'capgo-updates-com.edge.app,capgo-plugin-state-com.edge.app' })
+  const dbFill = fillHeader({ ks: 5000, e: 'updates', n: '1.2.3', k: null, cs: true })
+  const KV_DEVICE = deviceInKvCohort(true)
+  const KV_DEVICE_2 = deviceInKvCohort(true, 1)
+  const DB_DEVICE = deviceInKvCohort(false)
+  const DB_DEVICE_2 = deviceInKvCohort(false, 1)
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    cache = buildCache()
+    vi.stubGlobal('caches', { default: cache })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function workerAnswer(fill: string, kv: boolean) {
+    return vi.fn(async () => new Response(JSON.stringify(NO_NEW_BODY), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'X-Capgo-Edge-Fill': fill, ...(kv ? { 'X-Plugin-State': 'kv' } : {}) },
+    }))
+  }
+
+  it('serves a KV canary answer only to the KV cohort', async () => {
+    // A database answer tells the snippet the KV share.
+    installFetch(workerAnswer(dbFill, false))
+    await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: DB_DEVICE_2 })))
+    const fetchMock = workerAnswer(kvFill, true)
+    installFetch(fetchMock)
+    await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: KV_DEVICE })))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const cohort = await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: KV_DEVICE_2 })))
+    expect(cohort.headers.get('X-Capgo-Edge')).toBe('answer')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // The database answer purged: its devices never fall back to the KV one.
+    for (const key of [...cache.store.keys()].filter(key => key.includes('/edge-v4/')))
+      cache.store.delete(key)
+    await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: DB_DEVICE })))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('never serves a database answer to the KV cohort', async () => {
+    const fetchMock = workerAnswer(dbFill, false)
+    installFetch(fetchMock)
+    await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: DB_DEVICE })))
+    const other = await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: DB_DEVICE_2 })))
+    expect(other.headers.get('X-Capgo-Edge')).toBe('answer')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: KV_DEVICE })))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps each cohort under its own key and purge tags, within the subrequest budget', async () => {
+    installFetch(workerAnswer(dbFill, false))
+    await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: DB_DEVICE })))
+    const fetchMock = workerAnswer(kvFill, true)
+    installFetch(fetchMock)
+    await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: KV_DEVICE })))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const tagsOf = (part: string) => [...cache.store.entries()].filter(([key]) => key.includes(part)).map(([, response]) => response.headers.get('Cache-Tag') ?? '')
+    // A snapshot publication evicts only the KV answer, never the database one.
+    expect(tagsOf('/edge-v4-kv/').join(',')).toContain('capgo-plugin-state-com.edge.app')
+    expect(tagsOf('/edge-v4/').join(',')).not.toContain('capgo-plugin-state-com.edge.app')
+
+    // KV device: both entries + IP limit; database device: its entry + IP limit.
+    for (const [device, lookups] of [[KV_DEVICE_2, 3], [DB_DEVICE_2, 2]] as const) {
+      cache.match.mockClear()
+      cache.put.mockClear()
+      fetchMock.mockClear()
+      const answer = await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: device })))
+      expect(answer.headers.get('X-Capgo-Edge')).toBe('answer')
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(cache.match).toHaveBeenCalledTimes(lookups)
+      expect(cache.put).not.toHaveBeenCalled()
+      expect(subrequests(cache, fetchMock)).toBeLessThanOrEqual(5)
+    }
+  })
+
+  it('refuses a KV canary response that carries a database fill', async () => {
+    const fetchMock = workerAnswer(dbFill, true)
+    installFetch(fetchMock)
+    await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: DB_DEVICE })))
+    await snippet.fetch(buildRequest('/updates', updatesBody({ device_id: DB_DEVICE_2 })))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})
 
 describe('cloudflare snippet edge answers', () => {
   let cache: Cache
@@ -685,6 +790,24 @@ describe('cloudflare snippet on-prem fallback', () => {
     expect(await control.json()).toEqual(responseBody)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(edgeCachePuts(cache)).toEqual([])
+  })
+
+  it('learns a KV-sourced on-prem answer once the worker marks KV authoritative', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'on_premise_app' }), {
+      status: 429,
+      headers: { 'X-Plugin-State': 'kv', 'X-Plugin-State-Shared': '1', 'Cache-Control': 'public, max-age=60' },
+    }))
+    installFetch(fetchMock)
+    const first = await snippet.fetch(onPremRequest({ app_id: 'com.example.shared' }))
+    expect(first.status).toBe(429)
+    expect(edgeCachePuts(cache).length).toBeGreaterThan(0)
+    // A snapshot publication purges only the plugin-state tag: it must evict this answer.
+    const tags = [...cache.store.values()].map(response => response.headers.get('Cache-Tag') ?? '')
+    expect(tags.some(tag => tag.split(',').includes('capgo-plugin-state-com.example.shared'))).toBe(true)
+    // A read racing a publication purge may be stale: no longer than the KV document window.
+    const ttls = [...cache.store.values()].map(response => response.headers.get('Cache-Control') ?? '')
+    expect(ttls).toContain('public, max-age=30')
+    expect(ttls).not.toContain('public, max-age=60')
   })
 
   it('returns on-prem from a fallback worker without caching when the primary fails', async () => {

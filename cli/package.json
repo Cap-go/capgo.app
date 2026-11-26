@@ -1,10 +1,10 @@
 {
   "name": "@capgo/cli",
   "type": "module",
-  "version": "8.110.0",
+  "version": "8.113.0",
   "description": "A CLI to upload to capgo servers",
   "author": "Martin martin@capgo.app",
-  "license": "Apache 2.0",
+  "license": "AGPL-3.0-only",
   "homepage": "https://github.com/Cap-go/capgo/tree/main/cli#readme",
   "repository": {
     "type": "git",
@@ -259,7 +259,7 @@
     "test:android-onboarding-units": "bun test/test-android-gradle.mjs && bun test/test-android-keystore.mjs && bun test/test-android-oauth.mjs && bun test/test-android-play.mjs && bun test/test-android-tui-sequencing.mjs",
     "test:build-credentials-units": "bun test/test-credentials-migration.mjs && bun test/test-provisioning-map-validation.mjs && bun test/test-mobileprovision-parser.mjs",
     "test:onboarding-generators": "bun test/test-diff-utils.mjs && bun test/test-workflow-generator.mjs",
-    "test:mcp-onboarding": "bun test ./test/build/onboarding/mcp/scoped-credential-path.test.ts && bun test/test-mcp-onboarding.mjs",
+    "test:mcp-onboarding": "bun test ./test/build/onboarding/mcp/scoped-credential-path.test.ts ./test/build/onboarding/mcp/start-setup-report.test.ts && bun test/test-mcp-onboarding.mjs",
     "test:setup-notices": "bun test ./test/test-setup-notices.mjs ./test/test-setup-progress-request.mjs ./test/test-setup-notice-background.mjs ./test/test-init-completion-notice.mjs && bun test ./test/test-builder-setup-notice.mjs",
     "test:recommend": "bun test test/recommend-context.test.ts",
     "test:app-prewarm": "bun test test/app-prewarm.test.ts"

@@ -1,9 +1,9 @@
 import type { Context } from 'hono'
 import { ALLOWED_STATS_ACTIONS } from '../plugins/stats_actions.ts'
-import { isPluginStateServed } from './pluginStateSwitch.ts'
+import { isPluginStateServed, isPluginStateShared, PLUGIN_STATE_FILL_MAX_TTL_SECONDS, pluginStateShareBps } from './pluginStateSwitch.ts'
 import { PROVIDER_INFRA_ASNS } from './providerAsns.ts'
 import { edgeCacheTtlForReplicaLag } from './replicaFreshness.ts'
-import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
+import { pluginStateAppCacheTag, updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
 import { hasUpdatesPurgeTarget, parseEdgeShareBps } from './updatesEdgeCache.ts'
 import { getEnv, isListedLimitedApp } from './utils.ts'
 
@@ -59,8 +59,18 @@ interface SnippetFillBase {
   /**
    * 3 when `pa` is set: snippets older than the provider network check
    * reject it, so they never answer an app that blocks provider IPs.
+   * 4: answer of the KV canary cohort (`kv`); older snippets reject it, so
+   * they never share it with the database cohort.
    */
-  v: 2 | 3
+  v: 2 | 3 | 4
+  /**
+   * Share of devices the worker serves from KV (PLUGIN_STATE_KV), basis
+   * points. The snippet gives a database answer only to devices outside it
+   * and a `kv` answer only to devices inside it (same bucket as the worker).
+   */
+  ks: number
+  /** Answer read from the KV plugin state during its canary. */
+  kv?: true
   /** Share of devices the snippet answers, in basis points. */
   bps: number
   ttl: number
@@ -129,9 +139,11 @@ export function getSnippetEdgeAnswerTtlSeconds(c: Context) {
 }
 
 async function fillBase(c: Context, appId: string, blockProviderInfraRequests: boolean, planValidUntil: number | null, replicaSource?: string | null): Promise<SnippetFillBase | null> {
-  // A KV canary must never teach the shared snippet, even after rollback.
-  if (isPluginStateServed(c))
-    return null
+  // KV answers teach the snippet too. During the canary they are stored as
+  // the cohort's own answer (v4 `kv`), never given to database devices.
+  const kvServed = isPluginStateServed(c)
+  const shared = isPluginStateShared(c)
+  const kvCanary = kvServed && !shared
   // A replayed request has no snippet in front of it.
   if (getSnippetEdgeReplay(c))
     return null
@@ -148,20 +160,32 @@ async function fillBase(c: Context, appId: string, blockProviderInfraRequests: b
   if (planTtl < 1)
     return null
   // The answer was read from the local replica: same lag rule as the worker cache.
-  const ttl = await edgeCacheTtlForReplicaLag(c, planTtl, replicaSource ?? undefined)
+  const replicaTtl = await edgeCacheTtlForReplicaLag(c, planTtl, replicaSource ?? undefined)
+  // A KV answer may come from a document read just before a publication purge.
+  const ttl = kvServed ? Math.min(replicaTtl, PLUGIN_STATE_FILL_MAX_TTL_SECONDS) : replicaTtl
+  // Both scopes: the answer depends on the channel (main tag) and on the
+  // served bundle row (versions tag: deleted, key_id). A KV answer also
+  // leaves with its snapshot: publications purge only the plugin-state tag.
+  const tags = [updatesAppCacheTag(appId), updatesVersionsCacheTag(appId), SNIPPET_EDGE_ANSWERS_TAG]
+  if (kvServed)
+    tags.push(pluginStateAppCacheTag(appId))
   const base: SnippetFillBase = {
     v: 2,
     bps,
     ttl,
-    // Both scopes: the answer depends on the channel (main tag) and on the
-    // served bundle row (versions tag: deleted, key_id).
-    tags: `${updatesAppCacheTag(appId)},${updatesVersionsCacheTag(appId)},${SNIPPET_EDGE_ANSWERS_TAG}`,
+    // Shared (authoritative at 100%): one answer serves every device.
+    ks: shared ? 0 : pluginStateShareBps(c),
+    tags: tags.join(','),
   }
   // The snippet cannot look the IP up: it answers only devices outside the
   // provider networks, the worker checks the rest.
   if (blockProviderInfraRequests) {
     base.v = 3
     base.pa = PROVIDER_INFRA_ASNS
+  }
+  if (kvCanary) {
+    base.v = 4
+    base.kv = true
   }
   return base
 }

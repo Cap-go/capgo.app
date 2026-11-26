@@ -10,7 +10,7 @@ const { nativePlatform, nativeRequest, getSession } = vi.hoisted(() => ({
 
 vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: () => 'web', isNativePlatform: nativePlatform }, CapacitorHttp: { request: nativeRequest } }))
 vi.mock('~/services/posthog', () => ({ pushEvent: vi.fn() }))
-vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.test', useConsole: () => ({ auth: { getSession } }) }))
+vi.mock('~/services/console', () => ({ getConsoleApiHost: () => 'https://api.capgo.test', useConsole: () => ({ auth: { getSession } }) }))
 
 const { tokenizeAssistantText } = await import('../src/utils/assistantText.ts')
 const { parseChatGptCallback } = await import('../src/utils/chatgptCallback.ts')

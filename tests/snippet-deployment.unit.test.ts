@@ -1,3 +1,4 @@
+import type { BuiltSnippet } from '../scripts/snippet/catalog'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
@@ -9,7 +10,7 @@ import { deploySnippets } from '../scripts/snippet/deploy-snippets'
 
 const snippets = [{ name: 'one', code: 'export default { fetch() {} }\n' }, { name: 'two', code: 'export default { fetch() { return 1 } }\n' }]
 
-function fixture(definitions = snippets) {
+function fixture(definitions: BuiltSnippet[] = snippets) {
   const live = new Map(definitions.map(snippet => [snippet.name, 'export default {}\n']))
   const rules = definitions.map(({ name }) => ({ snippet_name: name, enabled: true, expression: '(http.host eq "example.com")', description: `Rule for ${name}` }))
   const calls: { url: string, init?: RequestInit }[] = []
@@ -217,5 +218,65 @@ describe('production custom domains in snippet deployment', () => {
     if (kind === 'readback') f.setCorruptRules()
     await expect(run(f)).rejects.toThrow(kind === 'provider' ? 'HTTP 403' : 'routing verification failed')
     expect(f.ruleWrites).toHaveLength(1)
+  })
+})
+
+describe('catalog routing rules', () => {
+  const rule = { name: 'Rule from the catalog', expression: '(http.host eq "sb.example.com" and starts_with(http.request.uri.path, "/x/"))' }
+  const create = () => fixture([{ ...snippets[0], rule }, snippets[1]])
+
+  it.concurrent('sets the name and expression on the snippet rule, keeps enabled and the other rules, then stays unchanged', async () => {
+    const f = create()
+    f.rules[0].enabled = false
+    const other = structuredClone(f.rules[1])
+    await run(f)
+    expect(f.ruleWrites).toHaveLength(1)
+    expect(f.rules[0]).toEqual({ snippet_name: 'one', enabled: false, description: rule.name, expression: rule.expression })
+    expect(f.rules[1]).toEqual(other)
+    await run(f)
+    expect(f.ruleWrites).toHaveLength(1)
+  })
+
+  it.concurrent('dry run reports the rule change without writing it', async () => {
+    const f = create()
+    const messages: string[] = []
+    await deploySnippets({ token: 'test-token', snippets: f.definitions, fetcher: f.fetcher, log: message => messages.push(message) })
+    expect(f.ruleWrites).toEqual([])
+    expect(messages).toContain('one: rule would be set from the catalog')
+  })
+
+  it.concurrent('leaves rules without a catalog pair untouched', async () => {
+    const f = fixture()
+    const before = structuredClone(f.rules)
+    await run(f)
+    expect(f.ruleWrites).toEqual([])
+    expect(f.rules).toEqual(before)
+  })
+
+  it.concurrent('refuses several live rules for one catalog rule before any write', async () => {
+    const f = create()
+    f.rules.push({ ...f.rules[0] })
+    await expect(run(f)).rejects.toThrow('Expected one routing rule for one')
+    expect(f.writes).toEqual([])
+    expect(f.ruleWrites).toEqual([])
+  })
+
+  it.concurrent.each([
+    { label: 'empty expression', invalid: { ...snippets[0], rule: { name: 'x', expression: ' ' } }, error: 'needs a name and' },
+    { label: 'empty name', invalid: { ...snippets[0], rule: { name: '', expression: 'true' } }, error: 'needs a name and' },
+    { label: 'oversized expression', invalid: { ...snippets[0], rule: { name: 'x', expression: 'x'.repeat(4097) } }, error: 'needs a name and' },
+    { label: 'plugin rule', invalid: { ...snippets[0], name: 'plugin_load_balancer', rule }, error: 'comes from custom domains' },
+  ])('rejects a catalog rule with $label before network access', async ({ invalid, error }) => {
+    const f = fixture()
+    await expect(deploySnippets({ token: 'test', snippets: [invalid], fetcher: f.fetcher })).rejects.toThrow(error)
+    expect(f.fetcher).not.toHaveBeenCalled()
+  })
+
+  it.concurrent('sets the legacy CLI rule from the catalog, keeping its RPC branch and adding the old Edge Function paths', () => {
+    const legacy = SNIPPETS.find(snippet => snippet.name === 'legacy_cli_manifest_warning')
+    expect(legacy?.rule?.expression).toMatch(/^\(http\.host eq "sb\.capgo\.app" and http\.request\.method eq "POST" and http\.request\.uri\.path eq "[^"]*\/rpc\/get_organization_cli_warnings"\) or /)
+    for (const path of ['http.request.uri.path eq "/functions/v1/bundle"', 'starts_with(http.request.uri.path, "/functions/v1/files/")', 'starts_with(http.request.uri.path, "/functions/v1/private/")'])
+      expect(legacy?.rule?.expression).toContain(path)
+    expect(SNIPPETS.filter(snippet => snippet.rule).map(snippet => snippet.name)).toEqual(['legacy_cli_manifest_warning'])
   })
 })

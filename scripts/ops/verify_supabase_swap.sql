@@ -67,7 +67,6 @@ SELECT
 FROM public.cron_tasks
 WHERE name IN (
   'cleanup_queue_messages',
-  'cleanup_net_http_response',
   'cleanup_old_audit_logs',
   'null_migrated_app_version_manifests'
 )

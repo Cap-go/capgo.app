@@ -4,6 +4,7 @@ import { createClient } from '../../tests/sql-data-client'
 import { expect, test } from '../support/commands'
 
 const APP_ID = 'com.bundlealert.e2e'
+const regions = ['EU', 'NA', 'SA', 'OC', 'AS_INDIA', 'AS_JAPAN', 'HK', 'AF', 'ME']
 
 function localAdminClient() {
   const status = getSupabaseStatus()
@@ -30,8 +31,13 @@ test('saves and reloads the incompatible-bundle alert scope', async ({ page }) =
   expect(insertError).toBeNull()
 
   try {
+    await page.route('**/serving_policy/**', route => route.fulfill({ json: { app_id: APP_ID, active: true, policy: { regions, mode: 'route' } } }))
     await page.login('test@capgo.app', 'testtest')
     await page.goto(`/app/${APP_ID}/settings`)
+
+    const servingRegions = page.locator('[data-test="serving-regions"]')
+    await expect(servingRegions).toBeVisible()
+    await expect(servingRegions.locator('input[name="serving-region-NA"]')).toBeChecked()
 
     const scope = page.locator('#bundle-incompatible-alert')
     await expect(scope).toBeVisible()
@@ -43,6 +49,7 @@ test('saves and reloads the incompatible-bundle alert scope', async ({ page }) =
 
     await page.reload()
     await expect(scope).toHaveValue('all')
+    await expect(servingRegions.locator('input[name="serving-region-NA"]')).toBeChecked()
 
     await scope.selectOption('default')
     await page.locator('#update-app').getByRole('button', { name: 'Save', exact: true }).click()

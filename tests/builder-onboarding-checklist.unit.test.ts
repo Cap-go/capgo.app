@@ -3,7 +3,9 @@ import {
   BUILDER_STEP_IDS,
   hasSupportedBuilderTodoList,
   isBuilderTodoListSelected,
+  maskBuilderCommand,
   parseBuilderOnboarding,
+  startedBuilderPlatforms,
 } from '../src/services/builderOnboardingChecklist'
 
 function onboarding(setup: Record<string, unknown>) {
@@ -69,5 +71,31 @@ describe('builder onboarding checklist assignment', () => {
     expect(parsed.selectedPlatform).toBeNull()
     expect(parsed.steps.ios.prepare_profile).toBeUndefined()
     expect(parsed.steps.ios).not.toHaveProperty('future_step')
+  })
+})
+
+describe('builder setup progress card', () => {
+  it.concurrent('waits until the CLI or the assistant starts a platform', () => {
+    expect(startedBuilderPlatforms(parseBuilderOnboarding(onboarding({ steps: { builder: builderSteps } })))).toEqual([])
+  })
+
+  it.concurrent('lists every platform with reported progress, iOS first', () => {
+    const state = parseBuilderOnboarding(onboarding({ steps: { builder: {
+      ios: { ...builderSteps.ios, connect_app_store: { status: 'warning' } },
+      android: { ...builderSteps.android, start_setup: { status: 'done' } },
+    } } }))
+    expect(startedBuilderPlatforms(state)).toEqual(['ios', 'android'])
+  })
+
+  it.concurrent('counts a skipped step as started', () => {
+    const state = parseBuilderOnboarding(onboarding({ steps: { builder: { ...builderSteps, android: { prepare_keystore: { status: 'skipped' } } } } }))
+    expect(startedBuilderPlatforms(state)).toEqual(['android'])
+  })
+
+  it.concurrent('masks the API key in the Builder command', () => {
+    expect(maskBuilderCommand('npx @capgo/cli@latest build init -a ak_1234567890abcdef3f9a')).toBe('npx @capgo/cli@latest build init -a ak_••••••••3f9a')
+    expect(maskBuilderCommand('npx @capgo/cli@latest build init -a 12345678-aaaa-bbbb-cccc-1234567890ab')).toBe('npx @capgo/cli@latest build init -a 123••••••••90ab')
+    expect(maskBuilderCommand('')).toBe('')
+    expect(maskBuilderCommand('npx @capgo/cli@latest build init -a ak_1234567890abcdef3f9a --verbose')).toBe('npx @capgo/cli@latest build init -a ak_••••••••3f9a --verbose')
   })
 })

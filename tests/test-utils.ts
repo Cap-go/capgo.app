@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { TestClient } from './sql-data-client'
 import type { PoolClient } from 'pg'
 import type { Database } from '../src/types/database.types'
 import { spawnSync } from 'node:child_process'
@@ -685,7 +685,7 @@ function getSeedOptionKey(options?: SeedAppOptions): string {
 }
 
 // Connection pool to reduce database connection overhead
-let supabaseClient: SupabaseClient<Database> | null = null
+let supabaseClient: TestClient<Database> | null = null
 
 export interface BaseTestData {
   channel: string
@@ -871,7 +871,7 @@ export async function resetAppDataStats(appId: string): Promise<void> {
     throw error
 }
 
-export function getSupabaseClient(): SupabaseClient<Database> {
+export function getSupabaseClient(): TestClient<Database> {
   if (!supabaseClient) {
     hydrateLocalSupabaseEnvFromStatus()
 
@@ -880,7 +880,7 @@ export function getSupabaseClient(): SupabaseClient<Database> {
     // SUPABASE_SERVICE_ROLE_KEY + SUPABASE_SERVICE_KEY for convenience.
     const supabaseServiceKey = env.SUPABASE_SERVICE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY ?? env.SERVICE_ROLE_KEY ?? ''
     // createClient from sql-data-client: data calls run as SQL with the service
-    // role, never through PostgREST. auth/storage stay on supabase-js.
+    // role, never through PostgREST; auth/storage go to the local stack over fetch.
     supabaseClient = createClient<Database>(supabaseUrl, supabaseServiceKey, {
       db: {
         schema: 'public',
@@ -908,13 +908,13 @@ export async function batchResetAndSeedApps(appIds: string[]): Promise<void> {
   }
 }
 
-export async function seedTestData(capgo: SupabaseClient, appId: string) {
+export async function seedTestData(capgo: TestClient, appId: string) {
   const { error } = await capgo.rpc('seed_test_data', { p_app_id: appId })
   if (error)
     throw error
 }
 
-export async function createDemoApp(capgo: SupabaseClient, appId: string) {
+export async function createDemoApp(capgo: TestClient, appId: string) {
   const { error } = await capgo.from('apps').insert({ id: appId })
   if (error)
     throw error
@@ -924,7 +924,7 @@ export function generateUniqueAppId(testName: string): string {
   return `com.demo.${testName.toLowerCase().replace(/\s/g, '_')}_${Date.now()}`
 }
 
-export async function cleanupDemoApp(capgo: SupabaseClient, appId: string) {
+export async function cleanupDemoApp(capgo: TestClient, appId: string) {
   const { error } = await capgo.from('apps').delete().eq('id', appId)
   if (error)
     throw error

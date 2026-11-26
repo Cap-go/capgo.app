@@ -2,7 +2,7 @@ import type { Ref } from 'vue'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { chartLabelCountForPeriodDays } from '~/services/date'
 
 export type UpdateDeliveryScope = 'app' | 'org'
@@ -80,7 +80,7 @@ export function useUpdateDeliveryStats(
         return
       }
 
-      const response = await fetch(`${defaultApiHost}/private/update_delivery_stats`, {
+      const response = await fetch(`${getConsoleApiHost()}/private/update_delivery_stats`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

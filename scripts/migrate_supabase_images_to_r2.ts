@@ -30,7 +30,9 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { Client } from 'pg'
 import { createImageStore } from './admin_image_storage.ts'
-import { asyncPool, createSupabaseServiceClient, DEFAULT_ENV_FILE, getArgValue, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
+import type { SupabaseStorageRest } from './supabase_storage_rest.ts'
+import { asyncPool, DEFAULT_ENV_FILE, getArgValue, getRequiredEnv, getSupabaseServiceRoleKey, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
+import { createSupabaseStorageRest } from './supabase_storage_rest.ts'
 
 const BUCKET = 'images'
 const PAGE_SIZE = 1000
@@ -42,8 +44,6 @@ const LIST_CONCURRENCY = 16
 const PROGRESS_INTERVAL_MS = 5000
 const DB_URL_ENV_KEYS = ['MAIN_SUPABASE_DB_URL', 'DATABASE_URL', 'SUPABASE_DB_URL', 'SUPABASE_DB_DIRECT_URL']
 const FAILURE_OUTPUT = './tmp/supabase_images_to_r2_failures.json'
-
-type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
 
 interface LegacyObject {
   path: string
@@ -81,20 +81,18 @@ async function listFromDatabase(databaseUrl: string, prefix: string): Promise<Le
   }
 }
 
-async function listFolderPage(supabase: SupabaseClient, folder: string) {
-  const entries: { name: string, id: string | null, updated_at?: string, created_at?: string }[] = []
+async function listFolderPage(storage: SupabaseStorageRest, folder: string) {
+  const entries = []
   for (let offset = 0; ; offset += PAGE_SIZE) {
-    const { data, error } = await supabase.storage.from(BUCKET).list(folder, { limit: PAGE_SIZE, offset, sortBy: { column: 'name', order: 'asc' } })
-    if (error)
-      throw error
-    entries.push(...(data ?? []))
-    if ((data ?? []).length < PAGE_SIZE)
+    const data = await storage.list(BUCKET, folder, { limit: PAGE_SIZE, offset })
+    entries.push(...data)
+    if (data.length < PAGE_SIZE)
       return entries
   }
 }
 
 // One Storage API request per folder, LIST_CONCURRENCY folders at a time.
-async function listThroughStorageApi(supabase: SupabaseClient, prefix: string): Promise<LegacyObject[]> {
+async function listThroughStorageApi(storage: SupabaseStorageRest, prefix: string): Promise<LegacyObject[]> {
   const objects: LegacyObject[] = []
   let pending: { folder: string, depth: number }[] = [{ folder: prefix, depth: 0 }]
   let listedFolders = 0
@@ -103,7 +101,7 @@ async function listThroughStorageApi(supabase: SupabaseClient, prefix: string): 
     while (pending.length > 0) {
       const next: { folder: string, depth: number }[] = []
       await asyncPool(LIST_CONCURRENCY, pending, async ({ folder, depth }) => {
-        for (const entry of await listFolderPage(supabase, folder)) {
+        for (const entry of await listFolderPage(storage, folder)) {
           const path = folder ? `${folder}/${entry.name}` : entry.name
           // Folders come back as placeholder entries without an id.
           if (entry.id === null) {
@@ -146,7 +144,7 @@ async function main() {
   const envFile = getArgValue(args, '--env-file') ?? DEFAULT_ENV_FILE
 
   const env = { ...await loadEnv(envFile), ...process.env }
-  const supabase = createSupabaseServiceClient(env)
+  const storage = createSupabaseStorageRest(getRequiredEnv(env, 'SUPABASE_URL'), getSupabaseServiceRoleKey(env))
   const images = createImageStore(env)
 
   console.log(apply ? 'Mode: APPLY' : 'Mode: DRY RUN')
@@ -156,7 +154,7 @@ async function main() {
   const databaseUrl = getDatabaseUrl(env)
   console.log(databaseUrl ? 'Listing Supabase images from storage.objects…' : 'No Postgres URL set: listing Supabase images through the Storage API (slow)…')
   const listStartedAt = Date.now()
-  const paths = databaseUrl ? await listFromDatabase(databaseUrl, prefix) : await listThroughStorageApi(supabase, prefix)
+  const paths = databaseUrl ? await listFromDatabase(databaseUrl, prefix) : await listThroughStorageApi(storage, prefix)
   console.log(`Found ${paths.length} Supabase image objects in ${Math.round((Date.now() - listStartedAt) / 1000)}s`)
   // One R2 listing (1000 keys per request) instead of a HEAD per object.
   console.log('Listing R2 images…')
@@ -176,10 +174,12 @@ async function main() {
     const batch = toRemove.splice(0, toRemove.length)
     if (batch.length === 0)
       return
-    const { error } = await supabase.storage.from(BUCKET).remove(batch)
-    if (error) {
+    try {
+      await storage.remove(BUCKET, batch)
+    }
+    catch (error) {
       for (const path of batch)
-        failures.push({ path, error: `remove from Supabase failed: ${error.message}` })
+        failures.push({ path, error: `remove from Supabase failed: ${error instanceof Error ? error.message : String(error)}` })
       return
     }
     removed += batch.length
@@ -209,9 +209,7 @@ async function main() {
 
       if (copy) {
         if (apply) {
-          const { data: blob, error } = await supabase.storage.from(BUCKET).download(path)
-          if (error || !blob)
-            throw error ?? new Error('empty download')
+          const blob = await storage.download(BUCKET, path)
           await images.upload(path, blob, { contentType: blob.type || undefined, upsert: true })
         }
         copied++

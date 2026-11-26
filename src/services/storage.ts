@@ -1,4 +1,4 @@
-import { defaultApiHost, useConsole } from './console'
+import { getConsoleApiHost, useConsole } from './console'
 import { resolveConsoleApiBase } from './consoleAuth'
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7
@@ -21,7 +21,7 @@ let imageToken: ImageToken | null = null
 let pendingImageToken: { userId: string, promise: Promise<string | null> } | null = null
 
 function consoleApiBase() {
-  return resolveConsoleApiBase(defaultApiHost)
+  return resolveConsoleApiBase(getConsoleApiHost())
 }
 
 // Only our own image relay URLs carry a storage path worth re-signing; an external

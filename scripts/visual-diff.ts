@@ -7,7 +7,6 @@ import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import type { Page } from '@playwright/test'
 import { chromium } from '@playwright/test'
-import { createClient } from '@supabase/supabase-js'
 import pixelmatch from 'pixelmatch'
 import { PNG } from 'pngjs'
 import type { VisualDiffRoute } from '../playwright/visual-diff.config'
@@ -15,6 +14,7 @@ import { dismissSupportPrompt } from '../playwright/support/dismissSupportPrompt
 import { getSupabaseStatus } from './supabase-worktree-status'
 import { getPlaywrightStripeApiBaseUrl, getStripeEmulatorPort } from './playwright-stripe'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
+import { signInWithPassword } from './gotrue_password_sign_in'
 
 type Phase = 'before' | 'after'
 type Command = 'capture' | 'capture-route' | 'diff' | 'run'
@@ -502,20 +502,12 @@ async function ensureFrontendStack(
 }
 
 async function prepareScreenshotData(supabaseUrl: string, supabaseAnon: string) {
-  const supabase = createClient(supabaseUrl, supabaseAnon, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  })
-
-  const { error: signInError } = await supabase.auth.signInWithPassword({
-    email: 'test@capgo.app',
-    password: 'testtest',
-  })
-  if (signInError)
-    throw new Error(`Unable to sign in for visual diff setup: ${signInError.message}`)
+  try {
+    await signInWithPassword(supabaseUrl, supabaseAnon, 'test@capgo.app', 'testtest')
+  }
+  catch (error) {
+    throw new Error(`Unable to sign in for visual diff setup: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 async function login(page: Page, credentials?: { email: string, password: string }) {

@@ -3,7 +3,7 @@
 // batch of up to 100 tags). Each queued row names an app and a scope: 'app'
 // purges the app's main tag, 'versions' its bundle-name lookup tag.
 //
-// Woken through pg_net by public.notify_updates_edge_cache_purge() (after the
+// Woken through the QueueDispatcher by public.notify_updates_edge_cache_purge() (after the
 // change commits) and by the 10s cron tick while purges are due. Each wake
 // drains the queue in its own transactions:
 //   claim_updates_cache_purge() -> purge -> ack_updates_cache_purge()

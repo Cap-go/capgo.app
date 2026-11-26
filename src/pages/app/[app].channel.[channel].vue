@@ -25,7 +25,7 @@ import { BUNDLE_PICKER_COLUMNS } from '~/services/bundleColumns'
 import { invalidateChannelImpact, warmChannelImpactCache } from '~/services/channelImpact'
 import { readChannelRollbackContext } from '~/services/channelRollback'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
-import { defaultApiHost, useConsole } from '~/services/console'
+import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { bundleChannelCompatibility, readBundleChannelCompatibility } from '~/services/nativePackageCompatibility'
 import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
@@ -382,7 +382,7 @@ async function notificationAuthHeaders() {
 }
 
 async function notificationFetch<T>(path: string, init: RequestInit = {}) {
-  const response = await fetch(`${defaultApiHost}/notifications${path}`, {
+  const response = await fetch(`${getConsoleApiHost()}/notifications${path}`, {
     ...init,
     headers: {
       ...(await notificationAuthHeaders()),
@@ -1511,7 +1511,7 @@ function getChannelCurlCommand() {
 
   const jsonBody = JSON.stringify(requestBody, null, 2)
 
-  return `curl -X POST '${defaultApiHost}/updates' \\
+  return `curl -X POST '${getConsoleApiHost()}/updates' \\
   -H 'Content-Type: application/json' \\
   -d '${jsonBody}'`
 }

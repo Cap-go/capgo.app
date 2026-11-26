@@ -31,7 +31,7 @@
     // Test phase: the local console auth relay. PR 3 switches it to https://sb.capgo.app/auth/v1.
     "API_EXTERNAL_URL": "http://localhost:8787/private/console/auth",
     "GOTRUE_SITE_URL": "https://console.capgo.app",
-    "GOTRUE_URI_ALLOW_LIST": "http://localhost:5173/onboarding/set_password,http://localhost:5173/forgot_password?step=2,http://localhost:5173/onboarding/verify_email,http://localhost:5173,https://console.capgo.app/onboarding/set_password,https://console.capgo.app/onboarding/verify_email",
+    "GOTRUE_URI_ALLOW_LIST": "http://localhost:5173/onboarding/set_password,http://localhost:5173/forgot_password?step=2,http://localhost:5173/onboarding/verify_email,http://localhost:5173,https://console.capgo.app/onboarding/set_password,https://console.capgo.app/onboarding/verify_email,https://console.capgo.com.cn,https://console.capgo.com.cn/onboarding/set_password,https://console.capgo.com.cn/forgot_password?step=2,https://console.capgo.com.cn/onboarding/verify_email,https://console.capgo.com.cn/sso-callback",
     "GOTRUE_JWT_ISSUER": "https://xvwzpoazmxkqosrdewyv.supabase.co/auth/v1",
     "GOTRUE_JWT_AUD": "authenticated",
     // Role of new users (signup.go SetRole) despite GoTrue's deprecation notice; empty breaks auth.role().

@@ -31,11 +31,6 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
     Promise.all(checks.map(check => checkPermissionPgMock(c, check.permission, check.scope, ...rest))),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: vi.fn(),
-  supabaseWithAuth: vi.fn(),
-}))
-
 const { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, MAX_API_KEY_BINDINGS, sanitizeClientBindings } = await import('../supabase/functions/_backend/public/apikey/scope.ts')
 
 const ORG_ID = '00000000-0000-4000-8000-000000000111'

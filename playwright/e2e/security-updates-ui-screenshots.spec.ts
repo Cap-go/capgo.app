@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { expect, test } from '../support/commands'
 import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
-const screenshotDir = resolve(process.cwd(), 'docs/screenshots/security-updates-ui')
+const screenshotDir = resolve(process.cwd(), 'docs/pr-screenshots/security-updates-ui')
 const phase = process.env.CAPGO_SCREENSHOT_PHASE === 'before' ? 'before' : 'after'
 
 async function dismissOptionalPrompts(page: import('@playwright/test').Page) {

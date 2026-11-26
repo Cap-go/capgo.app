@@ -12,15 +12,15 @@
  */
 import type Stripe from 'stripe'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import type pg from 'pg'
 import { mkdir, writeFile } from 'node:fs/promises'
 import process from 'node:process'
-import { asyncPool, createStripeClient, createSupabaseServiceClient, DEFAULT_ENV_FILE, getArgValue, getRequiredEnv, isActionableStripeCustomerId, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
+import { asyncPool, connectAdminDb, createStripeClient, DEFAULT_ENV_FILE, getArgValue, getRequiredEnv, isActionableStripeCustomerId, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
 
 const DEFAULT_CONCURRENCY = 8
 const DEFAULT_PAGE_SIZE = 1000
 const FAILURE_OUTPUT = './tmp/stripe_subscription_end_date_backfill_failures.json'
 
-type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
 type StripeInfoSubscriptionEndRow = Pick<
   Database['public']['Tables']['stripe_info']['Row'],
   'canceled_at' | 'customer_id' | 'subscription_anchor_end' | 'subscription_anchor_start' | 'subscription_id'
@@ -90,7 +90,7 @@ function hasSnapshotChanged(row: StripeInfoSubscriptionEndRow, snapshot: ReturnT
 }
 
 async function fetchStripeInfoRows(
-  supabase: SupabaseClient,
+  db: pg.Pool,
   options: {
     customerId?: string | null
     missingOnly: boolean
@@ -100,25 +100,17 @@ async function fetchStripeInfoRows(
   let lastSeenCustomerId: string | null = null
 
   while (true) {
-    let query = supabase
-      .from('stripe_info')
-      .select('customer_id, subscription_id, subscription_anchor_start, subscription_anchor_end, canceled_at')
-      .not('subscription_id', 'is', null)
-      .order('customer_id', { ascending: true })
-      .limit(DEFAULT_PAGE_SIZE)
-
-    if (options.customerId)
-      query = query.eq('customer_id', options.customerId)
-    else if (lastSeenCustomerId)
-      query = query.gt('customer_id', lastSeenCustomerId)
-
-    if (options.missingOnly)
-      query = query.is('canceled_at', null)
-
-    const { data, error } = await query
-    if (error)
-      throw error
-    if (!data?.length)
+    const { rows: data }: { rows: StripeInfoSubscriptionEndRow[] } = await db.query<StripeInfoSubscriptionEndRow>(
+      `SELECT customer_id, subscription_id, subscription_anchor_start, subscription_anchor_end, canceled_at
+       FROM public.stripe_info
+       WHERE subscription_id IS NOT NULL
+         AND ($1::text IS NULL OR customer_id = $1) AND ($2::text IS NULL OR customer_id > $2)
+         AND (NOT $3::boolean OR canceled_at IS NULL)
+       ORDER BY customer_id ASC
+       LIMIT $4`,
+      [options.customerId || null, lastSeenCustomerId, options.missingOnly, DEFAULT_PAGE_SIZE],
+    )
+    if (!data.length)
       break
 
     rows.push(...data)
@@ -131,22 +123,16 @@ async function fetchStripeInfoRows(
   return rows
 }
 
-async function updateSubscriptionEndSnapshot(supabase: SupabaseClient, candidate: StripeSubscriptionEndBackfillCandidate) {
-  const update: Database['public']['Tables']['stripe_info']['Update'] = {
-    canceled_at: candidate.next_canceled_at,
-  }
-  if (candidate.next_anchor_start)
-    update.subscription_anchor_start = candidate.next_anchor_start
-  if (candidate.next_anchor_end)
-    update.subscription_anchor_end = candidate.next_anchor_end
-
-  const { error } = await supabase
-    .from('stripe_info')
-    .update(update)
-    .eq('customer_id', candidate.customer_id)
-
-  if (error)
-    throw error
+async function updateSubscriptionEndSnapshot(db: pg.Pool, candidate: StripeSubscriptionEndBackfillCandidate) {
+  // Anchors are only overwritten when Stripe returned one.
+  await db.query(
+    `UPDATE public.stripe_info
+     SET canceled_at = $1,
+         subscription_anchor_start = COALESCE($2, subscription_anchor_start),
+         subscription_anchor_end = COALESCE($3, subscription_anchor_end)
+     WHERE customer_id = $4`,
+    [candidate.next_canceled_at, candidate.next_anchor_start || null, candidate.next_anchor_end || null, candidate.customer_id],
+  )
 }
 
 async function writeFailures(failures: BackfillFailure[]) {
@@ -173,13 +159,31 @@ async function main(args = process.argv.slice(2), runtimeEnv: Record<string, str
     ...runtimeEnv,
   }
 
-  const supabase = createSupabaseServiceClient(env)
   const stripe = createStripeClient(
     getRequiredEnv(env, 'STRIPE_SECRET_KEY'),
     env.STRIPE_API_BASE_URL?.trim(),
   )
+  const db = await connectAdminDb(env)
+  try {
+    await backfill(db, stripe, { apply, concurrency, customerId, envFile, limit, refreshExisting })
+  }
+  finally {
+    await db.end()
+  }
+}
 
-  const rows = await fetchStripeInfoRows(supabase, {
+interface BackfillOptions {
+  apply: boolean
+  concurrency: number
+  customerId: string | null
+  envFile: string
+  limit: number | null
+  refreshExisting: boolean
+}
+
+async function backfill(db: pg.Pool, stripe: ReturnType<typeof createStripeClient>, { apply, concurrency, customerId, envFile, limit, refreshExisting }: BackfillOptions) {
+
+  const rows = await fetchStripeInfoRows(db, {
     customerId,
     missingOnly: !refreshExisting,
   })
@@ -252,7 +256,7 @@ async function main(args = process.argv.slice(2), runtimeEnv: Record<string, str
   let updated = 0
   await asyncPool(concurrency, candidates, async (candidate) => {
     try {
-      await updateSubscriptionEndSnapshot(supabase, candidate)
+      await updateSubscriptionEndSnapshot(db, candidate)
       updated++
       if (updated % 100 === 0 || updated === candidates.length)
         console.log(`Updated ${updated}/${candidates.length}`)

@@ -156,7 +156,6 @@
     "npm:@standard-schema/spec@^1.1.0": "1.1.0",
     "npm:@stripe/stripe-js@^10.1.0": "10.1.0",
     "npm:@stylistic/eslint-plugin@5.10.0": "5.10.0_eslint@10.7.0",
-    "npm:@supabase/supabase-js@2.110.8": "2.110.8",
     "npm:@tailwindcss/aspect-ratio@~0.4.2": "0.4.2_tailwindcss@4.3.3",
     "npm:@tailwindcss/vite@^4.3.3": "4.3.3_vite@8.1.5_@types+node@26.2.0_sass@1.101.3",
     "npm:@tanstack/intent@~0.3.6": "0.3.6",
@@ -3812,12 +3811,6 @@
         "picomatch@4.0.5"
       ]
     },
-    "@supabase/auth-js@2.110.8": {
-      "integrity": "sha512-TQ5neTUDX2C2WmyYa03yGhLMkhdE/SkHXtK8/qxO/APUy3rsymsJCBP48p4jcN6iO2G0ow6RRexQd2mX+dSyJg==",
-      "dependencies": [
-        "tslib"
-      ]
-    },
     "@supabase/cli-darwin-arm64@2.115.0": {
       "integrity": "sha512-yUNw1KG+fyuBqBGvFT8ASC7aAkFkx2Kx+qPjUTW50ttiKKgg8D/eMSCoSjQuaAbL0vafw98bHEZ2dAfdyYyXMA==",
       "os": ["darwin"],
@@ -3858,43 +3851,10 @@
       "os": ["win32"],
       "cpu": ["x64"]
     },
-    "@supabase/functions-js@2.110.8": {
-      "integrity": "sha512-5yB9TLYzvv2oSQxwb0gamEvIAsuH66pVt7AM/pz03S7wN6ehD34GNgbShrccetqPedXQSz7e/1hAJ9NeEhoZVg==",
-      "dependencies": [
-        "tslib"
-      ]
-    },
-    "@supabase/phoenix@0.4.5": {
-      "integrity": "sha512-aAn9H9ovVyeApKy11OWOrrOGq8DV68yWeH4ud2lN9fzn4aO8Zb5GLL9m1pUg9nLqIcT+ZDfAcsZe0E/nqdv2lw=="
-    },
     "@supabase/postgrest-js@2.110.8": {
       "integrity": "sha512-QeRROxl1PpOZw5Jzi7BwdN9icsycMrLlCCvsjS0hYLW+nZoaT46zdagz/glJirj8jHF4jSd5Jyipuae2cBClCw==",
       "dependencies": [
         "tslib"
-      ]
-    },
-    "@supabase/realtime-js@2.110.8": {
-      "integrity": "sha512-mwX7ituX6O31fLf+0g65rpLlNxqgnMaPltPsQwzox6jfmbfVl3tCxXrfr3HEsQcCRjpjuJG1+A0vFzP1yVjKHA==",
-      "dependencies": [
-        "@supabase/phoenix",
-        "tslib"
-      ]
-    },
-    "@supabase/storage-js@2.110.8": {
-      "integrity": "sha512-CcfhkZFBLxsthgUabZKxwfsoXdrikIGsL3LsGoV3FZTqCMx/s1y49taT4jT/oya5+1IuB0sFFHw6pF0o0iJniQ==",
-      "dependencies": [
-        "iceberg-js",
-        "tslib"
-      ]
-    },
-    "@supabase/supabase-js@2.110.8": {
-      "integrity": "sha512-E5qzoe74zhJRv4wRcbO9eMYzeQDb/+h6c603pL8shcxLGBjTKsIF7XXj05IcNj23TLDgJN1WkMw7mwAPyu5dZg==",
-      "dependencies": [
-        "@supabase/auth-js",
-        "@supabase/functions-js",
-        "@supabase/postgrest-js",
-        "@supabase/realtime-js",
-        "@supabase/storage-js"
       ]
     },
     "@tailwindcss/aspect-ratio@0.4.2_tailwindcss@4.3.3": {
@@ -6557,9 +6517,6 @@
     "husky@9.1.7": {
       "integrity": "sha512-5gs5ytaNjBrh5Ow3zrvdUUY+0VxIuWVL4i9irt6friV+BqdCfmV11CQTWMiBYWHbXhco+J1kHfTOUkePhCDvMA==",
       "bin": true
-    },
-    "iceberg-js@0.8.1": {
-      "integrity": "sha512-1dhVQZXhcHje7798IVM+xoo/1ZdVfzOMIc8/rgVSijRK38EDqOJoGula9N/8ZI5RD8QTxNQtK/Gozpr+qUqRRA=="
     },
     "idb@8.0.4": {
       "integrity": "sha512-jd0ITCrN+Zah4J7R/Z2jnR3W7A4BXDAjmo62MwWuSjxCiueUAf7X5rbodEdidWzeknwXHmLpdZkoiiCppNi30Q=="
@@ -9857,7 +9814,6 @@
         "npm:@standard-schema/spec@^1.1.0",
         "npm:@stripe/stripe-js@^10.1.0",
         "npm:@stylistic/eslint-plugin@5.10.0",
-        "npm:@supabase/supabase-js@2.110.8",
         "npm:@tailwindcss/aspect-ratio@~0.4.2",
         "npm:@tailwindcss/vite@^4.3.3",
         "npm:@types/adm-zip@~0.5.8",

@@ -163,6 +163,34 @@ is_failed_migration_hotfix() {
   esac
 }
 
+# Branch-only split of failed 152120; never applied in prod (capgo-22.63.1).
+is_storage_gb_hours_split_delete() {
+  case "$1" in
+    supabase/migrations/20261117152410_storage_gb_hours_billing_data.sql) return 0 ;;
+    supabase/migrations/20261117152411_storage_gb_hours_billing_apps_locks.sql) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Branch-only restamp deletes for storage gb-hours billing (capgo.app#4190).
+is_storage_gb_hours_restamp_delete() {
+  case "$1" in
+    supabase/migrations/20261118193000_storage_gb_hours_billing.sql) return 0 ;;
+    supabase/migrations/20261119233941_storage_gb_hours_billing.sql) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 20261120001201 is #4190's rename of the prod-applied 20261117152120 and was
+# never applied in prod. Deletion only (never edits), and only together with
+# the byte-for-byte restore of 152120.
+is_storage_gb_hours_001201_delete() {
+  local restored='supabase/migrations/20261117152120_storage_gb_hours_billing.sql'
+  [[ "$1" == 'supabase/migrations/20261120001201_storage_gb_hours_billing.sql' ]] || return 1
+  [[ -f "$restored" ]] || return 1
+  [[ "$(git hash-object "$restored")" == '7b34c6e483664c47fd0910b37a0d10a53eaadc89' ]]
+}
+
 # Prod-applied migrations restored from remote schema_migrations.statements.
 # Exact blob hashes keep this allowlist from accepting later edits.
 is_prod_history_restore() {
@@ -175,6 +203,7 @@ is_prod_history_restore() {
     supabase/migrations/20260725111931_fix_reclaim_cron_catch_canceled.sql:4226e0cab969bbefc7ca622e34821ae12a0c8c3a) return 0 ;;
     supabase/migrations/20260725162854_skip_audit_dual_storage_manifest_count.sql:ea3b1c49c5469aa9ba0d74bef34eba35f78d934f) return 0 ;;
     supabase/migrations/20260725182614_slim_audit_logs_skip_bookkeeping.sql:1856f7dced19a929e4ea3548e75e2a17b8a99863) return 0 ;;
+    supabase/migrations/20261117152120_storage_gb_hours_billing.sql:7b34c6e483664c47fd0910b37a0d10a53eaadc89) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -203,6 +232,23 @@ if [[ -n "$modified_files" ]]; then
 
     if is_failed_migration_hotfix "$file"; then
       echo "⚠️  Allowing audited repair to failed unapplied migration: $file"
+      continue
+    fi
+
+    # A restore can show up as a rename when the replaced file is deleted
+    # (20261120001201 -> 20261117152120); the exact blob hash still applies.
+    if is_prod_history_restore "$file"; then
+      echo "⚠️  Allowing audited prod-history restore: $file"
+      continue
+    fi
+
+    if is_storage_gb_hours_split_delete "$file"; then
+      echo "⚠️  Allowing replacement of unapplied storage gb-hours split migration: $file"
+      continue
+    fi
+
+    if is_storage_gb_hours_restamp_delete "$file"; then
+      echo "⚠️  Allowing restamp deletion of unapplied storage gb-hours migration: $file"
       continue
     fi
 
@@ -248,13 +294,33 @@ if [[ "$baseline_added_count" -eq 1 && "$deleted_count" -ge 50 ]]; then
 fi
 
 if [[ -n "$deleted_files" && "$allow_migration_squash" -ne 1 ]]; then
-  echo '❌ Existing Supabase migrations were deleted in this change.'
-  echo '  Supabase migrations must remain append-only.'
+  disallowed_deleted_files=''
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
-    echo "  - $file"
+    if is_storage_gb_hours_split_delete "$file"; then
+      echo "⚠️  Allowing removal of unapplied storage gb-hours split migration: $file"
+      continue
+    fi
+    if is_storage_gb_hours_restamp_delete "$file"; then
+      echo "⚠️  Allowing removal of unapplied storage gb-hours restamp: $file"
+      continue
+    fi
+    if is_storage_gb_hours_001201_delete "$file"; then
+      echo "⚠️  Allowing removal of unapplied 20261120001201 (152120 restored): $file"
+      continue
+    fi
+    disallowed_deleted_files+="${file}"$'\n'
   done <<< "$deleted_files"
-  status=1
+
+  if [[ -n "$disallowed_deleted_files" ]]; then
+    echo '❌ Existing Supabase migrations were deleted in this change.'
+    echo '  Supabase migrations must remain append-only.'
+    while IFS= read -r file; do
+      [[ -z "$file" ]] && continue
+      echo "  - $file"
+    done <<< "$disallowed_deleted_files"
+    status=1
+  fi
 fi
 if [[ -n "$added_files" ]]; then
   : > "${added_timestamps_file}"

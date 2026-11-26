@@ -15,9 +15,11 @@ import IconSparkles from '~icons/lucide/sparkles'
 import { applyBuildStreamMessage, buildTimeline, createBuildLiveState, resolveBuildOutcome, stepCopy } from '~/services/buildLiveStream'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
+import { buildChinaConsoleCliApiHostArg } from '~/services/consoleApiHost'
 import { buildPreviewQrCodeDataUrl } from '~/services/previewQrCode'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
+import { buildRequestCliCommand } from '~/utils/onboardingSetupMode'
 
 type BuildRow = Pick<Database['public']['Tables']['build_requests']['Row'], 'status' | 'created_at' | 'started_at' | 'completed_at' | 'last_error' | 'builder_job_id'>
 
@@ -32,7 +34,7 @@ const props = defineProps<{
   // Show a back control that leaves the live page while the build runs.
   closable?: boolean
 }>()
-const emit = defineEmits<{ retry: [], done: [], close: [] }>()
+const emit = defineEmits<{ retry: [], done: [], close: [], download: [], finished: [outcome: 'success' | 'failure'] }>()
 
 const POLL_MS = 3000
 const HEARTBEAT_MS = 2000
@@ -41,6 +43,7 @@ const MAX_RECONNECTS = 5
 const { t } = useI18n()
 const capgo = useConsole()
 const organizationStore = useOrganizationStore()
+const localCommand = buildChinaConsoleCliApiHostArg()
 const row = ref<BuildRow | null>(null)
 const live = ref<BuildLiveState>(createBuildLiveState())
 const now = ref(Date.now())
@@ -82,7 +85,7 @@ const queued = computed(() => !outcome.value && (currentRow.value?.key === 'uplo
 const errorText = computed(() => row.value?.last_error || live.value.statusMessage || t('build-live-failed-no-error'))
 const downloadUrl = computed(() => live.value.downloadUrl || savedDownloadUrl.value)
 const qrCode = computed(() => downloadUrl.value ? buildPreviewQrCodeDataUrl(downloadUrl.value) : '')
-const terminalCommand = computed(() => `npx @capgo/cli@latest build request ${props.appId} --platform ${props.platform}`)
+const terminalCommand = computed(() => buildRequestCliCommand(props.appId, props.platform, localCommand))
 const jobShort = computed(() => row.value?.builder_job_id ? `${row.value.builder_job_id.slice(0, 12)}…` : '')
 
 const title = computed(() => {
@@ -277,6 +280,7 @@ watch(() => row.value?.builder_job_id, (jobId) => {
 watch(outcome, (value) => {
   if (!value)
     return
+  emit('finished', value)
   endedAt.value ??= Date.now()
   if (seenRunning) {
     const cancelled = [live.value.status, row.value?.status].some(s => /^cancel/i.test(s ?? ''))
@@ -357,13 +361,14 @@ onUnmounted(stop)
             {{ downloadUrl ? t('build-live-success-download') : !outputsChecked ? '' : outputsUnknown ? t('build-live-success-output-unknown') : platform === 'ios' ? t('build-live-success-store-ios') : t('build-live-success-store-android') }}
           </p>
           <div class="mt-5 flex flex-wrap gap-3">
-            <a v-if="downloadUrl" class="d-btn d-btn-primary gap-2" :href="downloadUrl" target="_blank" rel="noopener noreferrer">
+            <a v-if="downloadUrl" class="d-btn d-btn-primary gap-2" :href="downloadUrl" target="_blank" rel="noopener noreferrer" data-test="build-live-download" @click="emit('download')">
               <IconDownload class="h-4 w-4" />
               {{ t('build-live-download') }}
             </a>
             <button v-if="!embedded" type="button" class="d-btn" :class="downloadUrl ? 'd-btn-outline' : 'd-btn-primary'" @click="emit('done')">
               {{ t('build-live-view-builds') }}
             </button>
+            <slot name="success-actions" />
           </div>
         </div>
         <figure v-if="qrCode" class="shrink-0 text-center">

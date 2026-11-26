@@ -34,7 +34,7 @@ export interface GenerateLinkProperties {
 }
 
 export class GotrueAdminError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string) {
+  constructor(message: string, readonly status: number, readonly code?: string, readonly reasons?: string[]) {
     super(message)
     this.name = 'GotrueAdminError'
   }
@@ -48,7 +48,7 @@ export type GenerateLinkResponse
   = | { data: { properties: GenerateLinkProperties, user: GotrueUser }, error: null }
     | { data: { properties: null, user: null }, error: GotrueAdminError }
 
-type RawResponse = { data: unknown, error: null } | { data: null, error: GotrueAdminError }
+export type RawResponse = { data: unknown, error: null } | { data: null, error: GotrueAdminError }
 
 // Same precedence as supabase-js (auth-js lib/fetch.ts).
 function errorMessage(value: unknown, fallback: string): string {
@@ -69,6 +69,12 @@ function errorCode(value: unknown): string | undefined {
   return typeof body.error_code === 'string' ? body.error_code : undefined
 }
 
+// Like supabase-js, a weak_password error keeps GoTrue's reasons (e.g. `pwned`).
+function weakPasswordReasons(value: unknown): string[] | undefined {
+  const reasons = (value as { weak_password?: { reasons?: unknown } } | null)?.weak_password?.reasons
+  return Array.isArray(reasons) && reasons.every(reason => typeof reason === 'string') ? reasons : undefined
+}
+
 // `path` is relative to the GoTrue root, e.g. `admin/users` or `.well-known/jwks.json`.
 export function gotrueFetch(c: Context, path: string, init?: RequestInit): Promise<Response> {
   const goTrue = (c.env as Partial<Bindings> | undefined)?.GOTRUE
@@ -77,9 +83,10 @@ export function gotrueFetch(c: Context, path: string, init?: RequestInit): Promi
     : fetch(`${trimTrailingSlashes(getEnv(c, 'SUPABASE_URL'))}/auth/v1/${path}`, init)
 }
 
-async function request(c: Context, method: string, path: string, body?: unknown): Promise<RawResponse> {
-  const key = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
+// Shared by the admin helper (service key) and gotrue_auth.ts (anon key).
+export async function gotrueRequest(c: Context, key: string, method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<RawResponse> {
   const headers: Record<string, string> = {
+    ...extraHeaders,
     'apikey': key,
     'Authorization': `Bearer ${key}`,
     'X-Supabase-Api-Version': '2024-01-01',
@@ -107,8 +114,12 @@ async function request(c: Context, method: string, path: string, body?: unknown)
   if (response.ok && (!payload || typeof payload !== 'object'))
     return { data: null, error: new GotrueAdminError('Invalid JSON from auth server', 0) }
   if (!response.ok)
-    return { data: null, error: new GotrueAdminError(errorMessage(payload, text || response.statusText), response.status, errorCode(payload)) }
+    return { data: null, error: new GotrueAdminError(errorMessage(payload, text || response.statusText), response.status, errorCode(payload), weakPasswordReasons(payload)) }
   return { data: payload, error: null }
+}
+
+function request(c: Context, method: string, path: string, body?: unknown): Promise<RawResponse> {
+  return gotrueRequest(c, getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY'), method, path, body)
 }
 
 function userResponse(result: RawResponse): UserResponse {

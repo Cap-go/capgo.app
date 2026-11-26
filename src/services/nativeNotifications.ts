@@ -3,7 +3,7 @@ import { App } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
 import { CapgoNotifications } from '@capgo/capacitor-notifications'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { defaultApiHost } from '~/services/console'
+import { getConsoleApiHost } from '~/services/console'
 
 interface SelfProofResponse {
   appId: string
@@ -107,7 +107,7 @@ async function setup(): Promise<string | null> {
     void handleBackgroundNotification(event)
   })
   const { id: appId } = await App.getInfo()
-  await CapgoNotifications.configure({ appId, serverUrl: defaultApiHost, autoUpdater: false })
+  await CapgoNotifications.configure({ appId, serverUrl: getConsoleApiHost(), autoUpdater: false })
   return appId
 }
 
@@ -148,7 +148,7 @@ export async function registerNativeNotifications(userId: string) {
         throw error ?? new Error('Missing notification identity proof')
       await CapgoNotifications.register({
         appId,
-        serverUrl: defaultApiHost,
+        serverUrl: getConsoleApiHost(),
         externalId: data.externalId,
         identityProof: data.identityProof,
         consent: true,

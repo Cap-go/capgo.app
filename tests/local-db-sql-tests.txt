@@ -4,6 +4,7 @@ tests/app-onboarding-v3-postgres.test.ts
 tests/app-version-r2-path-guard.test.ts
 tests/app-versions-deleted-at-rbac.test.ts
 tests/app-versions-rls-dos.test.ts
+tests/cancel-save-offer-credits-postgres.test.ts
 tests/canceled-org-retention-cleanup.test.ts
 tests/cicd-encryption-policy.test.ts
 tests/cicd-setup-locking.test.ts
@@ -49,6 +50,7 @@ tests/rbac-priority-guards.test.ts
 tests/rollout-auto-pause-order.test.ts
 tests/serving-policy-activation-concurrency.test.ts
 tests/storage-lifetimes-sql.test.ts
+tests/storage-gb-hours-migration-lock-concurrency.test.ts
 tests/stripe-emulator.test.ts
 tests/user-bento-event-jsonb-patch.test.ts
 tests/user-created-via-invite.test.ts

@@ -21,7 +21,16 @@ export function getRequestOrigin(c: Context): string {
  */
 
 export function getApiOrigin(c: Context): string {
-  return getEnv(c, 'MCP_OAUTH_API_ORIGIN').trim().replace(/\/+$/, '') || getRequestOrigin(c)
+  const requestOrigin = getRequestOrigin(c)
+  try {
+    const hostname = new URL(requestOrigin).hostname.replace(/\.$/, '').toLowerCase()
+    if (hostname === 'api.capgo.com.cn')
+      return 'https://api.capgo.com.cn'
+  }
+  catch {
+    // ignore invalid request URL
+  }
+  return getEnv(c, 'MCP_OAUTH_API_ORIGIN').trim().replace(/\/+$/, '') || requestOrigin
 }
 
 /**

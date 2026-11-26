@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdir, unlink } from 'node:fs/promises'
 
 const baseUrl = process.env.CAPGO_URL || 'http://localhost:5173'
-const outputDir = process.env.OUTPUT_DIR || 'docs/screenshots'
+const outputDir = process.env.OUTPUT_DIR || 'docs/pr-screenshots/email-preferences'
 const visitorHex = 'a1b2c3d4e5f6478990aabbccddeeff00'
 
 await mkdir(outputDir, { recursive: true })

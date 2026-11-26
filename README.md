@@ -90,7 +90,9 @@ When a hosted MCP poll sees a job still `running` past the app's configured time
 - 📊 View your deployment statistics
 - 🔋 Supports Android and iOS
 - ⚡️ Capacitor 8/7/6/5 support
-- 🌐 **Open Source**: Licensed under GNU AFFERO GENERAL PUBLIC LICENSE
+- 🌐 **Open Source**: Source code licensed under GNU AFFERO GENERAL PUBLIC LICENSE
+  (public forks must use their own branding; private internal self-hosting is
+  fine, see [Trademarks and forks](#trademarks-and-forks))
 - 🌐 **Open Source Backend**: Self install
   [our backend](https://github.com/Cap-go/capgo) in your infra
 
@@ -115,14 +117,16 @@ Capgo is deployed to production on Cloudflare workers and Supabase.
 Cloudflare workers take 99% of the traffic. Supabase is used for internal calls,
 for internal tasks such as CRON jobs that call functions.
 
-When self-hosted, installing only Supabase is sufficient.
+When self-hosted, run Supabase plus the Cloudflare API worker
+(`cloudflare_workers/api`): its `QueueDispatcher` Durable Object is what wakes
+the queue consumers.
 
 ## Why Cloudflare Workers + Supabase
 
 We support both deployments for practical reasons:
 
-- **Supabase** is the legacy backend and the only required piece for
-  self-hosting.
+- **Supabase** is the legacy backend. Self-hosting needs it plus the API
+  worker, whose `QueueDispatcher` wakes the queue consumers.
 - **Cloudflare Workers** runs the same backend code (via the Hono adapter) but is
   much cheaper at Capgo scale. With ~50M devices, Supabase Edge Functions are
   cost-prohibitive because they follow AWS pricing. Cloudflare is ~10x cheaper
@@ -132,9 +136,11 @@ In production, we route most traffic through Cloudflare Workers for cost and
 scale, while Supabase remains the reference backend and the default for
 self-hosted deployments. Capgo cloud console and current CLI calls go to the
 Cloudflare API hosts (`VITE_API_HOST` / `hostApi`). Capgo cloud still publishes
-a small Supabase function allowlist for Postgres `pg_net` (`triggers`) and for
+a small Supabase function allowlist for the queue consumer (`triggers`) and for
 legacy CLI compatibility via `/functions/v1` through 2026-10-28. Self-hosted
-deployments keep using `/functions/v1`. Plugin hot paths and other unused Capgo
+deployments keep using `/functions/v1`, and also run the Cloudflare API worker:
+its `QueueDispatcher` Durable Object is what wakes the queue consumers (the
+database no longer uses `pg_net`). Plugin hot paths and other unused Capgo
 cloud endpoints are not published on Supabase.
 
 ## Project structure (self-hosting map)
@@ -151,7 +157,8 @@ If you're self-hosting, the key pieces live in a few top-level directories:
   - `supabase/migrations/` - Database schema and RLS policies
   - `supabase/seed.sql` - Local seed data for tests/dev
 - `supabase/schemas/prod.sql` - Production schema dump (reference only)
-- `cloudflare_workers/` - **Optional** Cloudflare Workers deployment (prod traffic)
+- `cloudflare_workers/` - Cloudflare Workers deployment (prod traffic). The API
+  worker is required everywhere: its `QueueDispatcher` wakes the queue consumers
   - `cloudflare_workers/snippet/` - Geo routing for replicas ([automatic deployment of all snippets](docs/snippets-deployment.md))
   - Worker entry points and deploy config live here
 - `src/` - Frontend Vue 3 web console (Vite + Tailwind + DaisyUI)
@@ -166,12 +173,19 @@ If you're self-hosting, the key pieces live in a few top-level directories:
 - `docs/` - Extra documentation and guides
 - `android/`, `ios/` - Capacitor native projects (mobile builds)
 
+Self-hosting and forking are welcome, but the license covers the code only.
+Public forks and services presented to others must use their own name and
+branding; see
+[Trademarks and forks](#trademarks-and-forks).
+
 Quick self-hosting path:
 
-1. `supabase/` is enough to run the backend locally.
+1. `supabase/` plus the API worker (`cloudflare_workers/api`) run the backend;
+   `bun run backend` starts both locally. Without the API worker's
+   `QueueDispatcher`, queued work is never picked up.
 2. `src/` is the web console you point to your own backend.
-3. `cloudflare_workers/` is only needed if you want to run the Workers layer
-   instead of (or in front of) Supabase.
+3. The other `cloudflare_workers/` (plugin, files) are only needed if you want
+   to run the Workers layer instead of (or in front of) Supabase.
 
 ## Backend endpoints (what lives where)
 
@@ -510,10 +524,11 @@ supabase secrets set --env-file supabase/functions/.env
 Capgo Cloud (prod / preprod / alpha) only publishes allowlisted Supabase
 functions from `scripts/supabase-cloud-functions.ts`:
 
-- `triggers` forever (`pg_net` queue consumer)
-- `bundle`, `channel`, `files`, `private` until **2026-10-28** (old Capgo CLI
-  still called these via `supabase.functions.invoke` on `sb.capgo.app`; new
-  CLI uses `api.capgo.app` / `files.capgo.app`)
+- `triggers` forever (queue consumer, called by the `QueueDispatcher`)
+- `bundle`, `files`, `private` until **2026-10-28** (old Capgo CLI still
+  called these via `supabase.functions.invoke` on `sb.capgo.app`; new CLI
+  uses `api.capgo.app` / `files.capgo.app`)
+- `channel` is no longer published (no traffic); the deploy deletes it
 
 The console only talks to the Capgo API (`VITE_API_HOST`): Cloudflare on Capgo
 cloud, the `private` Supabase function on self-host / local. Capgo cloud deploy
@@ -585,3 +600,29 @@ bun mobile
 
 And you will see the generated files in the `dist` directory, ready to be served
 on stores.
+
+## License
+
+All code in this repository, including the `cli/` workspace, is licensed under
+the [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE). The
+`LICENSE` file is the authoritative license text.
+
+## Trademarks and forks
+
+The AGPL-3.0 license covers **only the code** (source and works built from it).
+It does not grant any rights to Digital Shift OU's trademarks, branding, or
+trade dress, including the **Capgo** name, wordmark, logos, and application
+icons. This has always been the case; this section only makes it explicit.
+
+If you fork, redistribute, host, or build on Capgo's source code:
+
+- **Use your own name and branding.** Replace the Capgo name, wordmark, logos,
+  and application icons in any public fork, redistributed build, hosted
+  service, or self-hosted service presented to others, website, package, or app
+  store listing. Truthful, plain-text attribution is allowed as described in
+  [TRADEMARK.md](./TRADEMARK.md). Private internal self-hosting is fine.
+- **Make it clear that your project is not Capgo.** State clearly that your
+  project is unofficial and not affiliated with or endorsed by Capgo or Digital
+  Shift OU.
+
+See [TRADEMARK.md](./TRADEMARK.md) for the full trademark and branding policy.

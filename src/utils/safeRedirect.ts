@@ -1,4 +1,5 @@
 import type { LocationQuery } from 'vue-router'
+import { getConsoleApiHost } from '~/services/consoleApiHost'
 import { isLocalDevHost } from './urlSafety'
 
 function hasControlCharacters(path: string): boolean {
@@ -137,12 +138,19 @@ export function getAllowedConfirmationHosts() {
   const hosts = new Set<string>()
 
   addConfiguredHost(hosts, import.meta.env.VITE_APP_URL)
-  addConfiguredHost(hosts, import.meta.env.VITE_API_HOST)
+  addConfiguredHost(hosts, getConsoleApiHost())
 
   // Production fallbacks only; the repo config file stays out of the bundle (it carries backend keys).
   if (hosts.size === 0) {
     addConfiguredHost(hosts, 'console.capgo.app')
+    addConfiguredHost(hosts, 'console.capgo.com.cn')
     addConfiguredHost(hosts, 'api.capgo.app')
+    addConfiguredHost(hosts, 'api.capgo.com.cn')
+  }
+  else {
+    const apiHost = getConsoleApiHost().replace(/\/$/, '')
+    if (apiHost === 'https://api.capgo.app' || apiHost === 'https://api.capgo.com.cn')
+      addConfiguredHost(hosts, 'console.capgo.com.cn')
   }
 
   return [...hosts]

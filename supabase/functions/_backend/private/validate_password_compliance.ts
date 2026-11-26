@@ -10,9 +10,10 @@ import { clearFailedAccountAuth, isAccountRateLimited, isIPRateLimited, recordFa
 import { buildRateLimitInfo } from '../utils/rateLimitInfo.ts'
 import type { RlsPrincipal } from '../utils/pg_rls.ts'
 import { getClaimsFromJWT } from '../utils/hono_jwt.ts'
+import { gotrueAuth } from '../utils/gotrue_auth.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { withRlsTransaction } from '../utils/pg_rls.ts'
-import { emptySupabase } from '../utils/supabase.ts'
+import { collectConsoleWebOrigins } from '../utils/console_web_origins.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface ValidatePasswordCompliance {
@@ -50,21 +51,7 @@ function normalizeOrigin(origin: string): string {
  * Includes configured webapp origin plus optional custom allowed origins.
  */
 function getAllowedOrigins(c: BackendContext): Set<string> {
-  const webappUrl = normalizeOrigin(getEnv(c, 'WEBAPP_URL'))
-  const configuredOrigins = getEnv(c, 'PASSWORD_COMPLIANCE_ALLOWED_ORIGINS')
-    .split(',')
-    .map(origin => normalizeOrigin(origin.trim()))
-    .filter(Boolean)
-
-  const allowed = new Set<string>()
-  if (webappUrl)
-    allowed.add(webappUrl)
-
-  for (const origin of configuredOrigins) {
-    allowed.add(origin)
-  }
-
-  return allowed
+  return collectConsoleWebOrigins(c, getEnv(c, 'PASSWORD_COMPLIANCE_ALLOWED_ORIGINS'))
 }
 
 /**
@@ -167,8 +154,7 @@ app.post('/', async (c) => {
   cloudlog({ requestId: c.get('requestId'), context: 'validate_password_compliance raw body', rawBody: bodyWithoutPassword })
 
   // Authenticate first to avoid leaking org existence to unauthenticated callers.
-  const loginClient = emptySupabase(c)
-  const { data: signInData, error: signInError } = await loginClient.auth.signInWithPassword({
+  const { data: signInData, error: signInError } = await gotrueAuth(c).signInWithPassword({
     email: body.email,
     password: body.password,
     options: body.captcha_token

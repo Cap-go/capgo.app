@@ -44,4 +44,4 @@ Getting started sidebar links point directly to fullscreen setup for v3 apps. Ex
 
 ## Review preview
 
-Start the real frontend and visit `/playwright/fixtures/onboarding-setup.html?view=flow&version=3&resume=com.example.onboarding-preview&step=setup`; change version to 2 for the control. It mounts AppOnboardingFlow with synthetic identity and intercepted requests. No production writes are sent. Screenshots and the repository visual report are in `docs/pr-assets/onboarding-v3`.
+Start the real frontend and visit `/playwright/fixtures/onboarding-setup.html?view=flow&version=3&resume=com.example.onboarding-preview&step=setup`; change version to 2 for the control. It mounts AppOnboardingFlow with synthetic identity and intercepted requests. No production writes are sent. Screenshots and the repository visual report are in `docs/pr-screenshots/onboarding-v3`.

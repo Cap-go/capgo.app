@@ -64,7 +64,8 @@ vi.mock('~/services/permissions', () => ({
   checkPermissions: async () => true,
 }))
 
-vi.mock('~/services/console', () => {
+vi.mock('~/services/console', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/services/console')>()
   function createQuery(table: string) {
     let selectedId: string | null = null
     const query: Record<string, any> = {
@@ -121,6 +122,7 @@ vi.mock('~/services/console', () => {
   }
 
   return {
+    ...actual,
     useConsole: () => ({
       auth: {
         getClaims: async () => ({ data: { claims: { sub: 'user-id' } } }),

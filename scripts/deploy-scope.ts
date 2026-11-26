@@ -50,6 +50,7 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
     /^read_replicate\//,
     /^scripts\/(check-read-replica-hyperdrive-schema\.sh|sync-read-replica-schema\.ts)$/,
     /^scripts\/push-release-migrations\.sh$/,
+    /^scripts\/supabase-cloud-functions\.ts$/,
   ],
   api: [
     ...workerDependencyMatchers,

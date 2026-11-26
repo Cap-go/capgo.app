@@ -17,8 +17,7 @@ SET statement_timeout = '180s';
 -- ---------------------------------------------------------------------------
 DO $$
 BEGIN
-  IF to_regprocedure('public.null_migrated_app_version_manifests()') IS NULL
-     OR to_regprocedure('public.cleanup_net_http_response()') IS NULL THEN
+  IF to_regprocedure('public.null_migrated_app_version_manifests()') IS NULL THEN
     RAISE EXCEPTION
       'Missing reclaim functions. Deploy migration 20260722082019_fix_supabase_swap_memory first.';
   END IF;
@@ -57,11 +56,6 @@ WHERE (schemaname, relname) IN (
   ('pgmq', 'a_on_channel_update')
 )
 ORDER BY pg_total_relation_size(format('%I.%I', schemaname, relname)::regclass) DESC;
-
--- ---------------------------------------------------------------------------
--- 1) Truncate pg_net response bloat (biggest immediate win)
--- ---------------------------------------------------------------------------
-TRUNCATE TABLE net._http_response;
 
 -- ---------------------------------------------------------------------------
 -- 2) Purge pgmq archives/stuck messages (batched; re-run until notice = 0)

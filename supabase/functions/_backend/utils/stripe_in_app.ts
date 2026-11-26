@@ -456,10 +456,14 @@ async function requireActiveSubscriptionId(c: Context, ctx: InAppBillingContext)
 }
 
 // Ends at period end, like the portal did; the reason is kept on the Stripe subscription.
-export async function scheduleSubscriptionCancel(c: Context, ctx: InAppBillingContext, feedback: CancelFeedback, comment?: string) {
+// expectedSubscriptionId: cancel only that subscription (the one a save offer checked);
+// it is compared under the billing lock, where replacement subscriptions are created.
+export async function scheduleSubscriptionCancel(c: Context, ctx: InAppBillingContext, feedback: CancelFeedback, comment?: string, expectedSubscriptionId?: string) {
   const subscriptionId = await requireActiveSubscriptionId(c, ctx)
   await withBillingProfileLock(c, ctx.billingAccount, ctx.customerId, async (assertHeld) => {
     await assertHeld()
+    if (expectedSubscriptionId && (subscriptionId !== expectedSubscriptionId || await requireActiveSubscriptionId(c, ctx) !== expectedSubscriptionId))
+      throw simpleError('subscription_changed', 'The subscription changed; nothing was canceled')
     const scheduled = await updateCurrencyDiscountSchedule(ctx.stripe, subscriptionId, true, assertHeld, { metadata: clearCurrencyTransition })
     await releaseTrialPlanSchedule(c, ctx.stripe, subscriptionId)
     await assertHeld()

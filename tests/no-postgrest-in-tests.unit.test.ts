@@ -13,24 +13,22 @@ const REST_PATH_ALLOWED: Record<string, string> = {
   'tests/cli-preview-lifecycle.test.ts': 'asserts the CLI does not call PostgREST',
   'tests/console-auth-proxy.unit.test.ts': 'path traversal input for the auth proxy',
   'tests/http-dispatch.unit.test.ts': 'origin parsing input',
+  'tests/legacy-cli-manifest-warning-snippet.unit.test.ts': 'request URLs for the edge snippet, fetch is stubbed',
   'tests/no-postgrest-in-tests.unit.test.ts': 'this guard',
   'tests/sql-data-client.ts': 'documents the rule',
   'tests/sql-rest-request.ts': 'documents the request shape it replaces',
 }
 
-const SUPABASE_JS_CREATE_CLIENT_ALLOWED = new Set(['tests/sql-data-client.ts', 'tests/no-postgrest-in-tests.unit.test.ts'])
-
 const SUPABASE_JS = String.raw`['"]@supabase/supabase-js['"]`
-const SUPABASE_JS_CLIENT_ACCESS = [
-  // import { createClient } / { createClient as x }
-  new RegExp(String.raw`import\s+\{[^}]*\bcreateClient\b[^}]*\}\s+from\s+${SUPABASE_JS}`),
-  // import * as x / import x (default): x.createClient(...)
-  new RegExp(String.raw`import\s+(?!type\b)(?:\*\s+as\s+)?\w+\s+from\s+${SUPABASE_JS}`),
-  new RegExp(String.raw`require\(\s*${SUPABASE_JS}\s*\)`),
+const SUPABASE_JS_IMPORT = [
+  // import ... from / export ... from, type-only included
+  new RegExp(String.raw`\b(?:import|export)\b[^;]*?\bfrom\s*${SUPABASE_JS}`),
+  // side-effect import, require() and dynamic import()
+  new RegExp(String.raw`(?:import|require)\s*\(?\s*${SUPABASE_JS}`),
 ]
 
-function canCreateSupabaseJsClient(source: string): boolean {
-  return SUPABASE_JS_CLIENT_ACCESS.some(pattern => pattern.test(source))
+function importsSupabaseJs(source: string): boolean {
+  return SUPABASE_JS_IMPORT.some(pattern => pattern.test(source))
 }
 
 function testFiles(dir: string): string[] {
@@ -55,9 +53,9 @@ describe('tests never rely on PostgREST', () => {
     expect(offenders).toEqual([])
   })
 
-  it('no test builds a supabase-js client whose from()/rpc() would reach PostgREST', () => {
+  it('no test imports supabase-js (data goes through ./sql-data-client, auth/storage/functions through ./local-stack-http)', () => {
     const offenders = files
-      .filter(file => !SUPABASE_JS_CREATE_CLIENT_ALLOWED.has(file.name) && canCreateSupabaseJsClient(file.source))
+      .filter(file => file.name !== 'tests/no-postgrest-in-tests.unit.test.ts' && importsSupabaseJs(file.source))
       .map(file => file.name)
     expect(offenders).toEqual([])
   })
@@ -67,16 +65,23 @@ describe('tests never rely on PostgREST', () => {
     'import { PostgrestError, createClient as make } from "@supabase/supabase-js"',
     'import * as supabase from \'@supabase/supabase-js\'',
     'import supabase from \'@supabase/supabase-js\'',
+    'import type { SupabaseClient } from \'@supabase/supabase-js\'',
+    'import {\n  type SupabaseClient,\n  createClient,\n} from \'@supabase/supabase-js\'',
+    'export type { SupabaseClient } from \'@supabase/supabase-js\'',
     'const { createClient } = require(\'@supabase/supabase-js\')',
+    'const supabase = await import(\'@supabase/supabase-js\')',
+    'import \'@supabase/supabase-js\'',
+    'import{createClient}from\'@supabase/supabase-js\'',
+    'export{type SupabaseClient}from"@supabase/supabase-js"',
   ])('flags %s', (source) => {
-    expect(canCreateSupabaseJsClient(source)).toBe(true)
+    expect(importsSupabaseJs(source)).toBe(true)
   })
 
   it.each([
-    'import type { SupabaseClient } from \'@supabase/supabase-js\'',
-    'import { PostgrestError } from \'@supabase/supabase-js\'',
     'import { createClient } from \'./sql-data-client\'',
+    'import type { TestClient } from \'./sql-data-client\'',
+    'import { createClient } from \'@supabase/postgrest-js\'',
   ])('allows %s', (source) => {
-    expect(canCreateSupabaseJsClient(source)).toBe(false)
+    expect(importsSupabaseJs(source)).toBe(false)
   })
 })

@@ -8,7 +8,8 @@ import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
-import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
+import { useConsole } from '~/services/console'
+import { buildChinaConsoleCliApiHostArg } from '~/services/consoleApiHost'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -43,8 +44,7 @@ interface Step {
   subtitle: string
 }
 
-const config = getLocalConfig()
-const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ``
+const localCommand = buildChinaConsoleCliApiHostArg()
 const steps = ref<Step[]>([
   {
     title: t('add-another-bundle'),

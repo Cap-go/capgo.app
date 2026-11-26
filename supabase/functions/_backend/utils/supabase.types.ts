@@ -829,62 +829,129 @@ export type Database = {
           },
         ]
       }
+      cancel_attempts: {
+        Row: {
+          canceled_at: string | null
+          created_at: string
+          customer_id: string
+          founder_call_clicked_at: string | null
+          founder_call_shown: boolean
+          id: string
+          offer_id: string | null
+          org_id: string
+          reason: string
+        }
+        Insert: {
+          canceled_at?: string | null
+          created_at?: string
+          customer_id: string
+          founder_call_clicked_at?: string | null
+          founder_call_shown?: boolean
+          id?: string
+          offer_id?: string | null
+          org_id: string
+          reason: string
+        }
+        Update: {
+          canceled_at?: string | null
+          created_at?: string
+          customer_id?: string
+          founder_call_clicked_at?: string | null
+          founder_call_shown?: boolean
+          id?: string
+          offer_id?: string | null
+          org_id?: string
+          reason?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cancel_attempts_offer_id_fkey"
+            columns: ["offer_id"]
+            isOneToOne: false
+            referencedRelation: "cancel_save_offers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cancel_attempts_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       cancel_save_offers: {
         Row: {
           billing_account: string
-          coupon_id: string
+          coupon_id: string | null
+          credit_grant_id: string | null
+          credits: number | null
           created_at: string
           currency: string
           customer_id: string
           discount_end: string | null
           discount_start: string | null
-          duration_months: number
+          duration_months: number | null
           id: string
           monthly_amount: number
           org_id: string
+          offer_type: string
           outcome: string
-          percent_off: number
+          percent_off: number | null
           reason: string
           responded_at: string | null
           subscription_id: string
         }
         Insert: {
           billing_account: string
-          coupon_id: string
+          coupon_id?: string | null
+          credit_grant_id?: string | null
+          credits?: number | null
           created_at?: string
           currency: string
           customer_id: string
           discount_end?: string | null
           discount_start?: string | null
-          duration_months: number
+          duration_months?: number | null
           id?: string
           monthly_amount: number
           org_id: string
+          offer_type?: string
           outcome?: string
-          percent_off: number
+          percent_off?: number | null
           reason: string
           responded_at?: string | null
           subscription_id: string
         }
         Update: {
           billing_account?: string
-          coupon_id?: string
+          coupon_id?: string | null
+          credit_grant_id?: string | null
+          credits?: number | null
           created_at?: string
           currency?: string
           customer_id?: string
           discount_end?: string | null
           discount_start?: string | null
-          duration_months?: number
+          duration_months?: number | null
           id?: string
           monthly_amount?: number
           org_id?: string
+          offer_type?: string
           outcome?: string
-          percent_off?: number
+          percent_off?: number | null
           reason?: string
           responded_at?: string | null
           subscription_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "cancel_save_offers_credit_grant_id_fkey"
+            columns: ["credit_grant_id"]
+            isOneToOne: false
+            referencedRelation: "usage_credit_grants"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "cancel_save_offers_org_id_fkey"
             columns: ["org_id"]
@@ -4525,7 +4592,6 @@ export type Database = {
       cleanup_frequent_job_details: { Args: never; Returns: undefined }
       cleanup_job_run_details_7days: { Args: never; Returns: undefined }
       cleanup_long_canceled_org_data: { Args: never; Returns: undefined }
-      cleanup_net_http_response: { Args: never; Returns: undefined }
       cleanup_old_audit_logs: {
         Args: {
           batch_size?: number
@@ -4612,7 +4678,6 @@ export type Database = {
         Args: { group_id: string }
         Returns: undefined
       }
-      delete_http_response: { Args: { request_id: number }; Returns: undefined }
       delete_non_compliant_bundles: {
         Args: { org_id: string; required_key?: string }
         Returns: number

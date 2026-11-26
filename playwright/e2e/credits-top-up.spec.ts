@@ -1,5 +1,3 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '../../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { getSupabaseClient, resetAndSeedAppData, resetAppData, USER_ID, USER_PASSWORD } from '../../tests/test-utils'
 import { expect, test } from '../support/commands'
@@ -25,7 +23,7 @@ async function stripeCreate<T>(path: string, body: Record<string, unknown>): Pro
 }
 
 test.describe('Credit Top-Up', () => {
-  let capgo: SupabaseClient<Database>
+  let capgo: ReturnType<typeof getSupabaseClient>
 
   let orgId = ''
   let appId = ''

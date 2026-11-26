@@ -67,4 +67,4 @@ CAPGO_PR_SCREENSHOTS=1 SKIP_BACKEND_START=1 SKIP_FRONTEND_START=1 SKIP_STRIPE_EM
   SUPABASE_URL="$SUPABASE_URL" SUPABASE_ANON_KEY="$ANON_KEY" \
   bunx playwright test playwright/e2e/pr-3280-security-screenshots.spec.ts
 
-echo "Screenshots written to docs/screenshots/pr-3280/"
+echo "Screenshots written to docs/pr-screenshots/pr-3280/"

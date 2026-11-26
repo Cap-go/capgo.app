@@ -19,9 +19,10 @@
  *   bun run admin:backfill-missing-store-urls --apply --env-file=./internal/cloudflare/.env.preprod
  */
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import type pg from 'pg'
 import { mkdir, writeFile } from 'node:fs/promises'
 import process from 'node:process'
-import { asyncPool, createSupabaseServiceClient, DEFAULT_ENV_FILE, getArgValue, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
+import { asyncPool, connectAdminDb, DEFAULT_ENV_FILE, getArgValue, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
 
 const DEFAULT_CONCURRENCY = 4
 const DEFAULT_PAGE_SIZE = 1000
@@ -43,7 +44,6 @@ const APPLE_FALLBACK_COUNTRIES = [
   'in',
 ]
 
-type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
 type AppStoreUrlRow = Pick<
   Database['public']['Tables']['apps']['Row'],
   'android_store_url' | 'app_id' | 'ios_store_url' | 'owner_org'
@@ -115,7 +115,7 @@ Options:
   --help                     Show this help.
 
 Required env:
-  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+  MAIN_SUPABASE_DB_URL (or DATABASE_URL, SUPABASE_DB_URL, SUPABASE_DB_DIRECT_URL)
 `)
 }
 
@@ -331,27 +331,21 @@ export function getMissingStoreUrlPlatforms(app: StoreUrlFields, platformFilter:
   return platforms
 }
 
-async function fetchApps(supabase: SupabaseClient, filters: { appId: string | null, orgId: string | null }) {
+async function fetchApps(db: pg.Pool, filters: { appId: string | null, orgId: string | null }) {
   const rows: AppStoreUrlRow[] = []
   let offset = 0
 
   while (true) {
-    let query = supabase
-      .from('apps')
-      .select('android_store_url, app_id, ios_store_url, owner_org')
-      .order('app_id', { ascending: true })
-      .range(offset, offset + DEFAULT_PAGE_SIZE - 1)
+    const { rows: data } = await db.query<AppStoreUrlRow>(
+      `SELECT android_store_url, app_id, ios_store_url, owner_org
+       FROM public.apps
+       WHERE ($1::text IS NULL OR app_id = $1) AND ($2::uuid IS NULL OR owner_org = $2::uuid)
+       ORDER BY app_id ASC
+       LIMIT $3 OFFSET $4`,
+      [filters.appId || null, filters.orgId || null, DEFAULT_PAGE_SIZE, offset],
+    )
 
-    if (filters.appId)
-      query = query.eq('app_id', filters.appId)
-    if (filters.orgId)
-      query = query.eq('owner_org', filters.orgId)
-
-    const { data, error } = await query
-    if (error)
-      throw error
-
-    if (!data?.length)
+    if (!data.length)
       break
 
     rows.push(...data)
@@ -392,22 +386,19 @@ function hasStoreUrlUpdate(update: StoreUrlUpdate) {
   return !!(update.android_store_url || update.ios_store_url)
 }
 
-async function ensureStillMissingStoreUrls(supabase: SupabaseClient, app: AppStoreUrlRow) {
-  const { data, error } = await supabase
-    .from('apps')
-    .select('android_store_url, app_id, ios_store_url, owner_org')
-    .eq('app_id', app.app_id)
-    .eq('owner_org', app.owner_org)
-    .maybeSingle()
+async function ensureStillMissingStoreUrls(db: pg.Pool, app: AppStoreUrlRow) {
+  const { rows } = await db.query<AppStoreUrlRow>(
+    `SELECT android_store_url, app_id, ios_store_url, owner_org
+     FROM public.apps
+     WHERE app_id = $1 AND owner_org = $2`,
+    [app.app_id, app.owner_org],
+  )
 
-  if (error)
-    throw error
-
-  return data
+  return rows[0] ?? null
 }
 
-async function applyStoreUrls(supabase: SupabaseClient, app: AppStoreUrlRow, update: StoreUrlUpdate) {
-  const current = await ensureStillMissingStoreUrls(supabase, app)
+async function applyStoreUrls(db: pg.Pool, app: AppStoreUrlRow, update: StoreUrlUpdate) {
+  const current = await ensureStillMissingStoreUrls(db, app)
   if (!current)
     return null
 
@@ -420,22 +411,21 @@ async function applyStoreUrls(supabase: SupabaseClient, app: AppStoreUrlRow, upd
   if (!hasStoreUrlUpdate(safeUpdate))
     return null
 
-  const { data, error } = await supabase
-    .from('apps')
-    .update(safeUpdate)
-    .eq('app_id', app.app_id)
-    .eq('owner_org', app.owner_org)
-    .select('app_id')
+  // Unset fields in safeUpdate keep their current value.
+  const { rowCount } = await db.query(
+    `UPDATE public.apps
+     SET android_store_url = COALESCE($1, android_store_url), ios_store_url = COALESCE($2, ios_store_url)
+     WHERE app_id = $3 AND owner_org = $4`,
+    [safeUpdate.android_store_url ?? null, safeUpdate.ios_store_url ?? null, app.app_id, app.owner_org],
+  )
 
-  if (error)
-    throw error
-  if (!data?.length)
+  if (!rowCount)
     throw new Error('App row disappeared before update')
 
   return safeUpdate
 }
 
-async function processApp(supabase: SupabaseClient, app: AppStoreUrlRow, apply: boolean, platformFilter: PlatformFilter, appleCountries: readonly (string | null)[]): Promise<ProcessAppResult> {
+async function processApp(db: pg.Pool, app: AppStoreUrlRow, apply: boolean, platformFilter: PlatformFilter, appleCountries: readonly (string | null)[]): Promise<ProcessAppResult> {
   const lookup = await findStoreUrls(app, platformFilter, appleCountries)
   if (!hasStoreUrlUpdate(lookup.update))
     return { misses: lookup.misses, result: null, skippedAfterRecheck: false }
@@ -454,7 +444,7 @@ async function processApp(supabase: SupabaseClient, app: AppStoreUrlRow, apply: 
     }
   }
 
-  const appliedUpdate = await applyStoreUrls(supabase, app, lookup.update)
+  const appliedUpdate = await applyStoreUrls(db, app, lookup.update)
   if (!appliedUpdate)
     return { misses: lookup.misses, result: null, skippedAfterRecheck: true }
 
@@ -492,8 +482,26 @@ export async function main() {
     ...fileEnv,
     ...process.env,
   }
-  const supabase = createSupabaseServiceClient(env)
-  const apps = await fetchApps(supabase, { appId, orgId })
+  const db = await connectAdminDb(env)
+  try {
+    await backfill(db, { apply, appId, appleCountries, concurrency, envFile, orgId, parsedLimit, platformFilter })
+  }
+  finally {
+    await db.end()
+  }
+}
+
+async function backfill(db: pg.Pool, { apply, appId, appleCountries, concurrency, envFile, orgId, parsedLimit, platformFilter }: {
+  apply: boolean
+  appId: string | null
+  appleCountries: readonly (string | null)[]
+  concurrency: number
+  envFile: string
+  orgId: string | null
+  parsedLimit: number | null
+  platformFilter: PlatformFilter
+}) {
+  const apps = await fetchApps(db, { appId, orgId })
   const missingApps = apps.filter(app => getMissingStoreUrlPlatforms(app, platformFilter).length > 0)
   const targetApps = parsedLimit === null ? missingApps : missingApps.slice(0, parsedLimit)
   const failures: BackfillFailure[] = []
@@ -516,7 +524,7 @@ export async function main() {
 
   await asyncPool(concurrency, targetApps, async (app) => {
     try {
-      const { misses: appMisses, result, skippedAfterRecheck: skipped } = await processApp(supabase, app, apply, platformFilter, appleCountries)
+      const { misses: appMisses, result, skippedAfterRecheck: skipped } = await processApp(db, app, apply, platformFilter, appleCountries)
       misses.push(...appMisses.map(platform => ({
         appId: app.app_id,
         ownerOrg: app.owner_org,

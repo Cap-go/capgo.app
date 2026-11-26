@@ -10,6 +10,7 @@ import { requestId } from 'hono/request-id'
 import { Hono } from 'hono/tiny'
 import { cloudlog } from './logging.ts'
 import { onError } from './on_error.ts'
+import { collectConsoleWebOrigins } from './console_web_origins.ts'
 import { getEnv } from './utils.ts'
 
 import { version as CapgoVersion } from './version.ts'
@@ -131,6 +132,7 @@ function isLocalHttpOrigin(origin: string) {
 
 function getConfiguredCorsAllowedOrigins(c: Context) {
   return [
+  ...[...collectConsoleWebOrigins(c)],
     getEnv(c, 'WEBAPP_URL'),
     ...getEnv(c, 'CORS_ALLOWED_ORIGINS').split(','),
   ]

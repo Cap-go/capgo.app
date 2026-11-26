@@ -119,6 +119,7 @@ afterEach(() => {
   delete mockedEnv.STRIPE_API_BASE_URL
   delete mockedEnv.STRIPE_PUBLISHABLE_KEY
   mockedEnv.ENV = 'local'
+  mockedEnv.WEBAPP_URL = 'https://capgo.test'
   mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
   mockedSupabaseAdmin.mockReset()
   vi.restoreAllMocks()
@@ -127,6 +128,83 @@ afterEach(() => {
 describe('stripe redirect URL allowlist', () => {
   beforeEach(() => {
     mockBillingAccountLookup()
+  })
+
+  it('allows checkout success and cancel URLs on the China console host', async () => {
+    mockedEnv.WEBAPP_URL = 'https://console.capgo.app'
+    const createSession = vi.fn().mockResolvedValue({ url: 'https://pay.capgo.test/p/pay' })
+    const mocks = subscriptionCheckoutMocks()
+    const stripeClient = {
+      prices: {
+        list: vi.fn().mockResolvedValue({ data: createPriceList() }),
+        retrieve: mocks.retrievePrice,
+      },
+      customers: mocks.customers,
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
+      checkout: {
+        sessions: {
+          create: createSession,
+        },
+      },
+    } as any
+
+    vi.mocked(Stripe).mockImplementation(function () {
+      return stripeClient
+    } as any)
+
+    const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    await createCheckout(
+      createContext(),
+      'cus_123',
+      'month',
+      'prod_test',
+      'https://console.capgo.com.cn/app/success',
+      'https://console.capgo.com.cn/app/cancel',
+    )
+
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
+      success_url: 'https://console.capgo.com.cn/app/success?success=true',
+      cancel_url: 'https://console.capgo.com.cn/app/cancel',
+    }), expect.anything())
+    mockedEnv.WEBAPP_URL = 'https://capgo.test'
+  })
+
+  it('rejects China console return URLs when WEBAPP_URL is self-hosted', async () => {
+    mockedEnv.WEBAPP_URL = 'https://console.selfhost.example'
+    const createSession = vi.fn()
+    const mocks = subscriptionCheckoutMocks()
+    const stripeClient = {
+      prices: {
+        list: vi.fn().mockResolvedValue({ data: createPriceList() }),
+        retrieve: mocks.retrievePrice,
+      },
+      customers: mocks.customers,
+      subscriptions: { list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
+      checkout: {
+        sessions: {
+          create: createSession,
+        },
+      },
+    } as any
+
+    vi.mocked(Stripe).mockImplementation(function () {
+      return stripeClient
+    } as any)
+
+    const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const response = await createCheckout(
+      createContext(),
+      'cus_123',
+      'month',
+      'prod_test',
+      'https://console.capgo.com.cn/app/success',
+      'https://console.capgo.com.cn/app/cancel',
+    ).catch(error => error)
+
+    expect(response.cause).toMatchObject({ error: 'invalid_redirect_url' })
+    expect(response.status).toBe(400)
+    expect(createSession).not.toHaveBeenCalled()
+    mockedEnv.WEBAPP_URL = 'https://capgo.test'
   })
 
   it('allows same-origin return URLs for billing portal', async () => {

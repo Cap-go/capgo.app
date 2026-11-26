@@ -1,13 +1,13 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "22.67.0",
+  "version": "22.76.0",
   "private": true,
   "workspaces": [
     "cli",
     "packages/*"
   ],
-  "license": "GPL-3.0",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "generate:mcp-skills": "bun scripts/generate-mcp-skills.ts",
     "check:mcp-skills": "bun scripts/generate-mcp-skills.ts --check",
@@ -68,7 +68,7 @@
     "serve:preprod": "BRANCH=preprod vite",
     "ios:dev": "cap sync && cap run ios",
     "appstore:screenshots": "bun scripts/generate-app-store-screenshots.ts",
-    "backend": "bun run supabase:start && bun run supabase:functions:serve",
+    "backend": "bun run supabase:start && bun scripts/local-backend.ts",
     "backend:playwright": "bun scripts/serve-backend-playwright.ts",
     "backend:workers": "./scripts/start-cloudflare-workers.sh",
     "reset": "bun run supabase:db:reset",
@@ -360,7 +360,6 @@
     "@pinia/colada": "1.4.8",
     "@std/semver": "npm:@jsr/std__semver@1.0.8",
     "@stripe/stripe-js": "^10.1.0",
-    "@supabase/supabase-js": "2.110.8",
     "@vuepic/vue-datepicker": "^14.0.0",
     "@vueuse/core": "^14.3.0",
     "better-qr": "^0.1.2",
@@ -404,6 +403,7 @@
     "@smithy/fetch-http-handler": "5.6.9",
     "@standard-schema/spec": "^1.1.0",
     "@stylistic/eslint-plugin": "5.10.0",
+    "@supabase/postgrest-js": "2.110.8",
     "@tailwindcss/aspect-ratio": "^0.4.2",
     "@tailwindcss/vite": "^4.3.3",
     "@types/adm-zip": "^0.5.8",

@@ -1,7 +1,7 @@
 BEGIN;
 
 
-SELECT plan(10);
+SELECT plan(8);
 
 -- =============================================================================
 -- Test that internal functions WORK for postgres
@@ -24,12 +24,6 @@ SELECT
     lives_ok(
         'SELECT remove_old_jobs()',
         'remove_old_jobs test - works for service_role'
-    );
-
-SELECT
-    lives_ok(
-        'SELECT delete_http_response(999999)',
-        'delete_http_response test - works for service_role'
     );
 
 -- Test delete_user (should be safe to test as it requires authentication)
@@ -83,19 +77,6 @@ SELECT
         '42501',
         'permission denied for function remove_old_jobs',
         'remove_old_jobs test - throws permission error for authenticated user'
-    );
-
-SELECT tests.clear_authentication();
-
--- Test delete_http_response (internal function - should be denied to authenticated users)
-SELECT tests.authenticate_as('test_admin');
-
-SELECT
-    throws_ok(
-        'SELECT delete_http_response(999999)',
-        '42501',
-        'permission denied for function delete_http_response',
-        'delete_http_response test - throws permission error for authenticated user'
     );
 
 SELECT tests.clear_authentication();
