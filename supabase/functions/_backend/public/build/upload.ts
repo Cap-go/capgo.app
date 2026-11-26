@@ -4,6 +4,7 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
+import { getPublicApiUrl } from '../../utils/publicApiUrl.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { getEnv } from '../../utils/utils.ts'
 import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
@@ -426,7 +427,7 @@ export async function tusProxy(
           : locationUrl.pathname
 
         // Construct proxy URL
-        const publicUrl = getEnv(c, 'PUBLIC_URL') || 'https://api.capgo.app'
+        const publicUrl = getPublicApiUrl(c)
         const proxyLocation = `${publicUrl}/build/upload/${jobId}${uploadPath}`
 
         responseHeaders.set('location', proxyLocation)
