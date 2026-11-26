@@ -25,7 +25,7 @@ export function getApiOrigin(c: Context): string {
   try {
     const hostname = new URL(requestOrigin).hostname.replace(/\.$/, '').toLowerCase()
     if (hostname === 'api.capgo.com.cn')
-      return requestOrigin.replace(/\/+$/, '')
+      return 'https://api.capgo.com.cn'
   }
   catch {
     // ignore invalid request URL
