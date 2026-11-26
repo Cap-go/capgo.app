@@ -347,7 +347,7 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
     }
   }
 
-  it('applies the real migration SQL with a concurrent cron writer and does not deadlock', async () => {
+  it('applies the atomic fixture SQL with a concurrent cron writer and does not deadlock', async () => {
     await withFreshDatabase(async (dbUrl) => {
       const result = await runMigrationWithConcurrentWriter(
         dbUrl,
@@ -364,7 +364,7 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
     })
   }, 300_000)
 
-  it('control: real migration succeeds with legacy cron writer holding apps FOR SHARE during migration', async () => {
+  it('control: atomic fixture SQL succeeds with legacy cron writer holding apps FOR SHARE during migration', async () => {
     await withFreshDatabase(async (dbUrl) => {
       const result = await runMigrationWithConcurrentWriter(
         dbUrl,
