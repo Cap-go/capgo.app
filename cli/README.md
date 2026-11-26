@@ -202,6 +202,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Sync-ios-version](#build-sync-ios-version)
   - [Prescan](#build-prescan)
   - [Last-output](#build-last-output)
+  - [Variants](#build-variants)
   - [Credentials](#build-credentials)
     - [Apple-key](#build-credentials-apple-key)
     - [Ios-provisioning](#build-credentials-ios-provisioning)
@@ -1944,6 +1945,30 @@ Examples:
 | **--path** | <code>string</code> | Path to the JSON record written by --output-record (required) |
 | **--field** | <code>string</code> | Print a single field (one of: jobId, appId, platform, buildMode, status, outputUrl, symbolsUrl, qrCodeAscii, qrCodePngPath, finishedAt, schemaVersion) |
 | **--qr** | <code>boolean</code> | Print the rendered ASCII QR code (shortcut for --field qrCodeAscii) |
+
+### <a id="build-variants"></a> 🔹 **Variants**
+
+```bash
+npx @capgo/cli@latest build variants
+```
+
+List the macOS / Xcode variants iOS cloud builds can be pinned to.
+The list comes live from the Capgo build machines, so it always shows what is
+available right now. Pin a build to one with `build request --xcode-version <version>`.
+In an interactive terminal, `build request` offers the same list when no Xcode
+version is set.
+Examples:
+  npx @capgo/cli@latest build variants
+  npx @capgo/cli@latest build variants --json
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--platform** | <code>string</code> | Platform to list variants for: ios or android (default: ios) |
+| **--json** | <code>boolean</code> | Print the variants as JSON |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 
 ### <a id="build-credentials"></a> 🔹 **Credentials**
 
