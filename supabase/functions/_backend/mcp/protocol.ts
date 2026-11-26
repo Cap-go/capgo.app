@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { McpTool, McpToolContext, McpToolResult } from './tools.ts'
 import { z } from 'zod'
+import { withModelArgument, withoutModelArgument } from './analytics.ts'
 import { handleEventsList, handleEventsSubscribe, handleEventsUnsubscribe } from './events_rpc.ts'
 import { GUIDANCE_KEY, guidanceForError } from './error_guidance.ts'
 import { LATEST_LEGACY_PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSIONS, MCP_SERVER_INFO, SUPPORTED_PROTOCOL_VERSIONS } from './metadata.ts'
@@ -75,7 +76,8 @@ export function listTools(): unknown[] {
         name: tool.name,
         title: tool.title,
         description: tool.description,
-        inputSchema: toolJsonSchema(tool.inputSchema, 'input'),
+        // Optional `llm_model` lets PostHog MCP Analytics compare tool quality by model (see analytics.ts).
+        inputSchema: withModelArgument(toolJsonSchema(tool.inputSchema, 'input')),
         outputSchema: toolJsonSchema(tool.outputSchema, 'output'),
         annotations: tool.annotations,
       }
@@ -136,7 +138,7 @@ async function callTool(params: Record<string, unknown>, ctx: McpToolContext, mo
     return { code: JSON_RPC_ERRORS.invalidParams, message: `Unknown tool: ${name}. Call tools/list to see the available Capgo tools (all start with capgo_), then call one of those.` }
 
   // Legacy clients receive tool errors; 2026-07-28 classifies argument validation as InvalidParams.
-  const parsed = tool.inputSchema.safeParse(params.arguments ?? {})
+  const parsed = tool.inputSchema.safeParse(withoutModelArgument(params.arguments ?? {}))
   if (!parsed.success) {
     if (modern)
       return { code: JSON_RPC_ERRORS.invalidParams, message: `Invalid arguments for ${name}: ${z.prettifyError(parsed.error)}` }

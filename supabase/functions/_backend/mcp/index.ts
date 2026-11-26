@@ -9,11 +9,12 @@ import { CLI_CI_HEADER, readCliCiProvider } from '../utils/cicdDetection.ts'
 import { setApiKeyAuthContext } from '../utils/hono_middleware.ts'
 import { markInternalRequestVerified } from '../utils/internal_dispatch_auth.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { trackPosthogEvent } from '../utils/posthog.ts'
+import { trackPosthogEventBatch } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { checkKey } from '../utils/supabase.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { backgroundTask } from '../utils/utils.ts'
+import { mcpToolCallEvent } from './analytics.ts'
 import { createMcpDiscoveryApp, mcpSetupPage } from './discovery.ts'
 import { isModernRequest, modernErrorStatus, record, validateModernHttpRequest } from './modern_protocol.ts'
 import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
@@ -193,13 +194,35 @@ async function hostedMcpClient(c: Context<MiddlewareKeyVariables>, apikeyId: num
   return rows[0]?.client_name ?? 'api_key'
 }
 
-/** Sends one PostHog event per tool that ran in this HTTP request, tagged with the OAuth client. */
-async function trackHostedMcpToolCalls(c: Context<MiddlewareKeyVariables>, caller: McpCaller, exchanges: [unknown, JsonRpcResponse | null][]) {
-  const events = exchanges.map(([message, response]) => hostedMcpToolEvent(message, response, caller.userId)).filter(event => event !== null)
-  if (events.length === 0)
+interface McpExchange {
+  message: unknown
+  response: JsonRpcResponse | null
+  startedAt: number
+  durationMs: number
+}
+
+/**
+ * Sends the PostHog events for every tool that ran in this HTTP request in one batch: the legacy
+ * `Hosted MCP Tool Invoked` (tagged with the OAuth client) and PostHog MCP Analytics' `$mcp_tool_call`.
+ */
+async function trackHostedMcpToolCalls(c: Context<MiddlewareKeyVariables>, caller: McpCaller, exchanges: McpExchange[]) {
+  const toolCalls = exchanges.flatMap((exchange) => {
+    const legacy = hostedMcpToolEvent(exchange.message, exchange.response, caller.userId)
+    return legacy ? [{ ...exchange, legacy }] : []
+  })
+  if (toolCalls.length === 0)
     return
   const client = (await hostedMcpClient(c, caller.apikeyId).catch(() => 'unknown')).slice(0, 100)
-  await Promise.all(events.map(event => trackPosthogEvent(c, { ...event, nonPersonTags: { ...event.nonPersonTags, client } })))
+  const headers = {
+    userAgent: c.req.header('user-agent'),
+    vendorClient: c.req.header('x-anthropic-client'),
+    protocolVersion: c.req.header('MCP-Protocol-Version'),
+  }
+  const events = toolCalls.flatMap(({ legacy, ...exchange }) => {
+    const analytics = mcpToolCallEvent({ ...exchange, userId: caller.userId, apikeyId: caller.apikeyId, oauthClient: client, headers })
+    return [{ ...legacy, nonPersonTags: { ...legacy.nonPersonTags, client } }, ...(analytics ? [analytics] : [])]
+  })
+  await trackPosthogEventBatch(c, events)
 }
 
 export function createMcpApp(dispatch: McpDispatch) {
@@ -315,10 +338,11 @@ export function createMcpApp(dispatch: McpDispatch) {
       const method = (message as { method?: unknown } | null)?.method
       if (method === 'tools/call')
         cloudlog({ requestId: c.get('requestId'), message: 'mcp_tool_call', tool: (message as { params?: { name?: unknown } }).params?.name, apikeyId: caller.apikeyId })
+      const startedAt = Date.now()
       const response = await handleJsonRpcMessage(message, ctx, c)
-      return [message, response] as [unknown, JsonRpcResponse | null]
+      return { message, response, startedAt, durationMs: Date.now() - startedAt } satisfies McpExchange
     })
-    const responses = exchanges.map(([, response]) => response).filter((response): response is JsonRpcResponse => response !== null)
+    const responses = exchanges.map(({ response }) => response).filter((response): response is JsonRpcResponse => response !== null)
     await backgroundTask(c, trackHostedMcpToolCalls(c, caller, exchanges))
 
     if (responses.length === 0) {
