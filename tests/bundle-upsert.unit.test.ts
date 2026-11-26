@@ -152,7 +152,7 @@ describe('bundle upsert endpoint', () => {
     expect(id).toBe(99)
     expect(text).toContain('UPDATE public.app_versions AS target')
     expect(text).toContain('"r2_path" = source."r2_path"')
-    expect(text).toContain('WHERE target.id = $2')
+    expect(text).toContain('WHERE target.id = $2 AND target.app_id = source.app_id AND target.name = source.name')
     expect(text).not.toContain('"name" = ')
     expect(text).not.toContain('"app_id" = ')
     expect(text).not.toContain('"session_key"')
@@ -176,5 +176,19 @@ describe('bundle upsert endpoint', () => {
       expect.stringContaining('ON CONFLICT (name, app_id)'),
       expect.objectContaining({ r2_path: 'orgs/org-1/apps/com.example.app/1.0.0.zip' }),
     )
+  })
+
+  it('applies the new version encryption check before the fallback upsert', async () => {
+    mockOrgPolicy(true)
+    mockVersions({ id: 99, deleted: false, session_key: 'iv-key', key_id: null })
+    mocks.update.mockReturnValue(null)
+
+    await expect(upsertBundle(
+      createContext(),
+      { app_id: 'com.example.app', name: '1.0.0', r2_path: 'orgs/org-1/apps/com.example.app/1.0.0.zip' },
+      apikey,
+    )).rejects.toMatchObject({ status: 400, cause: { error: 'encryption_required' } })
+    expect(mocks.update).toHaveBeenCalledTimes(1)
+    expect(mocks.upsert).not.toHaveBeenCalled()
   })
 })
