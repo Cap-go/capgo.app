@@ -9,6 +9,7 @@
 
 ## Screenshots
 
+<!-- Commit the image or video at docs/pr-screenshots/<feature-slug>/<file> and embed https://raw.githubusercontent.com/Cap-go/capgo.app/<commit-sha>/docs/pr-screenshots/<feature-slug>/<file> -->
 <!-- Include screenshots/videos (if any) of how the PR works -->
 <!-- Please include this if CLI/frontend behaviour has changed, can be skipped for backend changes -->
 <!-- Required when Vue, CSS, email HTML, or native layout files change. The review fails with "missing screenshot for review" if this section has no image or video. -->

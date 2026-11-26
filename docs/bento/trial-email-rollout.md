@@ -86,9 +86,9 @@ the Liquid tests.
 
 | Template | Desktop | Mobile |
 | --- | --- | --- |
-| Post-trial value | [Before/after](../screenshots/bento-lifecycle/110589-desktop.png) | [Before/after](../screenshots/bento-lifecycle/110589-mobile.png) |
-| Bundle uploaded | [Before/after](../screenshots/bento-lifecycle/85770-desktop.png) | [Before/after](../screenshots/bento-lifecycle/85770-mobile.png) |
-| Onboarding help | [Before/after](../screenshots/bento-lifecycle/43121-desktop.png) | [Before/after](../screenshots/bento-lifecycle/43121-mobile.png) |
+| Post-trial value | [Before/after](../pr-screenshots/bento-lifecycle/110589-desktop.png) | [Before/after](../pr-screenshots/bento-lifecycle/110589-mobile.png) |
+| Bundle uploaded | [Before/after](../pr-screenshots/bento-lifecycle/85770-desktop.png) | [Before/after](../pr-screenshots/bento-lifecycle/85770-mobile.png) |
+| Onboarding help | [Before/after](../pr-screenshots/bento-lifecycle/43121-desktop.png) | [Before/after](../pr-screenshots/bento-lifecycle/43121-mobile.png) |
 
 ## Verification
 

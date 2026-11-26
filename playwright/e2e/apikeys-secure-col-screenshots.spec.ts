@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { expect, test } from '../support/commands'
 import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
-const screenshotDir = resolve(process.cwd(), 'docs/screenshots/apikeys-secure-col')
+const screenshotDir = resolve(process.cwd(), 'docs/pr-screenshots/apikeys-secure-col')
 const phase = process.env.CAPGO_PR_SCREENSHOT_PHASE === 'before' ? 'before' : 'after'
 
 const now = '2026-10-21T12:00:00.000Z'

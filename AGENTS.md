@@ -1088,6 +1088,35 @@ it returns is serialized twice. Keep each one bounded and cheap:
   and run them locally with `bun run test:front` before shipping UI changes.
   CI runs Playwright sharded with a 5-minute job budget.
 
+### PR screenshot files (HARD RULE)
+
+Commit every pull-request screenshot and demo video in this directory only:
+
+`docs/pr-screenshots/<feature-slug>/<file>`
+
+Example file: `docs/pr-screenshots/billing-currency/checkout-limit.png`
+
+In the pull request description, embed that file with the commit SHA that added it:
+
+`https://raw.githubusercontent.com/Cap-go/capgo.app/<commit-sha>/docs/pr-screenshots/<feature-slug>/<file>`
+
+Use the commit SHA, not `main`. A SHA link keeps loading after later moves.
+
+Do not create another screenshot directory. These paths are forbidden:
+
+- `pr-assets/`
+- `docs/pr-assets/`
+- `docs/screenshots/`
+- `docs/pr/`
+- `.github/pr-screenshots/`
+- `.github/pr-assets/`
+- `.github/assets/`
+- `.github/pr-previews/`
+- `assets/pr-previews/`
+- `artifacts/pr/`
+
+App Store captures stay in `fastlane/screenshots/`. Local visual-diff captures stay in `.context/visual-diff/` and are not committed.
+
 ### Visual diff for UI changes
 
 When a PR changes customer-facing UI (layout, spacing, colors, components, or
@@ -1235,7 +1264,7 @@ A severe bug, a regression, or angry users while production is still up is not t
 
 #### 2. Mark **Ready for review** when the change is complete
 
-The PR description has the required sections below (with `(AI generated)` where applicable). UX/UI changes include a screenshot in the pull request description. Without it, the review fails with `missing screenshot for review` (see visual-diff rules).
+The PR description has the required sections below (with `(AI generated)` where applicable). UX/UI changes include a screenshot in the pull request description. Put the file at `docs/pr-screenshots/<feature-slug>/<file>` and embed `https://raw.githubusercontent.com/Cap-go/capgo.app/<commit-sha>/docs/pr-screenshots/<feature-slug>/<file>`. Without that image, the review fails with `missing screenshot for review` (see visual-diff rules).
 
 For deployed code, mark Ready only after every CI/CD check is green.
 
