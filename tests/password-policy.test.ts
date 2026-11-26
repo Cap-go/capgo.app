@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createClient } from './sql-data-client'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { checkOrgReadAccess } from '../supabase/functions/_backend/private/validate_password_compliance.ts'
+import { checkOrgReadAccess, checkOrgRemediationAccess } from '../supabase/functions/_backend/private/validate_password_compliance.ts'
 import { BASE_URL, executeSQL, getSupabaseClient, headers, TEST_EMAIL, USER_EMAIL, USER_ID, USER_ID_2, USER_PASSWORD, USER_PASSWORD_HASH } from './test-utils.ts'
 
 const ORG_ID = randomUUID()
@@ -438,6 +438,91 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
       body: 'invalid json',
     })
     expect(response.status).toBe(400)
+  })
+
+  it('returns org_requires_2fa for members when the org enforces 2FA and the user has none', async () => {
+    const dedicatedUserId = USER_ID_2
+    const dedicatedEmail = 'test2@capgo.app'
+    const capgo = getSupabaseClient()
+
+    const { error: memberError } = await capgo.from('org_users').insert({
+      org_id: ORG_ID,
+      user_id: dedicatedUserId,
+      rbac_role_name: 'org_super_admin',
+    })
+    if (memberError)
+      throw memberError
+
+    const { data: role, error: roleError } = await capgo
+      .from('roles')
+      .select('id')
+      .eq('name', 'org_super_admin')
+      .eq('scope_type', 'org')
+      .single()
+    if (roleError || !role)
+      throw roleError ?? new Error('org_super_admin role missing')
+
+    const { error: bindingError } = await capgo.from('role_bindings').insert({
+      principal_type: 'user',
+      principal_id: dedicatedUserId,
+      role_id: role.id,
+      scope_type: 'org',
+      org_id: ORG_ID,
+      granted_by: USER_ID,
+      reason: 'password-policy org_requires_2fa test',
+      is_direct: true,
+    })
+    if (bindingError && bindingError.code !== '23505')
+      throw bindingError
+
+    const { error: updateError } = await capgo
+      .from('orgs')
+      .update({ enforcing_2fa: true })
+      .eq('id', ORG_ID)
+    if (updateError)
+      throw updateError
+
+    try {
+      const response = await postCompliance({
+        email: dedicatedEmail,
+        password: USER_PASSWORD,
+        org_id: ORG_ID,
+      })
+      expect(response.status).toBe(403)
+
+      const responseData = await response.json() as { error: string }
+      expect(responseData.error).toBe('org_requires_2fa')
+    }
+    finally {
+      await capgo.from('orgs').update({ enforcing_2fa: false }).eq('id', ORG_ID)
+      await capgo.from('role_bindings').delete()
+        .eq('org_id', ORG_ID)
+        .eq('principal_id', dedicatedUserId)
+        .eq('principal_type', 'user')
+      await capgo.from('org_users').delete().eq('org_id', ORG_ID).eq('user_id', dedicatedUserId)
+    }
+  })
+})
+
+describe('checkOrgRemediationAccess', () => {
+  it('distinguishes org_requires_2fa from not_member', async () => {
+    const result = await checkOrgRemediationAccess(
+      {
+        query: async <R extends Record<string, unknown> = Record<string, unknown>>(_text: string, _values?: unknown[]) => ({
+          rows: [{
+            is_member: true,
+            enforcing_2fa: true,
+            has_2fa: false,
+          }] as unknown as R[],
+        }),
+      },
+      USER_ID,
+      ORG_ID,
+      'req-2fa-test',
+    )
+
+    expect(result.status).toBe('org_requires_2fa')
+    expect(result.error).toBeUndefined()
   })
 })
 

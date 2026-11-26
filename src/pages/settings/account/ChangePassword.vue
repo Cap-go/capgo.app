@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconPassword from '~icons/heroicons/key'
 import FormField from '~/components/forms/FormField.vue'
@@ -28,6 +29,7 @@ const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 const { t } = useI18n()
+const router = useRouter()
 const AUTH_MAX_PASSWORD_LENGTH = 72
 
 function resetCaptcha() {
@@ -36,8 +38,15 @@ function resetCaptcha() {
 }
 displayStore.NavTitle = t('password')
 
+const needs2FASetup = computed(() => {
+  const org = organizationStore.currentOrganization
+  return org?.enforcing_2fa === true && org?.['2fa_has_access'] === false
+})
+
 // Check if user needs to verify password for current org
 const needsPasswordVerification = computed(() => {
+  if (needs2FASetup.value)
+    return false
   const org = organizationStore.currentOrganization
   return org?.password_policy_config?.enabled && org?.password_has_access === false
 })
@@ -165,6 +174,10 @@ async function verifyPassword(form: { current_password: string }) {
       }
       else if (result.error === 'password_does_not_meet_policy') {
         verifyFormErrors.value = [t('password-does-not-meet-requirements')]
+      }
+      else if (result.error === 'org_requires_2fa') {
+        toast.error(t('2fa-setup-required'))
+        await router.push('/settings/account/manage-2fa?setup2fa=true')
       }
       else {
         verifyFormErrors.value = [result.message || t('verification-failed')]
@@ -361,8 +374,25 @@ async function submit(form: { current_password: string, password: string, passwo
 <template>
   <div>
     <div class="flex flex-col h-full pb-8 overflow-hidden overflow-y-auto bg-white border shadow-sm md:pb-0 max-h-fit grow md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+      <div v-if="needs2FASetup" class="p-6 space-y-4 border-b border-slate-300 dark:border-slate-700">
+        <div class="p-4 text-[#BB4D00] bg-[#FFFBEC] rounded-lg border border-orange-200">
+          <h3 class="mb-2 text-lg font-semibold text-[#973C00]">
+            {{ t('2fa-setup-required') }}
+          </h3>
+          <p class="text-sm text-[#973C00]">
+            {{ t('2fa-setup-org-access') }}
+          </p>
+        </div>
+        <button
+          type="button"
+          class="d-btn d-btn-warning d-btn-sm"
+          @click="router.push('/settings/account/manage-2fa?setup2fa=true')"
+        >
+          {{ t('setup-2fa-now') }}
+        </button>
+      </div>
       <!-- Password Verification Section (shown when user needs to verify) -->
-      <div v-if="needsPasswordVerification" class="p-6 space-y-6 border-b border-slate-300 dark:border-slate-700">
+      <div v-else-if="needsPasswordVerification" class="p-6 space-y-6 border-b border-slate-300 dark:border-slate-700">
         <!-- Info banner with requirements -->
         <div class="p-4 text-[#BB4D00] bg-[#FFFBEC] rounded-lg border border-orange-200">
           <h3 class="mb-3 text-lg font-semibold text-[#973C00]">

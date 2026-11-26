@@ -510,12 +510,17 @@ async function prepareScreenshotData(supabaseUrl: string, supabaseAnon: string) 
     },
   })
 
-  const { error: signInError } = await supabase.auth.signInWithPassword({
-    email: 'test@capgo.app',
-    password: 'testtest',
-  })
-  if (signInError)
-    throw new Error(`Unable to sign in for visual diff setup: ${signInError.message}`)
+  const credentials = { email: 'test@capgo.app', password: 'testtest' }
+  let lastError: string | undefined
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const { error: signInError } = await supabase.auth.signInWithPassword(credentials)
+    if (!signInError)
+      return
+    lastError = signInError.message || String(signInError)
+    if (attempt < 7)
+      await sleep(2_000 * (attempt + 1))
+  }
+  throw new Error(`Unable to sign in for visual diff setup: ${lastError ?? 'unknown error'}`)
 }
 
 async function login(page: Page, credentials?: { email: string, password: string }) {
