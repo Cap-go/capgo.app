@@ -149,6 +149,12 @@ describe('builder checklist analytics mapping', () => {
     expect(getBuilderChecklistUpdateFromAnalytics(startSetupEvent(platform))).toEqual({ platform, step: 'start_setup', status: 'done' })
   })
 
+  it.each(['ios', 'android'] as const)('maps the %s setup start sent by the MCP flow', (platform) => {
+    const input = startSetupEvent(platform)
+    input.tags.source = 'mcp'
+    expect(getBuilderChecklistUpdateFromAnalytics(input)).toEqual({ platform, step: 'start_setup', status: 'done' })
+  })
+
   it.each([
     [{ action: 'question_answered', question_id: 'ios_setup_method', choice: 'create-new' }, { step: 'choose_destination', status: 'done', annotation: 'asc_new', annotationType: 'note' }],
     [{ action: 'question_answered', question_id: 'ios_setup_method', choice: 'import-existing' }, { step: 'choose_destination', status: 'pending' }],

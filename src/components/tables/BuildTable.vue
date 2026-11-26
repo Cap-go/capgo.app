@@ -7,13 +7,15 @@ import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch }
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import IconDownload from '~icons/heroicons/arrow-down-tray'
+import IconDevice from '~icons/heroicons/device-phone-mobile'
 import IconEye from '~icons/heroicons/eye'
 import BuilderIntroduction from '~/components/dashboard/BuilderIntroduction.vue'
 import { hasSupportedBuilderTodoList } from '~/services/builderOnboardingChecklist'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { getConsoleApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { rememberSimulator, simulatorEpoch } from '~/services/simulatorSessions'
+import { forgetSimulator, rememberSimulator, simulatorEpoch } from '~/services/simulatorSessions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -365,9 +367,7 @@ async function openSavedBuild(jobId: string) {
   const appId = props.appId
   const epoch = simulatorEpoch()
   const output = savedOutputs.value[jobId]
-  const tab = window.open('', '_blank')
   if (!output?.expires_at || Date.parse(output.expires_at) <= Date.now()) {
-    tab?.close()
     toast.error(t('saved-build-expired'))
     return
   }
@@ -388,15 +388,32 @@ async function openSavedBuild(jobId: string) {
     const url = payload.data?.url || ''
     if (payload.data?.id && epoch === simulatorEpoch())
       rememberSimulator(appId, { id: payload.data.id, url })
-    if (url && tab)
-      tab.location.replace(url)
-    else
-      tab?.close()
-    if (payload.data?.install_error)
+    if (payload.data?.install_error) {
       toast.error(payload.data.install_error)
+      const id = payload.data.id
+      if (id) {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 10_000)
+        void fetch(`${defaultApiHost}/private/simulator/${id}/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
+          body: JSON.stringify({ app_id: appId }),
+          signal: controller.signal,
+        }).then((response) => {
+          if (response.ok && epoch === simulatorEpoch())
+            forgetSimulator(appId, id)
+        }).catch(() => { /* Keep the session available for a manual stop. */ }).finally(() => clearTimeout(timeout))
+      }
+      return
+    }
+    // Stay on this page: the running session appears in the simulator card above with its Open link.
+    // The user may have switched apps or stopped simulators while this one started.
+    if (appId !== props.appId || epoch !== simulatorEpoch())
+      return
+    toast.success(t('saved-build-simulator-ready'))
+    document.querySelector('[data-simulator-card]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
   catch (error) {
-    tab?.close()
     toast.error(error instanceof Error ? error.message : t('simulator-did-not-start'))
   }
   finally {
@@ -412,24 +429,28 @@ function savedBuildCell(elem: Element) {
   const opening = openingJobs.value.includes(jobId)
   const children = [
     h('a', {
-      href: output?.url,
-      target: '_blank',
-      rel: 'noopener',
-      class: 'text-sm font-semibold text-blue-600 dark:text-blue-400',
-    }, t('download-saved-build')),
+      'href': output?.url,
+      'target': '_blank',
+      'rel': 'noopener',
+      'title': t('download-saved-build'),
+      'aria-label': t('download-saved-build'),
+      'class': 'd-btn d-btn-ghost d-btn-sm d-btn-square',
+    }, [h(IconDownload, { class: 'size-4' })]),
   ]
   if (output?.kind === 'ios_ipa') {
     children.push(h('button', {
-      type: 'button',
-      class: 'px-2 py-1 text-xs font-semibold rounded-md d-btn d-btn-xs shrink-0',
-      disabled: opening,
-      onClick: (event: Event) => {
+      'type': 'button',
+      'title': t('open-in-simulator'),
+      'aria-label': opening ? t('simulator-starting') : t('open-in-simulator'),
+      'class': 'd-btn d-btn-ghost d-btn-sm d-btn-square',
+      'disabled': opening,
+      'onClick': (event: Event) => {
         event.stopPropagation()
         void openSavedBuild(jobId)
       },
-    }, opening ? t('simulator-starting') : t('open-in-simulator')))
+    }, [opening ? h('span', { class: 'd-loading d-loading-spinner d-loading-xs' }) : h(IconDevice, { class: 'size-4' })]))
   }
-  return h('div', { class: 'flex items-center gap-2' }, children)
+  return h('div', { class: 'flex flex-wrap items-center gap-1' }, children)
 }
 
 function formatDuration(seconds: number | null | undefined): string {

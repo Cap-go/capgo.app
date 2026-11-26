@@ -1,8 +1,12 @@
 import type { Context } from 'hono'
+import type { StorageListEntry } from './bundle_storage.ts'
+import { listStorageObjects, removeStorageObjects, serviceHeaders, storageObjectUrl } from './bundle_storage.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { initS3 } from './s3.ts'
-import { supabaseAdmin } from './supabase.ts'
 import { getEnv } from './utils.ts'
+
+// Supabase Storage bucket that CLI releases before 8.90.1 still upload icons to.
+const LEGACY_IMAGE_BUCKET = 'images'
 
 // Avatars, org logos and app icons live in R2 under this prefix of the main
 // bucket. The object path after the prefix is the value stored in
@@ -252,16 +256,18 @@ export async function getImageLastModified(c: Context, path: string): Promise<Da
  */
 export async function importLegacySupabaseImage(c: Context, path: string): Promise<boolean> {
   const requestId = c.get('requestId')
-  const storage = supabaseAdmin(c).storage.from('images')
   const slash = path.lastIndexOf('/')
   const folder = path.slice(0, slash)
   const name = path.slice(slash + 1)
-  const { data: entries, error: listError } = await storage.list(folder, { search: name, limit: 100 })
-  if (listError) {
-    cloudlogErr({ requestId, message: 'Cannot look up legacy Supabase image', path, error: listError })
+  let entries: StorageListEntry[]
+  try {
+    entries = await listStorageObjects(c, LEGACY_IMAGE_BUCKET, folder, { search: name, limit: 100 })
+  }
+  catch (error) {
+    cloudlogErr({ requestId, message: 'Cannot look up legacy Supabase image', path, error: serializeError(error) })
     return false
   }
-  const legacy = entries?.find(entry => entry.id !== null && entry.name === name)
+  const legacy = entries.find(entry => entry.id !== null && entry.name === name)
   if (!legacy)
     return false
 
@@ -270,17 +276,28 @@ export async function importLegacySupabaseImage(c: Context, path: string): Promi
   const legacyIsNewer = !r2ModifiedAt || (Number.isFinite(legacyModifiedAt) && legacyModifiedAt > r2ModifiedAt.getTime())
 
   if (legacyIsNewer) {
-    const { data: blob, error } = await storage.download(path)
-    if (error || !blob) {
-      cloudlogErr({ requestId, message: 'Cannot download legacy Supabase image', path, error: error ? serializeError(error) : undefined })
+    let response: Response
+    try {
+      response = await fetch(storageObjectUrl(c, path, true, LEGACY_IMAGE_BUCKET), { headers: serviceHeaders(c) })
+      if (!response.ok) {
+        await response.body?.cancel()
+        throw new Error(`Storage GET returned ${response.status}`)
+      }
+    }
+    catch (error) {
+      cloudlogErr({ requestId, message: 'Cannot download legacy Supabase image', path, error: serializeError(error) })
       return false
     }
-    await uploadImage(c, path, new Uint8Array(await blob.arrayBuffer()), { contentType: blob.type || undefined, upsert: true })
+    const contentType = response.headers.get('content-type') || undefined
+    await uploadImage(c, path, new Uint8Array(await response.arrayBuffer()), { contentType, upsert: true })
   }
 
-  const { error: removeError } = await storage.remove([path])
-  if (removeError)
-    cloudlogErr({ requestId, message: 'Could not remove the legacy Supabase image', path, error: removeError })
+  try {
+    await removeStorageObjects(c, LEGACY_IMAGE_BUCKET, [path])
+  }
+  catch (error) {
+    cloudlogErr({ requestId, message: 'Could not remove the legacy Supabase image', path, error: serializeError(error) })
+  }
   cloudlog({ requestId, message: legacyIsNewer ? 'Imported legacy Supabase image into R2' : 'Dropped stale legacy Supabase image older than R2', path })
   return legacyIsNewer
 }

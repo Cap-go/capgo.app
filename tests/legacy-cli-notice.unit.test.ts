@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   closeClient: vi.fn(async () => {}),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ checkKey: mocks.checkKey, supabaseAdmin: vi.fn(() => ({})) }))
+vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ checkKey: mocks.checkKey }))
 vi.mock('../supabase/functions/_backend/utils/notifications.ts', () => ({ sendNotifOrgCached: mocks.sendNotifOrgCached }))
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => {
   const query = { from: () => query, innerJoin: () => query, where: () => query, orderBy: () => query, limit: async () => mocks.rows }

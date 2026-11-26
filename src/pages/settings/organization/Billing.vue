@@ -69,6 +69,7 @@ const trialPlanDate = computed(() => trialPlan.value ? formatLocalDate(trialPlan
 const canStartTrialPlanNow = computed(() => !!trialPlan.value && !!card.value && !subscription.value)
 const trialDaysLeft = computed(() => currentOrganization.value?.trial_left ?? 0)
 const openInvoiceAmount = computed(() => openInvoice.value ? formatStripeAmount(openInvoice.value.amountDue, openInvoice.value.currency) : '')
+const openInvoiceProcessing = computed(() => !!openInvoice.value?.paymentProcessing)
 
 const subscriptionLine = computed(() => {
   const sub = subscription.value
@@ -79,7 +80,7 @@ const subscriptionLine = computed(() => {
     return t('billing-currency-renews-in', { currency: sub.pendingCurrency.toUpperCase(), date: endDate })
   if (sub.cancelAtPeriodEnd || sub.cancelAt)
     return t('billing-subscription-ends', { date: endDate })
-  if (sub.status === 'past_due' || sub.status === 'unpaid')
+  if ((sub.status === 'past_due' || sub.status === 'unpaid') && !openInvoiceProcessing.value)
     return t('billing-subscription-past-due')
   return endDate ? t('billing-subscription-renews', { date: endDate }) : t('billing-subscription-active')
 })
@@ -190,6 +191,11 @@ async function payNow() {
     const result = await payOpenInvoice(orgId.value)
     if (result.status === 'paid') {
       toast.success(t('billing-invoice-paid'))
+      await Promise.all([loadOverview(), refreshOrganization()])
+      return
+    }
+    if (result.status === 'processing') {
+      toast.info(result.message || t('billing-invoice-payment-processing'))
       await Promise.all([loadOverview(), refreshOrganization()])
       return
     }
@@ -372,7 +378,19 @@ onMounted(async () => {
 
       <template v-else-if="overview">
         <section
-          v-if="openInvoice"
+          v-if="openInvoice && openInvoiceProcessing"
+          class="rounded-xl border border-sky-300 bg-sky-50 p-5 text-sky-950 dark:border-sky-700/60 dark:bg-sky-950/40 dark:text-sky-100"
+          data-test="billing-open-invoice-processing"
+        >
+          <p class="text-sm font-semibold">
+            {{ t('billing-open-invoice-processing-title') }}
+          </p>
+          <p class="mt-1 text-xs text-sky-900/80 dark:text-sky-200/80">
+            {{ t('billing-open-invoice-processing-detail') }}
+          </p>
+        </section>
+        <section
+          v-else-if="openInvoice"
           class="flex flex-col gap-3 rounded-xl border border-amber-300 bg-amber-50 p-5 text-amber-950 sm:flex-row sm:items-center sm:justify-between dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-100"
           data-test="billing-open-invoice"
         >

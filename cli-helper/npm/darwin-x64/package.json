@@ -7,7 +7,7 @@
     "url": "git+https://github.com/Cap-go/capgo.git",
     "directory": "cli-helper"
   },
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "os": ["darwin"],
   "cpu": ["x64"],
   "files": ["CapgoKeychainHelper.app", "CapgoAscKeyHelper.app"]

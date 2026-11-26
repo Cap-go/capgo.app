@@ -5,7 +5,6 @@ import type { LinkedChannel } from '~/services/bundleLinkedChannels'
 import type { ChannelPromotionTarget } from '~/services/channelPromotion'
 import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
-import { parse } from '@std/semver'
 import { computedAsync } from '@vueuse/core'
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -31,6 +30,7 @@ import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageErr
 import { useConsole } from '~/services/console'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
+import { resolveMinUpdateVersionCommit } from '~/services/minUpdateVersion'
 import { bundleChannelCompatibility } from '~/services/nativePackageCompatibility'
 import { checkPermissions, checkPermissionsBatch } from '~/services/permissions'
 import { openVersion } from '~/services/versions'
@@ -53,6 +53,11 @@ const channels = ref<(Database['public']['Tables']['channels']['Row'])[]>([])
 const channel = ref<(Database['public']['Tables']['channels']['Row'])>()
 const version_meta = ref<Database['public']['Tables']['app_versions_meta']['Row']>()
 const showBundleMetadataInput = ref<boolean>(false)
+const minUpdateVersionRow = ref<{ reset: () => void } | null>(null)
+const savingMinUpdateVersionIds = ref(new Set<number>())
+// Last successful min update version save, so a bundle load that overlapped it cannot bring back the old value.
+let minUpdateSaveSeq = 0
+const lastMinUpdateSaves = new Map<number, { value: string, seq: number }>()
 const hasManifest = ref<boolean>(false)
 const showChecksumTooltip = ref(false)
 const metadataLink = ref('')
@@ -548,7 +553,9 @@ async function saveBundleMetadata() {
     return false
   }
 
-  version.value = data
+  // Merge only the fields this handler writes, so a min update version saved meanwhile is kept.
+  if (version.value?.id === data.id)
+    version.value = { ...version.value, link: data.link, comment: data.comment }
   toast.success(t('bundle-metadata-updated'))
   return true
 }
@@ -586,6 +593,7 @@ async function openBundleMetadataDialog() {
 async function getVersion() {
   if (!id.value)
     return
+  const saveSeqAtStart = minUpdateSaveSeq
   try {
     const { data } = await capgo
       .from('app_versions')
@@ -602,6 +610,10 @@ async function getVersion() {
       console.error('no version found')
       return
     }
+    // A min update version save finished while this load was in flight: the read may predate the write.
+    const overlappingSave = lastMinUpdateSaves.get(data.id)
+    if (overlappingSave && overlappingSave.seq > saveSeqAtStart)
+      data.min_update_version = overlappingSave.value
     if (dataVersionsMeta)
       version_meta.value = dataVersionsMeta
 
@@ -636,49 +648,70 @@ function hideString(str: string) {
   return `${first}...${last}`
 }
 
-async function saveCustomId(input: string) {
-  if (!id.value)
+async function saveCustomId(input: string | undefined) {
+  if (!id.value || !version.value)
     return
 
   if (!canEditBundleMetadata.value) {
     toast.error(t('no-permission'))
+    minUpdateVersionRow.value?.reset()
     return
   }
 
-  if (input.length === 0) {
-    const { error: errorNull } = await capgo
+  const commit = resolveMinUpdateVersionCommit(input, version.value.min_update_version)
+  if (commit.kind === 'noop') {
+    minUpdateVersionRow.value?.reset()
+    return
+  }
+  if (commit.kind === 'empty') {
+    // Never write an empty value: it blocks pushes on version_number channels.
+    toast.error(t('min-update-version-required'))
+    minUpdateVersionRow.value?.reset()
+    return
+  }
+  if (commit.kind === 'invalid') {
+    toast.error(t('invalid-version'))
+    minUpdateVersionRow.value?.reset()
+    return
+  }
+
+  // One save at a time per bundle: the field is read only until this one finishes,
+  // so no newer draft or out of order response can race it.
+  const savedId = id.value
+  if (savingMinUpdateVersionIds.value.has(savedId))
+    return
+  savingMinUpdateVersionIds.value.add(savedId)
+  let error: unknown = null
+  try {
+    const result = await capgo
       .from('app_versions')
       .update({
-        min_update_version: null,
+        min_update_version: commit.value,
       })
-      .eq('id', id.value)
-
-    if (errorNull) {
-      console.log('Cannot set min update version to null', errorNull)
-      return
-    }
-
-    toast.success(t('updated-min-version'))
-    return
+      .eq('id', savedId)
+      .select('id')
+    // A no match or RLS filtered update returns no row and no error: treat it as a failed save.
+    error = result.error ?? (result.data?.length ? null : new Error('min_update_version update matched no bundle row'))
   }
-
-  if (!parse(input)) {
-    toast.error(t('invalid-version'))
-    return
+  catch (failure) {
+    error = failure
   }
-
-  const { error } = await capgo
-    .from('app_versions')
-    .update({
-      min_update_version: input,
-    })
-    .eq('id', id.value)
+  finally {
+    savingMinUpdateVersionIds.value.delete(savedId)
+  }
 
   if (error) {
     console.log('Cannot set min update version', error)
+    toast.error(t('cannot-update-min-version'))
+    if (version.value?.id === savedId)
+      minUpdateVersionRow.value?.reset()
     return
   }
 
+  lastMinUpdateSaves.set(savedId, { value: commit.value, seq: ++minUpdateSaveSeq })
+  // The user may have opened another bundle while the save was in flight.
+  if (version.value?.id === savedId)
+    version.value = { ...version.value, min_update_version: commit.value }
   toast.success(t('updated-min-version'))
 }
 
@@ -959,12 +992,13 @@ async function deleteBundle() {
                 <!-- Min update version -->
                 <InfoRow
                   v-if="showBundleMetadataInput" id="metadata-bundle"
+                  ref="minUpdateVersionRow"
                   :label="t('min-update-version')" editable
-                  :readonly="!canEditBundleMetadata"
-                  @click="guardMinAutoUpdate" @update:value="(saveCustomId as any)" @keydown="preventInputChangePerm"
-                >
-                  {{ version.min_update_version }}
-                </InfoRow>
+                  :value="version.min_update_version ?? ''"
+                  :placeholder="t('min-update-version-placeholder')"
+                  :readonly="!canEditBundleMetadata || savingMinUpdateVersionIds.has(version.id)"
+                  @click="guardMinAutoUpdate" @update:value="saveCustomId" @keydown="preventInputChangePerm"
+                />
 
                 <InfoRow v-if="channels && channels.length > 0 && version && channels.some(c => c.version === version!.id)" :label="t('channel')">
                   <div class="flex flex-wrap justify-end w-full gap-3">

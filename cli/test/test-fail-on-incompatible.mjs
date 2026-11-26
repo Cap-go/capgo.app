@@ -8,7 +8,7 @@
  * matrix below is the tested source of truth.
  */
 import assert from 'node:assert/strict'
-import { FunctionsHttpError } from '@supabase/supabase-js'
+import { CapgoApiHttpError } from '../src/api/http-error.ts'
 import { shouldBlockIncompatibleUpload } from '../src/bundle/builder-cta.ts'
 import { checkValidOptions } from '../src/bundle/upload.ts'
 import { rejectOrAcceptIncompatibleChannelBundle, throwChannelWriteError } from '../src/channel/set.ts'
@@ -323,7 +323,7 @@ test('channel set continues when compatible', () => {
 })
 
 function httpError(status, body) {
-  return new FunctionsHttpError(new Response(JSON.stringify(body), { status }))
+  return new CapgoApiHttpError(new Response(JSON.stringify(body), { status }))
 }
 
 console.log('\n🧪 Testing throwChannelWriteError...\n')

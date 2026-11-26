@@ -862,6 +862,44 @@ export async function findLatestOpenSubscriptionInvoice(c: Context, customerId: 
   return null
 }
 
+export async function getSubscriptionInvoicePaymentIntent(stripe: Stripe, invoiceId: string): Promise<Stripe.PaymentIntent | null> {
+  const payments = await stripe.invoicePayments.list({ invoice: invoiceId, limit: 10 })
+  const pending = payments.data.find(payment => payment.status === 'open')
+    ?? payments.data.find(payment => payment.status === 'processing')
+    ?? payments.data[0]
+  const paymentIntent = pending?.payment?.payment_intent
+  if (!paymentIntent)
+    return null
+  return typeof paymentIntent === 'string'
+    ? await stripe.paymentIntents.retrieve(paymentIntent)
+    : paymentIntent
+}
+
+export function isSubscriptionInvoicePaymentProcessing(paymentIntent: Stripe.PaymentIntent | null | undefined) {
+  return paymentIntent?.status === 'processing'
+}
+
+export async function isOpenSubscriptionInvoicePaymentProcessing(stripe: Stripe, invoiceId: string) {
+  return isSubscriptionInvoicePaymentProcessing(await getSubscriptionInvoicePaymentIntent(stripe, invoiceId))
+}
+
+/** Open invoice with an in-flight renewal payment is pending, not overdue. */
+export function shouldBlockPastDueForProcessingPayment(paymentProcessing: boolean) {
+  return paymentProcessing
+}
+
+export function subscriptionInvoicePaymentStateFromInvoice(
+  invoice: Pick<Stripe.Invoice, 'status' | 'billing_reason'>,
+  paymentIntentStatus: Stripe.PaymentIntent.Status | null | undefined,
+): 'paid' | 'unpaid' | 'first_invoice_unpaid' {
+  if (invoice.status === 'paid')
+    return 'paid'
+  // Renewal/access gating: ACH/async renewals stay usable while processing; first invoices stay blocked until settled.
+  if (invoice.status === 'open' && paymentIntentStatus === 'processing' && invoice.billing_reason !== 'subscription_create')
+    return 'paid'
+  return invoice.billing_reason === 'subscription_create' ? 'first_invoice_unpaid' : 'unpaid'
+}
+
 // Best effort: dunning emails and the past-due banner still work without the pay link.
 export async function getLatestOpenSubscriptionInvoice(c: Context, customerId: string, billingAccount: BillingAccount = 'ee'): Promise<OpenSubscriptionInvoiceSummary | null> {
   if (!isStripeConfiguredForAccount(c, billingAccount) || !customerId)

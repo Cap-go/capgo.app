@@ -29,7 +29,7 @@ const skipStepBodySchema = z.object({
   reason: z.string().trim().min(3).max(500),
 })
 type Observations = Partial<Record<'login_cli_mcp' | 'add_channel' | 'run_device' | 'upload_bundle' | 'test_update', boolean>>
-// Runs one statement as the caller, like a supabase-js call made with supabaseWithAuth.
+// Runs one statement as the caller (their JWT, else their API key), with RLS.
 interface CallerDb { pg: PgClient, principal: RlsPrincipal }
 type BillingSummary = { status: 'available', orgId: string, orgCreatedAt: string | null, trialEndsAt: string | null, hasPaid: boolean, isPaying: boolean, hasCredits: boolean } | { status: 'unavailable' }
 

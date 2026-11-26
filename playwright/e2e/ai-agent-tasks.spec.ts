@@ -1,20 +1,7 @@
 import type { Page, Response } from '@playwright/test'
-import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
-import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
-import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { expect, test } from '../support/commands'
 import { consoleQueryFromResponse, consoleQueryJson, consoleQueryMethod, forwardConsoleQuery, routeConsoleQuery } from '../support/consoleQuery'
-
-function localAdminClient() {
-  const { ports } = getSupabaseWorktreeConfig()
-  const configured = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY
-  const status = configured ? null : getSupabaseStatus()
-  const key = configured || status?.SERVICE_ROLE_KEY || status?.SECRET_KEY
-  if (!key)
-    throw new Error('Local Supabase service key is required for AI agent task fixtures')
-  return createClient(`http://127.0.0.1:${ports.api}`, key, { auth: { persistSession: false } })
-}
+import { localSqlClient } from '../support/localSupabase'
 
 // The table's own channel load is also a `channels` query. The agent baseline is the
 // head count taken when the prompt is copied.
@@ -63,7 +50,7 @@ test.describe('AI agent alternatives to manual actions', () => {
     await expect(page.locator('[data-test="add-app-ai-waiting"]')).toBeVisible()
 
     // The page opens the app the agent registers, and only that new one.
-    const admin = localAdminClient()
+    const admin = localSqlClient()
     const { data: demo } = await admin.from('apps').select('owner_org').eq('app_id', 'com.demo.app').single()
     const appId = `com.agent.e2e${Date.now()}`
     const { error } = await admin.from('apps').insert({ app_id: appId, name: 'Agent app', owner_org: demo!.owner_org, icon_url: '' })
@@ -113,7 +100,7 @@ test.describe('AI agent alternatives to manual actions', () => {
     // The agent creates the channel, so the dialog closes and the list picks it up.
     await expect(card).toHaveCount(0)
     await baseline
-    const admin = localAdminClient()
+    const admin = localSqlClient()
     const { data: app } = await admin.from('apps').select('owner_org').eq('app_id', 'com.demo.app').single()
     const name = `agent-e2e-${Date.now()}`
     const { data: user } = await admin.from('users').select('id').eq('email', 'test@capgo.app').single()
@@ -165,7 +152,7 @@ test.describe('AI agent alternatives to manual actions', () => {
 
   test('native builds offer the AI agent first, plus a teammate invite', async ({ page }) => {
     // The demo app has no builds in the seed: add one so the Builds tab shows its table and "Add".
-    const admin = localAdminClient()
+    const admin = localSqlClient()
     const { data: app } = await admin.from('apps').select('owner_org').eq('app_id', 'com.demo.app').single()
     const { data: user } = await admin.from('users').select('id').eq('email', 'test@capgo.app').single()
     const now = new Date().toISOString()

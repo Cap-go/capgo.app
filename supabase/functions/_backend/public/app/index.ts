@@ -9,6 +9,7 @@ import { createDemoApp } from './demo.ts'
 import { enableAppOnboarding, getBuilderOnboardingAccess } from './enable_onboarding.ts'
 import { get, getAll } from './get.ts'
 import { post } from './post.ts'
+import { prewarm } from './prewarm.ts'
 import { put } from './put.ts'
 import { fetchStoreMetadata } from './store_metadata.ts'
 
@@ -48,6 +49,8 @@ app.post('/', middlewareAuth(), async (c) => {
 app.post('/:id/onboarding/builder', middlewareAuth({ preferApiKey: true }), c => enableAppOnboarding(c, c.req.param('id'), 'builder'))
 app.post('/:id/onboarding/ota', middlewareAuth({ preferApiKey: true }), c => enableAppOnboarding(c, c.req.param('id'), 'ota'))
 app.get('/:id/onboarding/builder', middlewareAuth({ preferApiKey: true }), c => getBuilderOnboardingAccess(c, c.req.param('id')))
+
+app.post('/:id/prewarm', middlewareKey(), c => prewarm(c, c.req.param('id')))
 
 app.put('/:id', middlewareAuth({ preferApiKey: true }), async (c) => {
   const id = c.req.param('id')

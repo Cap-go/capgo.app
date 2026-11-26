@@ -1,3 +1,4 @@
+import type Stripe from 'stripe'
 import { describe, expect, it, vi } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
 import { orgEmailNotificationTestUtils } from '../supabase/functions/_backend/utils/org_email_notifications.ts'
@@ -349,5 +350,33 @@ describe('first payment detection for the OpenAI Ads paid conversion', () => {
     const retryWrite = getPaidAtUpdate({ paid_at: at, status: 'succeeded' }, 'succeeded', at)
     expect(retryWrite).toBeUndefined()
     expect(resolveFirstPaidAt(at, retryWrite)).toBeNull()
+  })
+})
+
+describe('backup recovery idempotency charge id', () => {
+  const { getBackupRecoveryChargeId } = stripeEventTestUtils
+
+  it.concurrent('uses the charge id for charge.failed', () => {
+    const event = {
+      type: 'charge.failed',
+      data: { object: { id: 'ch_fail' } },
+    } as unknown as Stripe.Event
+    expect(getBackupRecoveryChargeId(event)).toBe('ch_fail')
+  })
+
+  it.concurrent('prefers latest_charge over the payment intent id', () => {
+    const event = {
+      type: 'payment_intent.payment_failed',
+      data: { object: { id: 'pi_fail', latest_charge: 'ch_from_pi' } },
+    } as unknown as Stripe.Event
+    expect(getBackupRecoveryChargeId(event)).toBe('ch_from_pi')
+  })
+
+  it.concurrent('falls back to the payment intent id when latest_charge is missing', () => {
+    const event = {
+      type: 'payment_intent.payment_failed',
+      data: { object: { id: 'pi_fail_only' } },
+    } as unknown as Stripe.Event
+    expect(getBackupRecoveryChargeId(event)).toBe('pi_fail_only')
   })
 })

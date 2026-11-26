@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(43);
+SELECT plan(51);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user('apikey_v2_scope_owner', 'apikey_v2_scope_owner@test.local');
@@ -919,6 +919,79 @@ SELECT is(
   pg_typeof(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '1.0.0'))::text,
   'jsonb[]',
   'old CLI warning RPC accepts the same arguments and returns jsonb[]'
+);
+
+SELECT ok(
+  EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '8.90.0')) AS m
+    WHERE m->>'message' LIKE '%npm i -D @capgo/cli@latest%'
+      AND (m->>'fatal')::boolean = false
+  ),
+  'CLI older than 8.90.1 gets a non-fatal upgrade warning'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '8.90.1')) AS m
+    WHERE m->>'message' LIKE '%@capgo/cli@latest%'
+  ),
+  'CLI 8.90.1 or newer gets no upgrade warning'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, 'not-a-version')) AS m
+    WHERE m->>'message' LIKE '%@capgo/cli@latest%'
+  ),
+  'unparseable CLI version is ignored instead of erroring'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '8.89.0foo')) AS m
+    WHERE m->>'message' LIKE '%@capgo/cli@latest%'
+  ),
+  'malformed CLI version with a valid prefix is ignored'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '8.89.0-..')) AS m
+    WHERE m->>'message' LIKE '%@capgo/cli@latest%'
+  ),
+  'invalid semver 8.89.0-.. is ignored'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '08.89.0')) AS m
+    WHERE m->>'message' LIKE '%@capgo/cli@latest%'
+  ),
+  'invalid semver 08.89.0 is ignored'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '8.89.0-01')) AS m
+    WHERE m->>'message' LIKE '%@capgo/cli@latest%'
+  ),
+  'invalid semver 8.89.0-01 is ignored'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM unnest(public.get_organization_cli_warnings('71000000-0000-4000-8000-000000000056'::uuid, '8.90.1-beta.1')) AS m
+    WHERE m->>'message' LIKE '%@capgo/cli@latest%'
+  ),
+  '8.90.1 prerelease (already API-only) gets no upgrade warning'
 );
 
 SELECT tests.clear_authentication();

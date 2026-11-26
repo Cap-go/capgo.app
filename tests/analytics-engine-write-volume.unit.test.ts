@@ -60,6 +60,19 @@ describe('analytics engine write volume', () => {
     expect(writeDataPoint).not.toHaveBeenCalled()
   })
 
+  it('retains every milestone for a sampled attempt and independently samples retries', async () => {
+    const { createStatsLogs } = await import('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts')
+    const writeDataPoint = vi.fn()
+    const context = createContext({ APP_LOG: { writeDataPoint } })
+    for (const attempt of ['1469', '1470']) {
+      for (const action of ['download_10', 'download_50', 'download_90'] as const)
+        await createStatsLogs(context, 'com.example.app', 'device-1', action, '1.0.0', { attempt_id: attempt })
+    }
+    expect(writeDataPoint.mock.calls.map(([point]) => point.blobs[1])).toEqual(['download_10', 'download_50', 'download_90'])
+    expect(writeDataPoint.mock.calls.map(([point]) => point.doubles)).toEqual([[0, 1000], [0, 1000], [0, 1000]])
+    expect(writeDataPoint.mock.calls.every(([point]) => JSON.parse(point.blobs[3]).attempt_id === '1469')).toBe(true)
+  })
+
   it.each(['download_0', 'download_complete', 'download_fail', 'get', 'set'])('keeps %s in APP_LOG', async (action) => {
     const { createStatsLogs } = await import('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts')
     const writeDataPoint = vi.fn()

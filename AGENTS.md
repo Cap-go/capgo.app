@@ -3,9 +3,22 @@
 This file provides guidance to AI agents (Claude Code, Cursor, Copilot, etc.)
 when working with code in this repository.
 
+## Forks and branding
+
+All code in this repository is licensed under the [AGPL-3.0](LICENSE). That
+license covers the code only. It grants no rights to the Capgo name, wordmark,
+logos, or other branding, which Digital Shift OU owns. If you are building a
+public fork, a derivative project, or a hosted or self-hosted service presented
+to others from this code, rebrand it: replace the Capgo name, logos, icons, and
+domains with the project's own, and make clear it is not Capgo and not endorsed
+by Capgo. Private internal self-hosting and truthful plain-text attribution are
+fine. See [TRADEMARK.md](TRADEMARK.md).
+
 ## Admin dashboard
 
 The admin dashboard lives in [`Cap-go/capgo_admin_dashboard`](https://github.com/Cap-go/capgo_admin_dashboard) and reads the Capgo database read-only; Capgo carries no admin code.
+
+When a bug affects a dashboard dataset, include the historical repair in the same pull request. Identify the affected period, reconstruct each recoverable day from authoritative records, and verify the corrected series against those records. Document any dates or values that cannot be recovered and why. Dashboard trends over time are our highest priority.
 
 ## MUST NOT — never publish private customer data
 
@@ -108,7 +121,9 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `bun test:cloudflare:backend` - Run backend tests against Cloudflare Workers
 - `bun test:cloudflare:updates` - Run update tests against Cloudflare Workers
 - `./scripts/start-cloudflare-workers.sh` - Start local Cloudflare Workers for
-  testing
+  testing. With `LOCAL_QUEUE_DISPATCHER=true` (what `bun backend` sets) it also
+  runs `scripts/local-queue-dispatcher.ts`: queue wakeups go to the outbox and
+  the local `QueueDispatcher` instead of pg_net, and stopping it puts pg_net back
 
 Note: Prefer Tinbase (`bun test:db` / `tests/tinbase-db-tests.txt`) for
 data/auth-only coverage so Docker/Cloudflare shards stay small and can
@@ -156,7 +171,9 @@ and the test suite has to keep running once it is gone.
 - `bun run supabase:start` - Start local Supabase instance (worktree-isolated)
 - `bun run supabase:cleanup` - Stop local Supabase and delete this worktree's Supabase volumes
 - `bun run supabase:db:reset` - Reset and seed local database
-- `bun backend` - Start Supabase functions locally
+- `bun backend` - Start the local backend: Supabase (`supabase:start`), the edge
+  functions (`functions serve`) and the Cloudflare Workers, with queue wakeups
+  going through the local `QueueDispatcher` like prod (Ctrl+C stops all of it)
 - `bun reset` - Reset Supabase database
 
 ### Local Postgres without the Supabase stack
@@ -272,11 +289,13 @@ backfill code, design for this scale:
 - **Queue wakeups (pg_net vs Durable Object):** pgmq stays the queue
   everywhere. `process_function_queue` and `wake_updates_cache_purge` send
   their HTTP wakeups through `public.http_dispatch_post`: by default (self-host,
-  local, CI) that is `net.http_post`. Targets listed in
+  quiesced CI jobs) that is `net.http_post`. Targets listed in
   `public.http_dispatch_targets` (a queue name, or `*`) go to the unlogged
-  `public.http_dispatch_outbox` instead, which the prod-only `QueueDispatcher`
-  Durable Object (`cloudflare_workers/api/queue_dispatcher.ts`) claims every
-  second via `POST /triggers/http_dispatch/claim` and sends. Roll a target
+  `public.http_dispatch_outbox` instead, which the `QueueDispatcher` Durable
+  Object (`cloudflare_workers/api/queue_dispatcher.ts`) claims every second via
+  `POST /triggers/http_dispatch/claim` and sends. Prod routes `*`; locally
+  `bun backend` does the same through `scripts/local-queue-dispatcher.ts`
+  (it sets `db_url` to the host Supabase URL while it runs). Roll a target
   back by deleting its row. The dispatcher only sends to origins in
   `SUPABASE_URL` / `HTTP_DISPATCH_ALLOWED_ORIGINS`.
 - Do not assume a `202` HTTP response means queue work finished. If the handler
@@ -342,20 +361,13 @@ Do:
   - Never create migration files manually.
   - Always use `bunx supabase migration new <feature_slug>`.
   - Manual creation of migration files is not allowed.
-- **Supabase admin client + sign-in pitfall:** if you call
-  `supabaseAdmin.auth.signInWithPassword(...)`, that client becomes authenticated
-  as the user (it is no longer a pure service-role client). Always use a
-  **separate admin client** for sign-in, and keep a clean admin client for
-  service-role writes. Example:
-  - `const loginAdmin = supabaseAdmin(c)` → use for `signInWithPassword`
-  - `const adminClient = supabaseAdmin(c)` → use for admin writes
 - **Backend DB access style:** prefer `getPgClient()` / `getDrizzleClient()` for
   multi-step SQL, transactions, joins, schema-backed writes, or code that
   benefits from explicit pool lifecycle handling. Do **not** force every simple
-  one-statement internal helper write into Drizzle just for consistency. A
-  small service-role helper that is already a single clear `supabaseAdmin(c)`
-  call may stay on `supabaseAdmin` when that keeps the code smaller and equally
-  correct.
+  one-statement internal helper write into Drizzle just for consistency.
+- The backend has no service-role supabase-js client: GoTrue admin calls go
+  through `gotrueAdmin()` (`utils/gotrue_admin.ts`) and Supabase Storage through
+  plain `fetch` helpers in `utils/bundle_storage.ts`. Don't add one back.
 
 ### AI model freshness (HARD RULE)
 
@@ -1181,69 +1193,84 @@ When backend code uses the plugin read-path (`/updates`, `/stats`, `/channel_sel
 
 ### Pull Request Lifecycle (MANDATORY for every agent)
 
-**This is non-negotiable.** Agents that skip steps, ping humans early, or call a
-PR "ready to merge" before this lifecycle is finished are doing it wrong.
+**This is non-negotiable.** The agent turn that owns a PR is finished only when the finish line below is true. Stopping earlier is doing it wrong. Sending the PR URL and ending the turn is an early ping. It is 0% done.
+
+A ping is any message that hands a human the PR: the URL, a request to look, review, or merge, or a message that presents the PR as the result. "Do not ping" forbids that message. It does not forbid the work, and it is not a reason to end the turn.
 
 ```
-draft → code + CI green → mark Ready → AI review → fix until AI clear → ONLY THEN ping human
+draft while you code → CI green (unless an exception below) → Ready → every review clear (unless the outage exception) → nothing pending → ONLY THEN the turn is finished and you ping the human
 ```
 
-#### 1. While you are working: keep the PR a **Draft**
+#### Finish line
+
+The turn stays open until **all** of these are true. The text / non-deployed exception overrides condition 2. The outage exception overrides conditions 2, 3, 4, and 5.
+
+1. The PR is **Ready for review** (not a draft).
+2. Every CI/CD check is green, unless the text / non-deployed exception or the outage exception applies. No check is failing, pending, queued, or skipped in a way that hides a required job.
+3. Every review is finished, unless the outage exception applies. No automatic review and no human review already on the PR is pending, and no reviewer still requests changes.
+4. Zero unresolved review threads remain (Critical, Major, Minor, P2, nits — all of them), unless the outage exception applies.
+5. Nothing else is pending on the PR: no requested changes, no unfinished review, no open "please look" left to the human. Pending CI does not count when the text / non-deployed exception applies. The outage exception overrides this condition.
+
+The chat message at that moment is the first delivered result. It is the ask for human review or merge. A human approval that has not been requested yet is not "pending". Do not wait for the human you have not pinged. Do ping them once the list above is true.
+
+#### CI/CD exception: text and other non-deployed files
+
+CI/CD does not gate the turn when every changed file is outside what production deploys and CI does not test that change. This includes documentation and other text (for example `AGENTS.md` and markdown), and deploy scripts that CI does not run.
+
+Review still gates the turn. The PR is still marked Ready. Every review is still finished. Nothing in review is pending. Pending, failing, or skipped CI does not keep the turn open for this class of diff.
+
+A deployed source file is not "text" because it contains comments or docs strings. If the diff touches any deployed code, this exception does not apply and CI gates the whole PR.
+
+#### Outage exception: production is down
+
+Bypass the CI wait and the review wait only when production is down, partially or totally, right now, and users are affected. Ship the fix and hand the PR over. Do not hold the turn for checks or reviews during that outage.
+
+A severe bug, a regression, or angry users while production is still up is not this exception. Those still wait for CI and review.
+
+#### 1. While you are coding: keep the PR a **Draft**
 
 - Open the PR as a **draft** (or convert to draft immediately).
-- Stay in draft for the entire coding period: implementation, refactors, force-pushes, flaky CI loops.
-- **Never** ping a human for review or merge while the PR is still a draft.
-- **Never** tell a human the PR is ready while it is still a draft.
+- Stay in draft through implementation, refactors, force-pushes, and CI fixes.
+- After the draft exists, stay in the task. Do not send the URL as the outcome.
 
-#### 2. When coding is done: make CI/CD fully green, then mark **Ready for review**
+#### 2. Mark **Ready for review** when the change is complete
 
-Only after **all** of these are true:
+The PR description has the required sections below (with `(AI generated)` where applicable). UX/UI changes include a screenshot in the pull request description. Without it, the review fails with `missing screenshot for review` (see visual-diff rules).
 
-- You believe the implementation is complete (no known leftover work).
-- **Every** required GitHub Actions / CI check on the PR is **green** (no failing, no still-required pending).
-- The PR description follows the required sections below (with `(AI generated)` where applicable).
-- UX/UI changes include a screenshot in the pull request description. Without it, the review fails with `missing screenshot for review` (see visual-diff rules).
+For deployed code, mark Ready only after every CI/CD check is green.
 
-…then mark the PR **Ready for review** in GitHub (undraft).
+For the text and non-deployed exception, mark Ready when the writing is done. Do not wait for CI.
 
-Marking Ready is **not** “ready for a human.” It means: **ready for automatic AI review** (cubic).
+Marking Ready starts review. It is not a human ping. Do not tell the human the PR is ready for them at this point. Stay on the PR.
 
-#### 3. Wait for automatic review
+The outage exception may mark Ready and hand the PR over in the same turn.
 
-- After you mark Ready, **wait** for the automatic reviewers to finish.
-- Do not ping humans during this window.
-- Do not claim the PR is merge-ready while AI review is queued, pending, or incomplete.
+#### 3. Stay through review
 
-#### 4. Fix review comments until AI review is fully clear
-
+- Stay on the task until every review has finished.
 - Resolve **every** actionable review thread (Critical, Major, Minor, P2, nits — all of them).
-- Push fixes, re-run CI, and wait for AI re-review as needed.
-- Repeat until:
-  - **Zero** unresolved review threads remain, and
-  - Automatic review is satisfied (approved / no outstanding change requests from the AI reviewers), and
-  - CI is still fully green.
+- Push fixes, re-run CI when CI gates this PR, and wait for re-review.
+- Repeat until the finish line is true.
 
-If AI review still requests changes, you are **not** done. Fix again. Do not escalate.
+If review still requests changes, you are **not** done. Fix again. Do not escalate. Do not end the turn.
 
-#### 5. Only then: ping a human
+#### 4. Only then: ping a human
 
-Ping a human (CTO / Martin / reviewer) **only** when **all** of the following hold:
+Ping a human (CTO / Martin / reviewer) **only** when the finish line is true, or when the outage exception applies.
 
-1. PR is **not** a draft (Ready for review).
-2. CI/CD is fully green.
-3. Automatic AI review has finished.
-4. **No** unresolved review comments remain.
-5. AI review does not still request changes.
-
-That ping is the ask for **human review / merge**. Anything earlier is noise.
+That ping is the ask for **human review / merge**. Any earlier message that presents the PR URL as the outcome is a stopped task.
 
 #### Explicitly forbidden
 
-- Marking Ready before CI is green.
-- Pinging a human while the PR is draft.
-- Pinging a human while AI review is pending or still requesting changes.
-- Saying “ready to merge” / “ready for you” while any review thread is still open (including “minor” / P2).
-- Opening a second PR for the same change instead of fixing the existing draft/ready PR.
+- Ending the turn while the PR is a draft, unless the outage exception applies.
+- Ending the turn while CI is failing, pending, or queued, unless the text / non-deployed exception or the outage exception applies.
+- Ending the turn while any review is pending or still requesting changes, unless the outage exception applies.
+- Ending the turn while any review thread is unresolved, including "minor" and P2.
+- Sending the PR URL and stopping.
+- Marking Ready before CI is green, unless the text / non-deployed exception or the outage exception applies.
+- Saying "ready to merge" / "ready for you" before the finish line.
+- Opening a second PR for the same change instead of finishing the existing one.
+- Reading "do not ping" as permission to stop. Stay on the PR until the finish line.
 
 ### Required Sections
 
