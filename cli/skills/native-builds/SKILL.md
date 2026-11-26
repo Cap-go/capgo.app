@@ -178,7 +178,7 @@ interface BuildLogger {
 ### `build variants`
 
 - Lists the macOS / Xcode variants iOS cloud builds can be pinned to with `--xcode-version`, read live from the Capgo build machines (`GET /build/variants`), newest Xcode first, with each variant's machine (macOS version or Linux builder), online/total machines, and whether it is on the default Xcode major for unpinned builds.
-- Example: `npx @capgo/cli@latest build variants`
+- Examples: `npx @capgo/cli@latest build variants`, `npx @capgo/cli@latest build variants --json`, then pin one with `npx @capgo/cli@latest build request com.example.app --platform ios --xcode-version 26.2`.
 - Options:
   - `--platform <platform>`: `ios` (default) or `android`. Android has no variants.
   - `--json`: print `{ default_xcode_major, variants: [{ id, xcode_version, macos_version, backend, runners, online, default }] }`.

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const { getEnvMock } = vi.hoisted(() => ({ getEnvMock: vi.fn() }))
+const defaultEnv = (_c: unknown, key: string) => key === 'BUILDER_URL' ? 'https://builder.test' : 'builder-key'
+
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
-  getEnv: vi.fn((_c: unknown, key: string) => key === 'BUILDER_URL' ? 'https://builder.test' : 'builder-key'),
+  getEnv: getEnvMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -29,7 +32,7 @@ function context() {
 
 describe('toBuildVariantsResponse', () => {
   it('maps the builder body to snake_case', () => {
-    expect(toBuildVariantsResponse(builderBody, 'ios')).toEqual({
+    expect(toBuildVariantsResponse(builderBody)).toEqual({
       default_xcode_major: '26',
       variants: [
         { platform: 'ios', id: 'xcode-27.1-linux', xcode_version: '27.1', macos_version: null, backend: 'linux', runners: 1, online: 1, default: false },
@@ -41,6 +44,15 @@ describe('toBuildVariantsResponse', () => {
   it('rejects an unexpected builder body', () => {
     expect(() => toBuildVariantsResponse({ variants: 'nope' })).toThrow()
   })
+
+  it.each([
+    ['xcodeVersion', '26; rm -rf ~'],
+    ['xcodeVersion', '26 && curl x'],
+    ['macosVersion', '$(id)'],
+  ])('rejects a %s that is not a dotted version (%s)', (field, value) => {
+    const body = { ...builderBody, variants: [{ ...builderBody.variants[1], [field]: value }] }
+    expect(() => toBuildVariantsResponse(body)).toThrow()
+  })
 })
 
 describe('getBuildVariants', () => {
@@ -48,6 +60,7 @@ describe('getBuildVariants', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    getEnvMock.mockImplementation(defaultEnv)
     vi.stubGlobal('fetch', fetchMock)
   })
 
@@ -81,5 +94,16 @@ describe('getBuildVariants', () => {
   it('answers 503 when the builder is unreachable', async () => {
     fetchMock.mockRejectedValue(new Error('network'))
     await expect(getBuildVariants(context() as any)).rejects.toMatchObject({ status: 503 })
+  })
+
+  it('answers 503 when the builder body is malformed', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ variants: [{ xcodeVersion: '26; echo hacked' }] }), { status: 200 }))
+    await expect(getBuildVariants(context() as any, 'ios')).rejects.toMatchObject({ status: 503 })
+  })
+
+  it.each(['BUILDER_URL', 'BUILDER_API_KEY'])('answers 503 without calling the builder when %s is missing', async (missing) => {
+    getEnvMock.mockImplementation((c: unknown, key: string) => key === missing ? '' : defaultEnv(c, key))
+    await expect(getBuildVariants(context() as any, 'ios')).rejects.toMatchObject({ status: 503 })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

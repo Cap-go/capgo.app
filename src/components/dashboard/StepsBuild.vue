@@ -133,6 +133,8 @@ const setupStep = computed<Step>(() => {
   }
 })
 
+const MACHINE_VERSION_RE = /^\d{1,3}(?:\.\d{1,3}){0,2}$/
+
 // Xcode variants the build machines report right now; '' = no pin (any available machine).
 const buildVariants = ref<BuildVariant[]>([])
 const selectedXcodeVersion = ref('')
@@ -161,8 +163,9 @@ async function loadBuildVariants() {
   const { data, error } = await invokeCapgoApi<{ variants?: BuildVariant[] }>('build/variants?platform=ios', { method: 'GET', retries: 0 })
   if (error || !Array.isArray(data?.variants))
     return
-  buildVariants.value = data.variants
-  if (selectedXcodeVersion.value && !data.variants.some(variant => variant.xcode_version === selectedXcodeVersion.value))
+  // The version is pasted into a shell command: keep only dotted numeric versions.
+  buildVariants.value = data.variants.filter(variant => MACHINE_VERSION_RE.test(variant.xcode_version))
+  if (selectedXcodeVersion.value && !buildVariants.value.some(variant => variant.xcode_version === selectedXcodeVersion.value))
     selectedXcodeVersion.value = ''
 }
 onMounted(() => {

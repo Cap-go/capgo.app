@@ -6,11 +6,15 @@ import { getEnv } from '../../utils/utils.ts'
 
 const BUILDER_VARIANTS_TIMEOUT_MS = 10_000
 
+// Same shape the builder and the CLI accept ("26", "26.1", "16.4.1"): clients paste it into
+// a shell command (`--xcode-version <version>`), so nothing else may pass through.
+const MACHINE_VERSION_RE = /^\d{1,3}(?:\.\d{1,3}){0,2}$/
+
 const builderVariantSchema = z.object({
   platform: z.literal('ios'),
   id: z.string().min(1).max(128),
-  xcodeVersion: z.string().min(1).max(32),
-  macosVersion: z.string().min(1).max(32).nullable(),
+  xcodeVersion: z.string().regex(MACHINE_VERSION_RE),
+  macosVersion: z.string().regex(MACHINE_VERSION_RE).nullable(),
   backend: z.enum(['mac', 'linux']),
   runners: z.number().int().min(0),
   online: z.number().int().min(0),
@@ -42,23 +46,21 @@ function builderUnavailable(message: string): never {
   throw quickError(503, 'service_unavailable', message, {}, undefined, { alert: false })
 }
 
-/** Maps the builder's GET /variants body to the public snake_case shape, keeping only the requested platform. */
-export function toBuildVariantsResponse(body: unknown, platform?: string): BuildVariantsResponse {
+/** Maps the builder's GET /variants body (iOS variants only) to the public snake_case shape. */
+export function toBuildVariantsResponse(body: unknown): BuildVariantsResponse {
   const parsed = builderVariantsSchema.parse(body)
   return {
     default_xcode_major: parsed.defaultXcodeMajor,
-    variants: parsed.variants
-      .filter(variant => !platform || variant.platform === platform)
-      .map(variant => ({
-        platform: variant.platform,
-        id: variant.id,
-        xcode_version: variant.xcodeVersion,
-        macos_version: variant.macosVersion,
-        backend: variant.backend,
-        runners: variant.runners,
-        online: variant.online,
-        default: variant.default,
-      })),
+    variants: parsed.variants.map(variant => ({
+      platform: variant.platform,
+      id: variant.id,
+      xcode_version: variant.xcodeVersion,
+      macos_version: variant.macosVersion,
+      backend: variant.backend,
+      runners: variant.runners,
+      online: variant.online,
+      default: variant.default,
+    })),
   }
 }
 
@@ -97,7 +99,7 @@ export async function getBuildVariants(c: Context, platform?: string): Promise<R
   }
 
   try {
-    return c.json(toBuildVariantsResponse(await response.json(), platform))
+    return c.json(toBuildVariantsResponse(await response.json()))
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Builder variants response invalid', error: serializeError(error) })

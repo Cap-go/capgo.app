@@ -32,6 +32,9 @@ export interface BuildVariantsOptions {
   json?: boolean
 }
 
+// Same version shape `build request --xcode-version` accepts (normalizeMachineVersion).
+const MACHINE_VERSION_RE = /^\d{1,3}(?:\.\d{1,3}){0,2}$/
+
 /** Sentinel for "no pin": the build runs on any machine. */
 export const ANY_XCODE_VERSION = ''
 
@@ -53,7 +56,11 @@ export async function fetchBuildVariants(apiHost: string, apikey: string, platfo
     throw new CliUserError(`Capgo API ${response.status}${error.error ? ` ${error.error}` : ''}: ${error.message ?? 'request failed'}`)
   }
   const body = parsed as Partial<BuildVariantsResponse>
-  return { default_xcode_major: body.default_xcode_major ?? null, variants: Array.isArray(body.variants) ? body.variants : [] }
+  // The version ends up in `--xcode-version <version>`: keep only dotted numeric versions.
+  const variants = Array.isArray(body.variants)
+    ? body.variants.filter(variant => typeof variant?.xcode_version === 'string' && MACHINE_VERSION_RE.test(variant.xcode_version))
+    : []
+  return { default_xcode_major: body.default_xcode_major ?? null, variants }
 }
 
 export function formatBuildVariant(variant: BuildVariant): string {
