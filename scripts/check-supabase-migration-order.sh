@@ -163,14 +163,16 @@ is_failed_migration_hotfix() {
   esac
 }
 
-# capgo-22.63.1: 20261117152120 never applied in prod; atomic replacement at
-# 20261120001201 after #4193/#4057 on main (R085 rename of 152120 on this branch).
+# 20261117152120 IS applied in prod (#4171). #4190 renamed it to 20261120001201,
+# which blocked `supabase db push` (remote version missing locally). 152120 is
+# restored byte for byte (see is_prod_history_restore) and 20261120001201 is a
+# no-op follow-up; the atomic SQL moved to tests/fixtures.
 is_storage_gb_hours_152120_repair() {
   local file="$1"
   local blob
   blob="$(git hash-object "$file")"
   case "${file}:${blob}" in
-    supabase/migrations/20261120001201_storage_gb_hours_billing.sql:a2bcd8fc3bb09e516e570675aa75533acfb2f023) return 0 ;;
+    supabase/migrations/20261120001201_storage_gb_hours_billing.sql:35e76182a769a768077bad2c3aab6cac76c92f08) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -205,6 +207,7 @@ is_prod_history_restore() {
     supabase/migrations/20260725111931_fix_reclaim_cron_catch_canceled.sql:4226e0cab969bbefc7ca622e34821ae12a0c8c3a) return 0 ;;
     supabase/migrations/20260725162854_skip_audit_dual_storage_manifest_count.sql:ea3b1c49c5469aa9ba0d74bef34eba35f78d934f) return 0 ;;
     supabase/migrations/20260725182614_slim_audit_logs_skip_bookkeeping.sql:1856f7dced19a929e4ea3548e75e2a17b8a99863) return 0 ;;
+    supabase/migrations/20261117152120_storage_gb_hours_billing.sql:7b34c6e483664c47fd0910b37a0d10a53eaadc89) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -237,7 +240,7 @@ if [[ -n "$modified_files" ]]; then
     fi
 
     if is_storage_gb_hours_152120_repair "$file"; then
-      echo "⚠️  Allowing audited repair of failed unapplied 20261117152120: $file"
+      echo "⚠️  Allowing audited no-op follow-up to restored 20261117152120: $file"
       continue
     fi
 

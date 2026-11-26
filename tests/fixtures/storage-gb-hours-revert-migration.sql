@@ -1,4 +1,4 @@
--- Return disposable DBs to pre-20261120001201 storage lock state so the full migration SQL can re-apply.
+-- Return disposable DBs to the state before the storage GB-hours migration (20261117152120, atomic variant in storage-gb-hours-atomic-migration.sql) so its SQL can re-apply.
 -- Idempotent when the storage migration was never applied on the source.
 
 DROP TRIGGER IF EXISTS close_app_storage_lifetimes ON public.apps;
@@ -97,7 +97,7 @@ ON CONFLICT (app_id) DO NOTHING;
 
 SET session_replication_role = DEFAULT;
 
--- Pre-20261120001201 writer installed on the reverted daily_storage_hourly pk (app_id, date).
+-- Pre-storage GB-hours writer installed on the reverted daily_storage_hourly pk (app_id, date).
 CREATE OR REPLACE FUNCTION public.replace_app_storage_hourly(
     p_app_id character varying,
     p_owner_org uuid,
