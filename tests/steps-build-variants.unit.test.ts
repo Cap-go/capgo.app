@@ -26,7 +26,15 @@ vi.mock('~/composables/useSetupMethodPreference', () => ({
 }))
 const { invokeCapgoApiMock } = vi.hoisted(() => ({ invokeCapgoApiMock: vi.fn() }))
 vi.mock('~/services/capgoApi', () => ({ invokeCapgoApi: invokeCapgoApiMock }))
-vi.mock('~/components/dashboard/AiAgentTaskCard.vue', () => ({ default: { template: '<div />' } }))
+vi.mock('~/components/dashboard/AiAgentTaskCard.vue', async () => {
+  const { defineComponent, h } = await import('vue')
+  return {
+    default: defineComponent({
+      props: { task: String, platform: String, xcodeVersion: String },
+      setup: props => () => h('div', { 'data-test': 'ai-card', 'data-xcode': props.xcodeVersion ?? '' }),
+    }),
+  }
+})
 vi.mock('~/components/dashboard/BuildLiveProgress.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('~/components/dashboard/TechnicalTeammateInviteCard.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('~icons/lucide/arrow-left', () => ({ default: { setup: () => () => null } }))
@@ -122,6 +130,13 @@ describe('StepsBuild Xcode variant selector', () => {
     await vi.waitFor(() => expect(selector()).toBeTruthy())
     expect(container.querySelector('#build_step_0')?.textContent).toContain('build init')
     expect(selector()!.disabled).toBe(false)
+    const aiCard = () => container.querySelector('[data-test="ai-card"]')
+    expect(aiCard()?.getAttribute('data-xcode')).toBe('')
+
+    selector()!.value = '26.2'
+    selector()!.dispatchEvent(new Event('change'))
+    await nextTick()
+    expect(aiCard()?.getAttribute('data-xcode')).toBe('26.2')
   })
 
   it('drops versions that are not dotted numbers so they never reach the command', async () => {
