@@ -62,12 +62,36 @@ be trusted when authoritative mode is enabled; a published `exists: false` app
 document remains an explicit deletion in either mode. Plugin-state
 entries use their own app tag, separate from DB/control and snippet caches.
 Writer publications purge only that namespace; they do not use the replica-lag
-re-purge ladder. KV-sourced answers must not fill the shared DB read cache or
-teach the snippet answers that can be served outside the KV cohort.
-The snippet must also refuse direct on-prem/plan-response cache learning from
-KV-marked Worker responses; skipping only the snippet fill header is not enough.
-Deploy that snippet guard before enabling any read cohort, while preserving
-all existing DB-sourced snippet cache behavior and response contracts.
+re-purge ladder. KV-sourced answers must not fill the shared DB read cache.
+
+## Snippet edge answers per cohort
+
+KV answers teach the snippet too, so the canary skips the Worker like the
+database cohort does. Every fill carries `ks`, the Worker's KV share
+(`PLUGIN_STATE_KV`, 0 without the binding). A KV canary answer is a version 4
+fill with `kv: true`; older snippets reject version 4, so they never share it.
+Each cohort has its own snippet entry: the database answer under
+`/__internal__/edge-v4/...`, the KV answer under `/__internal__/edge-v4-kv/...`.
+The snippet computes the Worker's `pluginStateBucket` for the device with the
+database answer's `ks`: devices outside the share use the database answer, and
+only devices inside it read the KV entry (one more cache read, no Worker
+call). Without a database answer in that data center the KV cohort reaches the
+Worker; at 100% use `PLUGIN_STATE_KV_AUTHORITATIVE` (below). Entries are never
+merged, so a purge of one cohort cannot be undone by the other's fill. A KV
+fill carries the plugin-state tag, so a publication evicts only the KV entry,
+and it lasts at most 30 seconds (`PLUGIN_STATE_FILL_MAX_TTL_SECONDS`), the
+window a document read racing a publication can land the old snapshot.
+Database purges evict both entries through the app tags.
+
+A KV-marked Worker response may only fill the KV entry, and the snippet still
+refuses on-prem/plan-response learning from it. KV answers become shared only
+when both conditions hold: `PLUGIN_STATE_KV_AUTHORITATIVE=true` and
+`PLUGIN_STATE_KV` at 100% (`on`). Authoritative mode with a partial share keeps
+the cohort split. Shared fills are ordinary answers (`ks: 0`, plugin-state tag
+kept, at most 30 seconds). The Worker then marks pure KV responses
+(`X-Plugin-State: kv`, never `kv-escaped`) with `X-Plugin-State-Shared: 1`, so
+the snippet learns on-prem/plan answers again, tagged with the plugin-state
+tag and cached for at most 30 seconds.
 
 Read failures, invalid documents, missing bundle-name keys, and missing manifest
 keys use the existing replica path, including in authoritative app mode.

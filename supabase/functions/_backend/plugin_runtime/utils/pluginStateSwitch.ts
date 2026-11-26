@@ -32,6 +32,37 @@ export function pluginStateBucket(appId: string, deviceId: string) {
   return (hash >>> 0) % 10_000
 }
 
+/**
+ * Longest snippet fill from a KV answer: the worker trusts a document read
+ * for 30 seconds (pluginState.ts *_CACHE_TTL_SECONDS), and a read racing a
+ * publication purge may land the old one afterwards for that long.
+ */
+export const PLUGIN_STATE_FILL_MAX_TTL_SECONDS = 30
+
+/** Published deletions are trusted (PLUGIN_STATE_KV_AUTHORITATIVE). */
+export function isPluginStateAuthoritative(c: AnyContext) {
+  return getEnv(c, 'PLUGIN_STATE_KV_AUTHORITATIVE').trim().toLowerCase() === 'true'
+}
+
+/**
+ * KV answers may be shared with every device: authoritative AND every device
+ * reads KV. A partial share keeps the database cohort on its own answers.
+ */
+export function isPluginStateShared(c: AnyContext) {
+  return isPluginStateAuthoritative(c) && pluginStateShareBps(c) >= 10_000
+}
+
+/**
+ * Share of devices this worker serves from KV, in basis points (0 without the
+ * PLUGIN_STATE binding). The snippet uses it to keep each cohort on its own
+ * edge answers (snippetEdgeAnswer.ts).
+ */
+export function pluginStateShareBps(c: AnyContext) {
+  if (!(c.env as { PLUGIN_STATE?: unknown } | undefined)?.PLUGIN_STATE)
+    return 0
+  return parsePluginStateShareBps(getEnv(c, 'PLUGIN_STATE_KV'))
+}
+
 /** Tests: a request served from the plugin state must never open a database connection. */
 export function isPluginStateStrict(c: AnyContext) {
   return getEnv(c, 'PLUGIN_STATE_KV_STRICT').trim().toLowerCase() === 'true'

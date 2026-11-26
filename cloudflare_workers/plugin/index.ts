@@ -11,7 +11,7 @@ import { app as ok } from '../../supabase/functions/_backend/plugin_runtime/publ
 import { createAllCatch, createHono, quickError, useCors } from '../../supabase/functions/_backend/plugin_runtime/utils/hono.ts'
 import { cloudlog } from '../../supabase/functions/_backend/plugin_runtime/utils/logging.ts'
 import { startPluginStateReadMetrics } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts'
-import { parsePluginStateShareBps, pluginStateBucket } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
+import { isPluginStateShared, parsePluginStateShareBps, pluginStateBucket } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
 import { handleSnippetEdgeStatsMessage } from '../../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 import { getEnv } from '../../supabase/functions/_backend/plugin_runtime/utils/utils.ts'
 import { version } from '../../supabase/functions/_backend/plugin_runtime/utils/version.ts'
@@ -35,6 +35,21 @@ app.use('*', async (c, next) => {
 })
 
 app.use('*', useCors)
+
+// Once KV is authoritative at 100% every device reads it, so the snippet may
+// learn its on-prem / plan answers like database ones (snippet
+// canCacheWorkerAnswer). Only pure KV answers: kv-escaped read the database.
+app.use('*', async (c, next) => {
+  await next()
+  if (c.res.headers.get('X-Plugin-State') === 'kv' && isPluginStateShared(c)) {
+    try {
+      c.res.headers.set('X-Plugin-State-Shared', '1')
+    }
+    catch {
+      // Immutable response: the snippet keeps treating it as a canary answer.
+    }
+  }
+})
 
 // Sample both read paths during rollout. This measures Worker wall time;
 // external probes measure device-to-edge latency and release propagation.
