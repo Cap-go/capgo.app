@@ -135,11 +135,11 @@ center. Check the `cf-placement` response header to confirm it, for example
 header may not run in one data center, so its prewarm may not warm the cache its
 devices read. On 2026-11-22 `capgo_plugin-jp-prod` reported `placement.mode:
 targeted` (`gcp:asia-northeast1`) in its script settings but returned no
-`cf-placement` header, even on uncached paths, so the Japan prewarm is not
-relied on until that placement is active. The prewarm reports each region's
-`cf-placement` value. Only `remote-XXX` shows the call ran in the worker's
-placement data center: the API worker is placed in `aws:eu-west-2`, so
-`local-XXX` means a regional call stayed where it arrived. The `plugin state
+`cf-placement` header, even on uncached paths. On 2026-11-26 every region,
+Japan included (`remote-NRT`), answered a prewarm with a `remote-` placement.
+The prewarm reports each region's `cf-placement` value. Only `remote-XXX` shows
+the call ran in the worker's placement data center: the API worker is placed in
+`aws:eu-west-2`, so `local-XXX` means a regional call stayed where it arrived. The `plugin state
 prewarmed` log lists regions without a `remote-` value under `unplaced`, the
 public endpoint returns `pinned`, and `app prewarm` flags them.
 
