@@ -101,7 +101,7 @@ function fnv1aHex(input: string): string {
   let h1 = 0x84222325
   let h2 = 0xCBF29CE4
   for (let i = 0; i < input.length; i++) {
-    const c = input.charCodeAt(i)
+    const c = input.codePointAt(i) ?? 0
     h1 = Math.imul(h1 ^ c, 0x000001B3)
     h2 = Math.imul(h2 ^ c, 0x00000193)
   }
@@ -111,7 +111,8 @@ function fnv1aHex(input: string): string {
 /** Stable `ses_` id for one API key and client within a 30 minute window (the hosted server has no sessions). */
 export function mcpSessionId(apikeyId: number, client: string, startedAt: number): string {
   const input = `${apikeyId}:${client}:${Math.floor(startedAt / SESSION_WINDOW_MS)}`
-  return `ses_${fnv1aHex(input)}${fnv1aHex(`${input}::salt`)}`
+  const salted = `${input}::salt`
+  return `ses_${fnv1aHex(input)}${fnv1aHex(salted)}`
 }
 
 export interface McpToolCallEventInput {
@@ -130,7 +131,7 @@ export interface McpToolCallEventInput {
 export function mcpToolCallEvent(input: McpToolCallEventInput): PostHogCapturePayload | null {
   const message = record(input.message)
   const response = input.response
-  if (message?.method !== 'tools/call' || !response || response.id == null)
+  if (message?.method !== 'tools/call' || response?.id == null)
     return null
   const params = record(message.params)
   const meta = record(params?._meta)
