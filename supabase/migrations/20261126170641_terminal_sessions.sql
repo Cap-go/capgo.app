@@ -317,6 +317,9 @@ BEGIN
   IF p_reason = 'ws_token_failed' THEN
     v_minutes := 0;
   ELSE
+    -- Billing policy: whole elapsed minutes, rounded down, with a 1 minute
+    -- minimum and capped at max_duration_minutes. Partial minutes beyond the
+    -- first are intentionally not billed.
     v_minutes := LEAST(
       v_row.max_duration_minutes,
       GREATEST(1, extract(epoch FROM (now() - v_row.started_at))::integer / 60)
