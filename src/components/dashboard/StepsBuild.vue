@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { computed, onUnmounted, ref, watch, watchEffect } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -136,6 +136,12 @@ const setupStep = computed<Step>(() => {
 // Xcode variants the build machines report right now; '' = no pin (any available machine).
 const buildVariants = ref<BuildVariant[]>([])
 const selectedXcodeVersion = ref('')
+function variantMachineLabel(variant: BuildVariant): string {
+  if (variant.backend === 'linux')
+    return t('build-variant-linux')
+  return variant.macos_version ? `macOS ${variant.macos_version}` : 'macOS'
+}
+
 const xcodeChoices = computed(() => {
   const byXcode = new Map<string, BuildVariant[]>()
   for (const variant of buildVariants.value)
@@ -144,7 +150,7 @@ const xcodeChoices = computed(() => {
     xcodeVersion,
     label: [
       `Xcode ${xcodeVersion}`,
-      variants.map(variant => variant.backend === 'linux' ? t('build-variant-linux') : variant.macos_version ? `macOS ${variant.macos_version}` : 'macOS').join(', '),
+      variants.map(variantMachineLabel).join(', '),
       variants.some(variant => variant.online > 0) ? '' : t('build-variant-offline'),
       variants.some(variant => variant.default) ? t('build-variant-default') : '',
     ].filter(Boolean).join(' · '),
@@ -159,7 +165,9 @@ async function loadBuildVariants() {
   if (selectedXcodeVersion.value && !data.variants.some(variant => variant.xcode_version === selectedXcodeVersion.value))
     selectedXcodeVersion.value = ''
 }
-loadBuildVariants()
+onMounted(() => {
+  void loadBuildVariants()
+})
 
 const xcodeVersionArg = computed(() => selectedPlatform.value === 'ios' && selectedXcodeVersion.value ? ` --xcode-version ${selectedXcodeVersion.value}` : '')
 
