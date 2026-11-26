@@ -1,11 +1,29 @@
-import { describe, expect, it } from 'vitest'
-import { chinaApiOriginForRequest, getPublicApiUrl, isChinaApiHostname } from '../supabase/functions/_backend/utils/publicApiUrl.ts'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-function fakeContext(url: string, env: Record<string, string> = {}) {
-  return { req: { url }, env } as any
+const { mockGetEnv } = vi.hoisted(() => ({ mockGetEnv: vi.fn() }))
+
+vi.mock('../supabase/functions/_backend/utils/utils.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/utils.ts')>()
+  return { ...actual, getEnv: mockGetEnv }
+})
+
+const { chinaApiOriginForRequest, getPublicApiUrl, isChinaApiHostname } = await import('../supabase/functions/_backend/utils/publicApiUrl.ts')
+const { manifestUploadPublicUrl } = await import('../supabase/functions/_backend/private/request_manifest_upload.ts')
+
+function fakeContext(url: string) {
+  return { req: { url } } as any
+}
+
+function useEnv(values: Record<string, string>) {
+  mockGetEnv.mockImplementation((_c: unknown, key: string) => values[key] ?? '')
 }
 
 describe('public API URL for China requests', () => {
+  beforeEach(() => {
+    mockGetEnv.mockReset()
+    useEnv({})
+  })
+
   it('recognizes only the China API hostname', () => {
     expect(isChinaApiHostname('api.capgo.com.cn')).toBe(true)
     expect(isChinaApiHostname('API.capgo.com.cn.')).toBe(true)
@@ -21,12 +39,18 @@ describe('public API URL for China requests', () => {
   })
 
   it('keeps PUBLIC_URL for global requests and uses the China host for China requests', () => {
-    const env = { PUBLIC_URL: 'https://api.capgo.app' }
-    expect(getPublicApiUrl(fakeContext('https://api.capgo.app/build/request', env))).toBe('https://api.capgo.app')
-    expect(getPublicApiUrl(fakeContext('https://api.capgo.com.cn/build/request', env))).toBe('https://api.capgo.com.cn')
+    useEnv({ PUBLIC_URL: 'https://uploads.example.com' })
+    expect(getPublicApiUrl(fakeContext('https://api.capgo.app/build/request'))).toBe('https://uploads.example.com')
+    expect(getPublicApiUrl(fakeContext('https://api.capgo.com.cn/build/request'))).toBe('https://api.capgo.com.cn')
   })
 
   it('falls back to the default API host when PUBLIC_URL is unset', () => {
     expect(getPublicApiUrl(fakeContext('https://api.capgo.app/build/request'))).toBe('https://api.capgo.app')
+  })
+
+  it('uses the China host for manifest uploads started on the China API host', () => {
+    useEnv({ FILES_PUBLIC_URL: 'https://files.example.com', PUBLIC_URL: 'https://uploads.example.com' })
+    expect(manifestUploadPublicUrl(fakeContext('https://api.capgo.com.cn/private/request_manifest_upload'))).toBe('https://api.capgo.com.cn')
+    expect(manifestUploadPublicUrl(fakeContext('https://api.capgo.app/private/request_manifest_upload'))).toBe('https://files.example.com')
   })
 })
