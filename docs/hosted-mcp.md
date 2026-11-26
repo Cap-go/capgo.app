@@ -1,6 +1,6 @@
 # Hosted Capgo MCP server
 
-Capgo exposes a remote MCP server at `https://api.capgo.app/mcp`. You can add it to web tools such as Lovable, Claude.ai, ChatGPT, Cursor, VS Code or MCP Inspector by URL. Nothing needs to be installed.
+Capgo exposes a remote MCP server at `https://mcp.capgo.app/` (`https://api.capgo.app/mcp` still works for existing clients). You can add it to web tools such as Lovable, Claude.ai, ChatGPT, Cursor, VS Code or MCP Inspector by URL. Nothing needs to be installed.
 
 The local server (`npx @capgo/cli@latest mcp`) still exists. Use it for tasks that need the local project, such as uploading bundle files, requesting native builds, `doctor` and `probe`.
 
@@ -8,12 +8,12 @@ The local server (`npx @capgo/cli@latest mcp`) still exists. Use it for tasks th
 
 | Client supports | What to enter |
 | --- | --- |
-| OAuth (Claude, ChatGPT, Cursor, VS Code, Lovable "OAuth") | The URL `https://api.capgo.app/mcp`. The client discovers login on its own. |
+| OAuth (Claude, ChatGPT, Cursor, VS Code, Lovable "OAuth") | The URL `https://mcp.capgo.app/` or `https://mcp.capgo.app/mcp`. The client discovers login on its own. |
 | Bearer / API key header (Lovable "API key", n8n, scripts) | The URL, plus the header `Authorization: Bearer <Capgo API key>` |
 
 ## Public setup and discovery
 
-Opening `https://api.capgo.app/mcp` in a browser shows setup instructions without signing in. Requests preferring JSON or an SSE stream still receive `405`; authenticated MCP calls use `POST`.
+Opening `https://mcp.capgo.app/` or `https://api.capgo.app/mcp` in a browser shows setup instructions without signing in. Requests preferring JSON or an SSE stream still receive `405`; authenticated MCP calls use `POST`.
 
 The API host also publishes public, cacheable discovery documents:
 

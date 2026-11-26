@@ -46,7 +46,7 @@ describe('plugin package for OpenAI', () => {
 
   it('points at the hosted MCP server', () => {
     const mcp = JSON.parse(readFileSync(join(PLUGIN_DIR, 'mcp.json'), 'utf8'))
-    expect(mcp.mcpServers.capgo).toEqual({ type: 'streamable-http', url: 'https://api.capgo.app/mcp' })
+    expect(mcp.mcpServers.capgo).toEqual({ type: 'streamable-http', url: 'https://mcp.capgo.app/' })
   })
 
   it('only references tools the MCP server exposes', () => {
