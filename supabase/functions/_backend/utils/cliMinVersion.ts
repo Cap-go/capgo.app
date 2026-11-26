@@ -11,6 +11,6 @@
  * Agents MUST ask before changing these values. Security-related breaks may
  * raise the floor; non-security / additive changes usually should not.
  */
-export const MIN_CLI_VERSION = '8.42.3'
+export const MIN_CLI_VERSION = '8.90.1'
 
-export const MIN_CLI_VERSION_REASON = 'Oldest CLI version Capgo still tests against the current API. Older CLIs can fail on uploads, auth, or encryption.'
+export const MIN_CLI_VERSION_REASON = 'Capgo no longer accepts direct database (PostgREST) access from the CLI. CLIs older than 8.90.1 rely on it and can no longer upload bundles or manage apps.'

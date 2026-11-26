@@ -154,9 +154,6 @@ and the test suite has to keep running once it is gone.
   `/rest/v1` URL. `tests/no-postgrest-in-tests.unit.test.ts` and
   `tests/no-supabase-js.unit.test.ts` fail if you do, and
   `getEndpointUrl('/rest/...')` throws.
-- Only exception: `tests/cli-compat.test.ts` runs the pinned published CLI
-  (`MIN_CLI_VERSION`), which calls PostgREST itself. That is the product
-  behaviour under test, not test plumbing.
 
 ### Code Quality
 
