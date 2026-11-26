@@ -23,6 +23,13 @@ vi.mock('../src/components/dashboard/BuildLiveProgress.vue', () => ({ default: d
 }) }))
 vi.mock('../src/services/console', () => ({
   defaultApiHost: 'https://api.example.test',
+  // BuildTable.loadSavedOutputs calls this before fetch. Same rule as consoleApiHost.ts.
+  getConsoleApiHost: () => {
+    const hostname = typeof window === 'undefined' ? '' : window.location.hostname.replace(/\.$/, '').toLowerCase()
+    if (hostname === 'capgo.com.cn' || hostname.endsWith('.capgo.com.cn'))
+      return 'https://api.capgo.com.cn'
+    return import.meta.env.VITE_API_HOST
+  },
   useConsole: () => ({
     auth: { getSession: async () => ({ data: { session: { access_token: 'token' } } }) },
     from: (table: string) => {
