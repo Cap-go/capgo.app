@@ -67,7 +67,7 @@ async function cleanupApp(appId: string) {
 async function postgrestCreateVersion(appId: string, version: string) {
   try {
     // The PostgREST request supabase-js sent for upsert().select('id,name').single().
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/app_versions?on_conflict=app_id,name&select=id,name`, {
+    const response = await fetch(`${SUPABASE_URL!.replace(/\/+$/, '')}/rest/v1/app_versions?on_conflict=app_id,name&select=id,name`, {
       method: 'POST',
       headers: {
         'apikey': SERVICE_KEY!,

@@ -16,7 +16,7 @@ export async function signInWithPassword(supabaseUrl: string, anonKey: string, e
     headers: { 'apikey': anonKey, 'Authorization': `Bearer ${anonKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   })
-  const body = await response.json().catch(() => ({})) as Partial<GotrueSession> & { msg?: string, message?: string, error_description?: string, error?: string }
+  const body = await response.json().then(json => json ?? {}, () => ({})) as Partial<GotrueSession> & { msg?: string, message?: string, error_description?: string, error?: string }
   if (!response.ok || !body.access_token)
     throw new Error(body.msg || body.message || body.error_description || body.error || `HTTP ${response.status}`)
   return {

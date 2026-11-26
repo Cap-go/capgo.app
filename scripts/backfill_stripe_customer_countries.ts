@@ -84,7 +84,7 @@ async function fetchStripeInfoCountryRows(
          AND (NOT $3::boolean OR customer_country IS NULL)
        ORDER BY customer_id ASC
        LIMIT $4`,
-      [options.customerId ?? null, lastSeenCustomerId, options.missingOnly, DEFAULT_PAGE_SIZE],
+      [options.customerId || null, lastSeenCustomerId, options.missingOnly, DEFAULT_PAGE_SIZE],
     )
     if (!data.length)
       break

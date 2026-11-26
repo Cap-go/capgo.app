@@ -409,7 +409,7 @@ async function fetchApps(db: pg.Pool, filters: { appId: string | null, orgId: st
        WHERE ($1::text IS NULL OR app_id = $1) AND ($2::uuid IS NULL OR owner_org = $2::uuid)
        ORDER BY app_id ASC
        LIMIT $3 OFFSET $4`,
-      [filters.appId, filters.orgId, DEFAULT_PAGE_SIZE, offset],
+      [filters.appId || null, filters.orgId || null, DEFAULT_PAGE_SIZE, offset],
     )
 
     if (!data.length)

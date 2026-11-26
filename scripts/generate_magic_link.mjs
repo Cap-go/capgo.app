@@ -8,9 +8,9 @@ async function generateLink(supabaseUrl, serviceKey, params) {
     headers: { 'apikey': serviceKey, 'Authorization': `Bearer ${serviceKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   })
-  const body = await response.json().catch(() => ({}))
+  const body = await response.json().then(json => json ?? {}, () => ({}))
   if (!response.ok)
-    return { data: null, error: { status: response.status, message: body.msg || body.message || body.error_description || `HTTP ${response.status}` } }
+    return { data: null, error: { status: response.status, message: body.msg || body.message || body.error_description || body.error || `HTTP ${response.status}` } }
   const { action_link, email_otp, hashed_token, redirect_to, verification_type, ...user } = body
   return { data: { properties: { action_link, email_otp, hashed_token, redirect_to, verification_type }, user }, error: null }
 }

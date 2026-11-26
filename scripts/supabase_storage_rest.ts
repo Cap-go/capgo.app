@@ -16,7 +16,7 @@ export interface SupabaseStorageRest {
 }
 
 function encodeObjectPath(path: string) {
-  return path.replace(/^\/+|\/+$/g, '').split('/').map(encodeURIComponent).join('/')
+  return path.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')
 }
 
 async function failure(response: Response, action: string) {

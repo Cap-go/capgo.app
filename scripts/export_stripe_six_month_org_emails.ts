@@ -105,7 +105,7 @@ async function fetchActionableOrgs(db: pg.Pool, customerId: string | null) {
          AND ($1::text IS NULL OR customer_id = $1) AND ($2::uuid IS NULL OR id > $2::uuid)
        ORDER BY id ASC
        LIMIT $3`,
-      [customerId, lastSeenOrgId, DEFAULT_PAGE_SIZE],
+      [customerId || null, lastSeenOrgId, DEFAULT_PAGE_SIZE],
     )
     if (!data.length)
       break

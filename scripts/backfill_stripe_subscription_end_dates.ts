@@ -108,7 +108,7 @@ async function fetchStripeInfoRows(
          AND (NOT $3::boolean OR canceled_at IS NULL)
        ORDER BY customer_id ASC
        LIMIT $4`,
-      [options.customerId ?? null, lastSeenCustomerId, options.missingOnly, DEFAULT_PAGE_SIZE],
+      [options.customerId || null, lastSeenCustomerId, options.missingOnly, DEFAULT_PAGE_SIZE],
     )
     if (!data.length)
       break
