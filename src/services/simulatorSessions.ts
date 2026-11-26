@@ -1,8 +1,21 @@
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 
 export interface RunningSimulator {
   id: string
   url: string
+}
+
+// False once the API says this server has no simulator host: start buttons would only fail.
+// Null until known (older API): the buttons stay.
+export const simulatorConfigured = ref<boolean | null>(null)
+
+// A start refused for a missing simulator host also settles it, before any list answered.
+// Returns true when the refusal means the server has no simulator host.
+export function noteSimulatorStartError(payload: { error?: string } | undefined) {
+  if (payload?.error !== 'simulator_not_configured')
+    return false
+  simulatorConfigured.value = false
+  return true
 }
 
 const sessionsByApp = reactive<Record<string, RunningSimulator[]>>({})

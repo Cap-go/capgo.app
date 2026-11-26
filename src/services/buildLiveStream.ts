@@ -80,6 +80,10 @@ function isTerminal(status: string | null | undefined) {
   return !!status && (SUCCESS_STATUSES.has(status) || FAILURE_STATUSES.has(status))
 }
 
+export function isBuildSucceeded(status: string | null | undefined) {
+  return !!status && SUCCESS_STATUSES.has(status)
+}
+
 export function resolveBuildOutcome(streamStatus: string | null | undefined, dbStatus: string | null | undefined): BuildOutcome | null {
   // The stream reports the end first; the row can lag when the CLI is closed.
   const status = isTerminal(streamStatus) ? streamStatus : dbStatus

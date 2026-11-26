@@ -25,7 +25,9 @@ app.get('/outputs', middlewareAuth, async (c) => {
   const principal = authPrincipal(c)
   await ensureBuildPermission(c, appId, id)
   const ownerOrg = await getBuildOwnerOrg(c, principal, appId)
-  return c.json({ outputs: await savedOutputsForJobs(c, principal, appId, ownerOrg, jobIds) })
+  const failed: string[] = []
+  const outputs = await savedOutputsForJobs(c, principal, appId, ownerOrg, jobIds, failed)
+  return c.json({ outputs, failed })
 })
 
 // The app's recent simulators, with the build time each one counted.

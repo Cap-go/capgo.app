@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import IconSmartphone from '~icons/lucide/smartphone'
 import { getConsoleApiHost, useConsole } from '../../services/console'
 import { formatLocalDateTime } from '../../services/date'
-import { applySimulatorList, forgetSimulator, formatSimulatorDuration, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorEpoch } from '../../services/simulatorSessions'
+import { applySimulatorList, forgetSimulator, formatSimulatorDuration, noteSimulatorStartError, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorConfigured, simulatorEpoch } from '../../services/simulatorSessions'
 
 const props = defineProps<{ appId: string }>()
 const { t } = useI18n()
@@ -52,10 +52,12 @@ async function loadSessions() {
     })
     if (!response.ok)
       return false
-    const payload = await response.json() as { data?: SimulatorSummary[], idle_minutes?: number, max_minutes?: number }
+    const payload = await response.json() as { data?: SimulatorSummary[], idle_minutes?: number, max_minutes?: number, configured?: boolean }
     if (request !== listRequest || epoch !== simulatorEpoch() || appId !== props.appId || !Array.isArray(payload.data))
       return false
     recent.value = payload.data
+    if (typeof payload.configured === 'boolean')
+      simulatorConfigured.value = payload.configured
     limits.value = { idle: payload.idle_minutes ?? limits.value.idle, max: payload.max_minutes ?? limits.value.max }
     applySimulatorList(appId, payload.data, epoch, stoppedHere)
     return true
@@ -130,8 +132,15 @@ async function start(platform: 'ios' | 'android') {
       body: JSON.stringify({ app_id: props.appId, platform }),
     })
     const payload = await response.json().catch(() => undefined) as { data?: { id?: string, url?: string }, message?: string, error?: string } | undefined
-    if (!response.ok)
+    if (!response.ok) {
+      // A missing simulator host is explained by the hint that replaces the start buttons.
+      if (noteSimulatorStartError(payload)) {
+        // A list sent before this refusal must not bring the start buttons back.
+        listRequest++
+        return
+      }
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-start'))
+    }
     const id = payload?.data?.id
     if (id)
       rememberSimulator(props.appId, { id, url: payload.data?.url || '' }, epoch)
@@ -187,7 +196,10 @@ async function stop(id: string) {
     <p class="mt-2 text-sm font-medium text-amber-700 dark:text-amber-300">
       {{ t('simulator-auto-stop', { idle: limits.idle, max: limits.max }) }}
     </p>
-    <div class="flex flex-wrap gap-2 mt-4">
+    <p v-if="simulatorConfigured === false" class="mt-4 text-sm text-slate-600 dark:text-slate-300" data-test="simulator-not-configured">
+      {{ t('simulator-not-configured-hint') }}
+    </p>
+    <div v-else class="flex flex-wrap gap-2 mt-4">
       <button type="button" class="text-white d-btn d-btn-primary" :disabled="pending !== '' || stoppingId !== ''" @click="start('ios')">
         {{ pending === 'ios' ? t('simulator-starting') : t('start-ios-simulator') }}
       </button>

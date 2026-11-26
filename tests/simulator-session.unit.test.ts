@@ -1,3 +1,4 @@
+import { HTTPException } from 'hono/http-exception'
 import { describe, expect, it } from 'vitest'
 import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, ipaUploadStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, SIMULATOR_STOPPED_MESSAGE, simulatorArtifactUrl, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorListItem, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
 import { deviceStopTime } from '../supabase/functions/_backend/public/build/simulator_host.ts'
@@ -141,6 +142,8 @@ describe('simulator sessions', () => {
     expect(startupFailureKeepsSlot('', false)).toBe(false)
     expect(simulatorCreateWasInterrupted(new Error('The operation was aborted.'))).toBe(true)
     expect(simulatorCreateWasInterrupted(new Error('Simulator did not return a session URL.'))).toBe(false)
+    // A refusal such as simulator_not_configured is an HTTPException, whose name stays 'Error'.
+    expect(simulatorCreateWasInterrupted(new HTTPException(503, { message: 'Simulator is not configured.' }))).toBe(false)
     expect(emulatorSessionCreateBody({
       id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4',
       appId: 'ee.forgr.capgo',

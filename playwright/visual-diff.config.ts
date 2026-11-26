@@ -404,6 +404,43 @@ async function prepareServingRegions(page: Page, width: number) {
   await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
 }
 
+// Builds page with one succeeded iOS build (saved .ipa), one running and one failed build.
+const BUILD_FIXTURES = [
+  { id: '7c0d1b1e-0000-4000-8000-000000000003', app_id: 'com.demo.app', platform: 'android', build_mode: 'release', status: 'running', builder_job_id: 'job_running', last_error: null, created_at: '2026-11-17T09:40:00Z', updated_at: '2026-11-17T09:41:00Z', started_at: '2026-11-17T09:40:30Z', completed_at: null },
+  { id: '7c0d1b1e-0000-4000-8000-000000000002', app_id: 'com.demo.app', platform: 'ios', build_mode: 'release', status: 'succeeded', builder_job_id: 'job_succeeded', last_error: null, created_at: '2026-11-17T09:00:00Z', updated_at: '2026-11-17T09:07:12Z', started_at: '2026-11-17T09:00:20Z', completed_at: '2026-11-17T09:07:12Z' },
+  { id: '7c0d1b1e-0000-4000-8000-000000000001', app_id: 'com.demo.app', platform: 'android', build_mode: 'debug', status: 'failed', builder_job_id: 'job_failed', last_error: 'Gradle task assembleRelease failed: missing keystore password', created_at: '2026-11-16T15:00:00Z', updated_at: '2026-11-16T15:04:00Z', started_at: '2026-11-16T15:00:20Z', completed_at: '2026-11-16T15:04:00Z' },
+]
+
+async function prepareBuildsWithResults(page: Page, open: 'table' | 'detail' | 'next-steps', width = 1440) {
+  await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
+  await routeConsoleQuery(page, 'build_requests', async (route, query) => {
+    const byId = query.operations.find(op => op.method === 'eq' && op.args[0] === 'id')
+    if (byId)
+      return route.fulfill(consoleQueryJson(BUILD_FIXTURES.find(build => build.id === byId.args[1]) ?? null))
+    return route.fulfill(consoleQueryJson(BUILD_FIXTURES, BUILD_FIXTURES.length))
+  })
+  await routeConsoleQuery(page, 'build_logs', route => route.fulfill(consoleQueryJson([{ build_id: 'job_succeeded', build_time_unit: 432 }, { build_id: 'job_failed', build_time_unit: 220 }])))
+  await page.route('**/app/com.demo.app/onboarding/builder', route => route.fulfill({ json: { canEnable: true } }))
+  await page.route('**/private/simulator/outputs**', route => route.fulfill({ json: { outputs: { job_succeeded: { url: 'https://example.com/app.ipa', kind: 'ios_ipa', expires_at: '2999-01-01T00:00:00Z' } } } }))
+  await page.route('**/private/simulator/?app_id=**', route => route.fulfill({ json: { data: [], idle_minutes: 5, max_minutes: 40, configured: true } }))
+  await page.route('**/build/logs_token/**', route => route.fulfill({ status: 404, json: { error: 'not_found' } }))
+  await page.reload()
+  await dismissRemindMeLater(page)
+  const succeededRow = page.locator('tr', { hasText: 'succeeded' }).first()
+  await succeededRow.waitFor({ state: 'visible', timeout: 120_000 })
+  if (open === 'detail') {
+    await succeededRow.locator('td').first().click()
+    if (process.env.VISUAL_DIFF_PHASE === 'after')
+      await page.locator('[data-test="build-live-success"]').waitFor({ state: 'visible' })
+    await page.waitForTimeout(500)
+    return
+  }
+  const target = open === 'next-steps' && process.env.VISUAL_DIFF_PHASE === 'after'
+    ? page.locator('[data-test="build-next-steps"]')
+    : succeededRow
+  await target.scrollIntoViewIfNeeded()
+}
+
 async function mockAvailableServingRegions(page: Page) {
   await page.route('**/serving_policy/**', route => route.fulfill({
     json: {
@@ -417,6 +454,12 @@ async function mockAvailableServingRegions(page: Page) {
 export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'serving-regions-desktop', path: '/app/com.demo.app/settings', auth: true, beforeNavigate: mockAvailableServingRegions, prepare: page => prepareServingRegions(page, 1280) },
   { slug: 'serving-regions-mobile', path: '/app/com.demo.app/settings', auth: true, beforeNavigate: mockAvailableServingRegions, prepare: page => prepareServingRegions(page, 390) },
+  { slug: 'builds-table', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'table') },
+  { slug: 'builds-detail', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'detail') },
+  { slug: 'builds-next-steps', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'next-steps') },
+  { slug: 'builds-table-mobile', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'table', 390) },
+  { slug: 'builds-detail-mobile', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'detail', 390) },
+  { slug: 'builds-next-steps-mobile', path: '/app/com.demo.app/builds', auth: true, prepare: page => prepareBuildsWithResults(page, 'next-steps', 390) },
   {
     // A saved iOS build opened in the simulator: the page stays on the build history.
     slug: 'builds-open-saved-simulator',

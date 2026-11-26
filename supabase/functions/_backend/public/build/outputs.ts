@@ -30,14 +30,15 @@ export function pickSavedOutput(outputs: BuilderOutput[] | undefined, platform: 
   return undefined
 }
 
-export async function savedOutputsForJobs(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobIds: string[]): Promise<Record<string, SavedBuildOutput>> {
+// Jobs whose builder lookup failed go to `failed`: their saved file is unknown, not absent.
+export async function savedOutputsForJobs(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobIds: string[], failed: string[] = []): Promise<Record<string, SavedBuildOutput>> {
   const ids = [...new Set(jobIds)].filter(id => /^[A-Za-z0-9._:-]{1,80}$/.test(id)).slice(0, 20)
   if (ids.length === 0)
     return {}
   const owned = await withRlsContext(c, principal, async client => (await client.query<{ builder_job_id: string, platform: string }>(
     `SELECT builder_job_id, platform
      FROM public.build_requests
-     WHERE app_id = $1 AND owner_org = $2 AND status = 'succeeded' AND builder_job_id = ANY($3::text[])`,
+     WHERE app_id = $1 AND owner_org = $2 AND status IN ('succeeded', 'released', 'completed') AND builder_job_id = ANY($3::text[])`,
     [appId, ownerOrg, ids],
   )).rows)
   const outputs: Record<string, SavedBuildOutput> = {}
@@ -49,15 +50,19 @@ export async function savedOutputsForJobs(c: Context, principal: RlsPrincipal, a
       })
       if (!response.ok) {
         await response.body?.cancel()
+        // The builder no longer knows the job: its file is gone for good.
+        if (response.status !== 404)
+          failed.push(row.builder_job_id)
         return
       }
-      const body = await response.json().catch(() => undefined) as { outputs?: BuilderOutput[] } | undefined
+      const body = await response.json() as { outputs?: BuilderOutput[] } | undefined
       const saved = pickSavedOutput(body?.outputs, row.platform)
       if (saved)
         outputs[row.builder_job_id] = saved
     }
     catch {
       // One stalled job must not hide the downloads that already succeeded.
+      failed.push(row.builder_job_id)
     }
   }))
   return outputs
