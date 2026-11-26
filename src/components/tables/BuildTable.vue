@@ -394,7 +394,7 @@ async function openSavedBuild(jobId: string) {
       if (id) {
         const controller = new AbortController()
         const timeout = setTimeout(() => controller.abort(), 10_000)
-        void fetch(`${defaultApiHost}/private/simulator/${id}/stop`, {
+        void fetch(`${getConsoleApiHost()}/private/simulator/${id}/stop`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
           body: JSON.stringify({ app_id: appId }),

@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
 import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
+import { maskBuilderCommand } from '../src/services/builderOnboardingChecklist'
 import { buildInitCliCommand } from '../src/utils/onboardingSetupMode'
 
 const runtimeMocks = vi.hoisted(() => {
@@ -81,6 +82,13 @@ vi.mock('~/services/apikeys', async (importOriginal) => {
   }
 })
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
+const setupMethodMocks = vi.hoisted(() => ({ manualFirst: { value: false } }))
+vi.mock('~/composables/useSetupMethodPreference', () => ({
+  useSetupMethodPreference: () => ({
+    manualFirst: setupMethodMocks.manualFirst,
+    rememberSetupMethod: vi.fn(),
+  }),
+}))
 function chinaConsoleWebHost() {
   return typeof window !== 'undefined' && window.location.hostname.endsWith('.capgo.com.cn')
 }
@@ -294,6 +302,7 @@ describe('app onboarding API key runtime loading', () => {
   it('shows China build init on the builder checklist when hosted on console.capgo.com.cn', async () => {
     const locationDescriptor = Object.getOwnPropertyDescriptor(window, 'location')
     try {
+      setupMethodMocks.manualFirst.value = true
       vi.stubEnv('VITE_API_HOST', 'https://api.capgo.app')
       vi.stubEnv('VITE_APP_URL', 'https://console.capgo.com.cn')
       Object.defineProperty(window, 'location', {
@@ -316,12 +325,13 @@ describe('app onboarding API key runtime loading', () => {
           initialChecklistPath: 'builder',
         },
       )
-      await vi.waitFor(() => expect(container.querySelector('[data-test="builder-checklist-command"] code')).not.toBeNull())
-      const command = container.querySelector('[data-test="builder-checklist-command"] code')?.textContent ?? ''
-      expect(command).toBe(`${expectedBase} --platform ios`)
+      await vi.waitFor(() => expect(container.querySelector('[data-test="builder-checklist-command"]')).not.toBeNull())
+      const command = container.querySelector('[data-test="builder-checklist-command"]')?.textContent ?? ''
+      expect(command).toBe(maskBuilderCommand(expectedBase))
       expect(command).not.toContain('api.capgo.app')
     }
     finally {
+      setupMethodMocks.manualFirst.value = false
       vi.unstubAllEnvs()
       if (locationDescriptor)
         Object.defineProperty(window, 'location', locationDescriptor)
