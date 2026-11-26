@@ -1,6 +1,6 @@
 import type { McpToolContext } from '../supabase/functions/_backend/mcp/tools.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { LLM_MODEL_ARGUMENT, MCP_ANALYTICS_SOURCE, mcpSessionId, mcpToolCallEvent, resolveModel, withModelArgument, withoutModelArgument } from '../supabase/functions/_backend/mcp/analytics.ts'
+import { LLM_MODEL_ARGUMENT, MCP_ANALYTICS_SOURCE, mcpToolCallEvent, newMcpSessionId, resolveModel, withModelArgument, withoutModelArgument } from '../supabase/functions/_backend/mcp/analytics.ts'
 import { MCP_SERVER_INFO } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { handleJsonRpcMessage, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS_BY_NAME } from '../supabase/functions/_backend/mcp/tools.ts'
@@ -16,7 +16,7 @@ const baseInput = {
   durationMs: 41.6,
   startedAt: Date.UTC(2026, 10, 26, 10, 5),
   userId: 'user-1',
-  apikeyId: 42,
+  sessionId: 'ses_0199d3a2-4f00-7000-8000-000000000000',
   oauthClient: 'Claude',
   isKnownTool: (name: string) => name === 'capgo_list_apps',
   headers: { userAgent: 'claude-code/2.1.0', vendorClient: 'claude-code', protocolVersion: '2025-11-25' },
@@ -78,7 +78,7 @@ describe('hosted MCP PostHog analytics', () => {
       $mcp_resource_name: 'capgo_list_apps',
       $mcp_is_error: false,
       $mcp_duration_ms: 42,
-      $session_id: mcpSessionId(42, 'Claude', baseInput.startedAt),
+      $session_id: baseInput.sessionId,
       $mcp_server_name: MCP_SERVER_INFO.name,
       $mcp_server_version: MCP_SERVER_INFO.version,
       $mcp_interface: 'mcp',
@@ -89,7 +89,6 @@ describe('hosted MCP PostHog analytics', () => {
       $mcp_llm_model: 'claude-opus-5-5',
       $mcp_llm_model_source: 'self_reported',
     })
-    expect(event?.nonPersonTags?.$session_id).toMatch(/^ses_[0-9a-f]{32}$/)
   })
 
   it.concurrent('reads the client and protocol from modern per-request metadata', () => {
@@ -124,10 +123,12 @@ describe('hosted MCP PostHog analytics', () => {
     expect(mcpToolCallEvent({ ...baseInput, message: call(), response: null })).toBeNull()
   })
 
-  it.concurrent('keeps one session per key and client within a 30 minute window', () => {
-    const start = Date.UTC(2026, 10, 26, 10, 0)
-    expect(mcpSessionId(42, 'Claude', start)).toBe(mcpSessionId(42, 'Claude', start + 29 * 60 * 1000))
-    expect(mcpSessionId(42, 'Claude', start)).not.toBe(mcpSessionId(42, 'Claude', start + 30 * 60 * 1000))
-    expect(mcpSessionId(42, 'Claude', start)).not.toBe(mcpSessionId(43, 'Claude', start))
+  it.concurrent('mints a fresh ses_<UUIDv7> per request, ordered by time', () => {
+    const now = Date.UTC(2026, 10, 26, 10, 0)
+    const id = newMcpSessionId(now)
+    expect(id).toMatch(/^ses_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(Number.parseInt(id.slice(4, 17).replace('-', ''), 16)).toBe(now)
+    expect(newMcpSessionId(now)).not.toBe(id)
+    expect(newMcpSessionId(now + 1) > id).toBe(true)
   })
 })

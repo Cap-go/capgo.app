@@ -14,7 +14,7 @@ import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { checkKey } from '../utils/supabase.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { backgroundTask } from '../utils/utils.ts'
-import { mcpToolCallEvent } from './analytics.ts'
+import { mcpToolCallEvent, newMcpSessionId } from './analytics.ts'
 import { createMcpDiscoveryApp, mcpSetupPage } from './discovery.ts'
 import { isModernRequest, modernErrorStatus, record, validateModernHttpRequest } from './modern_protocol.ts'
 import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
@@ -221,8 +221,9 @@ async function trackHostedMcpToolCalls(c: Context<MiddlewareKeyVariables>, calle
     protocolVersion: c.req.header('MCP-Protocol-Version'),
   }
   const isKnownTool = (name: string) => MCP_TOOLS_BY_NAME.has(name)
+  const sessionId = newMcpSessionId()
   const analytics = toolCalls
-    .map(({ legacy: _legacy, ...exchange }) => mcpToolCallEvent({ ...exchange, userId: caller.userId, apikeyId: caller.apikeyId, oauthClient: client, isKnownTool, headers }))
+    .map(({ legacy: _legacy, ...exchange }) => mcpToolCallEvent({ ...exchange, userId: caller.userId, sessionId, oauthClient: client, isKnownTool, headers }))
     .filter(event => event !== null)
   await Promise.all([
     ...toolCalls.map(({ legacy }) => trackPosthogEvent(c, { ...legacy, nonPersonTags: { ...legacy.nonPersonTags, client } })),

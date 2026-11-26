@@ -24,8 +24,6 @@ export const LLM_MODEL_DESCRIPTION = 'The model identifier you are running as, f
 const CODEX_TURN_METADATA = 'x-codex-turn-metadata'
 const CLIENT_INFO_META = 'io.modelcontextprotocol/clientInfo'
 const MAX_PROPERTY_CHARS = 256
-// Calls of one agent within this window share a PostHog session; the server itself is stateless.
-const SESSION_WINDOW_MS = 30 * 60 * 1000
 
 function text(value: unknown): string | undefined {
   if (typeof value !== 'string')
@@ -97,23 +95,27 @@ export function errorType(response: JsonRpcResponse): { type: string, status?: n
   return { type: 'tool_error', status }
 }
 
-function fnv1aHex(input: string): string {
-  // Two 32-bit FNV-1a passes with different offset bases give a 64-bit id.
-  let h1 = 0x811C9DC5
-  let h2 = 0xCBF29CE4
-  for (let i = 0; i < input.length; i++) {
-    const c = input.codePointAt(i) ?? 0
-    h1 = Math.imul(h1 ^ c, 0x01000193)
-    h2 = Math.imul(h2 ^ c, 0x01000193)
+/** RFC 9562 UUIDv7: 48-bit millisecond timestamp, version and variant bits, the rest random. */
+function uuidV7(now: number): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  let ms = now
+  for (let i = 5; i >= 0; i--) {
+    bytes[i] = ms % 256
+    ms = Math.floor(ms / 256)
   }
-  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0')
+  bytes[6] = 0x70 | (bytes[6] & 0x0F)
+  bytes[8] = 0x80 | (bytes[8] & 0x3F)
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
-/** Stable `ses_` id for one API key and client within a 30 minute window (the hosted server has no sessions). */
-export function mcpSessionId(apikeyId: number, client: string, startedAt: number): string {
-  const input = `${apikeyId}:${client}:${Math.floor(startedAt / SESSION_WINDOW_MS)}`
-  const salted = `${input}::salt`
-  return `ses_${fnv1aHex(input)}${fnv1aHex(salted)}`
+/**
+ * `ses_<UUIDv7>` for one hosted HTTP request. The server is stateless, so per PostHog's manual
+ * integration contract each request is its own session; never group by credential, since agents
+ * sharing an API key would merge.
+ */
+export function newMcpSessionId(now = Date.now()): string {
+  return `ses_${uuidV7(now)}`
 }
 
 export interface McpToolCallEventInput {
@@ -122,7 +124,8 @@ export interface McpToolCallEventInput {
   durationMs: number
   startedAt: number
   userId: string
-  apikeyId: number
+  /** From newMcpSessionId, shared only by the messages of one HTTP request. */
+  sessionId: string
   /** OAuth client that minted the key, or `api_key` for pasted keys. */
   oauthClient: string
   /** Whether the server has a tool by this name; other names are reported as `unknown` to keep the property low-cardinality. */
@@ -160,7 +163,7 @@ export function mcpToolCallEvent(input: McpToolCallEventInput): PostHogCapturePa
       $mcp_resource_name: toolName,
       $mcp_is_error: failure !== undefined,
       $mcp_duration_ms: Math.max(0, Math.round(input.durationMs)),
-      $session_id: mcpSessionId(input.apikeyId, clientName, input.startedAt),
+      $session_id: input.sessionId,
       $mcp_server_name: MCP_SERVER_INFO.name,
       $mcp_server_version: MCP_SERVER_INFO.version,
       $mcp_interface: 'mcp',
