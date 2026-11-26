@@ -86,6 +86,14 @@ echo "PUSH $*"
     expect(result.stderr).toContain('supabase migration repair --db-url "$DATABASE_URL" --status applied 20261117152120')
   })
 
+  it('rejects without a repair step when 20261117152120 and 20261120001201 are both pending', () => {
+    const result = runWithPending('supabase/migrations/20261117152120_storage_gb_hours_billing.sql\nsupabase/migrations/20261120001201_storage_gb_hours_billing.sql')
+    expect(result.status).toBe(1)
+    expect(result.stdout).not.toContain('PUSH')
+    expect(result.stderr).toContain('both pending')
+    expect(result.stderr).not.toContain('migration repair')
+  })
+
   it('still rejects any other out-of-order migration', () => {
     const result = runWithPending('supabase/migrations/20261121000000_other.sql')
     expect(result.status).toBe(1)
