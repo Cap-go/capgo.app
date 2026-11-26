@@ -16,7 +16,8 @@
 import process from 'node:process'
 import type { UsageOverageEventRow } from '../supabase/functions/_backend/utils/credit_usage_posthog.ts'
 import { buildCreditUsagePosthogEventInput, getCreditUsageSourceRefOverageEventId } from '../supabase/functions/_backend/utils/credit_usage_posthog.ts'
-import { DEFAULT_ENV_FILE, createSupabaseServiceClient, getArgValue, getRequiredEnv, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
+import type pg from 'pg'
+import { connectAdminDb, DEFAULT_ENV_FILE, getArgValue, getRequiredEnv, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
 
 const DEFAULT_DAYS = 90
 const DEFAULT_BATCH_SIZE = 500
@@ -52,14 +53,13 @@ Options:
   --cutover=TIMESTAMP  Exclude transactions at or after this timestamp. Required for first --apply run.
   --org-id=UUID        Limit to one organization.
   --limit=N            Stop after N transactions.
-  --batch-size=N       Supabase page size. Default: ${DEFAULT_BATCH_SIZE}.
+  --batch-size=N       Database page size. Default: ${DEFAULT_BATCH_SIZE}.
   --backfill-run-id=ID Mark all emitted events with this run id. Defaults to a generated id.
   --env-file=PATH      Env file to load. Default: ${DEFAULT_ENV_FILE}.
   --help               Show this help.
 
 Required env:
-  SUPABASE_URL
-  SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY
+  MAIN_SUPABASE_DB_URL (or DATABASE_URL, SUPABASE_DB_URL, SUPABASE_DB_DIRECT_URL)
 
 Required for --apply:
   POSTHOG_API_KEY
@@ -88,8 +88,19 @@ export function getBackfillProgressScopeKey(orgId: string | null | undefined) {
   return orgId?.trim() ? `org:${orgId.trim()}` : 'all_orgs'
 }
 
-export function buildCheckpointResumeFilter(lastProcessedOccurredAt: string, lastProcessedId: number) {
-  return `occurred_at.gt.${lastProcessedOccurredAt},and(occurred_at.eq.${lastProcessedOccurredAt},id.gt.${lastProcessedId})`
+// SQL condition for rows after the last processed (occurred_at, id) pair.
+// `firstParam` is the placeholder number of the first of its two parameters.
+export function buildCheckpointResumeFilter(lastProcessedOccurredAt: string, lastProcessedId: number, firstParam: number) {
+  const at = `$${firstParam}`
+  const id = `$${firstParam + 1}`
+  return {
+    sql: `(occurred_at > ${at} OR (occurred_at = ${at} AND id > ${id}))`,
+    params: [lastProcessedOccurredAt, lastProcessedId],
+  }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
 }
 
 export function addBackfillRunTags(input: ReturnType<typeof buildCreditUsagePosthogEventInput>, options: BackfillRunTagOptions) {
@@ -129,36 +140,37 @@ export function resolveCutoverIso(options: {
   return options.to.toISOString()
 }
 
-async function loadBackfillProgress(supabase: any, jobName: string, scopeKey: string): Promise<BackfillProgressRow | null> {
-  const { data, error } = await supabase
-    .from('backfill_progress')
-    .select('job_name, scope_key, cutover_at, last_processed_occurred_at, last_processed_id')
-    .eq('job_name', jobName)
-    .eq('scope_key', scopeKey)
-    .maybeSingle()
-
-  if (error)
-    throw new Error(`Failed to load backfill checkpoint: ${error.message}`)
-
-  return data ?? null
+async function loadBackfillProgress(db: pg.Pool, jobName: string, scopeKey: string): Promise<BackfillProgressRow | null> {
+  try {
+    const { rows } = await db.query<BackfillProgressRow>(
+      `SELECT job_name, scope_key, cutover_at, last_processed_occurred_at, last_processed_id
+       FROM public.backfill_progress
+       WHERE job_name = $1 AND scope_key = $2`,
+      [jobName, scopeKey],
+    )
+    return rows[0] ?? null
+  }
+  catch (error) {
+    throw new Error(`Failed to load backfill checkpoint: ${errorMessage(error)}`)
+  }
 }
 
-async function saveBackfillProgress(supabase: any, progress: BackfillProgressRow) {
-  const { error } = await supabase
-    .from('backfill_progress')
-    .upsert({
-      cutover_at: progress.cutover_at,
-      job_name: progress.job_name,
-      last_processed_id: progress.last_processed_id,
-      last_processed_occurred_at: progress.last_processed_occurred_at,
-      scope_key: progress.scope_key,
-      updated_at: new Date().toISOString(),
-    }, {
-      onConflict: 'job_name,scope_key',
-    })
-
-  if (error)
-    throw new Error(`Failed to save backfill checkpoint: ${error.message}`)
+async function saveBackfillProgress(db: pg.Pool, progress: BackfillProgressRow) {
+  try {
+    await db.query(
+      `INSERT INTO public.backfill_progress (cutover_at, job_name, last_processed_id, last_processed_occurred_at, scope_key, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (job_name, scope_key) DO UPDATE SET
+         cutover_at = EXCLUDED.cutover_at,
+         last_processed_id = EXCLUDED.last_processed_id,
+         last_processed_occurred_at = EXCLUDED.last_processed_occurred_at,
+         updated_at = EXCLUDED.updated_at`,
+      [progress.cutover_at, progress.job_name, progress.last_processed_id, progress.last_processed_occurred_at, progress.scope_key, new Date().toISOString()],
+    )
+  }
+  catch (error) {
+    throw new Error(`Failed to save backfill checkpoint: ${errorMessage(error)}`)
+  }
 }
 
 async function sendPosthogEvent(posthogUrl: string, apiKey: string, input: ReturnType<typeof buildCreditUsagePosthogEventInput>) {
@@ -209,9 +221,8 @@ async function main() {
     ? parseDate(getArgValue(args, '--from')!, '--from')
     : new Date(to.getTime() - days * 24 * 60 * 60 * 1000)
 
-  const supabase = createSupabaseServiceClient(env)
-  const supabaseAny = supabase as any
-  const progress = await loadBackfillProgress(supabaseAny, CREDIT_USAGE_BACKFILL_JOB_NAME, scopeKey)
+  const db = await connectAdminDb(env)
+  const progress = await loadBackfillProgress(db, CREDIT_USAGE_BACKFILL_JOB_NAME, scopeKey)
   const configuredCutover = getArgValue(args, '--cutover') ?? env.CREDIT_USAGE_POSTHOG_BACKFILL_CUTOVER_AT?.trim() ?? null
   const cutoverIso = resolveCutoverIso({ apply, configuredCutover, progress, to })
 
@@ -253,26 +264,30 @@ async function main() {
 
   while (limit === null || seen < limit) {
     const remaining = limit === null ? batchSize : Math.min(batchSize, limit - seen)
-    let query = supabase
-      .from('usage_credit_transactions')
-      .select('*')
-      .gte('occurred_at', fromIso)
-      .lt('occurred_at', toIso)
-      .order('occurred_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(0, remaining - 1)
+    const conditions = ['occurred_at >= $1', 'occurred_at < $2']
+    const params: unknown[] = [fromIso, toIso]
+    if (orgId) {
+      params.push(orgId)
+      conditions.push(`org_id = $${params.length}`)
+    }
+    if (resumeOccurredAt && resumeId !== null) {
+      const resume = buildCheckpointResumeFilter(resumeOccurredAt, resumeId, params.length + 1)
+      params.push(...resume.params)
+      conditions.push(resume.sql)
+    }
+    params.push(remaining)
 
-    if (orgId)
-      query = query.eq('org_id', orgId)
+    const transactions = await db.query(
+      `SELECT * FROM public.usage_credit_transactions
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY occurred_at ASC, id ASC
+       LIMIT $${params.length}`,
+      params,
+    ).then(result => result.rows, (error) => {
+      throw new Error(`Failed to fetch usage credit transactions: ${errorMessage(error)}`)
+    })
 
-    if (resumeOccurredAt && resumeId !== null)
-      query = query.or(buildCheckpointResumeFilter(resumeOccurredAt, resumeId))
-
-    const { data: transactions, error } = await query
-    if (error)
-      throw new Error(`Failed to fetch usage credit transactions: ${error.message}`)
-
-    if (!transactions || transactions.length === 0)
+    if (transactions.length === 0)
       break
 
     const overageIds = Array.from(new Set(
@@ -284,15 +299,14 @@ async function main() {
     const overageById = new Map<string, UsageOverageEventRow>()
     for (let index = 0; index < overageIds.length; index += batchSize) {
       const ids = overageIds.slice(index, index + batchSize)
-      const { data: overageEvents, error: overageError } = await supabase
-        .from('usage_overage_events')
-        .select('*')
-        .in('id', ids)
+      const overageEvents = await db.query<UsageOverageEventRow>(
+        'SELECT * FROM public.usage_overage_events WHERE id = ANY($1)',
+        [ids],
+      ).then(result => result.rows, (error) => {
+        throw new Error(`Failed to fetch usage overage events: ${errorMessage(error)}`)
+      })
 
-      if (overageError)
-        throw new Error(`Failed to fetch usage overage events: ${overageError.message}`)
-
-      for (const overageEvent of overageEvents ?? [])
+      for (const overageEvent of overageEvents)
         overageById.set(overageEvent.id, overageEvent)
     }
 
@@ -327,7 +341,7 @@ async function main() {
     resumeId = Number(lastTransaction.id)
 
     if (apply) {
-      await saveBackfillProgress(supabaseAny, {
+      await saveBackfillProgress(db, {
         cutover_at: cutoverIso,
         job_name: CREDIT_USAGE_BACKFILL_JOB_NAME,
         last_processed_id: resumeId,
@@ -339,6 +353,7 @@ async function main() {
     if (transactions.length < remaining)
       break
   }
+  await db.end()
 
   console.log(JSON.stringify({
     apply,

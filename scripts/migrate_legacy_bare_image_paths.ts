@@ -19,13 +19,14 @@
  *   bun run admin:migrate-legacy-bare-image-paths --apply --delete-source
  *   bun run admin:migrate-legacy-bare-image-paths --apply --env-file=./internal/cloudflare/.env.preprod
  */
+import type pg from 'pg'
 import { mkdir, writeFile } from 'node:fs/promises'
 import type { ImageStore } from './admin_image_storage.ts'
 import { dirname } from 'node:path'
 import { createImageStore } from './admin_image_storage.ts'
 import {
   asyncPool,
-  createSupabaseServiceClient,
+  connectAdminDb,
   DEFAULT_ENV_FILE,
   getArgValue,
   loadEnv,
@@ -43,7 +44,6 @@ const PLACEHOLDER_BARE_NAMES = new Set([
   '/capgo.png',
 ])
 
-type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
 // Images are stored in R2 (S3_* env vars), not Supabase Storage.
 let images: ImageStore
 
@@ -93,7 +93,7 @@ Options:
   --help              Show this help.
 
 Required env:
-  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+  MAIN_SUPABASE_DB_URL (or DATABASE_URL, SUPABASE_DB_URL, SUPABASE_DB_DIRECT_URL)
 `)
 }
 
@@ -133,23 +133,16 @@ function isPlaceholderBare(rawValue: string, sourcePath: string) {
 }
 
 /**
- * PostgREST prefilter: bare names, leading-slash bare names, or images/<bare>.
+ * SQL prefilter: bare names, leading-slash bare names, or images/<bare>.
  * Client still applies normalizeStoredPath + isLegacyBarePath.
+ * `column` is one of this file's constant column names, never user input.
  */
-function applyLegacyImageColumnFilter(
-  query: { not: (...args: any[]) => any, neq: (...args: any[]) => any, or: (...args: any[]) => any },
-  column: string,
-) {
-  return query
-    .not(column, 'is', null)
-    .neq(column, '')
-    .not(column, 'like', '%://%')
-    .or([
-      `${column}.not.like.*/%*`,
-      `and(${column}.like./%,${column}.not.like./%/%)`,
-      `and(${column}.like.images/%,${column}.not.like.images/%/%)`,
-      `and(${column}.like./images/%,${column}.not.like./images/%/%)`,
-    ].join(','))
+function legacyImageColumnFilter(column: string) {
+  return `${column} IS NOT NULL AND ${column} <> '' AND ${column} NOT LIKE '%://%'
+    AND (${column} NOT LIKE '%/%'
+      OR (${column} LIKE '/%' AND ${column} NOT LIKE '/%/%')
+      OR (${column} LIKE 'images/%' AND ${column} NOT LIKE 'images/%/%')
+      OR (${column} LIKE '/images/%' AND ${column} NOT LIKE '/images/%/%'))`
 }
 
 function targetForApp(ownerOrg: string, appId: string) {
@@ -171,23 +164,21 @@ async function writeJson(path: string, value: unknown) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
 }
 
-async function listLegacyApps(supabase: SupabaseClient, limit: number | null) {
+async function listLegacyApps(db: pg.Pool, limit: number | null) {
   const rows: LegacyRow[] = []
   let from = 0
   while (limit === null || rows.length < limit) {
     const pageSize = limit === null
       ? DEFAULT_PAGE_SIZE
       : Math.min(DEFAULT_PAGE_SIZE, limit - rows.length)
-    const { data, error } = await applyLegacyImageColumnFilter(
-      supabase.from('apps').select('app_id, owner_org, icon_url'),
-      'icon_url',
+    const { rows: data } = await db.query(
+      `SELECT app_id, owner_org, icon_url FROM public.apps
+       WHERE ${legacyImageColumnFilter('icon_url')}
+       ORDER BY app_id ASC
+       LIMIT $1 OFFSET $2`,
+      [pageSize, from],
     )
-      .range(from, from + pageSize - 1)
-      .order('app_id', { ascending: true })
-
-    if (error)
-      throw error
-    if (!data?.length)
+    if (!data.length)
       break
 
     for (const app of data) {
@@ -216,7 +207,7 @@ async function listLegacyApps(supabase: SupabaseClient, limit: number | null) {
   return rows
 }
 
-async function listLegacyOrgs(supabase: SupabaseClient, remaining: number | null) {
+async function listLegacyOrgs(db: pg.Pool, remaining: number | null) {
   const rows: LegacyRow[] = []
   if (remaining !== null && remaining <= 0)
     return rows
@@ -226,16 +217,14 @@ async function listLegacyOrgs(supabase: SupabaseClient, remaining: number | null
     const pageSize = remaining === null
       ? DEFAULT_PAGE_SIZE
       : Math.min(DEFAULT_PAGE_SIZE, remaining - rows.length)
-    const { data, error } = await applyLegacyImageColumnFilter(
-      supabase.from('orgs').select('id, logo'),
-      'logo',
+    const { rows: data } = await db.query(
+      `SELECT id, logo FROM public.orgs
+       WHERE ${legacyImageColumnFilter('logo')}
+       ORDER BY id ASC
+       LIMIT $1 OFFSET $2`,
+      [pageSize, from],
     )
-      .range(from, from + pageSize - 1)
-      .order('id', { ascending: true })
-
-    if (error)
-      throw error
-    if (!data?.length)
+    if (!data.length)
       break
 
     for (const org of data) {
@@ -264,7 +253,7 @@ async function listLegacyOrgs(supabase: SupabaseClient, remaining: number | null
   return rows
 }
 
-async function listLegacyUsers(supabase: SupabaseClient, remaining: number | null) {
+async function listLegacyUsers(db: pg.Pool, remaining: number | null) {
   const rows: LegacyRow[] = []
   if (remaining !== null && remaining <= 0)
     return rows
@@ -274,16 +263,14 @@ async function listLegacyUsers(supabase: SupabaseClient, remaining: number | nul
     const pageSize = remaining === null
       ? DEFAULT_PAGE_SIZE
       : Math.min(DEFAULT_PAGE_SIZE, remaining - rows.length)
-    const { data, error } = await applyLegacyImageColumnFilter(
-      supabase.from('users').select('id, image_url'),
-      'image_url',
+    const { rows: data } = await db.query(
+      `SELECT id, image_url FROM public.users
+       WHERE ${legacyImageColumnFilter('image_url')}
+       ORDER BY id ASC
+       LIMIT $1 OFFSET $2`,
+      [pageSize, from],
     )
-      .range(from, from + pageSize - 1)
-      .order('id', { ascending: true })
-
-    if (error)
-      throw error
-    if (!data?.length)
+    if (!data.length)
       break
 
     for (const user of data) {
@@ -312,24 +299,22 @@ async function listLegacyUsers(supabase: SupabaseClient, remaining: number | nul
   return rows
 }
 
-async function storageObjectExists(supabase: SupabaseClient, path: string) {
+async function storageObjectExists(db: pg.Pool, path: string) {
   if (await images.exists(path))
     return true
   // Images live in R2 now. One still only in Supabase was not migrated yet:
   // fail the row instead of letting the caller clear its database pointer.
-  const { data, error } = await supabase.storage.from('images').createSignedUrl(path, 60)
-  if (error) {
-    if (/not found|404|Object not found|does not exist/i.test(error.message))
-      return false
-    throw error
-  }
-  if (data?.signedUrl)
+  const { rowCount } = await db.query(
+    `SELECT 1 FROM storage.objects WHERE bucket_id = 'images' AND name = $1`,
+    [path],
+  )
+  if (rowCount)
     throw new Error(`"${path}" exists only in Supabase Storage. Run admin:migrate-supabase-images-to-r2 first.`)
   return false
 }
 
 async function copyObject(
-  _supabase: SupabaseClient,
+  _db: pg.Pool,
   fromPath: string,
   toPath: string,
   options?: { force?: boolean },
@@ -348,7 +333,7 @@ async function copyObject(
  * Keyset pagination (ordered by PK) so concurrent writes cannot skip pages.
  * Includes padded/alias spellings and absolute storage URLs that normalize to a bare key.
  */
-async function buildBareReferenceIndex(supabase: SupabaseClient): Promise<Map<string, number>> {
+async function buildBareReferenceIndex(db: pg.Pool): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
 
   async function scanTable(
@@ -358,19 +343,14 @@ async function buildBareReferenceIndex(supabase: SupabaseClient): Promise<Map<st
   ) {
     let lastId: string | null = null
     while (true) {
-      let query: any = supabase
-        .from(table)
-        .select(`${idColumn}, ${column}`)
-        .order(idColumn, { ascending: true })
-        .limit(DEFAULT_PAGE_SIZE)
-      query = applyLegacyImageColumnFilter(query, column)
-      if (lastId)
-        query = query.gt(idColumn, lastId)
-
-      const { data, error } = await query
-      if (error)
-        throw error
-      if (!data?.length)
+      const { rows: data } = await db.query(
+        `SELECT ${idColumn}, ${column} FROM public.${table}
+         WHERE ${legacyImageColumnFilter(column)}${lastId ? ` AND ${idColumn} > $2` : ''}
+         ORDER BY ${idColumn} ASC
+         LIMIT $1`,
+        lastId ? [DEFAULT_PAGE_SIZE, lastId] : [DEFAULT_PAGE_SIZE],
+      )
+      if (!data.length)
         break
 
       for (const row of data as Record<string, unknown>[]) {
@@ -394,21 +374,14 @@ async function buildBareReferenceIndex(supabase: SupabaseClient): Promise<Map<st
   ) {
     let lastId: string | null = null
     while (true) {
-      let query = supabase
-        .from(table)
-        .select(`${idColumn}, ${column}`)
-        .not(column, 'is', null)
-        .like(column, '%://%')
-        .like(column, '%/images/%')
-        .order(idColumn, { ascending: true })
-        .limit(DEFAULT_PAGE_SIZE)
-      if (lastId)
-        query = query.gt(idColumn, lastId)
-
-      const { data, error } = await query
-      if (error)
-        throw error
-      if (!data?.length)
+      const { rows: data } = await db.query(
+        `SELECT ${idColumn}, ${column} FROM public.${table}
+         WHERE ${column} IS NOT NULL AND ${column} LIKE '%://%' AND ${column} LIKE '%/images/%'${lastId ? ` AND ${idColumn} > $2` : ''}
+         ORDER BY ${idColumn} ASC
+         LIMIT $1`,
+        lastId ? [DEFAULT_PAGE_SIZE, lastId] : [DEFAULT_PAGE_SIZE],
+      )
+      if (!data.length)
         break
 
       for (const row of data as Record<string, unknown>[]) {
@@ -440,39 +413,26 @@ function consumeBareReference(index: Map<string, number>, normalizedBarePath: st
   return next
 }
 
-async function updateRow(supabase: SupabaseClient, row: LegacyRow, newValue: string) {
+async function updateRow(db: pg.Pool, row: LegacyRow, newValue: string) {
   if (row.kind === 'app_icon') {
-    const { data, error } = await supabase
-      .from('apps')
-      .update({ icon_url: newValue })
-      .eq('app_id', row.id)
-      .eq('owner_org', row.ownerKey)
-      .eq('icon_url', row.rawValue)
-      .select('app_id')
-    if (error)
-      throw error
-    return (data?.length ?? 0) > 0
+    const { rowCount } = await db.query(
+      'UPDATE public.apps SET icon_url = $1 WHERE app_id = $2 AND owner_org = $3 AND icon_url = $4',
+      [newValue, row.id, row.ownerKey, row.rawValue],
+    )
+    return (rowCount ?? 0) > 0
   }
   if (row.kind === 'org_logo') {
-    const { data, error } = await supabase
-      .from('orgs')
-      .update({ logo: newValue })
-      .eq('id', row.id)
-      .eq('logo', row.rawValue)
-      .select('id')
-    if (error)
-      throw error
-    return (data?.length ?? 0) > 0
+    const { rowCount } = await db.query(
+      'UPDATE public.orgs SET logo = $1 WHERE id = $2 AND logo = $3',
+      [newValue, row.id, row.rawValue],
+    )
+    return (rowCount ?? 0) > 0
   }
-  const { data, error } = await supabase
-    .from('users')
-    .update({ image_url: newValue })
-    .eq('id', row.id)
-    .eq('image_url', row.rawValue)
-    .select('id')
-  if (error)
-    throw error
-  return (data?.length ?? 0) > 0
+  const { rowCount } = await db.query(
+    'UPDATE public.users SET image_url = $1 WHERE id = $2 AND image_url = $3',
+    [newValue, row.id, row.rawValue],
+  )
+  return (rowCount ?? 0) > 0
 }
 
 /**
@@ -480,7 +440,7 @@ async function updateRow(supabase: SupabaseClient, row: LegacyRow, newValue: str
  * Missing source → clear the DB pointer instead of writing a broken path.
  */
 async function refreshOwnedPathFromBareSource(
-  supabase: SupabaseClient,
+  db: pg.Pool,
   currentPath: string,
   retryTarget: string,
   clear: boolean,
@@ -488,12 +448,12 @@ async function refreshOwnedPathFromBareSource(
   if (clear)
     return { action: 'clear', target: '' }
 
-  const sourceExists = await storageObjectExists(supabase, currentPath)
+  const sourceExists = await storageObjectExists(db, currentPath)
   if (!sourceExists)
     return { action: 'clear', target: '' }
 
   // Always force-refresh so a same-owner icon_url change doesn't keep stale bytes.
-  await copyObject(supabase, currentPath, retryTarget, { force: true })
+  await copyObject(db, currentPath, retryTarget, { force: true })
   return { action: 'copy', target: retryTarget }
 }
 
@@ -502,21 +462,18 @@ async function refreshOwnedPathFromBareSource(
  * with the current owner + exact DB value.
  */
 async function updateRowWithRetry(
-  supabase: SupabaseClient,
+  db: pg.Pool,
   row: LegacyRow,
   newValue: string,
 ): Promise<{ updated: boolean, targetPath: string | null }> {
-  if (await updateRow(supabase, row, newValue))
+  if (await updateRow(db, row, newValue))
     return { updated: true, targetPath: newValue || null }
 
   if (row.kind === 'app_icon') {
-    const { data: current, error } = await supabase
-      .from('apps')
-      .select('app_id, owner_org, icon_url')
-      .eq('app_id', row.id)
-      .maybeSingle()
-    if (error)
-      throw error
+    const { rows: [current] } = await db.query(
+      'SELECT app_id, owner_org, icon_url FROM public.apps WHERE app_id = $1',
+      [row.id],
+    )
     if (!current)
       return { updated: false, targetPath: newValue || null }
 
@@ -528,7 +485,7 @@ async function updateRowWithRetry(
     const clear = isPlaceholderBare(currentRaw, currentPath)
     const ownedTarget = clear ? '' : targetForApp(current.owner_org, row.id)
     const refreshed = await refreshOwnedPathFromBareSource(
-      supabase,
+      db,
       currentPath,
       ownedTarget,
       clear,
@@ -542,7 +499,7 @@ async function updateRowWithRetry(
       targetPath: refreshed.action === 'clear' ? null : refreshed.target,
       action: refreshed.action === 'clear' ? 'clear' : 'copy',
     }
-    const updated = await updateRow(supabase, retryRow, refreshed.target)
+    const updated = await updateRow(db, retryRow, refreshed.target)
     return {
       updated,
       targetPath: refreshed.action === 'clear' ? null : refreshed.target,
@@ -550,13 +507,10 @@ async function updateRowWithRetry(
   }
 
   if (row.kind === 'org_logo') {
-    const { data: current, error } = await supabase
-      .from('orgs')
-      .select('id, logo')
-      .eq('id', row.id)
-      .maybeSingle()
-    if (error)
-      throw error
+    const { rows: [current] } = await db.query(
+      'SELECT id, logo FROM public.orgs WHERE id = $1',
+      [row.id],
+    )
     if (!current)
       return { updated: false, targetPath: newValue || null }
 
@@ -568,7 +522,7 @@ async function updateRowWithRetry(
     const clear = isPlaceholderBare(currentRaw, currentPath)
     const ownedTarget = clear ? '' : targetForOrgLogo(row.id, currentPath)
     const refreshed = await refreshOwnedPathFromBareSource(
-      supabase,
+      db,
       currentPath,
       ownedTarget,
       clear,
@@ -581,20 +535,17 @@ async function updateRowWithRetry(
       targetPath: refreshed.action === 'clear' ? null : refreshed.target,
       action: refreshed.action === 'clear' ? 'clear' : 'copy',
     }
-    const updated = await updateRow(supabase, retryRow, refreshed.target)
+    const updated = await updateRow(db, retryRow, refreshed.target)
     return {
       updated,
       targetPath: refreshed.action === 'clear' ? null : refreshed.target,
     }
   }
 
-  const { data: current, error } = await supabase
-    .from('users')
-    .select('id, image_url')
-    .eq('id', row.id)
-    .maybeSingle()
-  if (error)
-    throw error
+  const { rows: [current] } = await db.query(
+    'SELECT id, image_url FROM public.users WHERE id = $1',
+    [row.id],
+  )
   if (!current)
     return { updated: false, targetPath: newValue || null }
 
@@ -606,7 +557,7 @@ async function updateRowWithRetry(
   const clear = isPlaceholderBare(currentRaw, currentPath)
   const ownedTarget = clear ? '' : targetForUser(row.id, currentPath)
   const refreshed = await refreshOwnedPathFromBareSource(
-    supabase,
+    db,
     currentPath,
     ownedTarget,
     clear,
@@ -619,7 +570,7 @@ async function updateRowWithRetry(
     targetPath: refreshed.action === 'clear' ? null : refreshed.target,
     action: refreshed.action === 'clear' ? 'clear' : 'copy',
   }
-  const updated = await updateRow(supabase, retryRow, refreshed.target)
+  const updated = await updateRow(db, retryRow, refreshed.target)
   return {
     updated,
     targetPath: refreshed.action === 'clear' ? null : refreshed.target,
@@ -627,7 +578,7 @@ async function updateRowWithRetry(
 }
 
 async function processRow(
-  supabase: SupabaseClient,
+  db: pg.Pool,
   row: LegacyRow,
   apply: boolean,
   deleteSource: boolean,
@@ -644,7 +595,7 @@ async function processRow(
         deletedSource: false,
       }
     }
-    const { updated, targetPath } = await updateRowWithRetry(supabase, row, '')
+    const { updated, targetPath } = await updateRowWithRetry(db, row, '')
     let deletedSource = false
     if (updated && deleteSource && bareRefIndex) {
       const remaining = consumeBareReference(bareRefIndex, row.sourcePath)
@@ -678,10 +629,10 @@ async function processRow(
     }
   }
 
-  const sourceExists = await storageObjectExists(supabase, row.sourcePath)
+  const sourceExists = await storageObjectExists(db, row.sourcePath)
   if (!sourceExists) {
     // Object already gone — clear broken pointer so it is not a bare legacy ref.
-    const { updated, targetPath: clearedTarget } = await updateRowWithRetry(supabase, row, '')
+    const { updated, targetPath: clearedTarget } = await updateRowWithRetry(db, row, '')
     if (updated && bareRefIndex)
       consumeBareReference(bareRefIndex, row.sourcePath)
     return {
@@ -694,8 +645,8 @@ async function processRow(
     }
   }
 
-  await copyObject(supabase, row.sourcePath, targetPath)
-  const { updated, targetPath: finalTarget } = await updateRowWithRetry(supabase, row, targetPath)
+  await copyObject(db, row.sourcePath, targetPath)
+  const { updated, targetPath: finalTarget } = await updateRowWithRetry(db, row, targetPath)
   if (!updated) {
     return {
       kind: row.kind,
@@ -744,8 +695,23 @@ async function main() {
 
   const fileEnv = await loadEnv(envFile)
   const env = { ...fileEnv, ...process.env }
-  const supabase = createSupabaseServiceClient(env)
   images = createImageStore(env)
+  const db = await connectAdminDb(env)
+  try {
+    await migrate(db, { apply, concurrency, deleteSource, envFile, limit })
+  }
+  finally {
+    await db.end()
+  }
+}
+
+async function migrate(db: pg.Pool, { apply, concurrency, deleteSource, envFile, limit }: {
+  apply: boolean
+  concurrency: number
+  deleteSource: boolean
+  envFile: string
+  limit: number | null
+}) {
 
   console.log(apply ? 'Mode: APPLY' : 'Mode: DRY RUN')
   console.log(`Env file: ${envFile}`)
@@ -755,13 +721,13 @@ async function main() {
   if (deleteSource)
     console.log('Delete source: yes (when unreferenced)')
 
-  const appRows = await listLegacyApps(supabase, limit)
+  const appRows = await listLegacyApps(db, limit)
   const remainingAfterApps = limit === null ? null : Math.max(0, limit - appRows.length)
-  const orgRows = await listLegacyOrgs(supabase, remainingAfterApps)
+  const orgRows = await listLegacyOrgs(db, remainingAfterApps)
   const remainingAfterOrgs = remainingAfterApps === null
     ? null
     : Math.max(0, remainingAfterApps - orgRows.length)
-  const userRows = await listLegacyUsers(supabase, remainingAfterOrgs)
+  const userRows = await listLegacyUsers(db, remainingAfterOrgs)
 
   const allRows = [...appRows, ...orgRows, ...userRows]
   console.log(`Found legacy bare paths: apps=${appRows.length} orgs=${orgRows.length} users=${userRows.length} total=${allRows.length}`)
@@ -769,7 +735,7 @@ async function main() {
   let bareRefIndex: Map<string, number> | null = null
   if (apply && deleteSource) {
     console.log('Building bare-path reference index (one scan)…')
-    bareRefIndex = await buildBareReferenceIndex(supabase)
+    bareRefIndex = await buildBareReferenceIndex(db)
     console.log(`Indexed ${bareRefIndex.size} distinct bare object keys`)
   }
 
@@ -778,7 +744,7 @@ async function main() {
 
   await asyncPool(concurrency, allRows, async (row) => {
     try {
-      const result = await processRow(supabase, row, apply, deleteSource, bareRefIndex)
+      const result = await processRow(db, row, apply, deleteSource, bareRefIndex)
       results.push(result)
       console.log(`[${result.status}] ${row.kind} ${row.id}: ${row.sourcePath} → ${result.targetPath ?? '(cleared)'}`)
     }

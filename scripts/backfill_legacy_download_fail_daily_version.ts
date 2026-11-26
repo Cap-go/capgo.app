@@ -21,11 +21,12 @@
  *   --concurrency=4
  *   --env-file=./internal/cloudflare/.env.preprod
  */
+import type pg from 'pg'
 import { mkdir, writeFile } from 'node:fs/promises'
 import process from 'node:process'
 import { escapeSqlString } from '../supabase/functions/_backend/utils/cloudflare.ts'
 import { legacyDownloadFailKey, legacyDownloadFailPluginSqlCF, sumLegacyDownloadFails } from '../supabase/functions/_backend/utils/legacyDownloadFail.ts'
-import { asyncPool, createSupabaseServiceClient, DEFAULT_ENV_FILE, getArgValue, getRequiredEnv, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
+import { asyncPool, connectAdminDb, DEFAULT_ENV_FILE, getArgValue, getRequiredEnv, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
 
 const DAY_MS = 86_400_000
 const RETENTION_DAYS = 89
@@ -132,8 +133,16 @@ export async function main() {
 
   const env = { ...process.env, ...(await loadEnv(envFile)) }
   const config = { accountId: getRequiredEnv(env, 'CF_ACCOUNT_ANALYTICS_ID'), token: getRequiredEnv(env, 'CF_ANALYTICS_TOKEN') }
-  const supabase = createSupabaseServiceClient(env)
+  const db = await connectAdminDb(env)
+  try {
+    await backfill(db, config, { apply, appId, concurrency, days })
+  }
+  finally {
+    await db.end()
+  }
+}
 
+async function backfill(db: pg.Pool, config: AnalyticsEngineConfig, { apply, appId, concurrency, days }: { apply: boolean, appId: string | null, concurrency: number, days: number }) {
   // Whole UTC days only: a day cut by retention or still running would be partial.
   const end = startOfUtcDay(new Date())
   const start = new Date(end.getTime() - days * DAY_MS)
@@ -149,18 +158,15 @@ export async function main() {
       const legacy = legacyByApp.get(app)!
       const versionFails = await readVersionFails(config, app, start, end)
       for (let page = 0; ; page++) {
-        const { data, error } = await supabase
-          .from('daily_version')
-          .select('date, version_name, fail')
-          .eq('app_id', app)
-          .gte('date', start.toISOString().slice(0, 10))
-          .lt('date', end.toISOString().slice(0, 10))
-          .order('date')
-          .order('version_name')
-          .range(page * DAILY_VERSION_PAGE_SIZE, (page + 1) * DAILY_VERSION_PAGE_SIZE - 1)
-        if (error)
-          throw error
-        for (const row of data ?? []) {
+        const { rows: data } = await db.query<{ date: string, version_name: string, fail: number | null }>(
+          `SELECT date, version_name, fail
+           FROM public.daily_version
+           WHERE app_id = $1 AND date >= $2 AND date < $3
+           ORDER BY date, version_name
+           LIMIT $4 OFFSET $5`,
+          [app, start.toISOString().slice(0, 10), end.toISOString().slice(0, 10), DAILY_VERSION_PAGE_SIZE, page * DAILY_VERSION_PAGE_SIZE],
+        )
+        for (const row of data) {
           const key = legacyDownloadFailKey(row.date, row.version_name)
           const legacyFails = legacy.get(key)
           const recordedFails = versionFails.get(key)
@@ -173,7 +179,7 @@ export async function main() {
           if (after !== before)
             changes.push({ app_id: app, date: row.date, version_name: row.version_name, before, after })
         }
-        if ((data?.length ?? 0) < DAILY_VERSION_PAGE_SIZE)
+        if (data.length < DAILY_VERSION_PAGE_SIZE)
           break
       }
     }
@@ -184,14 +190,20 @@ export async function main() {
 
   if (apply) {
     // Every changed row exists: an upsert on the primary key only rewrites fail,
-    // one request per batch instead of one per row.
+    // one statement per batch instead of one per row.
     const batches = Array.from({ length: Math.ceil(changes.length / UPDATE_BATCH_SIZE) }, (_, index) => changes.slice(index * UPDATE_BATCH_SIZE, (index + 1) * UPDATE_BATCH_SIZE))
     await asyncPool(concurrency, batches, async (batch) => {
-      const { error } = await supabase
-        .from('daily_version')
-        .upsert(batch.map(change => ({ app_id: change.app_id, date: change.date, version_name: change.version_name, fail: change.after })), { onConflict: 'app_id,date,version_name' })
-      if (error)
-        failures.push({ app_id: batch[0].app_id, error: `batch of ${batch.length} from ${batch[0].date}: ${error.message}` })
+      try {
+        await db.query(
+          `INSERT INTO public.daily_version (app_id, date, version_name, fail)
+           SELECT * FROM unnest($1::varchar[], $2::date[], $3::varchar[], $4::bigint[])
+           ON CONFLICT (app_id, date, version_name) DO UPDATE SET fail = EXCLUDED.fail`,
+          [batch.map(change => change.app_id), batch.map(change => change.date), batch.map(change => change.version_name), batch.map(change => change.after)],
+        )
+      }
+      catch (error) {
+        failures.push({ app_id: batch[0].app_id, error: `batch of ${batch.length} from ${batch[0].date}: ${error instanceof Error ? error.message : String(error)}` })
+      }
     })
   }
 

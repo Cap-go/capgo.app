@@ -1,9 +1,9 @@
 import { chromium } from '@playwright/test'
-import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 import { mkdir, unlink } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import keys from '../configs.json' with { type: 'json' }
+import { signInWithPassword } from './gotrue_password_sign_in.ts'
 
 const baseUrl = process.env.CAPGO_URL || 'http://localhost:5173'
 const email = process.env.CAPGO_EMAIL || 'test@capgo.app'
@@ -32,10 +32,7 @@ const sendCodeLabel = i18n['email-otp-send-code']
 
 await mkdir(outputPath.split('/').slice(0, -1).join('/') || '.', { recursive: true })
 
-const supabase = createClient(supabaseUrl, supabaseAnon)
-const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-if (error || !data.session)
-  throw new Error(error?.message || 'Login failed')
+const session = await signInWithPassword(supabaseUrl, supabaseAnon, email, password)
 
 const browser = await chromium.launch({ headless: true })
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
@@ -92,7 +89,7 @@ await page.evaluate(({ storageKey, session }) => {
     token_type: session.token_type,
     user: session.user,
   }))
-}, { storageKey, session: data.session })
+}, { storageKey, session })
 
 await page.goto(`${baseUrl}/settings/account/manage-2fa`, { waitUntil: 'domcontentloaded' })
 await page.waitForSelector('h2', { timeout: 60000 })

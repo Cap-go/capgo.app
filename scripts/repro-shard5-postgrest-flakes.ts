@@ -13,7 +13,6 @@
  */
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { createClient } from '@supabase/supabase-js'
 import pg from 'pg'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
@@ -32,15 +31,6 @@ const USER_ID = '6aa76066-55ef-4238-ade6-0b32334a4097'
 const PARALLEL = Number(process.env.REPRO_PARALLEL ?? 20)
 const REQUEST_TIMEOUT_MS = Number(process.env.REPRO_TIMEOUT_MS ?? 2000)
 
-const supabase = createClient(SUPABASE_URL, SERVICE_KEY, {
-  auth: { persistSession: false },
-  global: {
-    fetch: (input, init) => fetch(input, {
-      ...init,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    }),
-  },
-})
 const pool = new pg.Pool({ connectionString: DB_URL, max: 10 })
 
 function findPostgrestContainer(): string | null {
@@ -76,15 +66,30 @@ async function cleanupApp(appId: string) {
 
 async function postgrestCreateVersion(appId: string, version: string) {
   try {
-    const { data, error } = await supabase.from('app_versions').upsert({
-      app_id: appId,
-      name: version,
-      owner_org: ORG_ID,
-    }, {
-      onConflict: 'app_id,name',
-    }).select('id,name').single()
-    if (error || !data)
-      return { ok: false as const, error: error?.message ?? 'no data' }
+    // The PostgREST request supabase-js sent for upsert().select('id,name').single().
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/app_versions?on_conflict=app_id,name&select=id,name`, {
+      method: 'POST',
+      headers: {
+        'apikey': SERVICE_KEY!,
+        'Authorization': `Bearer ${SERVICE_KEY}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.pgrst.object+json',
+        'Prefer': 'resolution=merge-duplicates,return=representation',
+      },
+      body: JSON.stringify({ app_id: appId, name: version, owner_org: ORG_ID }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+    const body = await response.text()
+    if (!response.ok) {
+      let message = body || `HTTP ${response.status}`
+      try {
+        message = (JSON.parse(body) as { message?: string }).message ?? message
+      }
+      catch {}
+      return { ok: false as const, error: message }
+    }
+    if (!body)
+      return { ok: false as const, error: 'no data' }
     return { ok: true as const }
   }
   catch (error) {

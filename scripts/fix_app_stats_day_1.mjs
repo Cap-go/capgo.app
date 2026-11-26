@@ -1,56 +1,42 @@
 // Backfill first-day app statistics from stored app versions.
-import { createClient } from '@supabase/supabase-js'
+import { connectScriptDb } from './script_db.ts'
 
-const supabaseUrl = 'https://sb.capgo.app'
-const supabaseAnonKey = '***'
+const databaseUrl = '***'
 
-export function useSupabase() {
-  const options = {
-    // const options: SupabaseClientOptions = {
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
-  }
-  return createClient(supabaseUrl, supabaseAnonKey, options)
-}
-
-async function updateOrAppStats(increment, date_id, user_id) {
-  const supabase = useSupabase()
-  const { data: dataAppStats } = await supabase
-    .from('app_stats')
-    .select()
-    .eq('app_id', increment.app_id)
-    .eq('date_id', date_id)
-    .single()
+async function updateOrAppStats(db, increment, date_id, user_id) {
+  const { rows: [dataAppStats] } = await db.query(
+    'SELECT * FROM public.app_stats WHERE app_id = $1 AND date_id = $2',
+    [increment.app_id, date_id],
+  )
   if (dataAppStats) {
-    const { error } = await supabase
-      .rpc('increment_stats', increment)
-    if (error)
-      console.error('increment_stats', error)
+    await db.query(
+      `SELECT public.increment_stats(app_id => $1, date_id => $2, bandwidth => $3, mlu => $4, mlu_real => $5,
+         devices => $6, version_size => $7, channels => $8, shared => $9, versions => $10)`,
+      [increment.app_id, increment.date_id, increment.bandwidth, increment.mlu, increment.mlu_real,
+        increment.devices, increment.version_size, increment.channels, increment.shared, increment.versions],
+    ).catch(error => console.error('increment_stats', error))
   }
   else {
     const newDay = {
       ...increment,
       user_id,
     }
-    const { error } = await supabase
-      .from ('app_stats')
-      .insert(newDay)
-    if (error)
-      console.error('Cannot create app_stats', error)
+    const columns = Object.keys(newDay)
+    await db.query(
+      `INSERT INTO public.app_stats (${columns.join(', ')}) VALUES (${columns.map((_, index) => `$${index + 1}`).join(', ')})`,
+      Object.values(newDay),
+    ).catch(error => console.error('Cannot create app_stats', error))
   }
 }
 
 async function fix_apps() {
-  const supabase = useSupabase()
+  const db = await connectScriptDb(databaseUrl)
 
-  const { data } = await supabase
-    .from('apps')
-    // .from('apps')
-    .select()
+  const { rows: data } = await db.query('SELECT * FROM public.apps')
 
   if (!data || !data.length) {
     console.error('No apps found')
+    await db.end()
     return
   }
 
@@ -58,14 +44,16 @@ async function fix_apps() {
   for (const app of data) {
     console.log('app', app.app_id)
     if (!app.app_id)
-      return
-    // console.log('app', app.app_id, devices, versions, shared, channels)
-    const { data: versions } = supabase
-      .storage
-      .from('apps')
-      .list(`${app.user_id}/${app.app_id}/versions`)
+      break
+    // Objects directly under the versions folder of the `apps` bucket, like a Storage list.
+    const folder = `${app.user_id}/${app.app_id}/versions`
+    const { rows: versions } = await db.query(
+      `SELECT name, metadata FROM storage.objects
+       WHERE bucket_id = 'apps' AND starts_with(name, $1 || '/') AND strpos(substr(name, length($1) + 2), '/') = 0`,
+      [folder],
+    )
     console.log('versions', versions)
-    const versionSize = versions.data.reduce((acc, cur) => acc + (cur.metadata.size?? 0), 0)?? 0
+    const versionSize = versions.reduce((acc, cur) => acc + (cur.metadata?.size ?? 0), 0)
     if (new Date().getDate() === 1) {
       const today_id = new Date().toISOString().slice(0, 10)
       const increment = {
@@ -80,10 +68,11 @@ async function fix_apps() {
         shared: 0,
         versions: 0,
       }
-      all.push(updateOrAppStats(increment, today_id, app.user_id))
+      all.push(updateOrAppStats(db, increment, today_id, app.user_id))
     }
   }
   await Promise.all(all)
+  await db.end()
 }
 
 fix_apps()

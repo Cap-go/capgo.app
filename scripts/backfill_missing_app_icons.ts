@@ -16,10 +16,11 @@
  *   bun run admin:backfill-missing-app-icons --apply --env-file=./internal/cloudflare/.env.preprod
  */
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
+import type pg from 'pg'
 import { mkdir } from 'node:fs/promises'
 import type { ImageStore } from './admin_image_storage.ts'
 import { createImageStore } from './admin_image_storage.ts'
-import { asyncPool, createSupabaseServiceClient, DEFAULT_ENV_FILE, getArgValue, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
+import { asyncPool, connectAdminDb, DEFAULT_ENV_FILE, getArgValue, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
 
 const DEFAULT_CONCURRENCY = 4
 const DEFAULT_PAGE_SIZE = 1000
@@ -40,7 +41,6 @@ const GOOGLE_IMAGE_HOSTS = new Set([
   'play.googleusercontent.com',
 ])
 
-type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
 // Icons are stored in R2 (S3_* env vars), not Supabase Storage.
 let images: ImageStore
 type AppIconRow = Pick<
@@ -102,7 +102,7 @@ Options:
   --help              Show this help.
 
 Required env:
-  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+  MAIN_SUPABASE_DB_URL (or DATABASE_URL, SUPABASE_DB_URL, SUPABASE_DB_DIRECT_URL)
 `)
 }
 
@@ -387,7 +387,7 @@ async function downloadIcon(iconUrl: string): Promise<DownloadedIcon | null> {
   }
 }
 
-async function storageObjectExists(supabase: SupabaseClient, rawPath: string | null) {
+async function storageObjectExists(db: pg.Pool, rawPath: string | null) {
   if (isExternalIconUrl(rawPath))
     return true
 
@@ -398,27 +398,21 @@ async function storageObjectExists(supabase: SupabaseClient, rawPath: string | n
   return images.exists(path)
 }
 
-async function fetchApps(supabase: SupabaseClient, filters: { appId: string | null, orgId: string | null }) {
+async function fetchApps(db: pg.Pool, filters: { appId: string | null, orgId: string | null }) {
   const rows: AppIconRow[] = []
   let offset = 0
 
   while (true) {
-    let query = supabase
-      .from('apps')
-      .select('android_store_url, app_id, icon_url, ios_store_url, name, owner_org')
-      .order('app_id', { ascending: true })
-      .range(offset, offset + DEFAULT_PAGE_SIZE - 1)
+    const { rows: data } = await db.query<AppIconRow>(
+      `SELECT android_store_url, app_id, icon_url, ios_store_url, name, owner_org
+       FROM public.apps
+       WHERE ($1::text IS NULL OR app_id = $1) AND ($2::uuid IS NULL OR owner_org = $2::uuid)
+       ORDER BY app_id ASC
+       LIMIT $3 OFFSET $4`,
+      [filters.appId, filters.orgId, DEFAULT_PAGE_SIZE, offset],
+    )
 
-    if (filters.appId)
-      query = query.eq('app_id', filters.appId)
-    if (filters.orgId)
-      query = query.eq('owner_org', filters.orgId)
-
-    const { data, error } = await query
-    if (error)
-      throw error
-
-    if (!data?.length)
+    if (!data.length)
       break
 
     rows.push(...data)
@@ -431,7 +425,7 @@ async function fetchApps(supabase: SupabaseClient, filters: { appId: string | nu
   return rows
 }
 
-async function getMissingIconApps(supabase: SupabaseClient, apps: AppIconRow[], verifyStorage: boolean, concurrency: number) {
+async function getMissingIconApps(db: pg.Pool, apps: AppIconRow[], verifyStorage: boolean, concurrency: number) {
   if (!verifyStorage)
     return apps.filter(app => isDefaultIcon(app.icon_url))
 
@@ -442,7 +436,7 @@ async function getMissingIconApps(supabase: SupabaseClient, apps: AppIconRow[], 
       return
     }
 
-    const exists = await storageObjectExists(supabase, app.icon_url)
+    const exists = await storageObjectExists(db, app.icon_url)
     if (!exists)
       missing.push(app)
   })
@@ -450,16 +444,14 @@ async function getMissingIconApps(supabase: SupabaseClient, apps: AppIconRow[], 
   return missing
 }
 
-async function ensureStillMissingIcon(supabase: SupabaseClient, app: AppIconRow, verifyStorage: boolean) {
-  const { data, error } = await supabase
-    .from('apps')
-    .select('android_store_url, app_id, icon_url, ios_store_url, name, owner_org')
-    .eq('app_id', app.app_id)
-    .eq('owner_org', app.owner_org)
-    .maybeSingle()
+async function ensureStillMissingIcon(db: pg.Pool, app: AppIconRow, verifyStorage: boolean) {
+  const { rows: [data] } = await db.query<AppIconRow>(
+    `SELECT android_store_url, app_id, icon_url, ios_store_url, name, owner_org
+     FROM public.apps
+     WHERE app_id = $1 AND owner_org = $2`,
+    [app.app_id, app.owner_org],
+  )
 
-  if (error)
-    throw error
   if (!data)
     return false
   if (isDefaultIcon(data.icon_url))
@@ -467,11 +459,11 @@ async function ensureStillMissingIcon(supabase: SupabaseClient, app: AppIconRow,
   if (!verifyStorage)
     return false
 
-  return !(await storageObjectExists(supabase, data.icon_url))
+  return !(await storageObjectExists(db, data.icon_url))
 }
 
-async function applyIcon(supabase: SupabaseClient, app: AppIconRow, candidate: StoreIconCandidate, icon: DownloadedIcon, verifyStorage: boolean) {
-  if (!(await ensureStillMissingIcon(supabase, app, verifyStorage)))
+async function applyIcon(db: pg.Pool, app: AppIconRow, candidate: StoreIconCandidate, icon: DownloadedIcon, verifyStorage: boolean) {
+  if (!(await ensureStillMissingIcon(db, app, verifyStorage)))
     return null
 
   const storagePath = getAppIconStoragePath(app.owner_org, app.app_id)
@@ -480,16 +472,12 @@ async function applyIcon(supabase: SupabaseClient, app: AppIconRow, candidate: S
     upsert: true,
   })
 
-  const { data, error: updateError } = await supabase
-    .from('apps')
-    .update({ icon_url: storagePath })
-    .eq('app_id', app.app_id)
-    .eq('owner_org', app.owner_org)
-    .select('app_id')
+  const { rowCount } = await db.query(
+    'UPDATE public.apps SET icon_url = $1 WHERE app_id = $2 AND owner_org = $3',
+    [storagePath, app.app_id, app.owner_org],
+  )
 
-  if (updateError)
-    throw updateError
-  if (!data?.length)
+  if (!rowCount)
     throw new Error('App row disappeared before update')
 
   return {
@@ -503,7 +491,7 @@ async function applyIcon(supabase: SupabaseClient, app: AppIconRow, candidate: S
   } satisfies BackfillResult
 }
 
-async function processApp(supabase: SupabaseClient, app: AppIconRow, apply: boolean, verifyStorage: boolean) {
+async function processApp(db: pg.Pool, app: AppIconRow, apply: boolean, verifyStorage: boolean) {
   const candidate = await findStoreIcon(app)
   if (!candidate)
     throw new Error('No matching store icon found')
@@ -525,7 +513,7 @@ async function processApp(supabase: SupabaseClient, app: AppIconRow, apply: bool
     } satisfies BackfillResult
   }
 
-  return applyIcon(supabase, app, candidate, icon, verifyStorage)
+  return applyIcon(db, app, candidate, icon, verifyStorage)
 }
 
 async function main() {
@@ -548,10 +536,27 @@ async function main() {
     ...fileEnv,
     ...Bun.env,
   }
-  const supabase = createSupabaseServiceClient(env)
   images = createImageStore(env)
-  const apps = await fetchApps(supabase, { appId, orgId })
-  const missingApps = await getMissingIconApps(supabase, apps, verifyStorage, concurrency)
+  const db = await connectAdminDb(env)
+  try {
+    await backfill(db, { apply, appId, concurrency, envFile, orgId, parsedLimit, verifyStorage })
+  }
+  finally {
+    await db.end()
+  }
+}
+
+async function backfill(db: pg.Pool, { apply, appId, concurrency, envFile, orgId, parsedLimit, verifyStorage }: {
+  apply: boolean
+  appId: string | null
+  concurrency: number
+  envFile: string
+  orgId: string | null
+  parsedLimit: number | null
+  verifyStorage: boolean
+}) {
+  const apps = await fetchApps(db, { appId, orgId })
+  const missingApps = await getMissingIconApps(db, apps, verifyStorage, concurrency)
   const targetApps = parsedLimit === null ? missingApps : missingApps.slice(0, parsedLimit)
   const failures: BackfillFailure[] = []
   const results: BackfillResult[] = []
@@ -572,7 +577,7 @@ async function main() {
 
   await asyncPool(concurrency, targetApps, async (app) => {
     try {
-      const result = await processApp(supabase, app, apply, verifyStorage)
+      const result = await processApp(db, app, apply, verifyStorage)
       if (!result) {
         skippedAfterRecheck++
         return

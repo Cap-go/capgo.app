@@ -1,7 +1,7 @@
-import { createClient } from '@supabase/supabase-js'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from '@playwright/test'
+import { signInWithPassword } from './gotrue_password_sign_in.ts'
 
 const baseUrl = process.env.BASE_URL || 'http://127.0.0.1:5173/'
 const outDir = '/opt/cursor/artifacts/screenshots'
@@ -23,15 +23,12 @@ async function login(page: import('@playwright/test').Page) {
 }
 
 async function ensureLocalAuth() {
-  const supabase = createClient(supabaseUrl, supabaseAnon, {
-    auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
-  })
-  const { error } = await supabase.auth.signInWithPassword({
-    email: 'test@capgo.app',
-    password: 'testtest',
-  })
-  if (error)
-    throw new Error(`Local auth failed: ${error.message}`)
+  try {
+    await signInWithPassword(supabaseUrl, supabaseAnon, 'test@capgo.app', 'testtest')
+  }
+  catch (error) {
+    throw new Error(`Local auth failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 async function main() {

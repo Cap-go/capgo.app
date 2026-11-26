@@ -15,14 +15,13 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import process from 'node:process'
-import { createSupabaseServiceClient, DEFAULT_ENV_FILE, getArgValue, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
+import type pg from 'pg'
+import { connectAdminDb, DEFAULT_ENV_FILE, getArgValue, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
 
 const DEFAULT_PAGE_SIZE = 100
 const DEFAULT_DELAY_MS = 100
 const DEFAULT_REPORT_FILE = './tmp/github_user_id_backfill_report.json'
 const GITHUB_API_URL = 'https://api.github.com'
-
-type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
 
 interface CandidateUser {
   github_id: number | null
@@ -69,7 +68,7 @@ Options:
   --help                  Show this help.
 
 Required env:
-  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+  MAIN_SUPABASE_DB_URL (or DATABASE_URL, SUPABASE_DB_URL, SUPABASE_DB_DIRECT_URL)
 
 Optional env:
   GITHUB_TOKEN             Raises GitHub's API rate limit from 60 to 5,000 requests/hour.
@@ -125,37 +124,40 @@ async function lookupGitHubUser(username: string, token: string | null): Promise
   return { id: data.id, login: data.login }
 }
 
-async function getCandidatePage(client: SupabaseClient, cursor: string | null, pageSize: number) {
-  let query = client
-    .from('users')
-    .select('id, github_username, github_id')
-    .not('github_username', 'is', null)
-    .is('github_id', null)
-    .order('id', { ascending: true })
-    .limit(pageSize)
-
-  if (cursor)
-    query = query.gt('id', cursor)
-
-  const { data, error } = await query
-  if (error)
-    throw new Error(`Failed to load candidates: ${error.message}`)
-  return (data ?? []) as CandidateUser[]
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
 }
 
-async function updateGithubId(client: SupabaseClient, candidate: CandidateUser, githubId: number) {
-  const { data, error } = await client
-    .from('users')
-    .update({ github_id: githubId })
-    .eq('id', candidate.id)
-    .eq('github_username', candidate.github_username!)
-    .is('github_id', null)
-    .select('id')
-    .maybeSingle()
+async function getCandidatePage(client: pg.Pool, cursor: string | null, pageSize: number) {
+  try {
+    const { rows } = await client.query<CandidateUser>(
+      `SELECT id, github_username, github_id
+       FROM public.users
+       WHERE github_username IS NOT NULL AND github_id IS NULL
+         AND ($1::uuid IS NULL OR id > $1::uuid)
+       ORDER BY id ASC
+       LIMIT $2`,
+      [cursor, pageSize],
+    )
+    return rows
+  }
+  catch (error) {
+    throw new Error(`Failed to load candidates: ${errorMessage(error)}`)
+  }
+}
 
-  if (error)
-    throw new Error(`Failed to update ${candidate.id}: ${error.message}`)
-  return !!data
+async function updateGithubId(client: pg.Pool, candidate: CandidateUser, githubId: number) {
+  try {
+    const { rowCount } = await client.query(
+      `UPDATE public.users SET github_id = $1
+       WHERE id = $2 AND github_username = $3 AND github_id IS NULL`,
+      [githubId, candidate.id, candidate.github_username],
+    )
+    return (rowCount ?? 0) > 0
+  }
+  catch (error) {
+    throw new Error(`Failed to update ${candidate.id}: ${errorMessage(error)}`)
+  }
 }
 
 async function writeReport(filePath: string, report: unknown) {
@@ -177,8 +179,23 @@ async function main() {
   const limit = parsePositiveInteger(getArgValue(args, '--limit'), '--limit', Number.MAX_SAFE_INTEGER)
   const delayMs = parseNonNegativeInteger(getArgValue(args, '--delay-ms'), '--delay-ms', DEFAULT_DELAY_MS)
   const env = { ...await loadEnv(envFile), ...process.env }
-  const client = createSupabaseServiceClient(env)
-  const githubToken = getGitHubToken(env)
+  const client = await connectAdminDb(env)
+  try {
+    await backfill(client, { apply, cursor, delayMs, limit, reportFile, githubToken: getGitHubToken(env) })
+  }
+  finally {
+    await client.end()
+  }
+}
+
+async function backfill(client: pg.Pool, { apply, cursor, delayMs, limit, reportFile, githubToken }: {
+  apply: boolean
+  cursor: string | null
+  delayMs: number
+  githubToken: string | null
+  limit: number
+  reportFile: string
+}) {
   const failures: BackfillFailure[] = []
   const notFound: BackfillNotFound[] = []
   const results: BackfillResult[] = []
