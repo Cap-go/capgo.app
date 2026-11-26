@@ -1,10 +1,11 @@
 import type { OptionsBase } from '../src/schemas/base'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import process from 'node:process'
 import { expect, test } from 'bun:test'
 import { describePrewarmRegion, prewarmApp } from '../src/app/prewarm'
+import { withCwd } from '../src/build/cwd'
+import { getConfig } from '../src/utils'
 
 const base = { region: 'na', placement: 'remote-CMH', revision: '7', cached: 0, skipped: null, error: null }
 
@@ -29,14 +30,16 @@ test('prewarms an explicit app id outside a Capacitor project', async () => {
       return Response.json({ app_id: 'com.example.prewarm', regions: [{ ...base, cached: 2 }] })
     },
   })
-  const cwd = process.cwd()
-  const dir = mkdtempSync(join(tmpdir(), 'capgo-prewarm-'))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'capgo-prewarm-')))
   try {
-    process.chdir(dir)
-    await prewarmApp('com.example.prewarm', { apikey: 'test-key', apiHost: server.url.origin } as OptionsBase)
+    await withCwd(dir, async () => {
+      // Capacitor looks for a config in parent folders too: a temp folder inside
+      // a project would let a regression that still loads the config pass.
+      await expect(getConfig(true)).rejects.toThrow()
+      await prewarmApp('com.example.prewarm', { apikey: 'test-key', apiHost: server.url.origin } as OptionsBase)
+    })
   }
   finally {
-    process.chdir(cwd)
     rmSync(dir, { recursive: true, force: true })
     server.stop(true)
   }

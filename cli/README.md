@@ -884,7 +884,7 @@ npx @capgo/cli@latest app prewarm
 ```
 
 🔥 Load your app's live update state into every Capgo plugin region now.
-Each region keeps a cache of your app's channels and bundles; until it fills, the first device requests after a change are slower. Uploads and channel changes already prewarm automatically; use this to warm regions on demand, for example right before a release reaches users. Requires the app.upload_bundle permission for the app.
+Each region keeps a cache of your app's channels and bundles; until it fills, the first device requests after a change are slower. Uploads and channel changes already prewarm automatically; use this to warm regions on demand, for example right before a release reaches users. Pass the app id to run it outside a Capacitor project, for example from CI. Requires the app.upload_bundle permission for the app.
 
 **Example:**
 

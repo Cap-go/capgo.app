@@ -156,8 +156,8 @@ the device keys.
 
 The database wakes the purge queue's drain (`triggers/updates_cache_purge.ts`)
 at `SUPABASE_URL`, so in production it mostly runs as a Supabase function. That
-runtime has no `ENV_NAME`, so no regions: after it purges a `plugin_state`
-batch, it posts the batch's app ids to the API worker
+runtime has no `ENV_NAME` and no `PLUGIN_REGION_TARGETS`, so no regions: after
+it purges a `plugin_state` batch, it posts the batch's app ids to the API worker
 (`CLOUDFLARE_FUNCTION_URL` + `/triggers/updates_cache_purge/prewarm`, with the
 API secret and `redirect: 'manual'`). The API worker runs the fan-out below
 with its own environment and never forwards it again. Cloudflare workers and
