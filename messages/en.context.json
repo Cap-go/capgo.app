@@ -5056,5 +5056,11 @@
   "serving-region-status-checking": "Plain customer-facing status for saved regional settings. Distinguish unsaved changes, checking, applying, confirmed up-to-date, and unable to confirm. Never tell the customer to publish, deploy or activate a policy.",
   "serving-region-status-unsaved": "Plain customer-facing status for saved regional settings. Distinguish unsaved changes, checking, applying, confirmed up-to-date, and unable to confirm. Never tell the customer to publish, deploy or activate a policy.",
   "custom-domain-verifying": "Status displayed while the custom domain and certificate are still being verified automatically. Do not promise a fixed completion time.",
-  "serving-region-save-error": "Customer-facing error when regional settings fail to save. Keep this short and do not expose database errors or internal publication details."
+  "serving-region-save-error": "Customer-facing error when regional settings fail to save. Keep this short and do not expose database errors or internal publication details.",
+  "build-variant-label": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "build-variant-any": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "build-variant-help": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "build-variant-linux": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "build-variant-offline": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "build-variant-default": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

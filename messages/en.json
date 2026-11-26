@@ -4801,5 +4801,11 @@
   "serving-region-save-error": "Couldn't save these changes. Please try again.",
   "cannot-update-min-version": "Cannot update the minimal update version",
   "min-update-version-placeholder": "e.g. 1.0.0",
-  "min-update-version-required": "Minimal update version cannot be empty, kept the current value"
+  "min-update-version-required": "Minimal update version cannot be empty, kept the current value",
+  "build-variant-label": "Xcode version",
+  "build-variant-any": "Any available machine (recommended)",
+  "build-variant-help": "Live list of the Xcode versions on Capgo build machines. Pick one only if your app needs it.",
+  "build-variant-linux": "Linux builder",
+  "build-variant-offline": "offline",
+  "build-variant-default": "default"
 }

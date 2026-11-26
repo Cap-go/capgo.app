@@ -19,6 +19,7 @@ import BuildLiveProgress from '~/components/dashboard/BuildLiveProgress.vue'
 import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'
 import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { buildChinaConsoleCliApiHostArg } from '~/services/consoleApiHost'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
@@ -36,6 +37,17 @@ interface Step {
   command?: string
   subtitle: string
   icon: Component
+}
+
+/** One macOS / Xcode combination from GET /build/variants (live from the builder). */
+interface BuildVariant {
+  id: string
+  xcode_version: string
+  macos_version: string | null
+  backend: 'mac' | 'linux'
+  runners: number
+  online: number
+  default: boolean
 }
 
 interface PlatformBuildCounts {
@@ -121,10 +133,40 @@ const setupStep = computed<Step>(() => {
   }
 })
 
+// Xcode variants the build machines report right now; '' = no pin (any available machine).
+const buildVariants = ref<BuildVariant[]>([])
+const selectedXcodeVersion = ref('')
+const xcodeChoices = computed(() => {
+  const byXcode = new Map<string, BuildVariant[]>()
+  for (const variant of buildVariants.value)
+    byXcode.set(variant.xcode_version, [...(byXcode.get(variant.xcode_version) ?? []), variant])
+  return [...byXcode.entries()].map(([xcodeVersion, variants]) => ({
+    xcodeVersion,
+    label: [
+      `Xcode ${xcodeVersion}`,
+      variants.map(variant => variant.backend === 'linux' ? t('build-variant-linux') : variant.macos_version ? `macOS ${variant.macos_version}` : 'macOS').join(', '),
+      variants.some(variant => variant.online > 0) ? '' : t('build-variant-offline'),
+      variants.some(variant => variant.default) ? t('build-variant-default') : '',
+    ].filter(Boolean).join(' · '),
+  }))
+})
+
+async function loadBuildVariants() {
+  const { data, error } = await invokeCapgoApi<{ variants?: BuildVariant[] }>('build/variants?platform=ios', { method: 'GET', retries: 0 })
+  if (error || !Array.isArray(data?.variants))
+    return
+  buildVariants.value = data.variants
+  if (selectedXcodeVersion.value && !data.variants.some(variant => variant.xcode_version === selectedXcodeVersion.value))
+    selectedXcodeVersion.value = ''
+}
+loadBuildVariants()
+
+const xcodeVersionArg = computed(() => selectedPlatform.value === 'ios' && selectedXcodeVersion.value ? ` --xcode-version ${selectedXcodeVersion.value}` : '')
+
 const requestStep = computed<Step>(() => ({
   key: 'request-build',
   title: t('build-step-request-build'),
-  command: `npx @capgo/cli@latest build request ${props.appId} -a ${apiKey.value} --platform ${selectedPlatform.value}${localCommand}`,
+  command: `npx @capgo/cli@latest build request ${props.appId} -a ${apiKey.value} --platform ${selectedPlatform.value}${xcodeVersionArg.value}${localCommand}`,
   subtitle: t('build-step-request-subtitle-platform', { platform: selectedPlatformLabel.value }),
   icon: IconTerminal,
 }))
@@ -504,6 +546,29 @@ onUnmounted(() => {
                   {{ i + 1 }} / {{ steps.length }}
                 </span>
               </div>
+
+              <label
+                v-if="s.key === 'request-build' && selectedPlatform === 'ios' && xcodeChoices.length > 0"
+                class="mt-4 block text-sm font-medium text-slate-700 dark:text-slate-200"
+                data-test="build-xcode-variant"
+              >
+                {{ t('build-variant-label') }}
+                <select
+                  v-model="selectedXcodeVersion"
+                  class="d-select mt-1 w-full rounded-lg border-slate-300 bg-white text-slate-950 dark:border-white/20 dark:bg-slate-900 dark:text-white"
+                  :disabled="step !== i"
+                >
+                  <option value="">
+                    {{ t('build-variant-any') }}
+                  </option>
+                  <option v-for="choice in xcodeChoices" :key="choice.xcodeVersion" :value="choice.xcodeVersion">
+                    {{ choice.label }}
+                  </option>
+                </select>
+                <span class="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
+                  {{ t('build-variant-help') }}
+                </span>
+              </label>
 
               <button
                 v-if="s.command"
