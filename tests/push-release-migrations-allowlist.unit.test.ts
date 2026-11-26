@@ -1,4 +1,8 @@
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 /**
@@ -44,5 +48,47 @@ describe('push-release-migrations out-of-order allowlist', () => {
     expect(pushes).toHaveLength(3)
     for (const push of pushes)
       expect(push).toContain('--db-url "$DATABASE_URL"')
+  })
+
+  function runWithPending(pending: string) {
+    const dir = mkdtempSync(join(tmpdir(), 'push-release-'))
+    try {
+      const fake = join(dir, 'supabase')
+      writeFileSync(fake, `#!/usr/bin/env bash
+if [[ " $* " == *" --dry-run "* ]]; then
+  printf 'Found local migration files to be inserted before the last migration on remote database.\\n\\nRerun the command with --include-all flag to apply these migrations:\\n%s\\n' "$FAKE_PENDING" >&2
+  exit 1
+fi
+echo "PUSH $*"
+`)
+      chmodSync(fake, 0o755)
+      const script = fileURLToPath(new URL('../scripts/push-release-migrations.sh', import.meta.url))
+      return spawnSync('bash', [script], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, DATABASE_URL: 'postgres://stub', FAKE_PENDING: pending },
+      })
+    }
+    finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('pushes with --include-all when only the no-op 20261120001201 is out of order', () => {
+    const result = runWithPending('supabase/migrations/20261120001201_storage_gb_hours_billing.sql')
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('PUSH db push --db-url postgres://stub --include-all')
+  })
+
+  it('stops with the repair step instead of replaying 20261117152120 over 20261120001201', () => {
+    const result = runWithPending('supabase/migrations/20261117152120_storage_gb_hours_billing.sql')
+    expect(result.status).toBe(1)
+    expect(result.stdout).not.toContain('PUSH')
+    expect(result.stderr).toContain('supabase migration repair --db-url "$DATABASE_URL" --status applied 20261117152120')
+  })
+
+  it('still rejects any other out-of-order migration', () => {
+    const result = runWithPending('supabase/migrations/20261121000000_other.sql')
+    expect(result.status).toBe(1)
+    expect(result.stdout).not.toContain('PUSH')
   })
 })

@@ -24,6 +24,14 @@ while read -r migration; do
     supabase/migrations/20261117032322_simulator_idle_stop.sql|\
     supabase/migrations/20261120001201_storage_gb_hours_billing.sql)
       found=true ;;
+    */20261117152120_storage_gb_hours_billing.sql)
+      # A database that recorded the atomic 20261120001201 from #4190 but not
+      # 20261117152120 already has the same schema (identical statements).
+      # Replaying the non-atomic 152120 SQL there is not safe to do blindly,
+      # so stop with the exact owner step instead of pushing.
+      echo '::error::20261117152120 is pending but its schema came from 20261120001201 (#4190).' >&2
+      echo '::error::After checking the schema, record it without replaying: supabase migration repair --db-url "$DATABASE_URL" --status applied 20261117152120' >&2
+      exit 1 ;;
     *) exit 1 ;;
   esac
 done <<< "${plan#*"$marker"}"
