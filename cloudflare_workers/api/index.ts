@@ -126,6 +126,7 @@ import { app as webhook_dispatcher } from '../../supabase/functions/_backend/tri
 import { BRES, createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
 import { flushQueuedPluginNotifications } from '../../supabase/functions/_backend/utils/plugin_notification_flush.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
+import { chinaBuildLogsDirectProxy } from './china_build_logs_direct_proxy.ts'
 import { processApiQueueBatch } from './queue.ts'
 import { QUEUE_DISPATCHER_NAME } from './queue_dispatcher.ts'
 import { app as send_email } from './triggers/send_email.ts'
@@ -143,6 +144,7 @@ function getExecutionContext(c: Context): Context['executionCtx'] | undefined {
 // Public API
 const functionName = 'api'
 const app = createHono(functionName, version)
+app.use('*', chinaBuildLogsDirectProxy)
 const functionNameScheduled = 'api-scheduled'
 const appScheduled = createHono(functionNameScheduled, version)
 app.route('/ok', ok)
