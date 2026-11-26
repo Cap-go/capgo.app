@@ -10,7 +10,7 @@ import { requestId } from 'hono/request-id'
 import { Hono } from 'hono/tiny'
 import { cloudlog } from './logging.ts'
 import { onError } from './on_error.ts'
-import { collectConsoleWebOrigins } from '../../utils/console_web_origins.ts'
+import { collectConsoleWebOrigins } from './console_web_origins.ts'
 import { getEnv } from './utils.ts'
 
 import { version as CapgoVersion } from './version.ts'

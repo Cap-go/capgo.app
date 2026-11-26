@@ -81,7 +81,7 @@ export const i18n = createI18n({
   },
 })
 
-const loadedLanguages = new Set<string>([FALLBACK_LOCALE, 'zh-cn'])
+const loadedLanguages = new Set<string>([FALLBACK_LOCALE])
 // Last locale asked for; a late response for another locale must not take its cache slot.
 let requestedLanguage: string = FALLBACK_LOCALE
 const pendingLanguageLoads = new Map<string, Promise<MessageCatalog | null>>()
