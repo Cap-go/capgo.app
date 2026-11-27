@@ -340,6 +340,13 @@ async function storeBuildCredentials(c: Context, input: {
   let normalized: CredentialRecord
   try {
     normalized = normalizeCredentialValues(platform, { ...base, ...incoming })
+    // The console edits the main profile. Preserve extension profiles in the same version-checked write.
+    if (actor.apikeyId === null && mode === 'merge' && base.CAPGO_IOS_PROVISIONING_MAP && incoming.CAPGO_IOS_PROVISIONING_MAP) {
+      normalized.CAPGO_IOS_PROVISIONING_MAP = JSON.stringify({
+        ...JSON.parse(base.CAPGO_IOS_PROVISIONING_MAP),
+        ...JSON.parse(normalized.CAPGO_IOS_PROVISIONING_MAP!),
+      })
+    }
   }
   catch (error) {
     asValidationError(error)

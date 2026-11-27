@@ -89,7 +89,7 @@ async function save(event: SubmitEvent) {
     </summary>
     <label class="mt-4 block">
       {{ t('platform') }}
-      <select v-model="platform" class="select select-bordered" :disabled="busy" @change="feedback = ''">
+      <select v-model="platform" class="d-select d-select-bordered" :disabled="busy" @change="feedback = ''">
         <option value="ios">iOS</option>
         <option value="android">Android</option>
       </select>
@@ -98,10 +98,10 @@ async function save(event: SubmitEvent) {
       <fieldset :disabled="busy" class="grid gap-3 py-4">
         <label v-for="[key, type, label] in fields[platform]" :key="key" class="grid gap-1">
           {{ t(label) }}
-          <input v-if="type.startsWith('.')" :name="key" type="file" :accept="type" class="file-input file-input-bordered">
-          <input v-else :name="key" :type="type" class="input input-bordered">
+          <input v-if="type.startsWith('.')" :name="key" type="file" :accept="type" class="d-file-input d-file-input-bordered">
+          <input v-else :name="key" :type="type" class="d-input d-input-bordered">
         </label>
-        <button type="submit" class="btn btn-primary justify-self-start">
+        <button type="submit" class="d-btn d-btn-primary justify-self-start">
           {{ t('save') }}
         </button>
       </fieldset>
