@@ -3,6 +3,7 @@ import { createMcpApp } from '../supabase/functions/_backend/mcp/index.ts'
 
 const mocks = vi.hoisted(() => ({
   track: vi.fn(),
+  batch: vi.fn(),
   query: vi.fn(),
 }))
 vi.mock('../supabase/functions/_backend/utils/rate_limit.ts', () => ({ isIPRateLimited: async () => ({ limited: false }), recordFailedAuth: async () => {} }))
@@ -15,7 +16,7 @@ vi.mock('../supabase/functions/_backend/mcp/oauth_shared.ts', async original => 
   withPg: async (_c: unknown, fn: (pg: unknown) => unknown) => fn({ query: mocks.query }),
 }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', async original => ({ ...await original<typeof import('../supabase/functions/_backend/utils/utils.ts')>(), backgroundTask: async (_c: unknown, task: unknown) => await task }))
-vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: mocks.track }))
+vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: mocks.track, trackPosthogEventBatch: mocks.batch }))
 
 const app = createMcpApp(() => new Response('{}'))
 const post = (body: unknown) => app.request('/mcp', { method: 'POST', headers: { 'authorization': 'Bearer key', 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -23,6 +24,7 @@ const post = (body: unknown) => app.request('/mcp', { method: 'POST', headers: {
 describe('hosted MCP tool tracking route', () => {
   beforeEach(() => {
     mocks.track.mockReset()
+    mocks.batch.mockReset()
     mocks.query.mockReset()
   })
 
@@ -32,6 +34,12 @@ describe('hosted MCP tool tracking route', () => {
     expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining('mcp_oauth_requests'), [7])
     expect(mocks.track).toHaveBeenCalledTimes(1)
     expect(mocks.track.mock.calls[0][1]).toMatchObject({ event: 'Hosted MCP Tool Invoked', user_id: 'user-1', nonPersonTags: { tool_name: 'capgo_nope', success: false, client: 'Claude' } })
+    expect(mocks.batch).toHaveBeenCalledTimes(1)
+    const [analytics] = mocks.batch.mock.calls[0][1]
+    expect(mocks.batch.mock.calls[0][1]).toHaveLength(1)
+    // Unknown tool names are bucketed so client typos cannot explode the property's cardinality.
+    expect(analytics).toMatchObject({ event: '$mcp_tool_call', user_id: 'user-1', nonPersonTags: { $mcp_source: 'posthog_mcp_analytics', $mcp_tool_name: 'unknown', $mcp_is_error: true, $mcp_client_name: 'Claude' } })
+    expect(typeof analytics.nonPersonTags.$mcp_duration_ms).toBe('number')
   })
 
   it('reports a pasted key as api_key and skips notifications', async () => {
@@ -42,6 +50,7 @@ describe('hosted MCP tool tracking route', () => {
     ])
     expect(mocks.track).toHaveBeenCalledTimes(1)
     expect(mocks.track.mock.calls[0][1].nonPersonTags.client).toBe('api_key')
+    expect(mocks.batch.mock.calls[0][1].map((event: { event: string }) => event.event)).toEqual(['$mcp_tool_call'])
   })
 
   it('sends nothing when no tool ran', async () => {
@@ -52,6 +61,7 @@ describe('hosted MCP tool tracking route', () => {
     ])
     expect(mocks.query).not.toHaveBeenCalled()
     expect(mocks.track).not.toHaveBeenCalled()
+    expect(mocks.batch).not.toHaveBeenCalled()
   })
 })
 

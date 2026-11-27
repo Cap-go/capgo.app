@@ -54,8 +54,8 @@ export async function prewarmApp(appId: string | undefined, options: OptionsBase
   const apikey = options.apikey || findSavedKey()
   if (!apikey)
     fail('Missing API key, you need to provide an API key to prewarm your app')
-  const extConfig = await getConfig()
-  const resolvedAppId = getAppId(appId, extConfig?.config)
+  // An explicit app id needs no Capacitor project (CI, a server, another folder).
+  const resolvedAppId = appId || getAppId(undefined, (await getConfig())?.config)
   if (!resolvedAppId)
     fail('Missing argument, you need to provide an appId, or be in a capacitor project')
 

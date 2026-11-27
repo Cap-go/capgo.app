@@ -6,6 +6,7 @@
 
 import type { Context } from 'hono'
 import type { PluginRegion } from './pluginRegionTargets.ts'
+import { getRuntimeKey } from 'hono/adapter'
 import { PREWARM_CALL_TIMEOUT_MS, PREWARM_MAX_APPS } from '../plugin_runtime/utils/pluginStatePrewarmLimits.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getConfiguredPluginRegions, PLUGIN_REGIONS } from './pluginRegionTargets.ts'
@@ -165,13 +166,66 @@ function regionFailure(region: RegionPrewarmResult) {
   return `${region.region}:${region.error}${status}`
 }
 
+/** Route of the API worker that runs a forwarded prewarm (triggers/updates_cache_purge.ts). */
+const PREWARM_FORWARD_PATH = '/triggers/updates_cache_purge/prewarm'
+const PREWARM_FORWARD_TIMEOUT_MS = 5000
+
+/**
+ * Where a runtime without regions hands its prewarm. The database wakes the
+ * purge drain at SUPABASE_URL, so in production it mostly runs as a Supabase
+ * function, which has no ENV_NAME and so no regions: it forwards the apps to
+ * the Cloudflare API worker (CLOUDFLARE_FUNCTION_URL), which prewarms with its
+ * own environment. Cloudflare workers never forward (their ENV_NAME decides),
+ * nor does a runtime with explicit PLUGIN_REGION_TARGETS, even invalid ones.
+ */
+export function pluginStatePrewarmForwardUrl(c: Context) {
+  if (getRuntimeKey() === 'workerd' || existInEnv(c, 'PLUGIN_REGION_TARGETS'))
+    return null
+  const base = getEnv(c, 'CLOUDFLARE_FUNCTION_URL')
+  return base ? `${base.replace(/\/$/, '')}${PREWARM_FORWARD_PATH}` : null
+}
+
+async function forwardPluginStatePrewarm(c: Context, url: string, appIds: string[]) {
+  const secret = getEnv(c, 'API_SECRET')
+  if (!secret) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'plugin state prewarm forward failed', error: 'API_SECRET is not set' })
+    return
+  }
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'apisecret': secret, 'content-type': 'application/json' },
+      body: JSON.stringify({ app_ids: appIds }),
+      signal: AbortSignal.timeout(PREWARM_FORWARD_TIMEOUT_MS),
+      // Never follow a redirect: it would carry the API secret to another origin.
+      redirect: 'manual',
+    })
+    void response.body?.cancel().catch(() => undefined)
+    if (response.ok)
+      cloudlog({ requestId: c.get('requestId'), message: 'plugin state prewarm forwarded', apps: appIds.length })
+    else
+      cloudlogErr({ requestId: c.get('requestId'), message: 'plugin state prewarm forward failed', status: response.status })
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'plugin state prewarm forward failed', error: serializeError(error) })
+  }
+}
+
 /**
  * Background prewarm after a successful plugin state purge. Never delays or
- * fails the purge drain; outcomes are only logged.
+ * fails the purge drain; outcomes are only logged. A runtime without regions
+ * forwards the apps to the API worker, unless `forward` is false (the API
+ * worker's route for forwarded prewarms), so a prewarm is forwarded at most once.
  */
-export function schedulePluginStatePrewarm(c: Context, appIds: string[], delayMs = PREWARM_AFTER_PURGE_DELAY_MS) {
-  if (!appIds.length || !pluginStatePrewarmTargets(c).length)
+export function schedulePluginStatePrewarm(c: Context, appIds: string[], delayMs = PREWARM_AFTER_PURGE_DELAY_MS, forward = true) {
+  if (!appIds.length)
     return
+  if (!pluginStatePrewarmTargets(c).length) {
+    const url = forward ? pluginStatePrewarmForwardUrl(c) : null
+    if (url)
+      void backgroundTask(c, forwardPluginStatePrewarm(c, url, [...new Set(appIds)]))
+    return
+  }
   const run = new Promise(resolve => setTimeout(resolve, delayMs))
     .then(() => prewarmPluginStateRegions(c, appIds))
     .then((regions) => {

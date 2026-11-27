@@ -13,7 +13,6 @@ import { syncSubscriptionData } from './stripe.ts'
 import {
   getCurrentPlanNameOrg,
   getOrgExtraMau,
-  getPlanUsageAndFit,
   getPlanUsageAndFitUncached,
   getPlanUsagePercent,
   getTotalStats,
@@ -563,14 +562,6 @@ export async function handleTrialOrg(c: Context, orgId: string, org: any, drizzl
   return false // Not a trial
 }
 
-// Calculate plan status and usage
-export async function calculatePlanStatus(c: Context, orgId: string) {
-  const planUsage = await getPlanUsageAndFit(c, orgId)
-  const { is_good_plan, total_percent, mau_percent, bandwidth_percent, storage_percent, build_time_percent } = planUsage
-  const percentUsage = normalizePlanUsage({ total_percent, mau_percent, bandwidth_percent, storage_percent, build_time_percent })
-  return { is_good_plan, percentUsage }
-}
-
 export async function calculatePlanStatusFresh(c: Context, orgId: string) {
   try {
     const planUsage = await getPlanUsageAndFitUncached(c, orgId)
@@ -590,6 +581,9 @@ export async function calculatePlanStatusFresh(c: Context, orgId: string) {
 export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgId: string, is_good_plan: boolean, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<PlanNotificationResult> {
   const is_onboarded = await isOnboardedOrg(c, orgId)
   const is_onboarding_needed = await isOnboardingNeeded(c, orgId)
+  // Paying orgs that only use native builds never upload a bundle, so they are never
+  // "onboarded"; they still need over-plan detection, upgrade emails and the console banner.
+  const checksPlanUsage = is_onboarded || hasActivePlanEntitlement(org)
 
   let finalIsGoodPlan = is_good_plan
   let exceededFlags: PlanExceededFlags | null = null
@@ -599,7 +593,7 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
     finalIsGoodPlan = !result.needsUpgrade
     exceededFlags = result.exceededFlags
   }
-  else if (!is_good_plan && is_onboarded) {
+  else if (!is_good_plan && checksPlanUsage) {
     const result = await userAbovePlan(c, org, orgId, is_good_plan, drizzleClient)
     finalIsGoodPlan = !result.needsUpgrade
     exceededFlags = result.exceededFlags
@@ -620,8 +614,11 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
         groups: { organization: orgId },
       }).catch()
     }
+    // A paying build-only org gets both the onboarding nudge and its usage-threshold alerts.
+    if (is_good_plan && checksPlanUsage)
+      await userIsAtPlanUsage(c, orgId, percentUsage, drizzleClient)
   }
-  else if (is_good_plan && is_onboarded) {
+  else if (is_good_plan && checksPlanUsage) {
     await userIsAtPlanUsage(c, orgId, percentUsage, drizzleClient)
   }
 
@@ -760,21 +757,38 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
 export async function syncSubscriptionAndEvents(c: Context, orgId: string, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<void> {
   if (!isStripeConfigured(c))
     return
-  const org = await getOrgWithCustomerInfo(c, orgId)
+  const staleOrg = await getOrgWithCustomerInfo(c, orgId)
 
   // Sync subscription data with Stripe
-  await syncOrgSubscriptionData(c, org)
+  await syncOrgSubscriptionData(c, staleOrg)
+  // Reload so trial and plan-entitlement checks see the freshly synced stripe_info.
+  const org = await getOrgWithCustomerInfo(c, orgId)
 
   // Handle trial organizations
   if (await handleTrialOrg(c, orgId, org, drizzleClient)) {
     return // Trial handled, exit early
   }
 
-  // Calculate plan status and usage for notifications
-  const { is_good_plan, percentUsage } = await calculatePlanStatus(c, orgId)
+  // Fresh calculation (same as cron_stat_org) because this path persists is_good_plan.
+  const { is_good_plan, percentUsage } = await calculatePlanStatusFresh(c, orgId)
 
   // Handle notifications and events
   const result = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
   if (result.exceededFlags)
     await updateExceededFlags(org.customer_id, result.exceededFlags, drizzleClient)
+  // Persist the credit-adjusted eligibility too, so can_use_more does not lag until the next stats run.
+  await updateFinalIsGoodPlan(org, result.finalIsGoodPlan, drizzleClient)
+}
+
+async function updateFinalIsGoodPlan(org: any, finalIsGoodPlan: boolean, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<void> {
+  if (!org.customer_id)
+    return
+  await drizzleClient.execute(sql`
+    UPDATE public.stripe_info
+    SET is_good_plan = ${finalIsGoodPlan}
+    WHERE customer_id = ${org.customer_id}
+      AND product_id IS NOT DISTINCT FROM ${org.stripe_info?.product_id ?? null}
+      AND price_id IS NOT DISTINCT FROM ${org.stripe_info?.price_id ?? null}
+      AND is_good_plan IS DISTINCT FROM ${finalIsGoodPlan}
+  `)
 }
