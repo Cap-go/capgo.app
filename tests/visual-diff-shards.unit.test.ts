@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseShard, shardRoutes } from '../scripts/visual-diff.ts'
+import { parseShard, shardRoutes } from '../scripts/visual-diff-shards.ts'
 
 describe('visual diff route shards', () => {
   it('covers every route exactly once, in order, across contiguous shards', () => {

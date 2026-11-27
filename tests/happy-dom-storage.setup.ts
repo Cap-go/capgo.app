@@ -11,3 +11,5 @@ if (typeof document !== 'undefined') {
     get: () => storageWindow.localStorage,
   })
 }
+
+export {}
