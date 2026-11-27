@@ -14,6 +14,8 @@ export interface BuildVariant {
   id: string
   xcode_version: string
   macos_version: string | null
+  /** "mac": a Mac runner; "fast": the Fast builder (picked first for the Xcode versions it ships). */
+  backend?: 'mac' | 'fast'
   runners: number
   online: number
   default: boolean
@@ -63,7 +65,9 @@ export async function fetchBuildVariants(apiHost: string, apikey: string, platfo
 }
 
 export function formatBuildVariant(variant: BuildVariant): string {
-  const machine = variant.macos_version ? `macOS ${variant.macos_version}` : 'macOS'
+  const machine = variant.backend === 'fast'
+    ? 'Fast builder'
+    : variant.macos_version ? `macOS ${variant.macos_version}` : 'macOS'
   const availability = variant.online > 0 ? `${variant.online}/${variant.runners} online` : 'offline'
   return `Xcode ${variant.xcode_version} · ${machine} · ${availability}${variant.default ? ' · default' : ''}`
 }

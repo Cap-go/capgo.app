@@ -4823,5 +4823,6 @@
   "build-variant-any": "Any available machine (recommended)",
   "build-variant-help": "Live list of the Xcode versions on Capgo build machines. Pick one only if your app needs it.",
   "build-variant-offline": "offline",
-  "build-variant-default": "default"
+  "build-variant-default": "default",
+  "build-variant-fast": "Fast builder"
 }

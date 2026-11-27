@@ -39,6 +39,7 @@ describe('build variants', () => {
   it('formats a variant with its machine and availability', () => {
     expect(formatBuildVariant(mac)).toBe('Xcode 26.2 · macOS 26.1 · 2/3 online · default')
     expect(formatBuildVariant(newMac)).toBe('Xcode 27.1 · macOS 27.0 · 1/1 online')
+    expect(formatBuildVariant({ ...newMac, id: 'xcode-27.1-fast', macos_version: null, backend: 'fast' })).toBe('Xcode 27.1 · Fast builder · 1/1 online')
     expect(formatBuildVariant(oldMac)).toBe('Xcode 26.2 · macOS 15.6 · offline · default')
   })
 

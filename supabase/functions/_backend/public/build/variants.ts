@@ -31,6 +31,8 @@ export interface BuildVariant {
   id: string
   xcode_version: string
   macos_version: string | null
+  /** "mac": a Mac runner; "fast": the Fast builder. */
+  backend: 'mac' | 'fast'
   runners: number
   online: number
   default: boolean
@@ -50,12 +52,13 @@ export function toBuildVariantsResponse(body: unknown): BuildVariantsResponse {
   const parsed = builderVariantsSchema.parse(body)
   return {
     default_xcode_major: parsed.defaultXcodeMajor,
-    // Only Mac machines are customer-facing: anything else the builder reports is internal.
-    variants: parsed.variants.filter(variant => variant.backend === undefined || variant.backend === 'mac').map(variant => ({
+    // Only Mac runners and the Fast builder are customer-facing; any other machine type is dropped.
+    variants: parsed.variants.filter(variant => variant.backend === undefined || variant.backend === 'mac' || variant.backend === 'fast').map(variant => ({
       platform: variant.platform,
       id: variant.id,
       xcode_version: variant.xcodeVersion,
       macos_version: variant.macosVersion,
+      backend: variant.backend === 'fast' ? 'fast' as const : 'mac' as const,
       runners: variant.runners,
       online: variant.online,
       default: variant.default,

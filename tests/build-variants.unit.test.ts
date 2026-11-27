@@ -19,6 +19,7 @@ const builderBody = {
   defaultXcodeMajor: '26',
   variants: [
     { platform: 'ios', id: 'xcode-27.1-linux', xcodeVersion: '27.1', macosVersion: null, backend: 'linux', runners: 1, online: 1, default: false },
+    { platform: 'ios', id: 'xcode-27.1-fast', xcodeVersion: '27.1', macosVersion: null, backend: 'fast', runners: 1, online: 1, default: false },
     { platform: 'ios', id: 'xcode-26.2-macos-26.1', xcodeVersion: '26.2', macosVersion: '26.1', backend: 'mac', runners: 3, online: 2, default: true },
   ],
 }
@@ -31,12 +32,13 @@ function context() {
 }
 
 describe('toBuildVariantsResponse', () => {
-  it('maps the builder body to snake_case and never exposes non-Mac machines', () => {
-    expect(JSON.stringify(toBuildVariantsResponse(builderBody))).not.toMatch(/linux|backend/i)
+  it('maps the builder body to snake_case and drops unknown machine types', () => {
+    expect(JSON.stringify(toBuildVariantsResponse(builderBody))).not.toMatch(/linux/i)
     expect(toBuildVariantsResponse(builderBody)).toEqual({
       default_xcode_major: '26',
       variants: [
-        { platform: 'ios', id: 'xcode-26.2-macos-26.1', xcode_version: '26.2', macos_version: '26.1', runners: 3, online: 2, default: true },
+        { platform: 'ios', id: 'xcode-27.1-fast', xcode_version: '27.1', macos_version: null, backend: 'fast', runners: 1, online: 1, default: false },
+        { platform: 'ios', id: 'xcode-26.2-macos-26.1', xcode_version: '26.2', macos_version: '26.1', backend: 'mac', runners: 3, online: 2, default: true },
       ],
     })
   })
@@ -73,7 +75,7 @@ describe('getBuildVariants', () => {
     const response = await getBuildVariants(context() as any, 'ios')
     expect(fetchMock).toHaveBeenCalledWith('https://builder.test/variants', expect.objectContaining({ headers: { 'x-api-key': 'builder-key' } }))
     const body = await response.json() as { variants: Array<{ xcode_version: string }> }
-    expect(body.variants.map(v => v.xcode_version)).toEqual(['26.2'])
+    expect(body.variants.map(v => v.xcode_version)).toEqual(['27.1', '26.2'])
   })
 
   it('returns no variants for Android without calling the builder', async () => {

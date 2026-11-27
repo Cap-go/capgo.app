@@ -104,7 +104,7 @@ describe('StepsBuild Xcode variant selector', () => {
   const optionValues = () => Array.from(selector()?.querySelectorAll('option') ?? [], option => option.getAttribute('value') ?? '')
 
   it('lists the builder variants for iOS and adds the chosen Xcode to the command', async () => {
-    invokeCapgoApiMock.mockResolvedValue({ data: { variants: [variant('27.1', { macos_version: '27.0' }), variant('26.2', { default: true })] }, error: null })
+    invokeCapgoApiMock.mockResolvedValue({ data: { variants: [variant('27.1', { backend: 'fast', macos_version: null }), variant('26.2', { default: true })] }, error: null })
     await mount()
     await vi.waitFor(() => expect(selector()).toBeTruthy())
     expect(invokeCapgoApiMock).toHaveBeenCalledWith('build/variants?platform=ios', expect.objectContaining({ method: 'GET' }))
