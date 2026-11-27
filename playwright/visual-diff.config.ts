@@ -428,6 +428,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       const introduction = page.locator('[data-test="builder-introduction"]')
       if (process.env.VISUAL_DIFF_PHASE === 'after') {
         await introduction.waitFor({ state: 'visible' })
+        await page.getByText('Build signing credentials', { exact: true }).click()
+        await page.getByLabel('Distribution certificate (.p12)').waitFor({ state: 'visible' })
         return
       }
       // The base can already include the introduction after the Builder PR merges.
