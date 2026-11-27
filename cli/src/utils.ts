@@ -873,7 +873,17 @@ function envHost(name: 'CAPGO_API_HOST' | 'CAPGO_FILES_HOST'): string | undefine
  * also serves files unless a files host is given: self-hosted backends (Edge
  * Functions, a single worker, a test server) expose both on one origin.
  */
-function applyCapgoHostOverride<T extends { hostApi: string, hostFilesApi: string }>(config: T): T {
+const chinaApiHost = 'https://api.capgo.com.cn'
+const chinaHostWeb = 'https://console.capgo.com.cn'
+
+/** Console links for the China API point at the China console: the global one cannot reach its API from China. */
+export function consoleHostWebForApiHost(apiHost: string, hostWeb: string): string {
+  if (apiHost.replace(/\/+$/, '') === chinaApiHost && hostWeb.replace(/\/+$/, '') === defaultHostWeb)
+    return chinaHostWeb
+  return hostWeb
+}
+
+function applyCapgoHostOverride<T extends { hostApi: string, hostFilesApi: string, hostWeb?: string }>(config: T): T {
   const pinned = currentHostOverride()
   const apiHost = pinned.apiHost ?? envHost('CAPGO_API_HOST')
   // An explicit API host owns its files too: CAPGO_FILES_HOST must not send that key elsewhere.
@@ -882,6 +892,8 @@ function applyCapgoHostOverride<T extends { hostApi: string, hostFilesApi: strin
     config.hostApi = apiHost
     config.hostFilesApi = apiHost
   }
+  if (typeof config.hostWeb === 'string')
+    config.hostWeb = consoleHostWebForApiHost(config.hostApi, config.hostWeb)
   if (filesHost)
     config.hostFilesApi = filesHost
   return config

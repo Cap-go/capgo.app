@@ -5,7 +5,7 @@ import { chdir, cwd } from 'node:process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createCapgoClient, defaultApiHost, defaultFileHost, getLocalConfig, getRemoteConfig, getRemoteFileConfig, setCapgoHostOverride, withCapgoHosts } from '../src/utils.ts'
+import { consoleHostWebForApiHost, createCapgoClient, defaultApiHost, defaultFileHost, defaultHostWeb, getLocalConfig, getRemoteConfig, getRemoteFileConfig, setCapgoHostOverride, withCapgoHosts } from '../src/utils.ts'
 import { CapgoSDK } from '../src/sdk.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
 
@@ -70,6 +70,18 @@ try {
   // A scope never inherits the process pin.
   assert.equal(await withCapgoHosts({}, async () => (await getLocalConfig(true)).hostApi), defaultApiHost)
   setCapgoHostOverride({})
+
+  // The China API host gets China console links: console.capgo.app cannot reach its API from China.
+  assert.equal((await getLocalConfig(true)).hostWeb, defaultHostWeb)
+  setCapgoHostOverride({ apiHost: 'https://api.capgo.com.cn' })
+  assert.equal((await getLocalConfig(true)).hostWeb, 'https://console.capgo.com.cn')
+  setCapgoHostOverride({ apiHost: 'https://api.example.com' })
+  assert.equal((await getLocalConfig(true)).hostWeb, defaultHostWeb)
+  setCapgoHostOverride({})
+  process.env.CAPGO_API_HOST = 'https://api.capgo.com.cn'
+  assert.equal((await getLocalConfig(true)).hostWeb, 'https://console.capgo.com.cn')
+  delete process.env.CAPGO_API_HOST
+  assert.equal(consoleHostWebForApiHost('https://api.capgo.com.cn', 'https://web.example.com'), 'https://web.example.com')
 
   // Concurrent clients on different backends keep their own host, key and remote config.
   requests.length = 0
