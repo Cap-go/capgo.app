@@ -226,6 +226,26 @@ describe('public channel post', () => {
     expect(updateOrCreateChannel).toHaveBeenLastCalledWith(c, expect.objectContaining({ version: 5, disable_auto_update: 'none' }), 42, true)
   })
 
+  it('updates the existing channel returned by the insert when the conflict retry lookup was stale', async () => {
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const conflict = Object.assign(new Error('duplicate channel'), { code: '23505', constraint: 'unique_name_app_id' })
+    const existing = { id: 42, version: 5, rollout_version: null, public: false, paused_at: null }
+    updateOrCreateChannel.mockRejectedValueOnce(conflict).mockRejectedValueOnce(new ChannelAlreadyExistsError(existing))
+    let channelLookups = 0
+    const lookup = buildAdminChain()
+    adminQuery.mockImplementation((text: string, values: unknown[]) => {
+      if (text.includes('FROM public.channels'))
+        channelLookups++
+      return lookup(text, values)
+    })
+    const c = context()
+    await post(c, { app_id: 'com.test.channel-race', channel: 'preview', disableAutoUpdate: 'none' }, apiKey())
+    expect(channelLookups).toBe(2)
+    expect(checkPermission).toHaveBeenCalledWith(c, 'channel.update_settings', { appId: 'com.test.channel-race', channelId: 42 })
+    expect(updateOrCreateChannel).toHaveBeenCalledTimes(3)
+    expect(updateOrCreateChannel).toHaveBeenLastCalledWith(c, expect.objectContaining({ version: 5, disable_auto_update: 'none' }), 42, true)
+  })
+
   it('does not update the existing channel returned by the insert without update permission', async () => {
     const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
     updateOrCreateChannel.mockRejectedValueOnce(new ChannelAlreadyExistsError({ id: 42, version: null, rollout_version: null, public: false, paused_at: null }))
