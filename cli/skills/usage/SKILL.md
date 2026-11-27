@@ -66,7 +66,7 @@ Both MCP servers advertise five workflow guides: `check-update-health`, `ship-li
 - `app set [appId]`: update app settings such as name, icon, retention, metadata exposure, preview access with `--preview` or `--no-preview`, and optional device data collection with `--collect-country` / `--no-collect-country` (same pattern for platform, os-version, plugin-version, version-build, is-emulator, is-prod, install-source). Unchecked fields are not stored; `/updates` still uses the live request.
 - `app setting [path]`: update Capacitor config values programmatically.
 - `app debug [appId]`: listen for live-update debug events, optionally for one device.
-- `app prewarm [appId]` (alias `warm`): load the app's live-update state into every Capgo plugin region's cache now. Uploads and channel changes already prewarm automatically; use it to warm regions on demand. Needs `app.upload_bundle` permission; exits non-zero when no region could be warmed.
+- `app prewarm [appId]` (alias `warm`): load the app's live-update state into every Capgo plugin region's cache now. Uploads and channel changes already prewarm automatically; use it to warm regions on demand. With an explicit `appId` it runs outside a Capacitor project (CI, a server). Needs `app.upload_bundle` permission; exits non-zero when no region could be warmed.
 
 ### Docs and agent integrations
 

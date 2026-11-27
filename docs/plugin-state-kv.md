@@ -135,11 +135,11 @@ center. Check the `cf-placement` response header to confirm it, for example
 header may not run in one data center, so its prewarm may not warm the cache its
 devices read. On 2026-11-22 `capgo_plugin-jp-prod` reported `placement.mode:
 targeted` (`gcp:asia-northeast1`) in its script settings but returned no
-`cf-placement` header, even on uncached paths, so the Japan prewarm is not
-relied on until that placement is active. The prewarm reports each region's
-`cf-placement` value. Only `remote-XXX` shows the call ran in the worker's
-placement data center: the API worker is placed in `aws:eu-west-2`, so
-`local-XXX` means a regional call stayed where it arrived. The `plugin state
+`cf-placement` header, even on uncached paths. On 2026-11-26 every region,
+Japan included (`remote-NRT`), answered a prewarm with a `remote-` placement.
+The prewarm reports each region's `cf-placement` value. Only `remote-XXX` shows
+the call ran in the worker's placement data center: the API worker is placed in
+`aws:eu-west-2`, so `local-XXX` means a regional call stayed where it arrived. The `plugin state
 prewarmed` log lists regions without a `remote-` value under `unplaced`, the
 public endpoint returns `pinned`, and `app prewarm` flags them.
 
@@ -154,9 +154,19 @@ the device keys.
 
 ### Fan-out
 
-After the purge queue (`triggers/updates_cache_purge.ts`) purges a
-`plugin_state` batch, the API worker waits one second for the purge to reach
-every data center. It then posts the batch's app ids, 10 per call, to
+The database wakes the purge queue's drain (`triggers/updates_cache_purge.ts`)
+at `SUPABASE_URL`, so in production it mostly runs as a Supabase function. That
+runtime has no `ENV_NAME` and no `PLUGIN_REGION_TARGETS`, so no regions: after
+it purges a `plugin_state` batch, it posts the batch's app ids to the API worker
+(`CLOUDFLARE_FUNCTION_URL` + `/triggers/updates_cache_purge/prewarm`, with the
+API secret and `redirect: 'manual'`). The API worker runs the fan-out below
+with its own environment and never forwards it again. Cloudflare workers and
+runtimes with explicit `PLUGIN_REGION_TARGETS` never forward. The forward log
+is `plugin state prewarm forwarded` (or `forward failed`, with the status).
+
+After a purge of a `plugin_state` batch, or on receiving a forwarded batch,
+the API worker waits one second for the purge to reach every data center. It
+then posts the batch's app ids, 10 per call, to
 `https://plugin.<region>.capgo.app/plugin_state/prewarm` with the API secret
 and `redirect: 'manual'`, so a redirect never carries the secret elsewhere.
 Workers allow six open connections per invocation, and the drain also holds
