@@ -9,15 +9,15 @@
 // process dies between tool calls, uses this broker.
 import process from 'node:process'
 import { buildCliRequestHeaders } from '../../../analytics/cli-headers'
-import { trimTrailingSlashes } from '../../../utils'
+import { resolveCapgoPublicApiHost, trimTrailingSlashes } from '../../../utils'
 
-const DEFAULT_BROKER_BASE = 'https://api.capgo.app'
 /** Override the broker base via env (staging / local). */
 const BROKER_BASE_ENV = 'CAPGO_OAUTH_BROKER_URL'
 const BROKER_PATH = '/builder_auth_direct/google'
 
-function brokerBase(): string {
-  return trimTrailingSlashes(process.env[BROKER_BASE_ENV] || DEFAULT_BROKER_BASE)
+/** The broker lives on the configured Capgo API host (--api-host, CAPGO_API_HOST, localApi, China host). */
+async function brokerBase(): Promise<string> {
+  return trimTrailingSlashes(process.env[BROKER_BASE_ENV] || await resolveCapgoPublicApiHost())
 }
 
 export interface BrokerSession {
@@ -36,7 +36,7 @@ export type BrokerPollResult =
 
 /** Create a broker sign-in session for `appId`. Throws on a transport/HTTP failure. */
 export async function createBrokerSession(appId: string): Promise<BrokerSession> {
-  const res = await fetch(`${brokerBase()}${BROKER_PATH}/sessions`, {
+  const res = await fetch(`${await brokerBase()}${BROKER_PATH}/sessions`, {
     method: 'POST',
     headers: buildCliRequestHeaders({ 'content-type': 'application/json', accept: 'application/json' }),
     body: JSON.stringify({ app_id: appId }),
@@ -59,7 +59,7 @@ export async function pollBrokerSession(session: { pubId: string, pollSecret: st
   const headers = buildCliRequestHeaders({ authorization: `Bearer ${session.pollSecret}`, accept: 'application/json' })
   if (confirmCode)
     headers['x-confirm-code'] = confirmCode
-  const res = await fetch(`${brokerBase()}${BROKER_PATH}/sessions/${encodeURIComponent(session.pubId)}`, { headers })
+  const res = await fetch(`${await brokerBase()}${BROKER_PATH}/sessions/${encodeURIComponent(session.pubId)}`, { headers })
   // 404 = the session was claimed/expired and hard-deleted server-side; 401 = wrong secret. Both terminal.
   if (res.status === 404)
     return { status: 'error', error: 'Your Google sign-in session expired. Start the sign-in again.' }

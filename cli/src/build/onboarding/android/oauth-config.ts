@@ -4,7 +4,7 @@
 // They are fetched at runtime from a Capgo backend endpoint so they can be
 // rotated without re-publishing the CLI.
 //
-// Endpoint: GET https://api.capgo.app/private/config/builder
+// Endpoint: GET <configured Capgo API host>/private/config/builder
 // Response: { enabled: false }
 //        OR { enabled: true, clientId: string, clientSecret: string, scopes: string[] }
 //
@@ -15,8 +15,9 @@
 // embedding it solely so that rotation doesn't require a CLI release.
 
 import process from 'node:process'
+import { resolveCapgoPublicApiHost, trimTrailingSlashes } from '../../../utils'
 
-const DEFAULT_CONFIG_ENDPOINT = 'https://api.capgo.app/private/config/builder'
+const CONFIG_ENDPOINT_PATH = '/private/config/builder'
 
 /** Override the config endpoint via env var (useful for staging / a local backend). */
 const CONFIG_ENDPOINT_ENV = 'CAPGO_BUILDER_CONFIG_URL'
@@ -53,8 +54,10 @@ interface BuilderConfigResponse {
  * as "Android OAuth onboarding is not available, ask the user to use the
  * manual flow from the docs".
  */
-export async function fetchCapgoOAuthConfig(): Promise<CapgoOAuthClientConfig | null> {
-  const url = process.env[CONFIG_ENDPOINT_ENV] || DEFAULT_CONFIG_ENDPOINT
+export async function fetchCapgoOAuthConfig(apiHost?: string): Promise<CapgoOAuthClientConfig | null> {
+  // Same host as every other CLI request (--api-host, CAPGO_API_HOST, localApi, China host).
+  const url = process.env[CONFIG_ENDPOINT_ENV]
+    || `${trimTrailingSlashes(await resolveCapgoPublicApiHost({ apiHost }))}${CONFIG_ENDPOINT_PATH}`
   const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } })
   if (!res.ok) {
     const text = await res.text().catch(() => '')

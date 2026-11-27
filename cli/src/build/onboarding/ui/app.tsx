@@ -1690,7 +1690,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         setSupportBusyText('Uploading your logs to Capgo support…')
         setStep('support-uploading') // show a spinner while the (network) upload runs
         return uploadSupportLogs({
-          apiHost: apiHost ?? 'https://api.capgo.app',
+          apiHost,
           apikey: resolvedApiKeyRef.current ?? apikey ?? '',
           appId,
           jobId: aiJobId ?? undefined,
@@ -1727,7 +1727,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         setSupportBusyText('Uploading your logs to Capgo support…')
         setStep('support-uploading')
         return uploadSupportLogs({
-          apiHost: apiHost ?? 'https://api.capgo.app',
+          apiHost,
           apikey: resolvedApiKeyRef.current ?? apikey ?? '',
           appId,
           jobId: aiJobId ?? undefined,
@@ -2058,7 +2058,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         }, true)
 
         const result = await runCapgoAiAnalysis({
-          apiHost: apiHost ?? 'https://api.capgo.app',
+          apiHost,
           apikey: resolvedApiKeyRef.current ?? apikey ?? '',
           jobId: aiJobId,
           appId,

@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { cwd } from 'node:process'
 import { intro, log, outro, spinner } from '@clack/prompts'
 import { formatRunnerCommand, splitRunnerCommand } from '../runner-command'
-import { defaultApiHost, formatError, getConfig, getPMAndCommand, updateConfigbyKey } from '../utils'
+import { formatError, getConfig, getPMAndCommand, resolveCapgoPublicApiHost, updateConfigbyKey } from '../utils'
 import { writeFileAtomic } from '../utils/safeWrites'
 
 const notificationPackages = [
@@ -108,7 +108,8 @@ export async function setupNotifications(appIdArg: string | undefined, options: 
     if (!appId)
       throw new Error('Missing appId. Pass it as `notifications setup com.example.app` or set it in capacitor.config.')
 
-    const serverUrl = options.serverUrl || defaultApiHost
+    // Default to the configured Capgo API (CAPGO_API_HOST, localApi, China host), not always the global cloud.
+    const serverUrl = options.serverUrl || await resolveCapgoPublicApiHost()
     const helperFile = options.file || 'src/capgo-notifications.ts'
     assertHelperFileWritable(helperFile, options.force)
 

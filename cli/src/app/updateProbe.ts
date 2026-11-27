@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import { cwd } from 'node:process'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getPlatformDirFromCapacitorConfig } from '../build/platform-paths'
-import { getInstalledVersion } from '../utils'
+import { chinaApiHost, getInstalledVersion } from '../utils'
 
 const defaultUpdateUrl = 'https://plugin.capgo.app/updates'
 export const updateProbeDeviceId = '00000000-0000-0000-0000-000000000000'
@@ -153,16 +153,20 @@ function getProbeDefaultChannel(capConfig: any): string {
   return ''
 }
 
-function getUpdateUrl(capConfig: any): string {
+export function getUpdateUrl(capConfig: any, apiHost?: string): string {
   const configured = capConfig?.plugins?.CapacitorUpdater?.updateUrl
   if (typeof configured === 'string' && configured.trim().length > 0)
     return configured.trim()
+  // plugin.capgo.app is unreachable from China: probe the China API host's updates route instead.
+  if (apiHost?.replace(/\/+$/, '') === chinaApiHost)
+    return `${chinaApiHost}/updates`
   return defaultUpdateUrl
 }
 
 export async function prepareUpdateProbe(
   platform: 'ios' | 'android',
   capConfig: any,
+  apiHost?: string,
 ): Promise<PrepareUpdateProbeResult> {
   const updaterAppId = capConfig?.plugins?.CapacitorUpdater?.appId
   const topLevelAppId = capConfig?.appId
@@ -205,7 +209,7 @@ export async function prepareUpdateProbe(
   return {
     ok: true,
     context: {
-      endpoint: getUpdateUrl(capConfig),
+      endpoint: getUpdateUrl(capConfig, apiHost),
       payload: {
         app_id: resolvedAppId,
         device_id: updateProbeDeviceId,

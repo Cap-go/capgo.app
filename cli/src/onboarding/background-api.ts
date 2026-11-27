@@ -1,5 +1,5 @@
 import type { OnboardingCheckOptions } from './background'
-import { defaultApiHost } from '../utils'
+import { isCapgoCloudApiHost } from '../utils'
 
 function parseApiUrl(value: string): URL | undefined {
   try {
@@ -26,7 +26,7 @@ export function isTrustedOnboardingApiHost(
   if (destination.protocol !== 'https:' && !loopback)
     return false
 
-  if (destination.origin === new URL(defaultApiHost).origin)
+  if (isCapgoCloudApiHost(destination.origin))
     return true
   // An explicit CLI self-host selection authorizes that origin, not project config alone.
   const explicitHost = options.apiHost ? parseApiUrl(options.apiHost) : undefined

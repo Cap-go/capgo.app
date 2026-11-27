@@ -38,7 +38,7 @@ import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
-import { canPromptInteractively, consoleWebUrl, createCapgoClient, defaultApiHost, fetchOrganizations, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectRoot, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { canPromptInteractively, consoleWebUrl, createCapgoClient, fetchOrganizations, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectRoot, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { readBuilderOnlyInitAssignment, tryBuilderOnlyInit } from './builder-setup'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
@@ -721,7 +721,7 @@ async function runInitContactSupport(failureText: string, supportPlatform?: Plat
         return null
       const spinner = pSpinner()
       spinner.start('Uploading your logs to Capgo support…')
-      const r = await uploadSupportLogs({ apiHost: globalApiHost ?? defaultApiHost, apikey: key, appId: globalAppId, platform: supportPlatform, gzPath })
+      const r = await uploadSupportLogs({ apiHost: globalApiHost, apikey: key, appId: globalAppId, platform: supportPlatform, gzPath })
       spinner.stop(r ? 'Logs uploaded.' : 'Logs upload unavailable — falling back to attaching the file.')
       return r
     },
