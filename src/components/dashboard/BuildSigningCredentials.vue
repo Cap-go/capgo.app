@@ -34,7 +34,7 @@ async function encodeFile(file: File) {
   const bytes = new Uint8Array(await file.arrayBuffer())
   let binary = ''
   for (let i = 0; i < bytes.length; i += 8192)
-    binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
+    binary += String.fromCodePoint(...bytes.subarray(i, i + 8192))
   return btoa(binary)
 }
 
@@ -47,13 +47,13 @@ async function save(event: SubmitEvent) {
   feedback.value = ''
   try {
     const credentials: Record<string, string> = {}
-    for (const [key] of fields[platform.value]) {
+    await Promise.all(fields[platform.value].map(async ([key]) => {
       const value = values.get(key)
       if (value instanceof File && value.size)
         credentials[key] = await encodeFile(value)
       else if (typeof value === 'string' && value)
         credentials[key] = value
-    }
+    }))
     if (credentials.profile || credentials.profileName) {
       if (!credentials.profile || !credentials.profileName)
         throw new Error('incomplete-profile')
@@ -106,8 +106,8 @@ async function save(event: SubmitEvent) {
         </button>
       </fieldset>
     </form>
-    <p v-if="feedback" role="status">
+    <output v-if="feedback">
       {{ t(feedback) }}
-    </p>
+    </output>
   </details>
 </template>

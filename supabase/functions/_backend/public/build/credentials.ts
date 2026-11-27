@@ -303,6 +303,16 @@ async function writeAuditLog(c: Context, input: {
 }
 
 /** Validate + encrypt + upsert. Shared by the API-key PUT and the token upload PUT. */
+function preserveExtensionProfiles(base: CredentialRecord, incoming: CredentialRecord, normalized: CredentialRecord) {
+  // The console edits the main profile. Preserve extension profiles in the same version-checked write.
+  if (base.CAPGO_IOS_PROVISIONING_MAP && incoming.CAPGO_IOS_PROVISIONING_MAP) {
+    normalized.CAPGO_IOS_PROVISIONING_MAP = JSON.stringify({
+      ...JSON.parse(base.CAPGO_IOS_PROVISIONING_MAP),
+      ...JSON.parse(normalized.CAPGO_IOS_PROVISIONING_MAP!),
+    })
+  }
+}
+
 async function storeBuildCredentials(c: Context, input: {
   appId: string
   platform: BuildPlatform
@@ -340,13 +350,8 @@ async function storeBuildCredentials(c: Context, input: {
   let normalized: CredentialRecord
   try {
     normalized = normalizeCredentialValues(platform, { ...base, ...incoming })
-    // The console edits the main profile. Preserve extension profiles in the same version-checked write.
-    if (actor.apikeyId === null && mode === 'merge' && base.CAPGO_IOS_PROVISIONING_MAP && incoming.CAPGO_IOS_PROVISIONING_MAP) {
-      normalized.CAPGO_IOS_PROVISIONING_MAP = JSON.stringify({
-        ...JSON.parse(base.CAPGO_IOS_PROVISIONING_MAP),
-        ...JSON.parse(normalized.CAPGO_IOS_PROVISIONING_MAP!),
-      })
-    }
+    if (actor.apikeyId === null)
+      preserveExtensionProfiles(base, incoming, normalized)
   }
   catch (error) {
     asValidationError(error)
