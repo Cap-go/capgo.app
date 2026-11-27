@@ -10,9 +10,9 @@
         "attempt": 1
       },
       "pending": {
-        "tag": "capgo-22.77.2",
-        "sha": "0c4f0637eabb1687767cde175303572a15efa734",
-        "runId": "45928962400",
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
         "attempt": 1
       }
     },
@@ -23,7 +23,12 @@
         "runId": "45928962400",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
+        "attempt": 1
+      }
     },
     "files": {
       "success": {
@@ -50,7 +55,12 @@
         "runId": "45889332870",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
+        "attempt": 1
+      }
     },
     "plugins_as": {
       "success": {
@@ -59,7 +69,12 @@
         "runId": "45889332870",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
+        "attempt": 1
+      }
     },
     "plugins_us": {
       "success": {
@@ -68,7 +83,12 @@
         "runId": "45889332870",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
+        "attempt": 1
+      }
     },
     "plugins_sa": {
       "success": {
@@ -77,7 +97,12 @@
         "runId": "45889332870",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
+        "attempt": 1
+      }
     },
     "plugins_oc": {
       "success": {
@@ -86,7 +111,12 @@
         "runId": "45889332870",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
+        "attempt": 1
+      }
     },
     "plugins_af": {
       "success": {
@@ -95,7 +125,12 @@
         "runId": "45889332870",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
+        "attempt": 1
+      }
     },
     "plugins_me": {
       "success": {
@@ -104,7 +139,12 @@
         "runId": "45889332870",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
+        "attempt": 1
+      }
     },
     "plugins_hk": {
       "success": {
@@ -113,7 +153,12 @@
         "runId": "45889332870",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
+        "attempt": 1
+      }
     },
     "plugins_jp": {
       "success": {
@@ -122,7 +167,12 @@
         "runId": "45889332870",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.77.3",
+        "sha": "272164f11b6039a6dc7207eecad45c97a43f3957",
+        "runId": "45931512208",
+        "attempt": 1
+      }
     },
     "gotrue": {
       "success": {
