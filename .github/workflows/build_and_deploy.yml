@@ -69,8 +69,8 @@ jobs:
         run: bun scripts/deploy-state.ts begin >> "$GITHUB_OUTPUT"
 
   # Tests already passed before tag was created, so just build and deploy.
-  # One job reconciles the replica schema, migrates, guards, then deploys functions while
-  # refreshing the replica subscription: separate jobs cost ~25s of runner setup each.
+  # One job reconciles the replica schema, migrates, guards and deploys functions:
+  # separate jobs cost ~25s of runner setup each.
   supabase_deploy:
     needs: [changes]
     if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' }}
@@ -79,9 +79,6 @@ jobs:
     name: Build code and deploy to Supabase
     permissions:
       contents: read
-      actions: write # Dispatch the schema/types sync workflow after migrations
-    outputs:
-      replica_subscription: ${{ steps.replica_subscription.outcome }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -158,62 +155,40 @@ jobs:
       - name: Guard read-replica schema against primary migrations
         if: env.SUPA_ENV == 'PROD'
         run: bun scripts/sync-read-replica-schema.ts --guard
-      - parallel:
-          - name: Update functions
-            env:
-              SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
-            # Capgo cloud publishes allowlisted functions only (pg_net + functions.invoke).
-            # Self-hosting keeps deploying all functions via `supabase functions deploy`.
-            # --use-api bundles server-side: Docker bundling pulled edge-runtime (~20s) and ran serially.
-            run: |
-              set -euo pipefail
-              FUNCTIONS=($(bun scripts/supabase-cloud-functions.ts list))
-              if [ "${#FUNCTIONS[@]}" -eq 0 ]; then
-                echo "Capgo cloud function allowlist is empty; refusing to deploy all functions" >&2
-                exit 1
-              fi
-              supabase functions deploy --use-api --jobs "${#FUNCTIONS[@]}" "${FUNCTIONS[@]}"
-              # Remove Capgo-cloud-only functions that are no longer allowlisted.
-              # Self-host installs are unaffected (they deploy every local function).
-              # Delete only the ones still deployed: one call per skipped function cost ~19s.
-              SKIPPED=($(bun scripts/supabase-cloud-functions.ts skip-list))
-              # If the listing cannot be read, fall back to attempting every delete.
-              if ! deployed="$(supabase functions list -o json | jq -er '.[].slug')"; then
-                deployed="$(printf '%s\n' "${SKIPPED[@]}")"
-              fi
-              for fn in "${SKIPPED[@]}"; do
-                if ! grep -qxF -- "$fn" <<< "$deployed"; then
-                  continue
-                fi
-                if ! out=$(supabase functions delete "$fn" 2>&1); then
-                  if echo "$out" | grep -qiE 'not found|does not exist|404|Function not found'; then
-                    continue
-                  fi
-                  echo "$out" >&2
-                  exit 1
-                fi
-              done
-          # Migrations may add tables to the Google publication; refresh the subscriber while
-          # functions deploy. A failure here must not block worker deploys, so the outcome is
-          # exported and enforced by the read_replica_subscription gate job below.
-          - name: Refresh subscription for newly published tables
-            id: replica_subscription
-            if: env.SUPA_ENV == 'PROD'
-            continue-on-error: true
-            run: |
-              set -euo pipefail
-              git fetch --tags origin
-              bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
-              bun scripts/sync-read-replica-schema.ts --refresh-subscription
-      # Regenerating schema/types takes ~4 min and never gates the release, so it runs in its own
-      # workflow instead of holding this deploy open.
-      - name: Dispatch production schema and types sync
-        if: env.SUPA_ENV == 'PROD' && needs.changes.outputs.requires_schema_types_sync == 'true'
+      - name: Update functions
         env:
-          GH_TOKEN: ${{ github.token }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
+        # Capgo cloud publishes allowlisted functions only (pg_net + functions.invoke).
+        # Self-hosting keeps deploying all functions via `supabase functions deploy`.
+        # --use-api bundles server-side: Docker bundling pulled edge-runtime (~20s) and ran serially.
         run: |
-          gh workflow run sync_schema_types.yml --repo "$GITHUB_REPOSITORY" --ref main \
-            -f deploy_tag="${{ needs.changes.outputs.deploy_tag }}"
+          set -euo pipefail
+          FUNCTIONS=($(bun scripts/supabase-cloud-functions.ts list))
+          if [ "${#FUNCTIONS[@]}" -eq 0 ]; then
+            echo "Capgo cloud function allowlist is empty; refusing to deploy all functions" >&2
+            exit 1
+          fi
+          supabase functions deploy --use-api --jobs "${#FUNCTIONS[@]}" "${FUNCTIONS[@]}"
+          # Remove Capgo-cloud-only functions that are no longer allowlisted.
+          # Self-host installs are unaffected (they deploy every local function).
+          # Delete only the ones still deployed: one call per skipped function cost ~19s.
+          SKIPPED=($(bun scripts/supabase-cloud-functions.ts skip-list))
+          # If the listing cannot be read, fall back to attempting every delete.
+          if ! deployed="$(supabase functions list -o json | jq -er '.[].slug')"; then
+            deployed="$(printf '%s\n' "${SKIPPED[@]}")"
+          fi
+          for fn in "${SKIPPED[@]}"; do
+            if ! grep -qxF -- "$fn" <<< "$deployed"; then
+              continue
+            fi
+            if ! out=$(supabase functions delete "$fn" 2>&1); then
+              if echo "$out" | grep -qiE 'not found|does not exist|404|Function not found'; then
+                continue
+              fi
+              echo "$out" >&2
+              exit 1
+            fi
+          done
 
   # Migrations may add tables to the Google publication; the subscriber only
   # streams them once its subscription is refreshed. Migration
@@ -224,25 +199,77 @@ jobs:
   # turned on, new workers return empty manifests for moved versions and old
   # workers build S3 paths without the session part. Keep that flag off until
   # this refresh succeeds and every api, files, and plugin worker runs the new
-  # release. Current prod: flag off, 0 rows moved. The refresh runs inside
-  # supabase_deploy (in parallel with function deploys); this gate keeps a failed
-  # refresh visible and holds web publishing, while worker deploys do not wait on it.
+  # release. Current prod: flag off, 0 rows moved. This job still runs on every
+  # production release and must stay visible when it fails, and it holds web publishing,
+  # but worker deploys do not wait on it (a new table's initial copy can take minutes).
   read_replica_subscription:
     needs: [changes, supabase_deploy]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' && needs.supabase_deploy.result == 'success' }}
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' && needs.supabase_deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    name: Refresh production read-replica subscription
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+      - name: Check for preinstalled Google Cloud CLI
+        id: gcloud
+        # ubuntu-latest ships gcloud; setup-gcloud cost ~12s per job. Install only if the image drops it.
+        run: echo "installed=$(command -v gcloud >/dev/null && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Setup Google Cloud CLI
+        if: steps.gcloud.outputs.installed != 'true'
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Install dependencies
+        run: bun install
+      - name: Assert deploy tag is current
+        run: |
+          git fetch --tags origin
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+      - name: Refresh subscription for newly published tables
+        env:
+          GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+        run: |
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
+          gcloud auth activate-service-account --key-file="$credentials_file"
+          gcloud config set project capgo-394818
+          bun scripts/sync-read-replica-schema.ts --refresh-subscription
+      - name: Explain how to retry
+        if: failure()
+        # changes recorded the deployment state OID for this attempt; a single-job rerun reuses
+        # it and record_deployments then rejects the stale OID.
+        run: echo "::error title=Read-replica subscription refresh failed::Fix the cause, then use 'Re-run all jobs' so the deploy scope and state are recomputed. Re-running only this job cannot record the deployment."
+
+  # Regenerating schema/types takes ~4 min and never gates the release, so it runs in its own
+  # workflow. Dispatching from a separate job keeps a rejected dispatch out of the Supabase result.
+  dispatch_schema_types_sync:
+    needs: [changes, supabase_deploy]
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.is_alpha != 'true' && needs.changes.outputs.requires_schema_types_sync == 'true' && needs.supabase_deploy.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    name: Refresh production read-replica subscription
-    permissions: {}
+    name: Dispatch production schema and types sync
+    permissions:
+      actions: write
     steps:
-      - name: Require read-replica subscription refresh
+      - name: Dispatch production schema and types sync
         env:
-          OUTCOME: ${{ needs.supabase_deploy.outputs.replica_subscription }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$OUTCOME" != "success" ]; then
-            echo "::error title=Read-replica subscription refresh failed::Refresh subscription for newly published tables ended with '$OUTCOME' in 'Build code and deploy to Supabase'. Fix it and rerun that job."
-            exit 1
-          fi
+          gh workflow run sync_schema_types.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f deploy_tag="${{ needs.changes.outputs.deploy_tag }}"
 
   # Build the web app while the backend deploys; only publishing waits for it.
   build_webapp:

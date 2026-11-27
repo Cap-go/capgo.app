@@ -206,7 +206,8 @@ describe('native-aware Capgo release workflow', () => {
     const deploy = parseWorkflow(deploySource)
     const supabaseSteps = (deploy.jobs?.supabase_deploy?.steps ?? []).flatMap(step => [step, ...((step as { parallel?: WorkflowStep[] }).parallel ?? [])])
     const stepIndex = (name: string) => supabaseSteps.findIndex(step => step.name === name)
-    const dispatch = supabaseSteps.find(step => step.name === 'Dispatch production schema and types sync')
+    const dispatchJob = deploy.jobs?.dispatch_schema_types_sync
+    const dispatch = dispatchJob?.steps?.find(step => step.name === 'Dispatch production schema and types sync')
     const syncJob = parseWorkflow(syncSource).jobs?.sync_schema_types
     const syncStep = syncJob?.steps?.find(step => step.name === 'Sync generated schema and types')
 
@@ -216,14 +217,19 @@ describe('native-aware Capgo release workflow', () => {
     // The ~4 minute regeneration runs in its own workflow, dispatched once both the replica
     // reconciliation and the primary migrations succeeded, so it never holds the deploy open.
     expect(deploy.jobs?.sync_schema_types).toBeUndefined()
-    expect(dispatch?.if).toContain('env.SUPA_ENV == \'PROD\'')
-    expect(dispatch?.if).toContain('needs.changes.outputs.requires_schema_types_sync == \'true\'')
+    // A rejected dispatch must not fail supabase_deploy and skip the publishing jobs.
+    expect(dispatchJob?.needs).toEqual(['changes', 'supabase_deploy'])
+    expect(dispatchJob?.if).toContain('needs.changes.outputs.is_alpha != \'true\'')
+    expect(dispatchJob?.if).toContain('needs.changes.outputs.requires_schema_types_sync == \'true\'')
+    expect(dispatchJob?.if).toContain('needs.supabase_deploy.result == \'success\'')
+    expect(dispatchJob?.permissions).toEqual({ actions: 'write' })
     expect(dispatch?.run).toContain('gh workflow run sync_schema_types.yml')
     expect(dispatch?.run).toContain('deploy_tag="${{ needs.changes.outputs.deploy_tag }}"')
     expect(stepIndex('Reconcile the Google subscriber through server-side Cloud SQL import')).toBeGreaterThan(-1)
     expect(stepIndex('Apply Supabase Migrations')).toBeGreaterThan(stepIndex('Reconcile the Google subscriber through server-side Cloud SQL import'))
-    expect(stepIndex('Dispatch production schema and types sync')).toBeGreaterThan(stepIndex('Apply Supabase Migrations'))
-    expect(deploy.jobs?.supabase_deploy?.permissions?.actions).toBe('write')
+    expect(deploy.jobs?.supabase_deploy?.permissions?.actions).toBeUndefined()
+    for (const [name, job] of Object.entries(deploy.jobs ?? {}))
+      expect(job.needs ?? [], `${name} must not wait for the schema/types dispatch`).not.toContain('dispatch_schema_types_sync')
     expect(syncJob?.if).toContain('!contains(inputs.deploy_tag, \'-alpha.\')')
     expect(syncJob?.permissions?.contents).toBe('write')
     expect(syncStep?.run).toContain('for attempt in 1 2 3')

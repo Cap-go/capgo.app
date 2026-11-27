@@ -60,7 +60,8 @@ describe('production read-replica release gate', () => {
       expect(reconcileIndex).toBeGreaterThan(-1)
       expect(reconcileIndex).toBeLessThan(supabaseJob.indexOf('push-release-migrations.sh'))
       expect(supabaseJob.indexOf('push-release-migrations.sh')).toBeLessThan(supabaseJob.indexOf('sync-read-replica-schema.ts --guard'))
-      expect(supabaseJob.indexOf('sync-read-replica-schema.ts --guard')).toBeLessThan(supabaseJob.indexOf('sync-read-replica-schema.ts --refresh-subscription'))
+      // The subscription refresh is its own job so a slow initial table copy never holds workers.
+      expect(supabaseJob).not.toContain('sync-read-replica-schema.ts --refresh-subscription')
       expect(workflow).not.toContain('read_replica_schema')
       expect(workflow).toContain('needs.supabase_deploy.result == \'success\'')
       // The sync script must preflight subscriber compatibility before applying anything.
@@ -101,31 +102,25 @@ describe('production read-replica release gate', () => {
         workflow.indexOf('\n  build_webapp:'),
       )
       expect(refreshJob).toContain(
-        githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && needs.changes.outputs.is_alpha != \'true\' && needs.supabase_deploy.result == \'success\''),
+        githubExpression('needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && needs.changes.outputs.is_alpha != \'true\' && needs.supabase_deploy.result == \'success\''),
       )
       expect(workflow).not.toMatch(
         /deploy_(?:api|files|plugin_regions):\n    needs:.*read_replica_subscription/,
       )
 
-      interface Step { 'id'?: string, 'run'?: string, 'continue-on-error'?: boolean, 'parallel'?: Step[] }
+      interface Step { run?: string }
       const parsed = parse(workflow) as {
-        jobs?: Record<string, { if?: unknown, needs?: string[] | string, outputs?: Record<string, string>, steps?: Step[] }>
+        jobs?: Record<string, { if?: unknown, needs?: string[] | string, steps?: Step[] }>
       }
       const refreshDef = parsed.jobs?.read_replica_subscription
       expect(refreshDef, 'read_replica_subscription must exist in build_and_deploy.yml').toBeDefined()
       expect(refreshDef?.if, 'read_replica_subscription must keep a job-level if').toBeDefined()
       expect(refreshDef?.if, 'read_replica_subscription must not be disabled with if: false').not.toBe(false)
-      // The refresh itself runs in supabase_deploy next to the function deploys. It asserts the
-      // deploy tag is current, cannot fail that job, and the gate job turns its outcome into a
-      // visible failure that holds web publishing.
-      const refreshStep = (parsed.jobs?.supabase_deploy?.steps ?? [])
-        .flatMap(step => [step, ...(step.parallel ?? [])])
-        .find(step => step.id === 'replica_subscription')
-      expect(refreshStep?.run).toContain('resolve-deploy-tag.ts --assert-current')
-      expect(refreshStep?.run).toContain('sync-read-replica-schema.ts --refresh-subscription')
-      expect(refreshStep?.['continue-on-error']).toBe(true)
-      expect(parsed.jobs?.supabase_deploy?.outputs?.replica_subscription).toBe(githubExpression('steps.replica_subscription.outcome'))
-      expect(refreshDef?.steps?.some(step => step.run?.includes('[ "$OUTCOME" != "success" ]') && step.run.includes('exit 1'))).toBe(true)
+      expect(
+        refreshDef?.steps?.some(step => step.run?.includes('resolve-deploy-tag.ts --assert-current')),
+        'read_replica_subscription must run an executable assert-current step',
+      ).toBe(true)
+      expect(refreshDef?.steps?.some(step => step.run?.includes('sync-read-replica-schema.ts --refresh-subscription'))).toBe(true)
       const workerJobs = ['deploy_api', 'deploy_files', 'deploy_plugin_regions', 'deploy_translation_worker'] as const
       const expectedIf: Record<typeof workerJobs[number], string> = {
         deploy_api: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.api == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\')'),

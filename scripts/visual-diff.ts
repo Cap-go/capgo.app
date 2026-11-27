@@ -909,7 +909,7 @@ async function runPipeline(options: CliOptions) {
     )
     if (options.onlyPhase)
       return
-    const results = await compareScreenshots(options.thresholdPercent, options.routes, visualDiffConfig)
+    const results = await compareScreenshots(options.thresholdPercent, routeFilter, visualDiffConfig)
     const summary = generateReport(results, options.thresholdPercent)
 
     if (summary.changedCount > 0)

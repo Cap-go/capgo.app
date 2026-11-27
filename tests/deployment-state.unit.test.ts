@@ -55,7 +55,7 @@ function job(name: string, steps: string[], conclusion = 'success'): DeploymentJ
 const apiJob = () => job('deploy_api', ['Deploy CF Worker API', 'Retire removed CF Workers'])
 const supabaseJob = () => job('Build code and deploy to Supabase', ['Apply Supabase Migrations', 'Update functions'])
 const stableSupabaseJob = () => job('Build code and deploy to Supabase', ['Reconcile the Google subscriber through server-side Cloud SQL import', 'Apply Supabase Migrations', 'Update functions'])
-const refreshJob = () => job('Refresh production read-replica subscription', ['Require read-replica subscription refresh'])
+const refreshJob = () => job('Refresh production read-replica subscription', ['Refresh subscription for newly published tables'])
 
 describe('cumulative deployment scope with real git history', () => {
   it('keeps changes from failed published tags pending on later unrelated tags', () => {

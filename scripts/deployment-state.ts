@@ -102,9 +102,7 @@ export function completedDeploymentKeys(jobs: DeploymentJob[], environment: Envi
     && succeeded('Build code and deploy to Supabase', 'Apply Supabase Migrations')
     && (environment === 'alpha' || (
       succeeded('Build code and deploy to Supabase', 'Reconcile the Google subscriber through server-side Cloud SQL import')
-      // The refresh step is continue-on-error, so its own conclusion stays green; the gate job
-      // only succeeds when the refresh did.
-      && succeeded('Refresh production read-replica subscription', 'Require read-replica subscription refresh')
+      && succeeded('Refresh production read-replica subscription', 'Refresh subscription for newly published tables')
     ))) {
     keys.push('supabase')
   }
