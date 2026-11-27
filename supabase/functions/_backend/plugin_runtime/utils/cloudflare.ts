@@ -2,6 +2,7 @@ import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue
 import type { Context } from 'hono'
 import type { DeviceInfoWriteCachePayload } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
+import type { SnippetEdgeStatsEnv } from './snippetEdgeReplay.ts'
 import type { Database } from './supabase.types.ts'
 import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceRes, DeviceWithoutCreatedAt, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
@@ -51,7 +52,8 @@ type AiBinding = {
 }
 
 // eslint-disable-next-line ts/consistent-type-definitions
-export type Bindings = {
+/** Snippet edge stats bindings (snippetEdgeReplay.ts) included: the EU worker consumes its queues. */
+export type Bindings = SnippetEdgeStatsEnv & {
   SERVING_REGION_SIGNING_KEY?: string
   DEVICE_USAGE: AnalyticsEngineDataset
   BANDWIDTH_USAGE: AnalyticsEngineDataset

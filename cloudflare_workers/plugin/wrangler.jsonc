@@ -33,6 +33,15 @@
       "placement": {
         "region": "gcp:europe-west8"
       },
+      // Queue handlers are not placed (they ran in US data centers). queue()
+      // relays each message through this binding to the worker's own placed
+      // fetch handler, so replays run next to the EU replica.
+      "services": [
+        {
+          "binding": "PLACED_SELF",
+          "service": "capgo_plugin-eu-prod"
+        }
+      ],
       "routes": [
         {
           "pattern": "plugin.capgo.app",
@@ -139,6 +148,8 @@
             "queue": "capgo-snippet-edge-stats-replay"
           }
         ],
+        // queue() relays every message through a service binding, and one
+        // invocation may call at most 32 workers: keep batches small.
         "consumers": [
           {
             "queue": "capgo-snippet-edge-stats-files",

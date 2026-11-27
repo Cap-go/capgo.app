@@ -131,17 +131,26 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 
 A regional plugin worker with an active placement hint runs in one data
 center. Check the `cf-placement` response header to confirm it, for example
-`remote-CMH` for `plugin.na.capgo.app`. A worker that returns no `cf-placement`
-header may not run in one data center, so its prewarm may not warm the cache its
-devices read. On 2026-11-22 `capgo_plugin-jp-prod` reported `placement.mode:
-targeted` (`gcp:asia-northeast1`) in its script settings but returned no
-`cf-placement` header, even on uncached paths. On 2026-11-26 every region,
-Japan included (`remote-NRT`), answered a prewarm with a `remote-` placement.
-The prewarm reports each region's `cf-placement` value. Only `remote-XXX` shows
-the call ran in the worker's placement data center: the API worker is placed in
-`aws:eu-west-2`, so `local-XXX` means a regional call stayed where it arrived. The `plugin state
-prewarmed` log lists regions without a `remote-` value under `unplaced`, the
-public endpoint returns `pinned`, and `app prewarm` flags them.
+`remote-CMH` for `plugin.na.capgo.app`. Cloudflare does not always send it:
+`capgo_plugin-jp-prod` answered without it on 2026-11-22 and 2026-11-26
+(requests entering at MRS), while Workers analytics showed all its invocations
+in NRT, and answered `remote-NRT` on 2026-11-27 (entering at MAD). Cloudflare
+also documents the header as one it may remove. So the regional prewarm route
+measures its own placement: it returns `colo`, where the call entered
+Cloudflare (`request.cf.colo`), and `ran_in`, where it ran. A worker cannot see
+its own `cf-placement`, and `request.cf.colo` is the entry data center even
+for a placed worker, so `ran_in` comes from a subrequest to
+`https://cloudflare.com/cdn-cgi/trace`: a subrequest leaves from the data
+center the worker runs in, and the trace names it (verified on 2026-11-27 with
+a worker placed at `gcp:asia-northeast1`: trace `NRT`, `request.cf.colo` `MAD`).
+
+The prewarm reports each region's `cf-placement` value or, without one,
+`remote-<ran_in>` when `ran_in` differs from `colo` and `local-<ran_in>` when
+they match. Only `remote-XXX` shows the call ran in the worker's placement data
+center: the API worker is placed in `aws:eu-west-2`, so `local-XXX` means a
+regional call stayed where it arrived. The `plugin state prewarmed` log lists
+regions without a `remote-` value under `unplaced`, the public endpoint returns
+`pinned`, and `app prewarm` flags them.
 
 The Cache API is local to the data center a worker runs in, so a placed region
 has a single plugin-state cache. Cache keys include the request hostname. The

@@ -1,4 +1,4 @@
-import type { Queue, R2Bucket } from '@cloudflare/workers-types'
+import type { Fetcher, Queue, R2Bucket } from '@cloudflare/workers-types'
 import type { SnippetEdgeReplay } from './snippetEdgeAnswer.ts'
 import { cloudlog } from './logging.ts'
 import { markSnippetEdgeReplay } from './snippetEdgeAnswer.ts'
@@ -16,6 +16,10 @@ import { markSnippetEdgeReplay } from './snippetEdgeAnswer.ts'
  * 2. replays every chunk in its own invocation through the plugin app, in
  *    process: /stats runs its normal handler, /updates only writes the stats
  *    of the up-to-date answer the snippet gave (recordSnippetUpToDate)
+ *
+ * Both steps run in the worker's placement data center: queue invocations are
+ * not placed, so the queue handler relays each message to its own fetch
+ * handler through the PLACED_SELF service binding (relaySnippetEdgeStatsMessage).
  *
  * Delivery is at least once, without a dedupe store: a file is deleted once
  * all its chunks are queued (a repeated notification then finds nothing), a
@@ -319,6 +323,34 @@ export async function replaySnippetEdgeRecords(records: SnippetEdgeStatRecord[],
 export interface SnippetEdgeStatsEnv {
   SNIPPET_EDGE_STATS_LOGS?: R2Bucket
   SNIPPET_EDGE_STATS_REPLAY?: Queue
+  /** Service binding to this same worker: its fetch handler runs placed (relaySnippetEdgeStatsMessage). */
+  PLACED_SELF?: Fetcher
+  API_SECRET?: string
+}
+
+/** Route of the plugin worker that consumes a relayed queue message (relaySnippetEdgeStatsMessage). */
+export const SNIPPET_EDGE_STATS_CONSUME_PATH = '/snippet_edge_stats/consume'
+
+/**
+ * Hands one queue message to this worker's placed fetch handler and waits for
+ * it. Placement moves fetch handlers only: queue invocations run wherever
+ * Cloudflare schedules them (US data centers for the EU worker), far from the
+ * replica the replayed /stats requests read. A fetch through a service binding
+ * to the same worker runs in its placement data center, where
+ * SNIPPET_EDGE_STATS_CONSUME_PATH runs handleSnippetEdgeStatsMessage. Throws
+ * when the message must be retried.
+ */
+export async function relaySnippetEdgeStatsMessage(env: SnippetEdgeStatsEnv, requestId: string, body: unknown) {
+  if (!env.PLACED_SELF || !env.API_SECRET)
+    throw new Error('Relaying snippet edge stats needs PLACED_SELF and API_SECRET')
+  const response = await env.PLACED_SELF.fetch(`https://plugin.capgo.app${SNIPPET_EDGE_STATS_CONSUME_PATH}`, {
+    method: 'POST',
+    headers: { 'apisecret': env.API_SECRET, 'content-type': 'application/json' },
+    body: JSON.stringify({ id: requestId, body }),
+  })
+  await response.body?.cancel()
+  if (!response.ok)
+    throw new Error(`Snippet edge stats relay answered HTTP ${response.status}`)
 }
 
 /** Delay before failed records are replayed again, or a failed file send resumes. */
