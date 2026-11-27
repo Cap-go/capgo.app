@@ -48,6 +48,10 @@ export const test = base.extend({
     }
 
     await use(page)
+    // The console keeps refetching in the background. A route handler forwarding one of
+    // those requests (route.fetch) when the test ends threw "Test ended" and failed a
+    // test whose assertions had all passed.
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
   },
 })
 
