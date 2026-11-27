@@ -37,8 +37,8 @@ import { quickError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { queryJson } from '../../utils/pg_rls.ts'
+import { getPublicApiUrl } from '../../utils/publicApiUrl.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { getEnv } from '../../utils/utils.ts'
 
 type ApikeyRow = Database['public']['Tables']['apikeys']['Row']
 
@@ -529,7 +529,7 @@ export async function createBuildCredentialsUploadUrl(c: Context, apikey: Apikey
     apikey_id: authKey.id,
     exp,
   })
-  const baseUrl = getEnv(c, 'PUBLIC_URL') || 'https://api.capgo.app'
+  const baseUrl = getPublicApiUrl(c)
   const uploadUrl = `${baseUrl}/build/credentials/upload/${token}`
   cloudlog({ requestId: c.get('requestId'), message: 'Build credentials upload URL created', app_id: appId, platform, mode })
   return c.json({

@@ -9,6 +9,7 @@ import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import type { PgClient } from '../../utils/pg.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
+import { getPublicApiUrl } from '../../utils/publicApiUrl.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { backgroundTask, getEnv } from '../../utils/utils.ts'
@@ -523,7 +524,7 @@ function ensureBuilderUploadUrl(c: Context, builderUrl: string, builderApiKey: s
 }
 
 function getBuildUploadUrl(c: Context, builderJob: BuilderJobResponse) {
-  return `${getEnv(c, 'PUBLIC_URL') || 'https://api.capgo.app'}/build/upload/${builderJob.jobId}`
+  return `${getPublicApiUrl(c)}/build/upload/${builderJob.jobId}`
 }
 
 async function persistBuildRequest(c: Context, input: {

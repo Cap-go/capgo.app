@@ -115,6 +115,31 @@ describe('files TUS upload location rewriting', () => {
     expect(response.headers.get('Location')).toBe('https://uploads.capgo.app/functions/v1/files/upload/attachments/upload-id')
   })
 
+  it('keeps China API requests on the China host even when PUBLIC_URL is the global host', async () => {
+    mockGetEnv.mockImplementation((_, key: string) => {
+      if (key === 'SUPABASE_URL')
+        return 'https://project.supabase.co'
+      if (key === 'SUPABASE_SERVICE_ROLE_KEY')
+        return 'service-role-key'
+      if (key === 'PUBLIC_URL')
+        return 'https://api.capgo.app'
+      return ''
+    })
+    globalThis.fetch = vi.fn(async () => new Response(null, {
+      status: 201,
+      headers: {
+        Location: 'https://project.supabase.co/storage/v1/upload/resumable/upload-id',
+      },
+    })) as typeof fetch
+
+    const response = await supabaseTusCreateHandler(createContext({
+      requestUrl: 'https://api.capgo.com.cn/functions/v1/files/upload/attachments',
+    }) as any)
+
+    expect(response.status).toBe(201)
+    expect(response.headers.get('Location')).toBe('https://api.capgo.com.cn/functions/v1/files/upload/attachments/upload-id')
+  })
+
   it('keeps forwarded local Supabase hosts working in development', async () => {
     mockGetEnv.mockImplementation((_, key: string) => {
       if (key === 'SUPABASE_URL')

@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { cloudlog } from '../utils/logging.ts'
+import { chinaApiOriginForRequest } from '../utils/publicApiUrl.ts'
 import { getEnv } from '../utils/utils.ts'
 import { parseUploadMetadata } from './parse.ts'
 import { ALLOWED_HEADERS, ALLOWED_METHODS, EXPOSED_HEADERS, MAX_UPLOAD_LENGTH_BYTES, TUS_EXTENSIONS, TUS_VERSION } from './util.ts'
@@ -69,6 +70,9 @@ function buildLocalForwardedBaseUrl(c: Context): string | undefined {
 
 function resolveUploadLocationBaseUrl(c: Context, supabaseUrl: string): string {
   const normalizedSupabaseUrl = supabaseUrl.replace(/\/$/, '')
+  const chinaApiOrigin = chinaApiOriginForRequest(c.req.url)
+  if (chinaApiOrigin)
+    return chinaApiOrigin
   const publicUrl = normalizeHttpOrigin(getEnv(c, 'PUBLIC_URL'))
   if (publicUrl)
     return publicUrl

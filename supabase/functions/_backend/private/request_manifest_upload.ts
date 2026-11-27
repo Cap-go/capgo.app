@@ -14,6 +14,7 @@ import { throwDatabaseLookupError, throwDatabaseUnavailable } from '../utils/pg_
 import { isTransientPgError } from '../utils/pg_errors.ts'
 import { getAppPlanStatePg } from '../utils/pg_files.ts'
 import * as schema from '../utils/postgres_schema.ts'
+import { chinaApiOriginForRequest } from '../utils/publicApiUrl.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { checkPermissionPg } from '../utils/rbac.ts'
 import { getEnv } from '../utils/utils.ts'
@@ -27,6 +28,9 @@ function manifestUploadError(error: ManifestUploadRequestError): never {
 }
 
 export function manifestUploadPublicUrl(c: Parameters<typeof getEnv>[0]): string {
+  const chinaApiOrigin = chinaApiOriginForRequest(c.req.url)
+  if (chinaApiOrigin)
+    return chinaApiOrigin
   const configured = getEnv(c, 'FILES_PUBLIC_URL') || getEnv(c, 'PUBLIC_URL')
   if (configured || getRuntimeKey() === 'workerd')
     return configured
