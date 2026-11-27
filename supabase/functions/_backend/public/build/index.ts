@@ -95,6 +95,9 @@ app.post('/start/:jobId', middlewareKey(['all', 'write']), async (c) => {
 // GET /build/status - Get build status and record billing
 app.get('/status', middlewareKey(['all', 'read']), async (c) => {
   const params = await getBodyOrQuery<BuildStatusParams>(c)
+  if (!params.app_id || !params.job_id) {
+    throw simpleError('missing_parameter', 'app_id and job_id are required')
+  }
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return getBuildStatus(c, params, apikey)
 })

@@ -2,8 +2,9 @@ import type { Context } from 'hono'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { app } from '../supabase/functions/_backend/public/build/index.ts'
 
-const mocks = vi.hoisted(() => ({ logs: vi.fn() }))
+const mocks = vi.hoisted(() => ({ logs: vi.fn(), status: vi.fn() }))
 vi.mock('../supabase/functions/_backend/public/build/logs.ts', () => ({ streamBuildLogs: (...args: unknown[]) => mocks.logs(...args) }))
+vi.mock('../supabase/functions/_backend/public/build/status.ts', () => ({ getBuildStatus: (...args: unknown[]) => mocks.status(...args) }))
 vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', async original => ({
   ...await original<typeof import('../supabase/functions/_backend/utils/hono_middleware.ts')>(),
   middlewareKey: () => async (c: Context, next: () => Promise<void>) => {
@@ -12,7 +13,10 @@ vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', async origina
   },
 }))
 
-beforeEach(() => mocks.logs.mockReset())
+beforeEach(() => {
+  mocks.logs.mockReset()
+  mocks.status.mockReset()
+})
 it('production log route forwards snapshot=true as a JSON read', async () => {
   mocks.logs.mockResolvedValue(Response.json({ logs: 'building', cursor: 1 }))
   const result = await app.request('http://local/logs/example-job?app_id=com.example.app&snapshot=true')
@@ -26,4 +30,12 @@ it('production log route preserves legacy streaming without snapshot=true', asyn
   const result = await app.request('http://local/logs/example-job?app_id=com.example.app')
   expect(result.headers.get('content-type')).toBe('text/event-stream')
   expect(mocks.logs.mock.calls[0][4]).toBe(false)
+})
+it('status route rejects a request without app_id or job_id', async () => {
+  for (const query of ['job_id=example-job', 'app_id=com.example.app']) {
+    const result = await app.request(`http://local/status?${query}`)
+    expect(result.status).toBe(400)
+    expect(await result.text()).toBe('app_id and job_id are required')
+  }
+  expect(mocks.status).not.toHaveBeenCalled()
 })
