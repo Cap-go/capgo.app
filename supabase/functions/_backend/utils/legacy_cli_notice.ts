@@ -13,7 +13,7 @@ export const LEGACY_CLI_UPGRADE_EVENT = 'user:cli_upgrade_required'
 /** First CLI that calls only the Capgo API. Up to 8.90.0 the CLI ships the Supabase SDK and reads the database directly. */
 export const FIRST_API_ONLY_CLI = '8.90.1'
 /** Direct database access through the Supabase API (PostgREST) is switched off on this date. */
-export const LEGACY_CLI_CUTOFF = '2026-12-01'
+export const LEGACY_CLI_CUTOFF = '2026-12-10'
 const UPGRADE_COMMAND = 'npm i -D @capgo/cli@latest'
 const CHANGELOG_URL = 'https://github.com/Cap-go/capgo/blob/main/cli/CHANGELOG.md'
 /** At most one reminder per user and per week while they keep running an old CLI. */
