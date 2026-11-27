@@ -49,7 +49,7 @@ globalThis.fetch = async (input, init) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   requests.push({ url, method: init?.method ?? 'GET' })
   if (new URL(url).pathname.endsWith('/build/ai_analyze_stream')) {
-    return new Response('data: {"type":"done","analysis":"ok"}\n\n', { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+    return new Response('event: chunk\ndata: {"text":"ok"}\n\nevent: done\ndata: {"durationMs":1}\n\n', { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
   }
   return new Response(JSON.stringify(respond(url)), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }
@@ -118,16 +118,19 @@ try {
   const gzPath = join(root, 'logs.gz')
   writeFileSync(gzPath, 'logs')
   assert.ok(await uploadSupportLogs({ apikey: 'test-key', appId: 'com.example.china', gzPath }))
+  assertOnlyChinaHost('support upload')
   const jobId = `china-host-${process.pid}`
   mkdirSync(join(getLogCapturePath(jobId), '..'), { recursive: true })
   writeFileSync(getLogCapturePath(jobId), 'build failed\n')
   try {
-    await runCapgoAiAnalysis({ apikey: 'test-key', jobId, appId: 'com.example.china' })
+    assert.deepEqual(await runCapgoAiAnalysis({ apikey: 'test-key', jobId, appId: 'com.example.china' }), { kind: 'ok', analysis: 'ok' })
   }
   finally {
     rmSync(getLogCapturePath(jobId), { force: true })
   }
-  assertOnlyChinaHost('support upload and AI analysis')
+  assert.equal(requests.length, 1, 'AI analysis makes exactly one request')
+  assert.equal(new URL(requests[0].url).pathname, '/build/ai_analyze_stream')
+  assertOnlyChinaHost('AI analysis')
 
   // Update probe defaults to the China updates route, unless the app configures its own.
   assert.equal(getUpdateUrl({}, CHINA_API), `${CHINA_API}/updates`)
