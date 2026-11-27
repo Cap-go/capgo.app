@@ -28,6 +28,9 @@ export function captureProperties(payload: PostHogCapturePayload) {
     description: payload.description,
     ...(payload.setPersonProperties === false ? {} : { $set: { ...payload.tags, ...payload.personProperties } }),
     ...(hasGroups ? { $groups: payload.groups } : {}),
+    // PostHog geolocates from the $ip property and ignores the top level ip field, so
+    // without this, worker-sent events get the worker's location. Overrides caller tags.
+    ...(payload.ip ? { $ip: payload.ip } : {}),
     // Reserved identity must override caller tags and never become a person trait.
     ...(payload.event_id ? { $insert_id: payload.event_id } : {}),
   }
