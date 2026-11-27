@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(12);
+SELECT plan(15);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -124,6 +124,46 @@ SELECT ok(
   (SELECT billed_minutes FROM public.terminal_sessions
    WHERE session_key = '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s1') >= 1,
   'billed_minutes persisted'
+);
+
+-- Floor billing: 119.7s elapsed is 1 whole minute, not 2.
+UPDATE public.terminal_sessions
+SET started_at = now() - interval '119.7 seconds'
+WHERE session_key = '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s2';
+
+SELECT is(
+  public.terminal_session_finish(
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s2',
+    'test'
+  ),
+  1,
+  'finish floors 119.7s to 1 billed minute'
+);
+
+SELECT is(
+  (public.terminal_session_reserve(
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s4',
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    'com.test.terminal.session',
+    NULL::bigint,
+    60,
+    2
+  )->>'ok')::boolean,
+  true,
+  'fourth session reserves after earlier sessions end'
+);
+
+UPDATE public.terminal_sessions
+SET started_at = now() - interval '59 seconds'
+WHERE session_key = '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s4';
+
+SELECT is(
+  public.terminal_session_finish(
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s4',
+    'test'
+  ),
+  1,
+  'finish bills the 1 minute minimum for 59s'
 );
 
 SELECT tests.authenticate_as('test_user');

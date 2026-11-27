@@ -328,7 +328,7 @@ BEGIN
     -- first are intentionally not billed.
     v_minutes := LEAST(
       v_row.max_duration_minutes,
-      GREATEST(1, extract(epoch FROM (now() - v_row.started_at))::integer / 60)
+      GREATEST(1, floor(extract(epoch FROM (now() - v_row.started_at)) / 60)::integer)
     );
   END IF;
 
