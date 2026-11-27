@@ -15,6 +15,8 @@ export type TerminalMcpSession = {
   sessionKey: string
   orgId: string
   appId: string
+  /** DB started_at (epoch ms) from the reservation. */
+  startedAtMs?: number
 }
 
 export { mcpRequestIncludesInitialize } from './mcp_rpc.ts'
@@ -72,6 +74,7 @@ function mcpServeContext(session: TerminalMcpSession, ctx: ExecutionContext): Te
       sessionKey: session.sessionKey,
       orgId: session.orgId,
       appId: session.appId,
+      ...(session.startedAtMs !== undefined ? { startedAtMs: session.startedAtMs } : {}),
     },
   } as TerminalMcpServeContext
 }

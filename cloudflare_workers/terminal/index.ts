@@ -14,9 +14,9 @@ import {
 import { handleTerminalMcpWhenSessionActive } from './lib/mcp_active.ts'
 import { validateTerminalMcpPostBody, type TerminalMcpPrecheckedPost } from './lib/mcp_serve.ts'
 import {
+  activeTerminalSessionStartedAtMs,
   consumeTerminalWsToken,
   finishTerminalSession,
-  isTerminalSessionActive,
   reserveTerminalSession,
   setTerminalWsToken,
   sha256Hex,
@@ -91,11 +91,11 @@ function reserveStatus(error: string | undefined): number {
 async function ensureReserved(
   hyperdrive: TerminalEnv['HYPERDRIVE_CAPGO_DIRECT_EU'],
   input: Parameters<typeof reserveTerminalSession>[1],
-): Promise<Response | { reused: boolean, created: boolean }> {
+): Promise<Response | { reused: boolean, created: boolean, startedAtMs?: number }> {
   const reserved = await reserveTerminalSession(hyperdrive, input)
   if (!reserved.ok)
     return Response.json({ error: reserved.error ?? 'reserve_failed' }, { status: reserveStatus(reserved.error) })
-  return { reused: reserved.reused === true, created: reserved.created === true }
+  return { reused: reserved.reused === true, created: reserved.created === true, startedAtMs: reserved.startedAtMs }
 }
 
 function mintWsConnectToken(): string {
@@ -231,11 +231,12 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv, ctx: Exec
     if (!ok)
       return new Response('unauthorized', { status: 401 })
 
-    if (!await isTerminalSessionActive(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey))
+    const startedAtMs = await activeTerminalSessionStartedAtMs(env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey)
+    if (startedAtMs === null)
       return new Response('gone', { status: 410 })
 
     const agent = await getAgentByName(env.TERMINAL_SESSION, await terminalDurableObjectName(sessionKey), {
-      props: { sessionKey, orgId: parts.orgId, appId: parts.appId },
+      props: { sessionKey, orgId: parts.orgId, appId: parts.appId, startedAtMs },
     })
     return agent.fetch(stripClientMcpHeaders(request))
   }
@@ -277,6 +278,7 @@ async function handleTerminalFetch(request: Request, env: TerminalEnv, ctx: Exec
         sessionKey,
         orgId,
         appId,
+        startedAtMs: reserved.startedAtMs,
       }, ctx, {
         sessionOwnedThisRequest,
         precheckedPost,

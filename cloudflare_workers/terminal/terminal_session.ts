@@ -11,6 +11,7 @@ import {
 import { finalizeTerminalSession } from './lib/apikey.ts'
 import { TERMINAL_INTERNAL_MCP_BRIDGE } from './lib/mcp_bridge.ts'
 import { buildRunCommandScript } from './lib/run_command.ts'
+import { finalizeOrScheduleRetry, readPendingFinish, resolveSessionStartedAtMs, type TeardownStorage } from './lib/teardown.ts'
 import {
   assertSafeCommand,
   capOutputBytes,
@@ -25,8 +26,6 @@ type McpTextResult = { content: Array<{ type: 'text', text: string }> }
 
 const SESSION_KEY_STORAGE = 'terminal_session_key'
 const SESSION_PROPS_STORAGE = 'terminal_session_props'
-const PENDING_FINISH_STORAGE = 'terminal_pending_finish'
-const PENDING_FINISH_RETRY_MS = 30_000
 
 function registerMcpTool(
   server: McpServer,
@@ -53,6 +52,8 @@ export interface TerminalProps extends Record<string, unknown> {
   sessionKey: string
   orgId: string
   appId: string
+  /** DB `terminal_sessions.started_at` (epoch ms) from the reservation; seeds the session clock. */
+  startedAtMs?: number
 }
 
 export interface TerminalAgentState {
@@ -64,7 +65,7 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
   server = new McpServer({ name: 'Capgo Cloud Terminal', version: '1.0.0' })
 
   initialState: TerminalAgentState = {
-    startedAtMs: Date.now(),
+    startedAtMs: 0,
     ended: false,
   }
 
@@ -98,6 +99,11 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
       await this.ctx.storage.put(SESSION_KEY_STORAGE, key)
       if (props?.orgId && props?.appId)
         await this.ctx.storage.put(SESSION_PROPS_STORAGE, JSON.stringify(props))
+    }
+    if (props?.startedAtMs !== undefined) {
+      const startedAtMs = resolveSessionStartedAtMs(props.startedAtMs, this.state.startedAtMs, Date.now())
+      if (startedAtMs !== this.state.startedAtMs)
+        this.setState({ ...this.state, startedAtMs })
     }
     await super.onStart(props)
   }
@@ -305,9 +311,9 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
 
   async alarm() {
     await this.restoreSessionIdentityFromStorage()
-    const pending = await this.ctx.storage.get<string>(PENDING_FINISH_STORAGE)
+    const pending = await readPendingFinish(this.ctx.storage)
     if (pending) {
-      await this.teardown(pending)
+      await this.teardown(pending.reason, pending.endedAtMs)
       return
     }
     const started = this.state.startedAtMs || Date.now()
@@ -315,31 +321,33 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
     await this.teardown(reason)
   }
 
-  async teardown(reason: string) {
+  /**
+   * @param endedAtMs original teardown time; retries pass the stored value so
+   * billing stops at the teardown, not at the retry.
+   */
+  async teardown(reason: string, endedAtMs: number = Date.now()) {
     this.setState({ ...this.state, ended: true })
     await this.restoreSessionIdentityFromStorage()
     const key = await this.sessionKeyForTeardown()
     let dbFinalized = !key
     if (key) {
-      try {
-        const result = await finalizeTerminalSession(this.env.HYPERDRIVE_CAPGO_DIRECT_EU, key, reason)
-        dbFinalized = result.finalized
-        if (!dbFinalized) {
-          await this.ctx.storage.put(PENDING_FINISH_STORAGE, reason)
-          await this.ctx.storage.setAlarm(Date.now() + PENDING_FINISH_RETRY_MS)
-        }
-      }
-      catch (error) {
-        console.error(JSON.stringify({
-          event: 'terminal_finish_failed',
-          session_key: key,
-          reason,
-          message: error instanceof Error ? error.message : String(error),
-        }))
-        await this.ctx.storage.put(PENDING_FINISH_STORAGE, reason)
-        await this.ctx.storage.setAlarm(Date.now() + PENDING_FINISH_RETRY_MS)
-        dbFinalized = false
-      }
+      dbFinalized = await finalizeOrScheduleRetry({
+        storage: this.ctx.storage as unknown as TeardownStorage,
+        sessionKey: key,
+        reason,
+        endedAtMs,
+        finalize: (sessionKey, finishReason, finishEndedAtMs) =>
+          finalizeTerminalSession(this.env.HYPERDRIVE_CAPGO_DIRECT_EU, sessionKey, finishReason, finishEndedAtMs),
+        nowMs: () => Date.now(),
+        onError: (error) => {
+          console.error(JSON.stringify({
+            event: 'terminal_finish_failed',
+            session_key: key,
+            reason,
+            message: error instanceof Error ? error.message : String(error),
+          }))
+        },
+      })
     }
     try {
       const container = this.ctx.container

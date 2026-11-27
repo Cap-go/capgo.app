@@ -102,6 +102,11 @@ export async function validateApiKeyForApp(
   }
 }
 
+function parseEpochMs(value: unknown): number | undefined {
+  const ms = typeof value === 'string' ? Number(value) : value
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? ms : undefined
+}
+
 export async function reserveTerminalSession(
   hyperdrive: PostgresHyperdrive,
   input: {
@@ -112,11 +117,11 @@ export async function reserveTerminalSession(
     maxDurationMinutes: number
     maxConcurrency: number
   },
-): Promise<{ ok: boolean, error?: string, reused?: boolean, created?: boolean }> {
+): Promise<{ ok: boolean, error?: string, reused?: boolean, created?: boolean, startedAtMs?: number }> {
   const client = new Client({ connectionString: hyperdrive.connectionString })
   await client.connect()
   try {
-    const result = await client.query<{ result: { ok: boolean, error?: string, reused?: boolean, created?: boolean } }>(
+    const result = await client.query<{ result: { ok: boolean, error?: string, reused?: boolean, created?: boolean, started_at_ms?: number | string } }>(
       `SELECT public.terminal_session_reserve(
       $1::text, $2::uuid, $3::text, $4::bigint, $5::integer, $6::integer
     ) AS result`,
@@ -136,6 +141,7 @@ export async function reserveTerminalSession(
       ok: true,
       reused: payload.reused === true,
       created: payload.created === true,
+      startedAtMs: parseEpochMs(payload.started_at_ms),
     }
   }
   finally {
@@ -182,6 +188,32 @@ export async function consumeTerminalWsToken(
   }
 }
 
+/** DB started_at (epoch ms) of the active session, or null when it is not active. */
+export async function activeTerminalSessionStartedAtMs(
+  hyperdrive: PostgresHyperdrive,
+  sessionKey: string,
+): Promise<number | null> {
+  const client = new Client({ connectionString: hyperdrive.connectionString })
+  await client.connect()
+  try {
+    const result = await client.query<{ started_at_ms: string | number }>(
+      `SELECT floor(extract(epoch FROM t.started_at) * 1000)::bigint AS started_at_ms
+      FROM public.terminal_sessions t
+      WHERE t.session_key = $1::text
+        AND t.status = 'active'
+        AND t.started_at + make_interval(mins => t.max_duration_minutes) > pg_catalog.now()`,
+      [sessionKey],
+    )
+    const row = result.rows[0]
+    if (!row)
+      return null
+    return parseEpochMs(row.started_at_ms) ?? null
+  }
+  finally {
+    await client.end().catch(() => {})
+  }
+}
+
 export async function isTerminalSessionActive(
   hyperdrive: PostgresHyperdrive,
   sessionKey: string,
@@ -209,13 +241,15 @@ export async function finalizeTerminalSession(
   hyperdrive: PostgresHyperdrive,
   sessionKey: string,
   reason: string,
+  endedAtMs?: number,
 ): Promise<{ billedMinutes: number, finalized: boolean }> {
   const client = new Client({ connectionString: hyperdrive.connectionString })
   await client.connect()
   try {
+    const endedAt = endedAtMs === undefined ? null : new Date(endedAtMs).toISOString()
     const result = await client.query<{ minutes: number }>(
-      'SELECT public.terminal_session_finish($1::text, $2::text) AS minutes',
-      [sessionKey, reason],
+      'SELECT public.terminal_session_finish($1::text, $2::text, $3::timestamptz) AS minutes',
+      [sessionKey, reason, endedAt],
     )
     const billedMinutes = result.rows[0]?.minutes ?? 0
     return { billedMinutes, finalized: true }

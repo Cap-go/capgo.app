@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(15);
+SELECT plan(22);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -164,6 +164,78 @@ SELECT is(
   ),
   1,
   'finish bills the 1 minute minimum for 59s'
+);
+
+-- Retried finish: p_ended_at (original teardown time) drives ended_at and billing, not now().
+INSERT INTO public.terminal_sessions (session_key, owner_org, app_id, status, started_at)
+VALUES
+  ('046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s5', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'com.test.terminal.session', 'active', now() - interval '50 minutes'),
+  ('046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s6', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'com.test.terminal.session', 'active', now() - interval '10 minutes'),
+  ('046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s7', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'com.test.terminal.session', 'active', now() - interval '10 minutes');
+
+SELECT is(
+  public.terminal_session_finish('046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s5', 'client_end', now() - interval '45 minutes'),
+  5,
+  'finish with an earlier p_ended_at bills from that time, not now()'
+);
+
+SELECT is(
+  (SELECT ended_at FROM public.terminal_sessions WHERE session_key = '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s5'),
+  now() - interval '45 minutes',
+  'finish with p_ended_at records ended_at at the original teardown time'
+);
+
+SELECT is(
+  public.terminal_session_finish('046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s6', 'client_end', now() + interval '1 hour'),
+  10,
+  'p_ended_at after now() is clamped to now()'
+);
+
+SELECT is(
+  public.terminal_session_finish('046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s7', 'client_end', now() - interval '20 minutes'),
+  1,
+  'p_ended_at before started_at is clamped to started_at (1 minute minimum)'
+);
+
+SELECT is(
+  (SELECT ended_at FROM public.terminal_sessions WHERE session_key = '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s7'),
+  now() - interval '10 minutes',
+  'p_ended_at before started_at records ended_at = started_at'
+);
+
+-- Reservation returns DB started_at so the DO clock matches the DB expiry.
+CREATE TEMP TABLE terminal_s8_reserve ON COMMIT DROP AS
+SELECT public.terminal_session_reserve(
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s8',
+  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  'com.test.terminal.session',
+  NULL::bigint,
+  60,
+  2
+) AS result;
+
+SELECT is(
+  (SELECT (result->>'started_at_ms')::bigint FROM terminal_s8_reserve),
+  (SELECT floor(extract(epoch FROM started_at) * 1000)::bigint
+   FROM public.terminal_sessions WHERE session_key = '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s8'),
+  'reserve returns started_at_ms of the created session'
+);
+
+UPDATE public.terminal_sessions
+SET started_at = now() - interval '7 minutes'
+WHERE session_key = '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s8';
+
+SELECT is(
+  (public.terminal_session_reserve(
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8:com.test.terminal.session:s8',
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    'com.test.terminal.session',
+    NULL::bigint,
+    60,
+    2
+  )->>'started_at_ms')::bigint,
+  floor(extract(epoch FROM now() - interval '7 minutes') * 1000)::bigint,
+  'reused reserve returns the original started_at_ms'
 );
 
 SELECT tests.authenticate_as('test_user');

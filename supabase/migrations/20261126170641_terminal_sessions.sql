@@ -227,6 +227,7 @@ SET search_path = ''
 AS $$
 DECLARE
   v_active integer;
+  v_started_at timestamptz;
 BEGIN
   IF p_session_key IS NULL OR length(trim(p_session_key)) = 0 THEN
     RETURN jsonb_build_object('ok', false, 'error', 'invalid_session_key');
@@ -242,13 +243,17 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'invalid_app');
   END IF;
 
-  IF EXISTS (
-    SELECT 1 FROM public.terminal_sessions t
-    WHERE t.session_key = p_session_key
-      AND t.status = 'active'
-      AND t.started_at + make_interval(mins => t.max_duration_minutes) > now()
-  ) THEN
-    RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'reused', true, 'created', false);
+  SELECT t.started_at
+  INTO v_started_at
+  FROM public.terminal_sessions t
+  WHERE t.session_key = p_session_key
+    AND t.status = 'active'
+    AND t.started_at + make_interval(mins => t.max_duration_minutes) > now();
+  IF FOUND THEN
+    RETURN jsonb_build_object(
+      'ok', true, 'session_key', p_session_key, 'reused', true, 'created', false,
+      'started_at_ms', floor(extract(epoch FROM v_started_at) * 1000)::bigint
+    );
   END IF;
 
   PERFORM 1
@@ -260,13 +265,17 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'terminal_not_entitled');
   END IF;
 
-  IF EXISTS (
-    SELECT 1 FROM public.terminal_sessions t
-    WHERE t.session_key = p_session_key
-      AND t.status = 'active'
-      AND t.started_at + make_interval(mins => t.max_duration_minutes) > now()
-  ) THEN
-    RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'reused', true, 'created', false);
+  SELECT t.started_at
+  INTO v_started_at
+  FROM public.terminal_sessions t
+  WHERE t.session_key = p_session_key
+    AND t.status = 'active'
+    AND t.started_at + make_interval(mins => t.max_duration_minutes) > now();
+  IF FOUND THEN
+    RETURN jsonb_build_object(
+      'ok', true, 'session_key', p_session_key, 'reused', true, 'created', false,
+      'started_at_ms', floor(extract(epoch FROM v_started_at) * 1000)::bigint
+    );
   END IF;
 
   SELECT public.terminal_count_active_sessions(p_org_id) INTO v_active;
@@ -285,9 +294,13 @@ BEGIN
   )
   VALUES (
     p_session_key, p_org_id, p_app_id, p_apikey_id, 'active', p_max_duration_minutes
-  );
+  )
+  RETURNING started_at INTO v_started_at;
 
-  RETURN jsonb_build_object('ok', true, 'session_key', p_session_key, 'created', true, 'reused', false);
+  RETURN jsonb_build_object(
+    'ok', true, 'session_key', p_session_key, 'created', true, 'reused', false,
+    'started_at_ms', floor(extract(epoch FROM v_started_at) * 1000)::bigint
+  );
 END;
 $$;
 
@@ -299,7 +312,8 @@ GRANT EXECUTE ON FUNCTION public.terminal_session_reserve(text, uuid, text, bigi
 
 CREATE OR REPLACE FUNCTION public.terminal_session_finish(
   p_session_key text,
-  p_reason text DEFAULT 'normal'
+  p_reason text DEFAULT 'normal',
+  p_ended_at timestamptz DEFAULT NULL
 )
 RETURNS integer
 LANGUAGE plpgsql
@@ -309,6 +323,7 @@ AS $$
 DECLARE
   v_row public.terminal_sessions%ROWTYPE;
   v_minutes integer;
+  v_ended_at timestamptz;
 BEGIN
   SELECT *
   INTO v_row
@@ -320,6 +335,11 @@ BEGIN
     RETURN 0;
   END IF;
 
+  -- p_ended_at is the original teardown time, so a finish retried after a DB
+  -- outage bills up to the teardown, not up to the retry. It is clamped to
+  -- [started_at, now()]; NULL means now().
+  v_ended_at := LEAST(now(), GREATEST(v_row.started_at, coalesce(p_ended_at, now())));
+
   IF p_reason = 'ws_token_failed' THEN
     v_minutes := 0;
   ELSE
@@ -328,13 +348,13 @@ BEGIN
     -- first are intentionally not billed.
     v_minutes := LEAST(
       v_row.max_duration_minutes,
-      GREATEST(1, floor(extract(epoch FROM (now() - v_row.started_at)) / 60)::integer)
+      GREATEST(1, floor(extract(epoch FROM (v_ended_at - v_row.started_at)) / 60)::integer)
     );
   END IF;
 
   UPDATE public.terminal_sessions
   SET status = 'ended',
-      ended_at = now(),
+      ended_at = v_ended_at,
       updated_at = now(),
       billed_minutes = v_minutes,
       teardown_reason = left(coalesce(p_reason, 'normal'), 120)
@@ -344,11 +364,11 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.terminal_session_finish(text, text) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.terminal_session_finish(text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.terminal_session_finish(text, text) FROM anon;
-REVOKE ALL ON FUNCTION public.terminal_session_finish(text, text) FROM authenticated;
-GRANT EXECUTE ON FUNCTION public.terminal_session_finish(text, text) TO service_role;
+ALTER FUNCTION public.terminal_session_finish(text, text, timestamptz) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.terminal_session_finish(text, text, timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.terminal_session_finish(text, text, timestamptz) FROM anon;
+REVOKE ALL ON FUNCTION public.terminal_session_finish(text, text, timestamptz) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.terminal_session_finish(text, text, timestamptz) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.terminal_session_set_ws_token(
   p_session_key text,
