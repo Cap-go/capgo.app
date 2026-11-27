@@ -15,7 +15,7 @@ const builderVariantSchema = z.object({
   id: z.string().min(1).max(128),
   xcodeVersion: z.string().regex(MACHINE_VERSION_RE),
   macosVersion: z.string().regex(MACHINE_VERSION_RE).nullable(),
-  backend: z.enum(['mac', 'linux']),
+  backend: z.string().optional(),
   runners: z.number().int().min(0),
   online: z.number().int().min(0),
   default: z.boolean(),
@@ -31,7 +31,6 @@ export interface BuildVariant {
   id: string
   xcode_version: string
   macos_version: string | null
-  backend: 'mac' | 'linux'
   runners: number
   online: number
   default: boolean
@@ -51,12 +50,12 @@ export function toBuildVariantsResponse(body: unknown): BuildVariantsResponse {
   const parsed = builderVariantsSchema.parse(body)
   return {
     default_xcode_major: parsed.defaultXcodeMajor,
-    variants: parsed.variants.map(variant => ({
+    // Only Mac machines are customer-facing: anything else the builder reports is internal.
+    variants: parsed.variants.filter(variant => variant.backend === undefined || variant.backend === 'mac').map(variant => ({
       platform: variant.platform,
       id: variant.id,
       xcode_version: variant.xcodeVersion,
       macos_version: variant.macosVersion,
-      backend: variant.backend,
       runners: variant.runners,
       online: variant.online,
       default: variant.default,

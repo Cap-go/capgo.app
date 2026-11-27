@@ -12,9 +12,9 @@ mock.module('../src/utils', () => ({
 const CANCEL = Symbol('cancel')
 const { fetchBuildVariants, formatBuildVariant, listBuildVariantsCommand, promptXcodeVersion, selectableXcodeVersions } = await import('../src/build/variants')
 
-const mac: BuildVariant = { platform: 'ios', id: 'xcode-26.2-macos-26.1', xcode_version: '26.2', macos_version: '26.1', backend: 'mac', runners: 3, online: 2, default: true }
-const linux: BuildVariant = { platform: 'ios', id: 'xcode-27.1-linux', xcode_version: '27.1', macos_version: null, backend: 'linux', runners: 1, online: 1, default: false }
-const oldMac: BuildVariant = { platform: 'ios', id: 'xcode-26.2-macos-15.6', xcode_version: '26.2', macos_version: '15.6', backend: 'mac', runners: 1, online: 0, default: true }
+const mac: BuildVariant = { platform: 'ios', id: 'xcode-26.2-macos-26.1', xcode_version: '26.2', macos_version: '26.1', runners: 3, online: 2, default: true }
+const newMac: BuildVariant = { platform: 'ios', id: 'xcode-27.1-macos-27.0', xcode_version: '27.1', macos_version: '27.0', runners: 1, online: 1, default: false }
+const oldMac: BuildVariant = { platform: 'ios', id: 'xcode-26.2-macos-15.6', xcode_version: '26.2', macos_version: '15.6', runners: 1, online: 0, default: true }
 
 const realFetch = globalThis.fetch
 function respondWith(body: unknown, status = 200) {
@@ -38,12 +38,12 @@ describe('build variants', () => {
 
   it('formats a variant with its machine and availability', () => {
     expect(formatBuildVariant(mac)).toBe('Xcode 26.2 · macOS 26.1 · 2/3 online · default')
-    expect(formatBuildVariant(linux)).toBe('Xcode 27.1 · Linux builder · 1/1 online')
+    expect(formatBuildVariant(newMac)).toBe('Xcode 27.1 · macOS 27.0 · 1/1 online')
     expect(formatBuildVariant(oldMac)).toBe('Xcode 26.2 · macOS 15.6 · offline · default')
   })
 
   it('groups variants by Xcode version, keeping the builder order', () => {
-    expect(selectableXcodeVersions([linux, mac, oldMac]).map(choice => [choice.xcodeVersion, choice.variants.length])).toEqual([
+    expect(selectableXcodeVersions([newMac, mac, oldMac]).map(choice => [choice.xcodeVersion, choice.variants.length])).toEqual([
       ['27.1', 1],
       ['26.2', 2],
     ])
@@ -59,8 +59,8 @@ describe('build variants', () => {
   })
 
   it('drops variants whose Xcode is not a dotted version', async () => {
-    respondWith({ default_xcode_major: '26', variants: [{ ...mac, xcode_version: '26; rm -rf ~' }, linux] })
-    expect((await fetchBuildVariants('https://api.capgo.app', 'key-1')).variants).toEqual([linux])
+    respondWith({ default_xcode_major: '26', variants: [{ ...mac, xcode_version: '26; rm -rf ~' }, newMac] })
+    expect((await fetchBuildVariants('https://api.capgo.app', 'key-1')).variants).toEqual([newMac])
   })
 
   it('surfaces API errors', async () => {
@@ -84,20 +84,20 @@ describe('build variants', () => {
     })
 
     it('offers "any machine" first, then each Xcode, and returns the pick', async () => {
-      respondWith({ default_xcode_major: '26', variants: [linux, mac] })
+      respondWith({ default_xcode_major: '26', variants: [newMac, mac] })
       expect(await promptXcodeVersion('https://api.capgo.app', 'key-1')).toBe('26.2')
       const { options } = selectMock.mock.calls[0][0] as { options: Array<{ value: string }> }
       expect(options.map(option => option.value)).toEqual(['', '27.1', '26.2'])
     })
 
     it('returns the empty "any machine" choice unchanged', async () => {
-      respondWith({ default_xcode_major: '26', variants: [linux, mac] })
+      respondWith({ default_xcode_major: '26', variants: [newMac, mac] })
       selectMock.mockImplementation(async () => '')
       expect(await promptXcodeVersion('https://api.capgo.app', 'key-1')).toBe('')
     })
 
     it('cancels the build when the prompt is cancelled', async () => {
-      respondWith({ default_xcode_major: '26', variants: [linux, mac] })
+      respondWith({ default_xcode_major: '26', variants: [newMac, mac] })
       selectMock.mockImplementation(async () => CANCEL)
       await expect(promptXcodeVersion('https://api.capgo.app', 'key-1')).rejects.toThrow('Build cancelled')
     })
@@ -105,10 +105,10 @@ describe('build variants', () => {
 
   describe('listBuildVariantsCommand', () => {
     it('prints each variant and the default major', async () => {
-      respondWith({ default_xcode_major: '26', variants: [linux, mac] })
+      respondWith({ default_xcode_major: '26', variants: [newMac, mac] })
       await listBuildVariantsCommand({})
       expect(logMock.message.mock.calls.map(call => (call as unknown as [string])[0])).toEqual([
-        `  ${formatBuildVariant(linux)}`,
+        `  ${formatBuildVariant(newMac)}`,
         `  ${formatBuildVariant(mac)}`,
       ])
       expect((logMock.info.mock.calls.at(-1) as unknown as [string])[0]).toContain('prefer Xcode 26')
