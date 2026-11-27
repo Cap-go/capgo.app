@@ -1,10 +1,11 @@
 // cli/src/support/support-upload.ts
 import { readFileSync } from 'node:fs'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
-import { trimTrailingSlashes } from '../utils'
+import { resolveCapgoPublicApiHost, trimTrailingSlashes } from '../utils'
 
 export interface SupportUploadInput {
-  apiHost: string
+  /** Capgo API host; omitted means the configured host (CAPGO_API_HOST, localApi, China host, cloud). */
+  apiHost?: string
   apikey: string
   appId?: string
   jobId?: string
@@ -30,8 +31,8 @@ export async function uploadSupportLogs(input: SupportUploadInput): Promise<Supp
   catch {
     return null
   }
-  const host = trimTrailingSlashes(input.apiHost) // tolerate a trailing slash from --api-host
   try {
+    const host = trimTrailingSlashes(await resolveCapgoPublicApiHost({ apiHost: input.apiHost })) // tolerate a trailing slash from --api-host
     const res = await fetch(`${host}/build/support_logs`, {
       method: 'POST',
 headers: buildCliRequestHeaders({ capgkey: input.apikey, 'content-type': 'application/json' }),

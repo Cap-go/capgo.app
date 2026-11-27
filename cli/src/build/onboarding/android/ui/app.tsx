@@ -1219,7 +1219,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
         setSupportBusyText('Uploading your logs to Capgo support…')
         setStep('support-uploading') // show a spinner while the (network) upload runs
         return uploadSupportLogs({
-          apiHost: apiHost ?? 'https://api.capgo.app',
+          apiHost,
           apikey: resolvedApiKeyRef.current ?? apikey ?? '',
           appId,
           jobId: aiJobId ?? undefined,
@@ -1256,7 +1256,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
         setSupportBusyText('Uploading your logs to Capgo support…')
         setStep('support-uploading')
         return uploadSupportLogs({
-          apiHost: apiHost ?? 'https://api.capgo.app',
+          apiHost,
           apikey: resolvedApiKeyRef.current ?? apikey ?? '',
           appId,
           jobId: aiJobId ?? undefined,
@@ -1282,12 +1282,12 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
   const getCapgoConfig = useCallback(async (): Promise<CapgoOAuthClientConfig> => {
     if (capgoConfigRef.current)
       return capgoConfigRef.current
-    const cfg = await fetchCapgoOAuthConfig()
+    const cfg = await fetchCapgoOAuthConfig(apiHost)
     if (!cfg)
       throw new Error('Capgo Android onboarding is not configured server-side. Use the manual setup at https://capgo.app/docs/cli/cloud-build/android.')
     capgoConfigRef.current = cfg
     return cfg
-  }, [])
+  }, [apiHost])
 
   /**
    * Mint a fresh access token from the stored refresh token when resuming.
@@ -1707,7 +1707,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
         }, true)
 
         const result = await runCapgoAiAnalysis({
-          apiHost: apiHost ?? 'https://api.capgo.app',
+          apiHost,
           apikey: resolvedApiKeyRef.current ?? apikey ?? '',
           jobId: aiJobId,
           appId,

@@ -3,7 +3,7 @@ import { exit, stdin, stdout } from 'node:process'
 import { intro, isCancel, log, select } from '@clack/prompts'
 import { trackEvent } from './analytics/track'
 import { explainCommonUpdateError, prepareUpdateProbe, singleProbeRequest } from './app/updateProbe'
-import { getConfig } from './utils'
+import { getConfig, resolveCapgoPublicApiHost } from './utils'
 
 interface ProbeOptions {
   platform?: string
@@ -59,7 +59,8 @@ export async function probeInternal(options: ProbeOptions): Promise<ProbeInterna
     platform = selected as 'ios' | 'android'
   }
 
-  const prepared = await prepareUpdateProbe(platform, capConfig)
+  const apiHost = await resolveCapgoPublicApiHost().catch(() => undefined)
+  const prepared = await prepareUpdateProbe(platform, capConfig, apiHost)
   if (!prepared.ok) {
     return { success: false, error: `Probe setup failed: ${prepared.error}` }
   }

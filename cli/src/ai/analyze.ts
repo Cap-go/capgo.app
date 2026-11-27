@@ -1,5 +1,6 @@
 import { stat, writeFile } from 'node:fs/promises'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
+import { resolveCapgoPublicApiHost } from '../utils'
 import { cleanupCapturedJobFiles, flushCapturedLogs, getAiPromptPath, getLogCapturePath, readCapturedLog } from './log-capture'
 import { SYSTEM_PROMPT } from './prompt'
 import { createSseParser } from './sse'
@@ -232,7 +233,8 @@ export async function isLogTooBig(jobId: string): Promise<boolean> {
 }
 
 export interface RunCapgoAiAnalysisInput {
-  apiHost: string
+  /** Capgo API host; omitted means the configured host (CAPGO_API_HOST, localApi, China host, cloud). */
+  apiHost?: string
   apikey: string
   jobId: string
   appId: string
@@ -258,8 +260,16 @@ export async function runCapgoAiAnalysis(input: RunCapgoAiAnalysisInput): Promis
     return { kind: 'error', message: err instanceof Error ? err.message : 'log_unavailable' }
   }
 
+  let apiHost: string
+  try {
+    apiHost = await resolveCapgoPublicApiHost({ apiHost: input.apiHost })
+  }
+  catch (err) {
+    return { kind: 'error', message: err instanceof Error ? err.message : 'invalid_api_host' }
+  }
+
   return postAnalyzeStreamRequest({
-    apiHost: input.apiHost,
+    apiHost,
     apikey: input.apikey,
     jobId: input.jobId,
     appId: input.appId,

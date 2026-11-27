@@ -873,8 +873,30 @@ function envHost(name: 'CAPGO_API_HOST' | 'CAPGO_FILES_HOST'): string | undefine
  * also serves files unless a files host is given: self-hosted backends (Edge
  * Functions, a single worker, a test server) expose both on one origin.
  */
-const chinaApiHost = 'https://api.capgo.com.cn'
+export const chinaApiHost = 'https://api.capgo.com.cn'
 const chinaHostWeb = 'https://console.capgo.com.cn'
+
+/** First party Capgo cloud API origins (global and China). */
+export function isCapgoCloudApiHost(host: string): boolean {
+  const normalized = host.replace(/\/+$/, '')
+  return normalized === defaultApiHost || normalized === chinaApiHost
+}
+
+/**
+ * Pick the Capgo API host from already collected sources with the same
+ * precedence as getLocalConfig: explicit (--api-host / SDK), then
+ * CAPGO_API_HOST, then capacitor config `localApi`, then Capgo cloud. For
+ * callers (background workers) that must not load the capacitor config again.
+ */
+export function pickCapgoApiHost(sources: { explicit?: string, env?: string, localApi?: string }): string {
+  const explicit = sources.explicit?.trim()
+  if (explicit)
+    return normalizeCapgoApiHost(explicit)
+  const fromEnv = sources.env?.trim()
+  if (fromEnv)
+    return normalizeCapgoApiHost(fromEnv)
+  return sources.localApi?.trim() || defaultApiHost
+}
 
 /** Console links for the China API point at the China console: the global one cannot reach its API from China. */
 export function consoleHostWebForApiHost(apiHost: string, hostWeb: string): string {
