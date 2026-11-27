@@ -68,6 +68,29 @@ describe('china build_logs_direct proxy on api worker', () => {
     await expect(response.json()).resolves.toMatchObject({ error: 'not_found' })
   })
 
+  it('returns the upstream webSocket response without buffering', async () => {
+    const upstreamSocket = { mock: true }
+    fetchMock.mockImplementation(() => {
+      const upstream = new Response(null, { status: 200, headers: { upgrade: 'websocket' } })
+      Object.defineProperty(upstream, 'webSocket', { value: upstreamSocket })
+      return Promise.resolve(upstream)
+    })
+
+    const apiWorker = await loadApiWorker()
+    const response = await apiWorker.fetch(new Request(
+      'https://api.capgo.com.cn/build_logs_direct/job-ws/stream?token=tok',
+      {
+        headers: {
+          Upgrade: 'websocket',
+          Connection: 'Upgrade',
+        },
+      },
+    ))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect((response as Response & { webSocket?: unknown }).webSocket).toBe(upstreamSocket)
+  })
+
   it('forwards WebSocket upgrade headers to the builder origin', async () => {
     fetchMock.mockImplementation((url: string | URL, init?: RequestInit) => {
       expect(String(url)).toBe('https://api.capgo.app/build_logs_direct/job-ws/stream?token=tok')
@@ -106,6 +129,26 @@ describe('china build_logs_direct proxy on api worker', () => {
 
     expect(String(fetchMock.mock.calls[0][0])).toBe('https://builder.custom.example/build_logs_direct/job-env/snapshot')
     vi.unstubAllEnvs()
+  })
+
+  it('drops headers named by Connection on the proxied request', async () => {
+    fetchMock.mockResolvedValue(new Response('ok', { status: 200 }))
+
+    const apiWorker = await loadApiWorker()
+    await apiWorker.fetch(new Request(
+      'https://api.capgo.com.cn/build_logs_direct/job-hdr/snapshot',
+      {
+        headers: {
+          authorization: 'Bearer keep-me',
+          connection: 'x-hop-context, close',
+          'x-hop-context': 'local-only',
+        },
+      },
+    ))
+
+    const headers = new Headers(fetchMock.mock.calls[0][1]?.headers)
+    expect(headers.get('authorization')).toBe('Bearer keep-me')
+    expect(headers.get('x-hop-context')).toBeNull()
   })
 
   it('does not proxy unrelated paths on the China API host', async () => {

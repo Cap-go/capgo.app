@@ -29,6 +29,35 @@ function isWebSocketUpgrade(request: Request) {
   return request.headers.get('Upgrade')?.toLowerCase() === 'websocket'
 }
 
+function connectionTokenNames(headers: Headers) {
+  const connection = headers.get('Connection')
+  if (!connection)
+    return new Set<string>()
+  return new Set(connection.split(',').map(part => part.trim().toLowerCase()).filter(Boolean))
+}
+
+function shouldForwardRequestHeader(name: string, wsUpgrade: boolean, connectionTokens: Set<string>) {
+  const lower = name.toLowerCase()
+  if (HOP_BY_HOP_REQUEST.has(lower))
+    return false
+  if (!wsUpgrade && connectionTokens.has(lower))
+    return false
+  if (!wsUpgrade && (lower === 'connection' || lower === 'upgrade'))
+    return false
+  return true
+}
+
+function shouldForwardResponseHeader(name: string, passConnectionHeaders: boolean, connectionTokens: Set<string>) {
+  const lower = name.toLowerCase()
+  if (HOP_BY_HOP_RESPONSE.has(lower))
+    return false
+  if (!passConnectionHeaders && connectionTokens.has(lower))
+    return false
+  if (!passConnectionHeaders && (lower === 'connection' || lower === 'upgrade'))
+    return false
+  return true
+}
+
 function builderLogStreamOrigin(c: Parameters<MiddlewareHandler<MiddlewareKeyVariables>>[0]) {
   const configured = getEnv(c, 'BUILDER_URL').trim()
   if (!configured)
@@ -48,12 +77,10 @@ export const chinaBuildLogsDirectProxy: MiddlewareHandler<MiddlewareKeyVariables
 
   const upstreamUrl = new URL(`${url.pathname}${url.search}`, builderLogStreamOrigin(c))
   const wsUpgrade = isWebSocketUpgrade(c.req.raw)
+  const requestConnectionTokens = connectionTokenNames(c.req.raw.headers)
   const headers = new Headers()
   c.req.raw.headers.forEach((value, key) => {
-    const lower = key.toLowerCase()
-    if (HOP_BY_HOP_REQUEST.has(lower))
-      return
-    if (!wsUpgrade && (lower === 'connection' || lower === 'upgrade'))
+    if (!shouldForwardRequestHeader(key, wsUpgrade, requestConnectionTokens))
       return
     headers.append(key, value)
   })
@@ -77,11 +104,9 @@ export const chinaBuildLogsDirectProxy: MiddlewareHandler<MiddlewareKeyVariables
 
   const responseHeaders = new Headers()
   const passConnectionHeaders = wsUpgrade || upstream.status === 101
+  const responseConnectionTokens = connectionTokenNames(upstream.headers)
   upstream.headers.forEach((value, key) => {
-    const lower = key.toLowerCase()
-    if (HOP_BY_HOP_RESPONSE.has(lower))
-      return
-    if (!passConnectionHeaders && (lower === 'connection' || lower === 'upgrade'))
+    if (!shouldForwardResponseHeader(key, passConnectionHeaders, responseConnectionTokens))
       return
     responseHeaders.append(key, value)
   })
