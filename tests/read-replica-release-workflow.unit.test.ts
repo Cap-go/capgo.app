@@ -52,20 +52,16 @@ describe('production read-replica release gate', () => {
       expect(workflow).toContain('read_replica_subscription:')
       expect(workflow).toContain('sync-read-replica-schema.ts --refresh-subscription')
       expect(workflow).toContain('sync-read-replica-schema.ts --guard')
-      expect(workflow).toContain(
-        [
-          'read_replica_schema:',
-          '    needs: changes',
-          `    if: ${githubExpression('needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && needs.changes.outputs.is_alpha != \'true\'')}`,
-        ].join('\n'),
-      )
-      expect(workflow).toContain(
-        'supabase_deploy:\n    needs: [changes, read_replica_schema]',
-      )
-      expect(workflow).toContain(
-        'sync_schema_types:\n    needs: [changes, read_replica_schema, supabase_deploy]',
-      )
-      expect(workflow).toContain('needs.read_replica_schema.result == \'success\'')
+      // Reconciliation runs in supabase_deploy before migrations, so a failed reconcile stops
+      // the migrations and everything that waits on supabase_deploy.
+      expect(workflow).toContain('supabase_deploy:\n    needs: [changes]')
+      const supabaseJob = workflow.slice(workflow.indexOf('\n  supabase_deploy:'), workflow.indexOf('\n  read_replica_subscription:'))
+      const reconcileIndex = supabaseJob.indexOf('sync-read-replica-schema.ts --apply --allow-drop')
+      expect(reconcileIndex).toBeGreaterThan(-1)
+      expect(reconcileIndex).toBeLessThan(supabaseJob.indexOf('push-release-migrations.sh'))
+      expect(supabaseJob.indexOf('push-release-migrations.sh')).toBeLessThan(supabaseJob.indexOf('sync-read-replica-schema.ts --guard'))
+      expect(supabaseJob.indexOf('sync-read-replica-schema.ts --guard')).toBeLessThan(supabaseJob.indexOf('sync-read-replica-schema.ts --refresh-subscription'))
+      expect(workflow).not.toContain('read_replica_schema')
       expect(workflow).toContain('needs.supabase_deploy.result == \'success\'')
       // The sync script must preflight subscriber compatibility before applying anything.
       // Import-path internals are covered by read-replica-schema-import-sync.unit.test.ts.
@@ -86,7 +82,7 @@ describe('production read-replica release gate', () => {
       const workflow = await readReleaseWorkflow()
 
       expect(workflow).toMatch(
-        /\n  deploy_webapp:\n    needs: \[changes, build_webapp, supabase_deploy, read_replica_schema, read_replica_subscription\]/,
+        /\n  deploy_webapp:\n    needs: \[changes, build_webapp, supabase_deploy, read_replica_subscription\]/,
       )
       for (const job of [
         'deploy_api',
@@ -95,7 +91,7 @@ describe('production read-replica release gate', () => {
         'deploy_plugin_regions',
       ]) {
         expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema\\]`),
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy\\]`),
         )
       }
       // Subscription refresh stays a visible release step but must not gate worker deploys.
@@ -105,29 +101,37 @@ describe('production read-replica release gate', () => {
         workflow.indexOf('\n  build_webapp:'),
       )
       expect(refreshJob).toContain(
-        githubExpression('needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && needs.changes.outputs.is_alpha != \'true\' && needs.supabase_deploy.result == \'success\' && needs.read_replica_schema.result == \'success\''),
+        githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && needs.changes.outputs.is_alpha != \'true\' && needs.supabase_deploy.result == \'success\''),
       )
       expect(workflow).not.toMatch(
         /deploy_(?:api|files|plugin_regions):\n    needs:.*read_replica_subscription/,
       )
 
+      interface Step { 'id'?: string, 'run'?: string, 'continue-on-error'?: boolean, 'parallel'?: Step[] }
       const parsed = parse(workflow) as {
-        jobs?: Record<string, { if?: unknown, needs?: string[] | string, steps?: Array<{ run?: string }> }>
+        jobs?: Record<string, { if?: unknown, needs?: string[] | string, outputs?: Record<string, string>, steps?: Step[] }>
       }
       const refreshDef = parsed.jobs?.read_replica_subscription
       expect(refreshDef, 'read_replica_subscription must exist in build_and_deploy.yml').toBeDefined()
       expect(refreshDef?.if, 'read_replica_subscription must keep a job-level if').toBeDefined()
       expect(refreshDef?.if, 'read_replica_subscription must not be disabled with if: false').not.toBe(false)
-      expect(
-        refreshDef?.steps?.some(step => step.run?.includes('resolve-deploy-tag.ts --assert-current')),
-        'read_replica_subscription must run an executable assert-current step',
-      ).toBe(true)
+      // The refresh itself runs in supabase_deploy next to the function deploys. It asserts the
+      // deploy tag is current, cannot fail that job, and the gate job turns its outcome into a
+      // visible failure that holds web publishing.
+      const refreshStep = (parsed.jobs?.supabase_deploy?.steps ?? [])
+        .flatMap(step => [step, ...(step.parallel ?? [])])
+        .find(step => step.id === 'replica_subscription')
+      expect(refreshStep?.run).toContain('resolve-deploy-tag.ts --assert-current')
+      expect(refreshStep?.run).toContain('sync-read-replica-schema.ts --refresh-subscription')
+      expect(refreshStep?.['continue-on-error']).toBe(true)
+      expect(parsed.jobs?.supabase_deploy?.outputs?.replica_subscription).toBe(githubExpression('steps.replica_subscription.outcome'))
+      expect(refreshDef?.steps?.some(step => step.run?.includes('[ "$OUTCOME" != "success" ]') && step.run.includes('exit 1'))).toBe(true)
       const workerJobs = ['deploy_api', 'deploy_files', 'deploy_plugin_regions', 'deploy_translation_worker'] as const
       const expectedIf: Record<typeof workerJobs[number], string> = {
-        deploy_api: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.api == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\') && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
-        deploy_translation_worker: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.translation == \'true\' && (needs.supabase_deploy.result == \'success\' || (needs.supabase_deploy.result == \'skipped\' && needs.changes.outputs.supabase != \'true\')) && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
-        deploy_files: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.files == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\') && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
-        deploy_plugin_regions: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.plugins == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\') && (needs.read_replica_schema.result == \'success\' || needs.read_replica_schema.result == \'skipped\')'),
+        deploy_api: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.api == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\')'),
+        deploy_translation_worker: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.translation == \'true\' && (needs.supabase_deploy.result == \'success\' || (needs.supabase_deploy.result == \'skipped\' && needs.changes.outputs.supabase != \'true\'))'),
+        deploy_files: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.files == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\')'),
+        deploy_plugin_regions: githubExpression('always() && needs.changes.result == \'success\' && needs.changes.outputs.plugins == \'true\' && (needs.supabase_deploy.result == \'success\' || needs.supabase_deploy.result == \'skipped\')'),
       }
       for (const job of workerJobs) {
         const jobDef = parsed.jobs?.[job]

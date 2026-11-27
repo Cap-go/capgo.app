@@ -32,6 +32,7 @@ const workflowPaths = {
   deploy: new URL('../.github/workflows/build_and_deploy.yml', import.meta.url),
   ios: new URL('../.github/workflows/build_mobile_ios.yml', import.meta.url),
   android: new URL('../.github/workflows/build_mobile_android.yml', import.meta.url),
+  schemaSync: new URL('../.github/workflows/sync_schema_types.yml', import.meta.url),
 }
 
 async function readWorkflow(path: URL): Promise<string> {
@@ -96,7 +97,6 @@ describe('native-aware Capgo release workflow', () => {
     const targetCheckout = jobs.changes?.steps?.find(step => step.name === 'Checkout deployment target')
     const deploymentJobs = [
       'supabase_deploy',
-      'read_replica_schema',
       'deploy_webapp',
       'deploy_api',
       'deploy_translation_worker',
@@ -160,7 +160,6 @@ describe('native-aware Capgo release workflow', () => {
     expect(completion?.if).toBe('${{ always() && needs.changes.result == \'success\' }}')
     expect(completion?.needs).toEqual(expect.arrayContaining([
       'changes',
-      'read_replica_schema',
       'supabase_deploy',
       'read_replica_subscription',
       'deploy_api',
@@ -199,22 +198,33 @@ describe('native-aware Capgo release workflow', () => {
   })
 
   it.concurrent('synchronizes production schema and types only after both database deployments', async () => {
-    const [bumpSource, deploySource] = await Promise.all([
+    const [bumpSource, deploySource, syncSource] = await Promise.all([
       readWorkflow(workflowPaths.bump),
       readWorkflow(workflowPaths.deploy),
+      readWorkflow(workflowPaths.schemaSync),
     ])
     const deploy = parseWorkflow(deploySource)
-    const syncJob = deploy.jobs?.sync_schema_types
+    const supabaseSteps = (deploy.jobs?.supabase_deploy?.steps ?? []).flatMap(step => [step, ...((step as { parallel?: WorkflowStep[] }).parallel ?? [])])
+    const stepIndex = (name: string) => supabaseSteps.findIndex(step => step.name === name)
+    const dispatch = supabaseSteps.find(step => step.name === 'Dispatch production schema and types sync')
+    const syncJob = parseWorkflow(syncSource).jobs?.sync_schema_types
     const syncStep = syncJob?.steps?.find(step => step.name === 'Sync generated schema and types')
 
     expect(bumpSource).not.toContain('sync_schema_types:')
     expect(bumpSource).not.toContain('has_migration_changes')
     expect(bumpSource).not.toContain('migration_scope')
-    expect(syncJob?.needs).toEqual(['changes', 'read_replica_schema', 'supabase_deploy'])
-    expect(syncJob?.if).toContain('needs.changes.outputs.is_alpha != \'true\'')
-    expect(syncJob?.if).toContain('needs.changes.outputs.requires_schema_types_sync == \'true\'')
-    expect(syncJob?.if).toContain('needs.read_replica_schema.result == \'success\'')
-    expect(syncJob?.if).toContain('needs.supabase_deploy.result == \'success\'')
+    // The ~4 minute regeneration runs in its own workflow, dispatched once both the replica
+    // reconciliation and the primary migrations succeeded, so it never holds the deploy open.
+    expect(deploy.jobs?.sync_schema_types).toBeUndefined()
+    expect(dispatch?.if).toContain('env.SUPA_ENV == \'PROD\'')
+    expect(dispatch?.if).toContain('needs.changes.outputs.requires_schema_types_sync == \'true\'')
+    expect(dispatch?.run).toContain('gh workflow run sync_schema_types.yml')
+    expect(dispatch?.run).toContain('deploy_tag="${{ needs.changes.outputs.deploy_tag }}"')
+    expect(stepIndex('Reconcile the Google subscriber through server-side Cloud SQL import')).toBeGreaterThan(-1)
+    expect(stepIndex('Apply Supabase Migrations')).toBeGreaterThan(stepIndex('Reconcile the Google subscriber through server-side Cloud SQL import'))
+    expect(stepIndex('Dispatch production schema and types sync')).toBeGreaterThan(stepIndex('Apply Supabase Migrations'))
+    expect(deploy.jobs?.supabase_deploy?.permissions?.actions).toBe('write')
+    expect(syncJob?.if).toContain('!contains(inputs.deploy_tag, \'-alpha.\')')
     expect(syncJob?.permissions?.contents).toBe('write')
     expect(syncStep?.run).toContain('for attempt in 1 2 3')
     expect(syncStep?.run).toContain('refs/remotes/schema-sync/main')

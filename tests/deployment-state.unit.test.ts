@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import { resolveDeployScopeFromGit } from '../scripts/deploy-scope.ts'
 import { bootstrapState, readAttemptJobs, readState, validateStateTargets, writeState } from '../scripts/deploy-state.ts'
 import { beginDeployment, completedDeploymentKeys, completeDeployment, emptyState, keysForEnvironment, pluginMatrix, stateSchema } from '../scripts/deployment-state.ts'
@@ -53,8 +54,8 @@ function job(name: string, steps: string[], conclusion = 'success'): DeploymentJ
 }
 const apiJob = () => job('deploy_api', ['Deploy CF Worker API', 'Retire removed CF Workers'])
 const supabaseJob = () => job('Build code and deploy to Supabase', ['Apply Supabase Migrations', 'Update functions'])
-const schemaJob = () => job('Reconcile production read-replica schema', ['Reconcile the Google subscriber through server-side Cloud SQL import'])
-const refreshJob = () => job('Refresh read-replica subscription', ['Refresh subscription for newly published tables'])
+const stableSupabaseJob = () => job('Build code and deploy to Supabase', ['Reconcile the Google subscriber through server-side Cloud SQL import', 'Apply Supabase Migrations', 'Update functions'])
+const refreshJob = () => job('Refresh production read-replica subscription', ['Require read-replica subscription refresh'])
 
 describe('cumulative deployment scope with real git history', () => {
   it('keeps changes from failed published tags pending on later unrelated tags', () => {
@@ -167,13 +168,32 @@ describe('operation evidence and attempt identity', () => {
   })
 
   it('requires stable schema reconciliation, deployment and subscription refresh together; alpha only its applicable operations', () => {
-    expect(completedDeploymentKeys([schemaJob(), supabaseJob()], 'stable')).toEqual([])
+    expect(completedDeploymentKeys([stableSupabaseJob()], 'stable')).toEqual([])
     const refresh = refreshJob()
     refresh.steps[0].conclusion = 'failure'
-    expect(completedDeploymentKeys([schemaJob(), supabaseJob(), refresh], 'stable')).toEqual([])
-    expect(completedDeploymentKeys([schemaJob(), supabaseJob(), refreshJob()], 'stable')).toEqual(['supabase'])
+    expect(completedDeploymentKeys([stableSupabaseJob(), refresh], 'stable')).toEqual([])
+    expect(completedDeploymentKeys([supabaseJob(), refreshJob()], 'stable')).toEqual([])
+    expect(completedDeploymentKeys([stableSupabaseJob(), refreshJob()], 'stable')).toEqual(['supabase'])
     expect(completedDeploymentKeys([supabaseJob()], 'alpha')).toEqual(['supabase'])
     expect(completedDeploymentKeys([supabaseJob()], 'stable')).toEqual([])
+  })
+
+  // The fixtures above once named a job that the workflow did not have, so production never
+  // recorded Supabase as deployed and redeployed it on every release. Pin them to the workflow.
+  it('names only jobs and steps that exist in build_and_deploy.yml', () => {
+    const source = readFileSync(new URL('../.github/workflows/build_and_deploy.yml', import.meta.url), 'utf8')
+    interface Step { name?: string, parallel?: Step[] }
+    const jobs = (parse(source) as { jobs: Record<string, { name?: string, steps?: Step[] }> }).jobs
+    const stepsByJob = new Map<string, Set<string>>()
+    for (const [key, definition] of Object.entries(jobs)) {
+      const names = new Set((definition.steps ?? []).flatMap(step => [step, ...(step.parallel ?? [])]).map(step => step.name).filter((name): name is string => !!name))
+      stepsByJob.set(definition.name ?? key, names)
+    }
+    for (const fixture of [apiJob(), stableSupabaseJob(), refreshJob()]) {
+      expect(stepsByJob.has(fixture.name), `${fixture.name} job`).toBe(true)
+      for (const step of fixture.steps)
+        expect(stepsByJob.get(fixture.name)?.has(step.name), `${fixture.name} / ${step.name}`).toBe(true)
+    }
   })
 
   it('uses nine real stable plugin destinations and one independent alpha destination', () => {

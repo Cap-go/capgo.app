@@ -42,13 +42,22 @@ function hangJsonUntilAbort(_url: string, init?: RequestInit): Promise<Response>
 
 const validConfigJson = { stripeEnabled: true }
 
+// The config probes abort after a 4s setTimeout. Fake timers run those aborts instantly
+// instead of waiting ~20s of wall clock, which also stops CPU load from shifting the timing.
+async function settled<T>(promise: Promise<T>): Promise<T> {
+  await vi.runAllTimersAsync()
+  return promise
+}
+
 describe('getRemoteConfig config fetch timeouts', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     vi.stubEnv('VITE_API_HOST', 'https://api.capgo.app')
     vi.stubEnv('VITE_APP_URL', 'https://console.capgo.app')
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
@@ -63,7 +72,7 @@ describe('getRemoteConfig config fetch timeouts', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { getRemoteConfig, suggestChinaConsole } = await import('../src/services/console')
-    await expect(getRemoteConfig()).resolves.toMatchObject({ apiHost: 'https://api.capgo.app' })
+    await expect(settled(getRemoteConfig())).resolves.toMatchObject({ apiHost: 'https://api.capgo.app' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledWith('https://api.capgo.app/private/config', expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(suggestChinaConsole.value).toBe(false)
@@ -78,7 +87,7 @@ describe('getRemoteConfig config fetch timeouts', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { getRemoteConfig } = await import('../src/services/console')
-    await expect(getRemoteConfig()).resolves.toMatchObject({
+    await expect(settled(getRemoteConfig())).resolves.toMatchObject({
       apiHost: 'http://127.0.0.1:57671/functions/v1',
     })
     expect(fetchMock).not.toHaveBeenCalled()
@@ -93,7 +102,7 @@ describe('getRemoteConfig config fetch timeouts', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { getRemoteConfig } = await import('../src/services/console')
-    await expect(getRemoteConfig()).resolves.toMatchObject({
+    await expect(settled(getRemoteConfig())).resolves.toMatchObject({
       apiHost: 'https://api.preprod.capgo.app',
       stripeEnabled: true,
     })
@@ -110,7 +119,7 @@ describe('getRemoteConfig config fetch timeouts', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { getRemoteConfig } = await import('../src/services/console')
-    await expect(getRemoteConfig()).resolves.toMatchObject({
+    await expect(settled(getRemoteConfig())).resolves.toMatchObject({
       apiHost: 'https://api.capgo.com.cn',
       stripeEnabled: true,
     })
@@ -199,7 +208,7 @@ describe('getRemoteConfig config fetch timeouts', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { getRemoteConfig, suggestChinaConsole } = await import('../src/services/console')
-    await expect(getRemoteConfig()).resolves.toMatchObject({ apiHost: 'https://api.capgo.app' })
+    await expect(settled(getRemoteConfig())).resolves.toMatchObject({ apiHost: 'https://api.capgo.app' })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(suggestChinaConsole.value).toBe(false)
   }, 10_000)
@@ -212,7 +221,7 @@ describe('getRemoteConfig config fetch timeouts', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { getRemoteConfig } = await import('../src/services/console')
-    await expect(getRemoteConfig()).resolves.toMatchObject({ apiHost: 'https://api.capgo.app' })
+    await expect(settled(getRemoteConfig())).resolves.toMatchObject({ apiHost: 'https://api.capgo.app' })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://api.capgo.app/private/config', expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'https://api.capgo.com.cn/private/config', expect.objectContaining({ signal: expect.any(AbortSignal) }))
