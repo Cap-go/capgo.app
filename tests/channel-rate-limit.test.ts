@@ -244,18 +244,27 @@ describe.skipIf(!USE_CLOUDFLARE)('device API rate limiting', () => {
   // ensuring the channel differs on every call per deviceId.
   const setCallCounts = new Map<string, number>()
 
+  // The device API checks the op limiter before its handler and records every
+  // request in `finally`, including ones the handler rejects
+  // (public/device/index.ts). A sequential burst only trips the limit when ten
+  // round trips fit in the one-second window, but a valid DELETE opens several
+  // Postgres sessions and takes ~90ms locally and over 110ms on slow runners.
+  // This app_id fails validation before any handler query, so the burst goes
+  // through the same limiter without the database latency.
+  const probeAppId = `ratelimit-probe-${id}`
+
   testRateLimitBehavior('[POST] set operation', async (deviceId) => {
     const count = setCallCounts.get(deviceId) ?? 0
     setCallCounts.set(deviceId, count + 1)
-    return fetchDeviceApi('POST', { app_id: APPNAME, device_id: deviceId, channel: `rl-op-${deviceId}-${count}` })
+    return fetchDeviceApi('POST', { app_id: probeAppId, device_id: deviceId, channel: `rl-op-${deviceId}-${count}` })
   })
 
   testRateLimitBehavior('[GET] get operation', async (deviceId) => {
-    return fetchDeviceApi('GET', { app_id: APPNAME, device_id: deviceId })
+    return fetchDeviceApi('GET', { app_id: probeAppId, device_id: deviceId })
   })
 
   testRateLimitBehavior('[DELETE] delete operation', async (deviceId) => {
-    return fetchDeviceApi('DELETE', { app_id: APPNAME, device_id: deviceId })
+    return fetchDeviceApi('DELETE', { app_id: probeAppId, device_id: deviceId })
   })
 
   describe('cross-operation independence', () => {

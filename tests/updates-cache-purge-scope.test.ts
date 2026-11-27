@@ -111,7 +111,12 @@ describe('updates cache purge scopes', () => {
 
   it('claims one entry per (app, scope) and re-purges each scope', async () => {
     await inTransaction(async () => {
-      // Claims are global: start from an empty, unthrottled queue in this transaction.
+      // Claims are global and a concurrent drain (woken by any test's commit)
+      // makes claim_updates_cache_purge() answer 'busy' while it holds the
+      // claim lock. Wait for it and keep the lock for this transaction: the
+      // claim below takes it again in the same session.
+      await client.query(`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('updates_cache_purge_claim'))`)
+      // Start from an empty, unthrottled queue in this transaction.
       await client.query('DELETE FROM public.updates_cache_purge_pending')
       await client.query(`UPDATE public.updates_cache_purge_state SET last_claim_at = '-infinity'`)
       await insertBundle('9.9.8-scope')

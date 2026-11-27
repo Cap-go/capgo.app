@@ -157,6 +157,14 @@ async function provisionBeforeStorageMigration(adminUrl: string, targetUrl: stri
   }
 }
 
+/** The migration SQL without its trailing COMMIT, so the caller decides when its locks are released. */
+function withoutFinalCommit(sql: string) {
+  const body = sql.trimEnd()
+  if (!body.endsWith('COMMIT;'))
+    throw new Error('storage migration SQL does not end with COMMIT')
+  return body.slice(0, -'COMMIT;'.length)
+}
+
 async function waitForMigratorLocks(
   observer: Client,
   migratorPid: number,
@@ -267,33 +275,34 @@ async function runMigrationWithConcurrentWriter(
       })()
     }
     else {
-      migrationPromise = migrator.query(migrationSql)
+      // Run the migration up to its final COMMIT: its locks stay held until the
+      // writer is seen waiting on them. A fast migration would otherwise commit
+      // and release them before the first pg_locks poll.
+      await migrator.query(withoutFinalCommit(migrationSql))
       await waitForMigratorLocks(observer, migratorPid, waitRelations)
       await writer.query('BEGIN')
       await writer.query(`SET LOCAL lock_timeout = '0'`)
-      if (writerMode === 'legacy-during-migration') {
-        writerPromise = (async () => {
-          await writer.query(LEGACY_REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
-          await writer.query('COMMIT')
-        })()
-        if (requireWriterLockWait)
-          await waitForRelationLockWait(observer, writerPid)
-      }
-      else {
-        // Contend on apps until the migrator's ACCESS EXCLUSIVE lock is released at COMMIT.
-        await writer.query(
-          `SELECT 1
-           FROM public.apps
-           WHERE app_id = $1
-             AND owner_org = $2
-           FOR SHARE`,
-          [DEMO_APP, ORG_ID],
-        )
-        writerPromise = (async () => {
-          await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID, cycleDay, hourlyRows])
-          await writer.query('COMMIT')
-        })()
-      }
+      writerPromise = writerMode === 'legacy-during-migration'
+        ? (async () => {
+            await writer.query(LEGACY_REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID])
+            await writer.query('COMMIT')
+          })()
+        : (async () => {
+            // Contends on apps until the migrator's ACCESS EXCLUSIVE lock is released at COMMIT.
+            await writer.query(
+              `SELECT 1
+               FROM public.apps
+               WHERE app_id = $1
+                 AND owner_org = $2
+               FOR SHARE`,
+              [DEMO_APP, ORG_ID],
+            )
+            await writer.query(REPLACE_HOURLY_SQL, [DEMO_APP, ORG_ID, cycleDay, hourlyRows])
+            await writer.query('COMMIT')
+          })()
+      if (requireWriterLockWait)
+        await waitForRelationLockWait(observer, writerPid)
+      migrationPromise = migrator.query('COMMIT')
     }
 
     const [migration, writerResult] = await Promise.allSettled([migrationPromise, writerPromise])
@@ -353,7 +362,6 @@ describe('storage gb-hours migration SQL vs replace_app_storage_hourly', () => {
         dbUrl,
         readStorageGbHoursMigrationSql(),
         ['apps'],
-        { requireWriterLockWait: false },
       )
       if (result.migration.status === 'rejected')
         throw result.migration.reason
