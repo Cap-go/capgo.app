@@ -10,6 +10,7 @@ import {
 } from './lib/constants.ts'
 import { finalizeTerminalSession } from './lib/apikey.ts'
 import { TERMINAL_INTERNAL_MCP_BRIDGE } from './lib/mcp_bridge.ts'
+import { buildRunCommandScript } from './lib/run_command.ts'
 import {
   assertSafeCommand,
   capOutputBytes,
@@ -166,9 +167,7 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
         const container = this.ctx.container!
         const controller = new AbortController()
         const deadline = setTimeout(() => controller.abort(), TERMINAL_COMMAND_TIMEOUT_MS)
-        const escaped = command.replace(/'/g, `'\\''`)
-        const wrapped = `set -m; exec sh -c '${escaped}'`
-        const proc = await container.exec(['sh', '-c', wrapped], {
+        const proc = await container.exec(['sh', '-c', buildRunCommandScript(command, TERMINAL_COMMAND_TIMEOUT_MS)], {
           cwd: TERMINAL_WORKSPACE_ROOT,
           user: '1000',
           stdout: 'pipe',
@@ -183,6 +182,10 @@ export class TerminalSession extends McpAgent<TerminalEnv, TerminalAgentState, T
           if (proc.stdout) {
             const reader = proc.stdout.getReader()
             const decoder = new TextDecoder()
+            // Stop reading as soon as the deadline fires, even if something still holds the pipe.
+            controller.signal.addEventListener('abort', () => {
+              void reader.cancel().catch(() => {})
+            }, { once: true })
             try {
               while (true) {
                 const { done, value } = await reader.read()

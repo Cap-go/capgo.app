@@ -92,10 +92,16 @@ ALTER FUNCTION "public"."guard_org_billing_columns"() OWNER TO "postgres";
 REVOKE ALL ON FUNCTION "public"."guard_org_billing_columns"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."guard_org_billing_columns"() TO "service_role";
 
+-- Original COMMENT text from 20261026013013_org_billing_columns_guard_extend.sql
+-- is kept verbatim; the terminal sentence is appended.
 COMMENT ON FUNCTION "public"."guard_org_billing_columns"() IS
 'BEFORE INSERT/UPDATE guard for org billing columns (customer_id, '
-'has_usage_credits, auto_top_up_*, cloud_terminal_enabled). User/capgkey roles '
-'cannot write them; service_role/postgres bypass via is_internal_request_role.';
+'has_usage_credits, auto_top_up_*). User/capgkey roles cannot write them; '
+'service_role/postgres bypass via is_internal_request_role. Org-create '
+'bootstrap may set pending customer_id while '
+'capgo.org_creation_bootstrap_org_id matches the row id. has_usage_credits '
+'may only change to the usage_credit_grants-derived value. '
+'cloud_terminal_enabled is also guarded: User/capgkey roles cannot write it.';
 
 DROP TRIGGER IF EXISTS "guard_org_billing_columns" ON "public"."orgs";
 

@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(11);
+SELECT plan(12);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -133,6 +133,16 @@ SELECT throws_ok(
   '42501',
   NULL,
   'authenticated cannot read terminal_sessions'
+);
+
+SELECT ok(
+  obj_description('public.guard_org_billing_columns()'::regprocedure, 'pg_proc')
+    LIKE '%Org-create bootstrap may set pending customer_id while capgo.org_creation_bootstrap_org_id matches the row id.%'
+  AND obj_description('public.guard_org_billing_columns()'::regprocedure, 'pg_proc')
+    LIKE '%has_usage_credits may only change to the usage_credit_grants-derived value.%'
+  AND obj_description('public.guard_org_billing_columns()'::regprocedure, 'pg_proc')
+    LIKE '%cloud_terminal_enabled%',
+  'guard_org_billing_columns comment keeps bootstrap and usage credit wording'
 );
 
 SELECT * FROM finish();
