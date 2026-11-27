@@ -37,3 +37,50 @@ export function shouldShowPlanFailureBanner(
     && (isNative || billingLookupFailed || paidAt !== undefined)
     && !shouldShowExpiredTrialPlansState(currentOrganizationFailed, isNative, paidAt)
 }
+
+export { isDirectOfferMetadata } from '../../supabase/functions/_backend/utils/direct_offer_metadata.ts'
+
+export type UnpaidCopyVariant = 'no_trial' | 'expired_trial' | 'lapsed' | 'native'
+
+export type OnboardingPlanSubtitleKey
+  = | 'ai-onboarding-plan-subtitle'
+    | 'ai-onboarding-plan-subtitle-no-trial'
+    | 'invite-onboarding-plan-subtitle'
+    | 'invite-onboarding-plan-subtitle-no-trial'
+
+/**
+ * Copy variant for unpaid-org surfaces. Does not change gating.
+ * Fresh orgs that never had a trial (`trialSkipped`) see "choose a plan to
+ * start shipping". Expired trials and lapsed subscriptions keep their existing
+ * copy. While billing history is still loading or a lookup failed, keep the
+ * existing lapsed copy. Account metadata is not used here; after history
+ * resolves, only the organization signal decides.
+ */
+export function resolveUnpaidCopyVariant(options: {
+  isNative: boolean
+  paidAt: string | null | undefined
+  trialSkipped: boolean
+}): UnpaidCopyVariant {
+  if (options.isNative)
+    return 'native'
+  if (options.trialSkipped)
+    return 'no_trial'
+  if (options.paidAt === null)
+    return 'expired_trial'
+  return 'lapsed'
+}
+
+/** Plan-step subtitle for AI or invite onboarding. Direct-offer users never see trial copy. */
+export function onboardingPlanSubtitleKey(options: {
+  isInvite: boolean
+  isDirectOfferUser: boolean
+}): OnboardingPlanSubtitleKey {
+  if (options.isDirectOfferUser) {
+    return options.isInvite
+      ? 'invite-onboarding-plan-subtitle-no-trial'
+      : 'ai-onboarding-plan-subtitle-no-trial'
+  }
+  return options.isInvite
+    ? 'invite-onboarding-plan-subtitle'
+    : 'ai-onboarding-plan-subtitle'
+}

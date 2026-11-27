@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { shouldShowExpiredTrialCopy } from '~/services/paymentRequired'
+import { resolveUnpaidCopyVariant } from '~/services/paymentRequired'
 import { useOrganizationStore } from '~/stores/organization'
 
 const { t } = useI18n()
@@ -13,9 +13,14 @@ const hideExternalPurchaseFlows = isNativeAppStoreContext()
 const organizationStore = useOrganizationStore()
 const billingOrgId = computed(() => organizationStore.currentOrganization?.gid)
 const { paidAt, trialSkipped } = useBillingPaidAt(billingOrgId, hideExternalPurchaseFlows)
-const showExpiredTrialCopy = computed(() => shouldShowExpiredTrialCopy(hideExternalPurchaseFlows, paidAt.value))
+const copyVariant = computed(() => resolveUnpaidCopyVariant({
+  isNative: hideExternalPurchaseFlows,
+  paidAt: paidAt.value,
+  trialSkipped: trialSkipped.value,
+}))
 // Direct-offer orgs never had a trial: invite them to start instead of saying it ended.
-const showNoTrialCopy = computed(() => showExpiredTrialCopy.value && trialSkipped.value)
+const showNoTrialCopy = computed(() => copyVariant.value === 'no_trial')
+const showExpiredTrialCopy = computed(() => copyVariant.value === 'expired_trial')
 
 function goToPlans() {
   router.push('/settings/organization/plans')
@@ -63,7 +68,7 @@ function goToPlans() {
           <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z" />
           <path fill-rule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clip-rule="evenodd" />
         </svg>
-        {{ t(showExpiredTrialCopy ? 'choose-a-plan' : 'plan-upgrade-v2') }}
+        {{ t(showNoTrialCopy || showExpiredTrialCopy ? 'choose-a-plan' : 'plan-upgrade-v2') }}
       </button>
     </div>
   </div>
