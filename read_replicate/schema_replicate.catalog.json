@@ -1741,6 +1741,16 @@
       "type": "text"
     },
     {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "cloud_terminal_enabled",
+      "notNull": true,
+      "position": 31,
+      "table": "orgs",
+      "type": "boolean"
+    },
+    {
       "default": null,
       "generated": "",
       "identity": "",

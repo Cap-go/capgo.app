@@ -9,6 +9,8 @@ export default defineConfig(({ mode }) => ({
     alias: {
       '@capgo/cli/sdk': path.resolve(cwd(), 'cli/src/sdk.ts'),
       '~/': `${path.resolve(cwd(), 'src')}/`,
+      'cloudflare:workers': path.resolve(cwd(), 'tests/stubs/cloudflare-workers.ts'),
+      'cloudflare:email': path.resolve(cwd(), 'tests/stubs/cloudflare-email.ts'),
     },
   },
   test: {
@@ -48,6 +50,11 @@ export default defineConfig(({ mode }) => ({
     retry: 0,
     maxConcurrency: 2,
     maxWorkers: 3,
+    server: {
+      deps: {
+        inline: ['agents', '@cloudflare/sandbox'],
+      },
+    },
     env: {
       ...loadEnv(mode, cwd(), ''),
       // Override to use Cloudflare Workers instead of Supabase Edge Functions

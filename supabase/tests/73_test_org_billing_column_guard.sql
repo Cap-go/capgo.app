@@ -1,7 +1,7 @@
 -- org.customer_id is service-managed: user/capgkey roles cannot write it.
 BEGIN;
 
-SELECT plan(16);
+SELECT plan(17);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user('org_billing_guard_admin', 'org_billing_guard_admin@test.local');
@@ -134,6 +134,17 @@ SELECT throws_ok(
   '42501',
   'PERMISSION_DENIED_ORG_BILLING_COLUMNS',
   'org_admin cannot mutate has_usage_credits'
+);
+
+SELECT throws_ok(
+  $$
+    UPDATE public.orgs
+    SET cloud_terminal_enabled = true
+    WHERE id = '73000000-0000-4000-8000-000000000073'::uuid
+  $$,
+  '42501',
+  'PERMISSION_DENIED_ORG_BILLING_COLUMNS',
+  'org_admin cannot enable cloud_terminal_enabled'
 );
 
 SELECT lives_ok(
