@@ -272,7 +272,7 @@ describe('pageRoutes and resolveRoute', () => {
       `{ path: '/app', redirect: '/app/new' },`,
       `{ path: '/app/:app/channel-list', redirect: redirectAppPath('/channels') },`,
       `{ path: '/app/:app/old', redirect: redirectAppPath('/channel-list') },`,
-      `{ path: '/p/:package', redirect: to => \`/app/\${to.params.package}\` },`,
+      '{ path: \'/p/:package\', redirect: to => `/app/${to.params.package}` },',
       `{\n  path: '/p/:package/logs',\n  redirect: (to) => {\n    return { path: '/x' }\n  },\n},`,
     ].join('\n'))
     expect(finalPage(routes, redirects, '/app')?.page).toBe('src/pages/app/new.vue')
