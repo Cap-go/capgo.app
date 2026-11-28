@@ -171,13 +171,16 @@ function flatten(value: unknown, prefix = '', out = new Map<string, string>()) {
 }
 
 /**
- * Message keys whose text changed or that were removed. Added keys are ignored: only code that
- * uses them can show them, and that code changed too.
+ * Message keys whose text changed or that were removed (`changed`), and keys new in head
+ * (`added`): code may already look one up and show the raw key or a fallback until it exists.
  */
 export function changedMessageKeys(base: Record<string, unknown>, head: Record<string, unknown>) {
   const before = flatten(base)
   const after = flatten(head)
-  return [...before].filter(([key, value]) => after.get(key) !== value).map(([key]) => key)
+  return {
+    changed: [...before].filter(([key, value]) => after.get(key) !== value).map(([key]) => key),
+    added: [...after.keys()].filter(key => !before.has(key)),
+  }
 }
 
 /**
@@ -196,7 +199,7 @@ export function usesKey(code: string, key: string) {
 }
 
 /** Routes whose modules can look up a changed key; null when no code anywhere can (a fully computed lookup). */
-export function routesUsingKeys(keys: string[], sides: Array<{ graph: ModuleGraph, modules: Map<string, Set<string>> }>) {
+export function routesUsingKeys(keys: string[], sides: Array<{ graph: ModuleGraph, modules: Map<string, Set<string>> }>, added: Set<string> = new Set()) {
   const affected = new Set<string>()
   for (const key of keys) {
     let found = false
@@ -210,8 +213,9 @@ export function routesUsingKeys(keys: string[], sides: Array<{ graph: ModuleGrap
       if (!found && Object.values(graph.modules).some(module => module.code && usesKey(module.code, key)))
         found = true
     }
-    // Built at runtime (t(`plans.${name}`)): any route could show it.
-    if (!found)
+    // Built at runtime (t(`plans.${name}`)): any route could show it. A new key that no code
+    // can look up yet is not displayed anywhere.
+    if (!found && !added.has(key))
       return null
   }
   return affected
@@ -484,9 +488,11 @@ export async function planVisualDiff(options: { repoRoot: string, base: string, 
     }
 
     const catalogs = new Set(Object.keys(headGraph.modules).concat(Object.keys(baseGraph.modules)).filter(key => MESSAGES_KEY.test(key)))
-    const keys = [...catalogs].flatMap(key => changedMessageKeys(readMessages(baseRoot, key), readMessages(repoRoot, key)))
+    const diffs = [...catalogs].map(key => changedMessageKeys(readMessages(baseRoot, key), readMessages(repoRoot, key)))
+    const added = new Set(diffs.flatMap(diff => diff.added))
+    const keys = [...new Set(diffs.flatMap(diff => [...diff.changed, ...diff.added]))]
     if (keys.length) {
-      const usingKeys = routesUsingKeys([...new Set(keys)], sides)
+      const usingKeys = routesUsingKeys(keys, sides, added)
       if (!usingKeys)
         return everything(['a changed message is looked up by a computed key'])
       usingKeys.forEach(slug => affected.add(slug))

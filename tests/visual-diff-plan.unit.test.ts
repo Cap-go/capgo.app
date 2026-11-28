@@ -101,11 +101,11 @@ describe('routeFingerprint', () => {
 })
 
 describe('message keys', () => {
-  it('reports changed and removed keys, not added ones', () => {
+  it('reports changed and removed keys, and added ones separately', () => {
     expect(changedMessageKeys(
       { 'a-title': 'A', 'b-title': 'B', 'nested': { kept: 'x', gone: 'y' } },
       { 'a-title': 'A2', 'b-title': 'B', 'nested': { kept: 'x' }, 'new-key': 'N' },
-    )).toEqual(['a-title', 'nested.gone'])
+    )).toEqual({ changed: ['a-title', 'nested.gone'], added: ['new-key'] })
   })
 
   it('maps a key to the routes whose code uses it, on either revision', () => {
@@ -135,6 +135,12 @@ describe('message keys', () => {
       ['b', new Set(['src/pages/b.vue', 'src/components/B.vue'])],
     ])
     expect([...routesUsingKeys(['a-title'], [{ graph: base, modules }])!].sort()).toEqual(['a', 'b'])
+  })
+
+  it('flags routes that already looked up an added key, and ignores added keys nothing uses', () => {
+    const base = graph()
+    const modules = new Map([['a', new Set(['src/pages/a.vue', 'src/components/A.vue'])], ['b', new Set(['src/pages/b.vue', 'src/components/B.vue'])]])
+    expect([...routesUsingKeys(['b-title', 'unused-new-key'], [{ graph: base, modules }], new Set(['b-title', 'unused-new-key']))!]).toEqual(['b'])
   })
 
   it('gives up when a key is never written literally (computed lookups)', () => {
