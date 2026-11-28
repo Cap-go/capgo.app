@@ -57,3 +57,4 @@ tests/user-created-via-invite.test.ts
 tests/users-onboarding-size.test.ts
 tests/webnative-onboarding-schema.test.ts
 tests/plugin-state-eu-source.test.ts
+tests/pgmq-plain-sql-prod-bodies.test.ts

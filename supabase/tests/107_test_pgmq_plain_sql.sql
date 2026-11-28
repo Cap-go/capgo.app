@@ -2,7 +2,7 @@
 -- and the queue API still works.
 BEGIN;
 
-SELECT plan(15);
+SELECT plan(19);
 
 SELECT ok(
   NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pgmq'),
@@ -25,6 +25,23 @@ SELECT is(
   ),
   0,
   'no object in schema pgmq is an extension member'
+);
+
+SELECT is(
+  (
+    SELECT count(*)::int
+    FROM pg_catalog.pg_proc AS p
+    WHERE p.oid::regprocedure::text IN (
+        'pgmq.create_non_partitioned(text)',
+        'pgmq.create_partitioned(text,text,text)',
+        'pgmq.create_unlogged(text)',
+        'pgmq.detach_archive(text)',
+        'pgmq.drop_queue(text)'
+      )
+      AND p.prosrc LIKE '%pgmq._extension_exists(''pgmq'')%'
+  ),
+  5,
+  'the five functions that run ALTER EXTENSION have the migration''s guarded bodies'
 );
 
 SELECT has_table('pgmq', 'meta', 'pgmq.meta is still there');
@@ -83,6 +100,20 @@ SELECT is(
   (SELECT count(*)::int FROM pgmq.a_test_pgmq_plain_sql),
   1,
   'the archived message is in the archive table'
+);
+
+SELECT lives_ok(
+  $$SELECT pgmq.detach_archive('test_pgmq_plain_sql')$$,
+  'pgmq.detach_archive works'
+);
+
+SELECT lives_ok(
+  $$SELECT pgmq.create_unlogged('test_pgmq_plain_sql_unlogged')$$,
+  'pgmq.create_unlogged works'
+);
+SELECT ok(
+  pgmq.drop_queue('test_pgmq_plain_sql_unlogged'),
+  'pgmq.drop_queue works on an unlogged queue'
 );
 
 SELECT ok(
