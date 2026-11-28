@@ -7,7 +7,8 @@
  * parallel and wait here.
  *
  * Each named job must end as success or skipped, like `needs.<job>.result` checks in an `if`;
- * with --require-success, only success passes. Any other conclusion, or the timeout, fails.
+ * with --require-success, only success passes. Any other conclusion fails, and so does a job
+ * that stays unstarted (queued) for longer than --timeout-minutes in total.
  *
  * Usage: bun scripts/wait-for-deploy-jobs.ts [--require-success] [--timeout-minutes N] "<job name>" ...
 
@@ -23,7 +24,7 @@ export interface RunJob {
 }
 
 export type GateResult
-  = | { state: 'wait', pending: string[] }
+  = | { state: 'wait', pending: string[], unstarted: string[] }
     | { state: 'proceed' }
     | { state: 'fail', reason: string }
 
@@ -31,6 +32,7 @@ export type GateResult
 export function evaluateGate(jobs: RunJob[], names: string[], options: { requireSuccess?: boolean } = {}): GateResult {
   const passing = new Set(options.requireSuccess ? ['success'] : ['success', 'skipped'])
   const pending: string[] = []
+  const unstarted: string[] = []
   for (const name of names) {
     const matches = jobs.filter(job => job.name === name)
     if (matches.length > 1)
@@ -39,12 +41,14 @@ export function evaluateGate(jobs: RunJob[], names: string[], options: { require
     // A job waiting on its own `needs` may not be listed yet.
     if (!job || job.status !== 'completed') {
       pending.push(name)
+      if (job?.status !== 'in_progress')
+        unstarted.push(name)
       continue
     }
     if (!passing.has(job.conclusion ?? ''))
       return { state: 'fail', reason: `"${name}" ended with ${job.conclusion ?? 'no conclusion'}` }
   }
-  return pending.length > 0 ? { state: 'wait', pending } : { state: 'proceed' }
+  return pending.length > 0 ? { state: 'wait', pending, unstarted } : { state: 'proceed' }
 }
 
 export function parseGateArgs(argv: string[]) {
@@ -93,7 +97,10 @@ async function listRunJobs(): Promise<RunJob[]> {
 async function main() {
   const { timeoutMinutes, requireSuccess, names } = parseGateArgs(process.argv.slice(2))
   const startedAt = Date.now()
-  const deadline = startedAt + timeoutMinutes * 60_000
+  // The timeout counts only time spent waiting for a job to start: a running job always ends on
+  // its own timeout-minutes, so waiting for it needs no deadline of its own.
+  let unstartedMs = 0
+  let lastCheck = startedAt
   let lastPending = ''
   let failedListings = 0
   while (true) {
@@ -107,7 +114,7 @@ async function main() {
       if (++failedListings >= 5)
         throw error
       console.warn(`[wait-for-deploy-jobs] ${error instanceof Error ? error.message : String(error)}; retrying`)
-      result = { state: 'wait', pending: names }
+      result = { state: 'wait', pending: names, unstarted: [] }
     }
     if (result.state === 'proceed') {
       console.log(`[wait-for-deploy-jobs] ${names.join(', ')}: ${requireSuccess ? 'success' : 'success or skipped'}`)
@@ -120,8 +127,12 @@ async function main() {
       console.log(`[wait-for-deploy-jobs] waiting for ${pending}`)
       lastPending = pending
     }
-    if (Date.now() > deadline)
-      throw new Error(`Timed out after ${timeoutMinutes} minutes waiting for ${pending}`)
+    const now = Date.now()
+    if (result.unstarted.length > 0)
+      unstartedMs += now - lastCheck
+    lastCheck = now
+    if (unstartedMs > timeoutMinutes * 60_000)
+      throw new Error(`Timed out: ${result.unstarted.join(', ')} did not start within ${timeoutMinutes} minutes`)
     // Poll often while the dependency is likely about to finish, then back off to stay well
     // inside the GITHUB_TOKEN rate limit during a long replica copy.
     const waited = Date.now() - startedAt

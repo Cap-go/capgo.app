@@ -186,15 +186,16 @@ describe('production read-replica release gate', () => {
 })
 
 describe('deploy gate time budgets', () => {
-  it('waits for the awaited jobs however late they start, and keeps the former step budgets', async () => {
+  it('caps only queued time in the gates and runs both jobs at the 360-minute maximum (accepted limit)', async () => {
     const workflow = parse(await readFile(new URL('../.github/workflows/build_and_deploy.yml', import.meta.url), 'utf8')) as {
       jobs: Record<string, { 'timeout-minutes': number, 'steps': Array<{ run?: string }> }>
     }
     const { supabase_deploy: supabase, read_replica_subscription: refresh, deploy_webapp: web } = workflow.jobs
     const waitMinutes = (job: typeof web) => Number(/wait-for-deploy-jobs\.ts .*--timeout-minutes (\d+)/.exec(job.steps.map(step => step.run ?? '').join('\n'))?.[1])
-    // Queueing is unbounded, so no budget can be tuned to it. The awaited jobs always end on
-    // their own timeouts once they start, so each wait gets GitHub's maximum job time instead,
-    // minus what the job needs after it (refresh: former 40 min, publishing: former 30 min).
+    // Queueing is unbounded, so no budget can be tuned to it. The gate's cap counts only time an
+    // awaited job spends unstarted (a running one ends on its own timeout), and the jobs run at
+    // GitHub's maximum. Accepted limit: setup, queueing and the backend together must fit in 360
+    // minutes; the cap leaves at least the former 40 (refresh) and 30 (publishing) minutes.
     for (const [job, after] of [[refresh, 40], [web, 30]] as const) {
       expect(job['timeout-minutes']).toBe(360)
       expect(waitMinutes(job) + after).toBeLessThanOrEqual(job['timeout-minutes'])

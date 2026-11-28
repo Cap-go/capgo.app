@@ -10,11 +10,12 @@ describe('deploy job gate', () => {
     expect(evaluateGate([job(supabase, 'completed', 'success'), job(refresh, 'completed', 'skipped')], [supabase, refresh])).toEqual({ state: 'proceed' })
   })
 
-  it('waits for jobs that are running, queued or not listed yet', () => {
+  it('waits for jobs that are running, queued or not listed yet, and tells which have not started', () => {
+    // A running job ends on its own timeout, so only unstarted ones count against the gate's.
     expect(evaluateGate([job(supabase, 'completed', 'success'), job(refresh, 'in_progress')], [supabase, refresh]))
-      .toEqual({ state: 'wait', pending: [refresh] })
+      .toEqual({ state: 'wait', pending: [refresh], unstarted: [] })
     expect(evaluateGate([job(supabase, 'queued')], [supabase, refresh]))
-      .toEqual({ state: 'wait', pending: [supabase, refresh] })
+      .toEqual({ state: 'wait', pending: [supabase, refresh], unstarted: [supabase, refresh] })
   })
 
   it.each(['failure', 'cancelled', 'timed_out', 'action_required', null])('fails when a job ends with %s', (conclusion) => {

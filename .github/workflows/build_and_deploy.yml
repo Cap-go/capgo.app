@@ -256,8 +256,9 @@ jobs:
               gcloud auth activate-service-account --key-file="$credentials_file"
               gcloud config set project capgo-394818
       # Same rule as `needs.supabase_deploy.result == 'success'`: the migrations must have applied.
-      # The awaited job ends on its own timeout, so this cap only stops a job that never starts
-      # (queued runners); it leaves the refresh its former 40 minutes within the job limit.
+      # The cap counts only time the awaited job spends unstarted (queued): once it runs, it ends
+      # on its own timeout. Accepted limit: this job still ends at GitHub's 360-minute maximum, so
+      # a Supabase deploy that starts and finishes more than ~5 hours late fails the refresh.
       - name: Wait for the Supabase deploy
         env:
           GH_TOKEN: ${{ github.token }}
@@ -414,8 +415,9 @@ jobs:
               git fetch --quiet --unshallow --filter=blob:none --tags origin
               bun run changelog:ai
       # Same rule as the old `needs` results: each job must end as success or skipped.
-      # Both awaited jobs end on their own timeouts whenever they start, so this cap only stops
-      # a job that never starts; it leaves publishing its former 30 minutes within the job limit.
+      # The cap counts only time an awaited job spends unstarted (queued): once it runs, it ends
+      # on its own timeout. Accepted limit: this job still ends at GitHub's 360-minute maximum, so
+      # a backend that finishes more than ~5 hours after this job started fails the web publish.
       - name: Wait for the Supabase deploy and replica refresh
         env:
           GH_TOKEN: ${{ github.token }}
