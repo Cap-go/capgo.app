@@ -210,6 +210,35 @@ async function latePublication(store: KVNamespace, logicalKey: string, read: Pro
 }
 
 /**
+ * Generation the R2 pointer publishes now (null: none). Background only: it
+ * re-checks a stored cache fill against a publication it may have raced, with
+ * the late-read budget, and frees a pointer body that arrives after it.
+ */
+export async function readPublishedGeneration(c: Context, logicalKey: string): Promise<string | null> {
+  const pointers = (c.env as { PLUGIN_STATE_POINTERS?: R2Bucket } | undefined)?.PLUGIN_STATE_POINTERS
+  if (!pointers)
+    throw new PluginStateMiss('publication index unavailable')
+  let abandoned = false
+  let current: R2ObjectBody | null = null
+  const discard = (object: R2ObjectBody | null) => { void object?.body?.cancel().catch(() => undefined) }
+  const read = pointers.get(logicalKey).then(async (object) => {
+    if (abandoned) {
+      discard(object)
+      return null
+    }
+    if (!object)
+      return null
+    current = object
+    return parsePluginStatePointer(await object.json<unknown>()).generation
+  })
+  return lateDeadline(read, 'publication check', () => {
+    abandoned = true
+    // The cast keeps TypeScript from narrowing the callback-assigned object to null.
+    discard(current as R2ObjectBody | null)
+  })
+}
+
+/**
  * Strongly consistent publication index; only immutable values live in KV.
  * `onLate` receives a read that missed its request deadline (see LatePluginStateRead).
  */

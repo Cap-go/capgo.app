@@ -19,6 +19,7 @@ function memoryCache() {
       return entry ? new Response(entry.body, { headers: entry.headers }) : undefined
     },
     put: vi.fn(async (request: Request, response: Response) => { entries.set(request.url, { body: await response.text(), headers: new Headers(response.headers) }) }),
+    delete: vi.fn(async (request: Request) => entries.delete(request.url)),
     revisions: () => [...entries.values()].map(entry => entry.headers.get('X-Plugin-State-Revision')),
   }
 }
@@ -164,7 +165,8 @@ describe('published plugin state reader', () => {
       expect(await response.json()).toEqual({ source: 'db', exists: null })
       expect(response.headers.get('X-Plugin-State')).toBe('miss')
     }
-    expect(getPointer).toHaveBeenCalledOnce()
+    // The cold read, then the check after caching the miss; later requests read the cache.
+    expect(getPointer).toHaveBeenCalledTimes(2)
     expect(getValue).not.toHaveBeenCalled()
     expect(cache.put).toHaveBeenCalledOnce()
   })
@@ -197,7 +199,8 @@ describe('published plugin state reader', () => {
       expect(await response.json()).toEqual(authoritative === 'true' ? { source: 'kv', exists: false } : { source: 'db', exists: null })
       expect(response.headers.get('X-Plugin-State')).toBe(authoritative === 'true' ? null : 'miss')
     }
-    expect(getPointer).toHaveBeenCalledOnce()
+    // The cold read, then the check after caching the deletion; later requests read the cache.
+    expect(getPointer).toHaveBeenCalledTimes(2)
     expect(getValue).not.toHaveBeenCalled()
   })
 
@@ -300,7 +303,8 @@ describe('published plugin state reader', () => {
     const warm = await app.request('/', undefined, bindings)
     expect(warm.headers.get('X-Plugin-State')).toBeNull()
     expect(await warm.json()).toMatchObject({ fallback: false, metrics: { r2_pointer_reads: 0, kv_value_reads: 0 } })
-    expect(getPointer).toHaveBeenCalledOnce()
+    // The request's read, then the check after the refill's write (outside request metrics).
+    expect(getPointer).toHaveBeenCalledTimes(2)
     expect(getValue).toHaveBeenCalledOnce()
   })
 
@@ -337,7 +341,8 @@ describe('published plugin state reader', () => {
     expect(getValue).toHaveBeenCalledExactlyOnceWith(key, { type: 'json', cacheTtl: 30 })
     const warm = await app.request('/', undefined, bindings)
     expect(await warm.json()).toEqual({ source: 'kv' })
-    expect(getPointer).toHaveBeenCalledOnce()
+    // The late read, then the check after the refill's write.
+    expect(getPointer).toHaveBeenCalledTimes(2)
   })
 
   it('logs a failed refill with its full read time and retries it on the next cold request', async () => {
@@ -589,6 +594,105 @@ describe('published plugin state reader', () => {
   })
 })
 
+describe('cache fill publication check', () => {
+  async function fixture(appId: string) {
+    const appKey = await pluginStateAppKey(appId)
+    const kvKeys: Record<string, string> = { 1: await pluginStateImmutableKey(appKey, '1'), 2: await pluginStateImmutableKey(appKey, '2') }
+    const pointer = (generation: string | null) => generation === null ? null : { json: async () => ({ f: 1, generation, kvKey: kvKeys[generation] }) }
+    const getValue = vi.fn(async (kvKey: string) => ({ f: 1, app_id: appId, exists: false, built_at: kvKey === kvKeys[2] ? 2 : 1 }))
+    const app = new Hono()
+    app.get('/', async (c) => {
+      startPluginStateReadMetrics(c)
+      const session = await startPluginStateRequest(c, appId, 'device')
+      return c.json({ source: session ? 'kv' : 'db' })
+    })
+    return { pointer, getValue, app }
+  }
+
+  it('keeps a fill for one day while the pointer still publishes its generation', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const cache = memoryCache()
+    vi.stubGlobal('caches', { open: async () => cache })
+    const { pointer, getValue, app } = await fixture('com.example.current-fill')
+    const getPointer = vi.fn(async () => pointer('1'))
+    const bindings = { PLUGIN_STATE: { get: getValue }, PLUGIN_STATE_POINTERS: { get: getPointer } }
+    await app.request('/', undefined, bindings)
+    const [, stored] = cache.put.mock.calls[0] as unknown as [Request, Response]
+    expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=86400')
+    expect(getPointer).toHaveBeenCalledTimes(2)
+    expect(cache.delete).not.toHaveBeenCalled()
+    expect(cache.revisions()).toEqual(['1'])
+  })
+
+  it('removes a fill that a publication superseded before its check, so the next request reads the new one', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const cache = memoryCache()
+    vi.stubGlobal('caches', { open: async () => cache })
+    const { pointer, getValue, app } = await fixture('com.example.raced-fill')
+    // The publication of generation 2 lands right after the first read.
+    const getPointer = vi.fn().mockResolvedValueOnce(pointer('1')).mockResolvedValue(pointer('2'))
+    const bindings = { PLUGIN_STATE: { get: getValue }, PLUGIN_STATE_POINTERS: { get: getPointer } }
+    await app.request('/', undefined, bindings)
+    expect(cache.delete).toHaveBeenCalledOnce()
+    expect(cache.revisions()).toEqual([])
+    await app.request('/', undefined, bindings)
+    expect(cache.revisions()).toEqual(['2'])
+    expect(getValue).toHaveBeenCalledTimes(2)
+    expect(cache.delete).toHaveBeenCalledOnce()
+  })
+
+  it('removes a cached miss once the key is published', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const cache = memoryCache()
+    vi.stubGlobal('caches', { open: async () => cache })
+    const { pointer, getValue, app } = await fixture('com.example.raced-miss')
+    const getPointer = vi.fn().mockResolvedValueOnce(pointer(null)).mockResolvedValue(pointer('1'))
+    const response = await app.request('/', undefined, { PLUGIN_STATE: { get: getValue }, PLUGIN_STATE_POINTERS: { get: getPointer } })
+    expect(response.headers.get('X-Plugin-State')).toBe('miss')
+    expect(cache.put).toHaveBeenCalledOnce()
+    expect(cache.delete).toHaveBeenCalledOnce()
+    expect(cache.revisions()).toEqual([])
+  })
+
+  it('removes a fill whose check cannot read the pointer, without failing the request', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const cache = memoryCache()
+    vi.stubGlobal('caches', { open: async () => cache })
+    const { pointer, getValue, app } = await fixture('com.example.unchecked-fill')
+    const getPointer = vi.fn().mockResolvedValueOnce(pointer('1')).mockRejectedValue(new Error('R2 unavailable'))
+    const response = await app.request('/', undefined, { PLUGIN_STATE: { get: getValue }, PLUGIN_STATE_POINTERS: { get: getPointer } })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('X-Plugin-State')).toBeNull()
+    expect(cache.delete).toHaveBeenCalledOnce()
+    expect(cache.revisions()).toEqual([])
+  })
+
+  it('logs a late refill that a publication superseded', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const cache = memoryCache()
+    vi.stubGlobal('caches', { open: async () => cache })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const { pointer, getValue, app } = await fixture('com.example.raced-refill')
+    // The read misses its deadline; generation 2 is published before the refill's check.
+    const getPointer = vi.fn().mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      return pointer('1')
+    }).mockImplementation(async () => pointer('2'))
+    const request = app.request('/', undefined, { PLUGIN_STATE: { get: getValue }, PLUGIN_STATE_POINTERS: { get: getPointer } })
+    await vi.advanceTimersByTimeAsync(100)
+    expect((await request).headers.get('X-Plugin-State')).toBe('cold')
+    await vi.waitFor(() => expect(refillLogs(log)).toHaveLength(1))
+    expect(refillLogs(log)[0]).toMatchObject({ outcome: 'superseded' })
+    expect(cache.revisions()).toEqual([])
+  })
+})
+
 describe('sampled pointer phase diagnostics', () => {
   it('measures successful headers and body separately without changing the value', async () => {
     const key = await pluginStateImmutableKey(KEY, '2')
@@ -718,7 +822,7 @@ describe('sampled pointer phase diagnostics', () => {
     expect(metrics).toEqual(frozen)
   })
 
-  it('caches a late refill of a miss no longer than a late value', async () => {
+  it('caches a late refill of a miss for the document TTL', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -735,8 +839,8 @@ describe('sampled pointer phase diagnostics', () => {
     await vi.advanceTimersByTimeAsync(0)
     await vi.waitFor(() => expect(cache.put).toHaveBeenCalledOnce())
     const [, stored] = cache.put.mock.calls[0] as unknown as [Request, Response]
-    // An on-time miss keeps the 60 s negative TTL; a late one only gets the 30 s document TTL.
-    expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=30')
+    // Misses live as long as documents: the next publication purges both.
+    expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=86400')
   })
 
   it('cancels a late pointer body that exceeds the background budget', async () => {

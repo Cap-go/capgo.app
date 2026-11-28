@@ -29,7 +29,7 @@ import {
 import { PLUGIN_STATE_FORMAT, pluginStateAppKey, pluginStateDeviceKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
 import { withPluginStateDocument } from './pluginStateReadBudget.ts'
 import { bindPluginStateQueries, PluginStateColdMiss, PluginStateMiss } from './pluginStateRegistry.ts'
-import { LATE_READ_TIMEOUT_MS, readPublishedPluginState } from './pluginStateStore.ts'
+import { LATE_READ_TIMEOUT_MS, readPublishedGeneration, readPublishedPluginState } from './pluginStateStore.ts'
 import { isPluginStateAuthoritative, isPluginStateStrict, markPluginStateServed, parsePluginStateShareBps, pluginStateBucket, unmarkPluginStateServed } from './pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateDevice, parsePluginStateManifestStorage, parsePluginStateVersion } from './pluginStateValidation.ts'
 import { pluginStateAppCacheTag } from './updatesCacheTag.ts'
@@ -60,16 +60,23 @@ const APP_CACHE_PATH = '/.plugin-state-app-v2'
 const DEVICE_CACHE_PATH = '/.plugin-state-device-v2'
 const VERSION_CACHE_PATH = '/.plugin-state-version-v2'
 const MANIFEST_CACHE_PATH = '/.plugin-state-manifest-v2'
-/** A stale KV refill must not be amplified into hours of Cache API staleness. */
-const APP_CACHE_TTL_SECONDS = 30
-const VERSION_CACHE_TTL_SECONDS = 30
-const MANIFEST_CACHE_TTL_SECONDS = 30
-/** Bound repeated pointer misses; publication purges these entries. */
-const NEGATIVE_CACHE_TTL_SECONDS = 60
+/**
+ * Documents and misses stay cached until a publication replaces them. Every
+ * publication durably queues a purge of the app's plugin-state tag, retried
+ * until Cloudflare accepts it, and the prewarm then rewrites each region's
+ * entries. A fill that raced the purge removes itself (reconcileDocument).
+ * The TTL is only a backstop for an invalidation that never lands: a day keeps
+ * provider reads to about one per document and region per day without a
+ * publication, while bounding how long a lost purge could serve an old answer.
+ * Cloudflare may evict idle entries sooner.
+ */
+const DOCUMENT_CACHE_TTL_SECONDS = 24 * 60 * 60
+const APP_CACHE_TTL_SECONDS = DOCUMENT_CACHE_TTL_SECONDS
+const VERSION_CACHE_TTL_SECONDS = DOCUMENT_CACHE_TTL_SECONDS
+const MANIFEST_CACHE_TTL_SECONDS = DOCUMENT_CACHE_TTL_SECONDS
 /** App documents can be large: allow more than the default 20ms Cache API read. */
 const CACHE_MATCH_TIMEOUT_MS = 50
 const CACHE_BODY_TIMEOUT_MS = 50
-const CACHE_PUT_TIMEOUT_MS = 200
 const REVISION_HEADER = 'X-Plugin-State-Revision'
 const MEMORY_MAX_ENTRIES = 256
 /** Conservative parsed-object estimate; avoid retaining hundreds of large manifests. */
@@ -263,24 +270,53 @@ async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLo
   }
   if (options.reuseParsed && revision)
     rememberDoc(request.url, { revision, value })
-  await backgroundTask(c, putDocument(helper, request, options, value, revision))
+  await backgroundTask(c, putDocument(c, helper, request, options, value, revision))
   return { revision, value }
 }
 
+/** cached: stored and still current. superseded: a newer publication replaced it, so it was removed. */
+type DocumentWrite = 'cached' | 'not_cached' | 'superseded'
+
 /**
- * `late`: a background refill, which can land after a publication purge. It
- * never caches longer than the document TTL, so a stale miss lasts at most
- * as long as a stale value.
+ * Store a document (or a miss) and check it is still the published one. It
+ * runs in the background, so it waits for the real write: a put that timed
+ * out could still land later, after the check.
  */
-function putDocument<T>(helper: CacheHelper, request: Request, options: DocLoadOptions<T>, value: T | null, revision: string | null, late = false) {
-  const ttlSeconds = value === null && !late ? NEGATIVE_CACHE_TTL_SECONDS : options.ttlSeconds
-  return helper.putJson(request, { v: value }, ttlSeconds, {
+async function putDocument<T>(c: AnyContext, helper: CacheHelper, request: Request, options: DocLoadOptions<T>, value: T | null, revision: string | null): Promise<DocumentWrite> {
+  const stored = await helper.putJson(request, { v: value }, options.ttlSeconds, {
     tags: options.tags,
-    // A late refill already runs in the background: it waits for the write
-    // itself (refillDocument) rather than dropping it at the request timeout.
-    timeoutMs: late ? undefined : CACHE_PUT_TIMEOUT_MS,
     headers: revision ? { [REVISION_HEADER]: revision } : undefined,
   })
+  if (!stored)
+    return 'not_cached'
+  // Never rejects: the request that filled the cache must not fail on its check.
+  return await reconcileDocument(c, helper, request, options.kvKey, revision).catch(() => false) ? 'cached' : 'superseded'
+}
+
+/** True when the generation published now is the stored one, or older. */
+function isCurrentRevision(published: string | null, stored: string | null) {
+  if (published === stored)
+    return true
+  return published !== null && stored !== null && BigInt(published) <= BigInt(stored)
+}
+
+/**
+ * A fill that read the pointer just before a publication can land after that
+ * publication's purge, and entries now outlive it. So after each write, read
+ * the pointer again: R2 is strongly consistent, and the purge only follows a
+ * pointer that is already visible. When the pointer moved past the stored
+ * revision, or cannot be read, delete the entry: a cold miss is safe, a stale
+ * entry is not. Resolves true when the entry stays.
+ */
+async function reconcileDocument(c: AnyContext, helper: CacheHelper, request: Request, kvKey: string, revision: string | null): Promise<boolean> {
+  const published = await Promise.resolve()
+    .then(() => readPublishedGeneration(c, kvKey))
+    .then(generation => ({ generation }), () => null)
+  if (published && isCurrentRevision(published.generation, revision))
+    return true
+  // Parsed memory is only reused for the revision the cache entry holds, so it needs no cleanup.
+  await helper.delete(request)
+  return false
 }
 
 /**
@@ -297,8 +333,9 @@ function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request,
   let readEndedAt: number | null = null
   const now = () => sampledSince === null ? 0 : performance.now()
   // not_cached: the read finished, but the best-effort cache write failed.
-  // write_pending: the write was still unconfirmed after LATE_READ_TIMEOUT_MS.
-  const log = (outcome: 'cached' | 'not_cached' | 'write_pending' | 'failed') => {
+  // superseded: written, then removed because a newer publication replaced it.
+  // write_pending: the write or its check was still running after LATE_READ_TIMEOUT_MS.
+  const log = (outcome: DocumentWrite | 'write_pending' | 'failed') => {
     if (sampledSince === null)
       return
     cloudlog({
@@ -316,15 +353,15 @@ function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request,
       const value = published.value === null ? null : options.parse(published.value)
       if (options.reuseParsed && published.revision)
         rememberDoc(request.url, { revision: published.revision, value })
-      const write = putDocument(helper, request, options, value, published.revision, true)
-      // Keep the write alive past this wait: it may still land after it.
+      const write = putDocument(c, helper, request, options, value, published.revision)
+      // Keep the write and its publication check alive past this wait: they may finish after it.
       void backgroundTask(c, write)
       let timer: ReturnType<typeof setTimeout> | undefined
       const stored = await Promise.race([
         write,
         new Promise<'pending'>((resolve) => { timer = setTimeout(() => resolve('pending'), LATE_READ_TIMEOUT_MS) }),
       ]).finally(() => clearTimeout(timer))
-      log(stored === 'pending' ? 'write_pending' : stored ? 'cached' : 'not_cached')
+      log(stored === 'pending' ? 'write_pending' : stored)
     })
     .catch(() => log('failed'))
     .finally(() => {

@@ -605,15 +605,15 @@ describe('plugin state prewarm (regional worker)', () => {
     expect(cache.put).not.toHaveBeenCalled()
   })
 
-  it('caches the miss of an unpublished app for the document TTL only', async () => {
+  it('caches the miss of an unpublished app for the document TTL', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     const { env } = providers()
     const { cache } = memoryCache()
     expect(await onRegionalHost(env, c => prewarmPluginStateApp(c, APP_ID))).toEqual({ app_id: APP_ID, revision: null, cached: 1, skipped: 'unpublished' })
     expect(cache.put).toHaveBeenCalledOnce()
-    // It can land after a purge, like a late refill: 30 s, not the 60 s negative TTL.
+    // Misses live as long as documents: the next publication purges both.
     const [, stored] = cache.put.mock.calls[0] as unknown as [Request, Response]
-    expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=30')
+    expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=86400')
   })
 
   it('does not write when the cache lookup fails or times out', async () => {

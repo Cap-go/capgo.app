@@ -13,8 +13,9 @@ Plugin requests never rebuild state from the primary.
 
 ## Consistency and latency
 
-Cache API serves successful document reads for 30 seconds at each Cloudflare
-location. On a miss, the reader gets the logical key's pointer through the R2
+Cache API serves document reads, and misses, until the next publication of
+the app purges them (see Cache lifetime and cost below), with a one-day TTL as
+a backstop. On a miss, the reader gets the logical key's pointer through the R2
 binding, validates its generation and immutable KV key, then reads that exact
 KV value. Popular app and manifest documents can reuse a parsed copy in isolate
 memory only after checking the Cache API's publication-generation revision.
@@ -25,9 +26,7 @@ decoding share a 50 ms deadline; the subsequent KV
 value read has its own 50 ms deadline. A timeout falls back to the existing
 replica path for that request, but the late read keeps going in the background
 (at most 2 seconds per provider read) and stores its result in the Cache API
-like an on-time read. A late miss gets the 30-second document TTL instead of
-the 60-second negative TTL, because a late put can land after a publication
-purge. Without this refill, a location where R2 always
+like an on-time read. Without this refill, a location where R2 always
 answers after 50 ms would never warm up. Each isolate runs at most one refill
 per document; while it runs, other requests for that document skip the
 provider reads and use the replica immediately. Each request may load at most 16
@@ -54,8 +53,9 @@ Cloudflare documents that writes and negative lookups can remain stale for
 60 seconds or more. A 30-second KV `cacheTtl` is not a propagation guarantee.
 If R2 points to an immutable value that a location cannot read yet, the reader
 falls back to the replica. The Cache API can retain a previous published value
-until its 30-second TTL or a purge; R2 consistency does not bypass that cache.
-Missing document results have a separate 60-second negative TTL. An absent app
+until the publication's purge removes it; R2 consistency does not bypass that
+cache. Missing document results use the same lifetime: the publication of a
+missing key purges its app's tag like any other. An absent app
 pointer has no publication revision and always uses the replica, including a
 cached miss in authoritative mode. A generation-bearing deletion pointer can
 be trusted when authoritative mode is enabled; a published `exists: false` app
@@ -63,6 +63,38 @@ document remains an explicit deletion in either mode. Plugin-state
 entries use their own app tag, separate from DB/control and snippet caches.
 Writer publications purge only that namespace; they do not use the replica-lag
 re-purge ladder. KV-sourced answers must not fill the shared DB read cache.
+
+## Cache lifetime and cost
+
+Plugin-state Cache API entries (app, device, bundle-name and manifest
+documents, and misses) live until a publication replaces them. The writer
+queues a purge of the app's plugin-state tag in the same transaction as each
+publication. A failed purge goes back to the queue at its `Retry-After` until
+Cloudflare accepts it, and the prewarm then rewrites each region's entries.
+The one-day TTL (`DOCUMENT_CACHE_TTL_SECONDS`) is only a backstop for an
+invalidation that never lands, so a lost purge can serve an old answer for at
+most a day. Cloudflare may evict idle entries sooner.
+
+A cache fill can race a publication: it reads the old pointer, the
+publication lands and its purge runs, then the fill writes the old document
+after the purge. Plugin-state purges are not repeated (the writer does not use
+the replica-lag re-purge ladder), so after each write the reader reads the R2
+pointer again. R2 is strongly consistent and the purge only follows a visible
+pointer, so a moved pointer means the entry may be stale: it is deleted, as it
+is when the pointer cannot be read, and the next request reads the new
+publication. A late refill logs this as `plugin_state_refill` outcome
+`superseded`. The check costs one R2 Class B read per cache fill.
+
+Provider reads happen only on cache fills, so their cost follows the cache
+lifetime, not device traffic. Each fill reads the R2 pointer and the KV value,
+then the R2 pointer again. With the earlier 30-second TTL a document that
+devices request continuously refilled up to 2,880 times a day in each region.
+With publication-driven invalidation it refills about once per publication
+(through the prewarm), plus once a day and after evictions. Writes are
+unchanged: on 2026-11-21 to 2026-11-27, with KV reads off, the production
+namespace took about 35,000 KV writes, 33,000 deletes and 11,000 reads a day,
+and the pointer bucket about 41,000 Class A and 480,000 Class B operations a
+day.
 
 ## Snippet edge answers per cohort
 
@@ -221,8 +253,7 @@ Regions with `PLUGIN_STATE_KV=off` skip the prewarm without reading R2 or KV.
 The lookup before a write keeps any entry that already holds the published
 generation or a newer one. When the lookup fails or times out (500 ms), the
 document is reported as an error rather than written blind. A prewarmed miss
-gets the 30-second document TTL, like a late refill, because it can land after
-a purge.
+gets the document lifetime, like any cached miss.
 
 The Cache API has no conditional put, so after each write the prewarm reads
 the R2 pointer again. A newer entry that the put could have replaced comes from
@@ -239,10 +270,10 @@ A stale entry written by the prewarm can remain only when its delete fails or
 is still pending and no newer write follows: the pointer read failed, the newer
 KV value has not propagated yet, or the retries, operations or budget ran out.
 When the cache lookup itself fails, the prewarm writes nothing and leaves
-whatever the cache already holds, which expires with its TTL like any entry. The error (or,
-for a late write, the `plugin state prewarm late write not reconciled` log)
-says so, and the entry expires with its 30-second TTL, which bounds every
-Cache API refill. Failures are only logged (`plugin state prewarmed`); devices
+whatever the cache already holds. The error (or, for a late write, the
+`plugin state prewarm late write not reconciled` log) says so. Such an entry
+stays until the next publication of the app purges and prewarms it, or until
+the one-day TTL, which bounds every Cache API entry. Failures are only logged (`plugin state prewarmed`); devices
 then fill the cache as usual.
 
 ### Targets and the CLI

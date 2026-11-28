@@ -10,6 +10,8 @@ import { parsePluginStateShareBps, pluginStateBucket } from '../supabase/functio
 import { parsePluginStateApp, parsePluginStateManifest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateValidation.ts'
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts', () => ({
+  // Pointer re-check after a cache write: unchanged, like the unversioned reads below.
+  readPublishedGeneration: async () => null,
   readPublishedPluginState: async (_context: unknown, store: { get: (key: string, options: object) => unknown }, key: string) => ({ value: await store.get(key, { type: 'json', cacheTtl: 30 }), revision: null }),
 }))
 
