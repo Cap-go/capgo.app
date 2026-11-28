@@ -432,9 +432,9 @@ function getCloudflareWorkerPorts(): number[] {
 /**
  * Keep worktree host ports out of the kernel ephemeral pool.
  *
- * CI offsets land in 32k–60k, which overlaps Linux's default local port range.
- * Without reserving them, outbound sockets can steal a Supabase port and make
- * `docker` fail with "address already in use" on an otherwise idle runner.
+ * Without SUPABASE_WORKTREE_PORT_BASE, worktree ports land in 54k–65k, which overlaps Linux's
+ * default local port range. Reserving them keeps new outbound sockets off them, but cannot
+ * evict a socket that already holds one, which is why CI also moves the base below 32768.
  */
 function reserveWorktreePortsFromEphemeralPool(repoRoot: string): void {
   if (process.platform !== 'linux')

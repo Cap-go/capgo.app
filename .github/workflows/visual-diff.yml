@@ -18,6 +18,9 @@ permissions:
   contents: read
 
 env:
+  # Keep Supabase ports below Linux's ephemeral range (32768-60999). The runner's own
+  # outbound sockets can already hold a port in it, and `docker` then fails to bind it.
+  SUPABASE_WORKTREE_PORT_BASE: '20321'
   # Pull Supabase CLI images from GHCR instead of the default public.ecr.aws,
   # whose anonymous pull quota fails CI with "toomanyrequests: Data limit exceeded".
   SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
@@ -42,21 +45,55 @@ jobs:
           fi
           echo "requested=${requested}" >> "$GITHUB_OUTPUT"
 
-  # Each phase/shard pair runs on its own runner with a fresh stack. Captures took ~9s per
-  # route serially (89 routes x 2 phases ~= 27 minutes on one runner).
-  capture:
+  # Builds the console at both revisions (seconds each) and keeps only the routes whose code
+  # changed, so a PR that touches one page screenshots that page instead of all of them.
+  plan:
     needs: check
     if: needs.check.outputs.requested == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Plan affected routes
+    permissions:
+      contents: read
+    outputs:
+      routes: ${{ steps.plan.outputs.routes }}
+      count: ${{ steps.plan.outputs.count }}
+      shard_total: ${{ steps.plan.outputs.shard_total }}
+      shards: ${{ steps.plan.outputs.shards }}
+      summary: ${{ steps.plan.outputs.summary }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Plan affected routes
+        id: plan
+        # The merge commit is what lands, so its diff against the base is exactly this PR.
+        run: bun scripts/visual-diff-plan.ts --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.sha }}" --github-output
+
+  # Each phase/shard pair runs on its own runner with a fresh stack. Captures took ~9s per
+  # route serially; the plan sizes the matrix to the routes that changed.
+  capture:
+    needs: [check, plan]
+    if: needs.check.outputs.requested == 'true' && needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    name: Capture ${{ matrix.phase }} screenshots (shard ${{ matrix.shard }}/4)
+    name: Capture ${{ matrix.phase }} screenshots (shard ${{ matrix.shard }}/${{ needs.plan.outputs.shard_total }})
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
         phase: [before, after]
-        shard: [1, 2, 3, 4]
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -89,12 +126,16 @@ jobs:
 
       - name: Capture screenshots
         timeout-minutes: 20
+        env:
+          ROUTES: ${{ needs.plan.outputs.routes }}
+          SHARD: ${{ matrix.shard }}/${{ needs.plan.outputs.shard_total }}
         run: |
           bun scripts/visual-diff.ts run \
             --base "${{ github.event.pull_request.base.sha }}" \
-            --head "${{ github.event.pull_request.head.sha }}" \
+            --head "${{ github.sha }}" \
             --only-phase "${{ matrix.phase }}" \
-            --shard "${{ matrix.shard }}/4"
+            --routes "$ROUTES" \
+            --shard "$SHARD"
 
       - name: Upload screenshots
         if: always()
@@ -108,7 +149,7 @@ jobs:
           retention-days: 1
 
   visual-diff:
-    needs: [check, capture]
+    needs: [check, plan, capture]
     if: ${{ !cancelled() && needs.check.outputs.requested == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -119,8 +160,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
+        # The merge commit, like plan and capture: its route list is the one they used.
 
       - name: Setup bun
         run: bash scripts/setup-bun.sh
@@ -129,6 +169,7 @@ jobs:
         run: bun install
 
       - name: Download screenshots
+        if: needs.plan.outputs.count != '0'
         uses: actions/download-artifact@v6
         with:
           pattern: visual-diff-*-${{ github.event.pull_request.head.sha }}
@@ -138,9 +179,23 @@ jobs:
       - name: Compare screenshots
         id: compare
         env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          ROUTES: ${{ needs.plan.outputs.routes }}
           CAPTURE_RESULT: ${{ needs.capture.result }}
         run: |
-          bun scripts/visual-diff.ts diff
+          if [ "$PLAN_RESULT" != "success" ]; then
+            echo "::error::Planning the affected routes ended with '$PLAN_RESULT'."
+            exit 1
+          fi
+          if [ -z "$ROUTES" ]; then
+            mkdir -p .context/visual-diff/report
+            printf '## Visual changes\n\nNo route needed a screenshot.\n' > .context/visual-diff/report/summary.md
+            exit 0
+          fi
+          bun scripts/visual-diff.ts diff --routes "$ROUTES"
+          # A capture that ended on a page the plan did not fingerprint would be skipped by later
+          # plans when that page changes; fail so its rendersPaths gets declared.
+          bun scripts/visual-diff-plan.ts --check-final-pages .context/visual-diff/after
           if [ "$CAPTURE_RESULT" != "success" ]; then
             echo "::error::At least one screenshot capture shard ended with '$CAPTURE_RESULT'; the report may be incomplete."
             exit 1
@@ -165,6 +220,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ARTIFACT_NAME: visual-diff-report-${{ github.event.pull_request.head.sha }}
+          PLAN_SUMMARY: ${{ needs.plan.outputs.summary }}
         with:
           script: |
             const fs = require('node:fs')
@@ -183,6 +239,7 @@ jobs:
               '',
               summary,
               '',
+              ...(process.env.PLAN_SUMMARY ? [process.env.PLAN_SUMMARY, ''] : []),
               `Commit: \`${process.env.HEAD_SHA}\``,
               `[Download the HTML report from workflow artifacts](${process.env.RUN_URL}) (artifact: \`${process.env.ARTIFACT_NAME}\`).`,
               '',

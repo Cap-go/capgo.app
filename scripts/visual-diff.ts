@@ -608,6 +608,8 @@ async function captureRouteScreenshot(
     const outputPath = resolve(targetDir, `${route.slug}.png`)
     console.log(`[visual-diff] screenshotting ${phase} ${route.slug}`)
     await page.screenshot({ path: outputPath, fullPage: false, timeout: visualDiffActionTimeoutMs })
+    // The page actually captured, checked against the route plan by the report job.
+    writeFileSync(resolve(targetDir, `${route.slug}.url`), `${new URL(page.url()).pathname}\n`)
     console.log(`[visual-diff] captured ${phase} ${route.slug} -> ${outputPath}`)
     await context.close()
   }

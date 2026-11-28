@@ -21,10 +21,10 @@ import Layouts from 'vite-plugin-vue-layouts'
 import { VueRouterAutoImports } from 'vue-router/unplugin'
 import VueRouter from 'vue-router/vite'
 import pack from './package.json'
-import { isGuestRoutePath } from './src/constants/guestRoutes'
 import { branch, getRightKey } from './scripts/utils.mjs'
 import { servingPolicyStatusBaseUrl } from './scripts/serving-policy-status-url'
 import { withConsoleContentSecurityPolicy } from './scripts/console-security-policy'
+import { pageRoutePattern, routeLayouts } from './scripts/console-route-patterns'
 import 'vitest/config'
 
 type FrontendConfigKey = 'api_domain' | 'base_domain' | 'captcha_key' | 'plugin_region_targets'
@@ -151,51 +151,6 @@ function envFaviconPlugin(): Plugin {
 const pagesDir = path.resolve(__dirname, 'src/pages')
 const layoutsDir = path.resolve(__dirname, 'src/layouts')
 
-// `segments` are path parts where a leading ':' marks a parameter.
-function toRoutePattern(segments: string[]) {
-  const parts = segments.map(segment => segment.startsWith(':') ? '[^/]+' : segment.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))
-  return {
-    source: `^/${parts.join('/')}/?$`,
-    params: segments.filter(segment => segment.startsWith(':')).length,
-    path: `/${segments.join('/')}`,
-  }
-}
-
-function fileRoutePattern(file: string) {
-  const segments: string[] = []
-  for (const segment of path.relative(pagesDir, file).replace(/\.vue$/, '').split(/[\\/.]/)) {
-    if (segment === 'index')
-      continue
-    if (segment.startsWith('[...'))
-      return null
-    segments.push(segment.startsWith('[') ? `:${segment.slice(1, -1)}` : segment)
-  }
-  return toRoutePattern(segments)
-}
-
-/** Reads `key: value` lines from a page's `<route>` YAML block. */
-function routeBlockValue(file: string, key: string) {
-  const source = readFileSync(file, 'utf8')
-  const start = source.indexOf('<route')
-  const end = source.indexOf('</route>', start)
-  if (start === -1 || end === -1)
-    return undefined
-  for (const line of source.slice(start, end).split('\n')) {
-    const trimmed = line.trim()
-    if (trimmed.startsWith(`${key}:`))
-      return trimmed.slice(key.length + 1).trim().replace(/^['"]|['"]$/g, '')
-  }
-  return undefined
-}
-
-function routeLayouts(file: string, routePath: string) {
-  if (isGuestRoutePath(routePath))
-    return ['naked']
-  const layout = routeBlockValue(file, 'layout') ?? 'default'
-  // The app and settings layouts render inside the default dashboard shell.
-  return layout === 'app' || layout === 'settings' ? [layout, 'default'] : [layout]
-}
-
 function routeChunkPreloadPlugin(): Plugin {
   return {
     name: 'capgo-route-chunk-preload',
@@ -247,8 +202,7 @@ function routeChunkPreloadPlugin(): Plugin {
         for (const [moduleId, chunk] of byModule) {
           if (!moduleId.startsWith(pagesDir) || !moduleId.endsWith('.vue'))
             continue
-          const override = routeBlockValue(moduleId, 'path')
-          const pattern = override ? toRoutePattern(override.split('/').filter(Boolean)) : fileRoutePattern(moduleId)
+          const pattern = pageRoutePattern(moduleId, pagesDir)
           if (!pattern)
             continue
           const layouts = routeLayouts(moduleId, pattern.path)

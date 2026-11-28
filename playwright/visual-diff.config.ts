@@ -73,6 +73,12 @@ export interface VisualDiffRoute {
   beforeNavigate?: (page: Page) => Promise<void>
   /** Optional deterministic UI setup before the screenshot is captured. */
   prepare?: (page: Page) => Promise<void>
+  /**
+   * Other pages the capture can end on through in-app navigation (router.replace in a
+   * component), which scripts/visual-diff-plan.ts cannot see. The report job fails when a capture
+   * ends on a page that is neither declared here nor reached through `path` or a goto call.
+   */
+  rendersPaths?: string[]
 }
 
 async function prepareOrgWebhooksMcpScreenshot(
@@ -646,12 +652,16 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   {
     slug: 'onboarding-profile-goal',
     path: '/onboarding/app',
+    // AppOnboardingFlow redirects a profile without a name to the name step.
+    rendersPaths: ['/onboarding/name'],
     auth: true,
     prepare: page => prepareProfileGoalScreenshot(page),
   },
   {
     slug: 'onboarding-profile-goal-mobile',
     path: '/onboarding/app',
+    // AppOnboardingFlow redirects a profile without a name to the name step.
+    rendersPaths: ['/onboarding/name'],
     auth: true,
     prepare: async (page) => {
       await page.setViewportSize({ width: 390, height: 844 })
@@ -661,12 +671,16 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   {
     slug: 'onboarding-profile-resume',
     path: '/onboarding/app',
+    // AppOnboardingFlow redirects a profile without a name to the name step.
+    rendersPaths: ['/onboarding/name'],
     auth: true,
     prepare: prepareProfileResumeScreenshot,
   },
   {
     slug: 'onboarding-profile-resume-mobile',
     path: '/onboarding/app',
+    // AppOnboardingFlow redirects a profile without a name to the name step.
+    rendersPaths: ['/onboarding/name'],
     auth: true,
     prepare: async (page) => {
       await page.setViewportSize({ width: 390, height: 844 })
@@ -1069,6 +1083,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   {
     slug: 'security-updates-observe-desktop',
     path: '/app/com.demo.app/observe/errors',
+    // The security updates tab is its own route.
+    rendersPaths: ['/app/com.demo.app/observe/security'],
     auth: true,
     prepare: async (page) => {
       await prepareSecurityUpdatesObserveTab(page, { width: 1440, height: 900 })
@@ -1091,6 +1107,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   {
     slug: 'security-updates-observe-mobile',
     path: '/app/com.demo.app/observe/errors',
+    // The security updates tab is its own route.
+    rendersPaths: ['/app/com.demo.app/observe/security'],
     auth: true,
     prepare: async (page) => {
       await prepareSecurityUpdatesObserveTab(page, { width: 390, height: 844 })
@@ -1200,7 +1218,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.getByRole('heading', { name: /Start guided setup|Finish setup in your app/ }).waitFor()
     },
   },
-  { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },
+  // With the seeded demo data, this capture ends on the app overview (seen by the final-page check).
+  { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', rendersPaths: ['/app/com.demo.app'], auth: true },
   {
     slug: 'app-settings',
     path: '/app/com.demo.app/settings',
