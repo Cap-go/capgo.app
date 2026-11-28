@@ -42,15 +42,21 @@ jobs:
           fi
           echo "requested=${requested}" >> "$GITHUB_OUTPUT"
 
-  visual-diff:
+  # Each phase/shard pair runs on its own runner with a fresh stack. Captures took ~9s per
+  # route serially (89 routes x 2 phases ~= 27 minutes on one runner).
+  capture:
     needs: check
     if: needs.check.outputs.requested == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    name: Generate visual diff report
+    timeout-minutes: 30
+    name: Capture ${{ matrix.phase }} screenshots (shard ${{ matrix.shard }}/4)
     permissions:
       contents: read
-      pull-requests: write # Upsert the sticky visual diff PR comment only in this job
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [before, after]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -81,13 +87,64 @@ jobs:
       - name: Link Supabase templates
         run: ln -sfn supabase/templates templates
 
-      - name: Run visual diff pipeline
-        # Full before/after captures can exceed 30 minutes. Reserve time for artifact upload and reporting.
-        timeout-minutes: 40
+      - name: Capture screenshots
+        timeout-minutes: 20
         run: |
           bun scripts/visual-diff.ts run \
             --base "${{ github.event.pull_request.base.sha }}" \
-            --head "${{ github.event.pull_request.head.sha }}"
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --only-phase "${{ matrix.phase }}" \
+            --shard "${{ matrix.shard }}/4"
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: visual-diff-${{ matrix.phase }}-${{ matrix.shard }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            .context/visual-diff/${{ matrix.phase }}/
+            .context/visual-diff/logs/
+          if-no-files-found: ignore
+          retention-days: 1
+
+  visual-diff:
+    needs: [check, capture]
+    if: ${{ !cancelled() && needs.check.outputs.requested == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: Generate visual diff report
+    permissions:
+      contents: read
+      pull-requests: write # Upsert the sticky visual diff PR comment only in this job
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Download screenshots
+        uses: actions/download-artifact@v6
+        with:
+          pattern: visual-diff-*-${{ github.event.pull_request.head.sha }}
+          path: .context/visual-diff
+          merge-multiple: true
+
+      - name: Compare screenshots
+        id: compare
+        env:
+          CAPTURE_RESULT: ${{ needs.capture.result }}
+        run: |
+          bun scripts/visual-diff.ts diff
+          if [ "$CAPTURE_RESULT" != "success" ]; then
+            echo "::error::At least one screenshot capture shard ended with '$CAPTURE_RESULT'; the report may be incomplete."
+            exit 1
+          fi
 
       - name: Upload visual diff report
         if: always()

@@ -14,6 +14,7 @@ import { dismissSupportPrompt } from '../playwright/support/dismissSupportPrompt
 import { getSupabaseStatus } from './supabase-worktree-status'
 import { getPlaywrightStripeApiBaseUrl, getStripeEmulatorPort } from './playwright-stripe'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
+import { parseShard, shardRoutes } from './visual-diff-shards'
 import { signInWithPassword } from './gotrue_password_sign_in'
 
 type Phase = 'before' | 'after'
@@ -43,6 +44,10 @@ interface CliOptions {
   thresholdPercent: number
   routes: string[]
   skipGitCheckout: boolean
+  /** `run` captures only this phase and skips the comparison (CI merges shards first). */
+  onlyPhase?: Phase
+  /** `run` captures only this contiguous slice of the routes, as index/total. */
+  shard?: { index: number, total: number }
 }
 
 const repoRoot = process.cwd()
@@ -99,6 +104,8 @@ function parseArgs(argv: string[]): CliOptions {
   let thresholdPercent = parseThreshold(process.env.VISUAL_DIFF_THRESHOLD_PERCENT || '0.1', 'VISUAL_DIFF_THRESHOLD_PERCENT')
   let routes: string[] = []
   let skipGitCheckout = process.env.VISUAL_DIFF_SKIP_GIT === 'true'
+  let onlyPhase: Phase | undefined
+  let shard: CliOptions['shard']
 
   function requireArg(flag: string, value: string | undefined) {
     if (!value || value.startsWith('--'))
@@ -133,12 +140,25 @@ function parseArgs(argv: string[]): CliOptions {
       skipGitCheckout = true
       continue
     }
+    if (arg === '--only-phase') {
+      onlyPhase = requireArg('--only-phase', rest[++index]) as Phase
+      if (onlyPhase !== 'before' && onlyPhase !== 'after')
+        throw new Error('--only-phase must be before or after')
+      continue
+    }
+    if (arg === '--shard') {
+      shard = parseShard(requireArg('--shard', rest[++index]))
+      continue
+    }
     throw new Error(`Unknown argument "${arg}"`)
   }
 
   if ((command === 'capture' || command === 'capture-route') && phase !== 'before' && phase !== 'after') {
     throw new Error(`${command} requires --phase before or --phase after`)
   }
+
+  if (onlyPhase === 'before' && skipGitCheckout)
+    throw new Error('--only-phase before needs git checkouts; drop --skip-git')
 
   if (command === 'capture-route' && routes.length !== 1)
     throw new Error('capture-route requires exactly one --routes slug')
@@ -151,6 +171,8 @@ function parseArgs(argv: string[]): CliOptions {
     thresholdPercent,
     routes,
     skipGitCheckout,
+    onlyPhase,
+    shard,
   }
 }
 
@@ -846,14 +868,22 @@ async function runPipeline(options: CliOptions) {
     snapshotVisualDiffConfig(visualDiffConfigPath)
     const visualDiffConfig = await loadVisualDiffConfig(visualDiffConfigPath)
     snapshotVisualDiffRunner(visualDiffRunnerPath)
+    const routeFilter = options.shard
+      ? shardRoutes(selectedRoutes(visualDiffConfig.visualDiffRoutes, options.routes), options.shard).map(route => route.slug)
+      : options.routes
+    if (options.shard) {
+      console.log(`[visual-diff] shard ${options.shard.index}/${options.shard.total}: ${routeFilter.length} route(s)`)
+      if (routeFilter.length === 0)
+        return
+    }
 
-    if (!options.skipGitCheckout) {
+    if (!options.skipGitCheckout && options.onlyPhase !== 'after') {
       await stopFrontendStack()
       await stopBackendStack()
       await checkoutRef(baseSha)
       await captureScreenshots(
         'before',
-        options.routes,
+        routeFilter,
         { forceFrontend: true, forceBackend: true },
         visualDiffConfig,
         visualDiffConfigPath,
@@ -861,12 +891,14 @@ async function runPipeline(options: CliOptions) {
       )
       await stopFrontendStack()
       await stopBackendStack()
+      if (options.onlyPhase === 'before')
+        return
       await checkoutRef(headSha)
     }
 
     await captureScreenshots(
       'after',
-      options.routes,
+      routeFilter,
       {
         forceFrontend: !options.skipGitCheckout,
         forceBackend: !options.skipGitCheckout,
@@ -875,7 +907,9 @@ async function runPipeline(options: CliOptions) {
       visualDiffConfigPath,
       visualDiffRunnerPath,
     )
-    const results = await compareScreenshots(options.thresholdPercent, options.routes, visualDiffConfig)
+    if (options.onlyPhase)
+      return
+    const results = await compareScreenshots(options.thresholdPercent, routeFilter, visualDiffConfig)
     const summary = generateReport(results, options.thresholdPercent)
 
     if (summary.changedCount > 0)
@@ -935,7 +969,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error)
-  process.exit(1)
-})
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error)
+    process.exit(1)
+  })
+}

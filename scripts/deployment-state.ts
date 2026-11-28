@@ -101,8 +101,8 @@ export function completedDeploymentKeys(jobs: DeploymentJob[], environment: Envi
   if (succeeded('Build code and deploy to Supabase', 'Update functions')
     && succeeded('Build code and deploy to Supabase', 'Apply Supabase Migrations')
     && (environment === 'alpha' || (
-      succeeded('Reconcile production read-replica schema', 'Reconcile the Google subscriber through server-side Cloud SQL import')
-      && succeeded('Refresh read-replica subscription', 'Refresh subscription for newly published tables')
+      succeeded('Build code and deploy to Supabase', 'Reconcile the Google subscriber through server-side Cloud SQL import')
+      && succeeded('Refresh production read-replica subscription', 'Refresh subscription for newly published tables')
     ))) {
     keys.push('supabase')
   }

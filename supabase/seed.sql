@@ -997,9 +997,45 @@ DECLARE
   END;
   v1_0_1_version_id bigint; v1_0_0_version_id bigint; v1_361_0_version_id bigint; v1_360_0_version_id bigint; v1_359_0_version_id bigint;
   production_channel_id bigint; beta_channel_id bigint; development_channel_id bigint; no_access_channel_id bigint; electron_only_channel_id bigint;
+  apikey_principal_ids uuid[] := '{}'::uuid[];
+  apikey_principal_id uuid;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext(p_app_id));
   EXECUTE 'DELETE FROM public.org_id_tombstones WHERE org_id = $1' USING org_id;
+
+  -- role_bindings triggers lock the API key principal, then the org. Two writes in
+  -- this function take principal locks: the reset below cascade-deletes the app's
+  -- app/bundle/channel bindings, and the clone further down copies the Demo org's
+  -- bindings of the seeded users' keys. Both run after locks that a concurrent test
+  -- or seed can hold in the other order (the orgs upsert takes the org lock first),
+  -- which deadlocked (40P01). Take every principal lock either write needs up front,
+  -- in UUID order, before any of them. The Demo org needs no clone: its bindings are
+  -- the source rows.
+  EXECUTE $sql_principals$
+    SELECT COALESCE(pg_catalog.array_agg(DISTINCT principal_id ORDER BY principal_id), '{}'::uuid[])
+    FROM (
+      SELECT rb.principal_id
+      FROM public.role_bindings rb
+      JOIN public.apps a ON a.id = rb.app_id
+      WHERE rb.principal_type = public.rbac_principal_apikey()
+        AND a.app_id = $1
+      UNION
+      SELECT rb.principal_id
+      FROM public.role_bindings rb
+      JOIN public.apikeys ak ON ak.rbac_id = rb.principal_id
+      WHERE $4
+        AND rb.principal_type = public.rbac_principal_apikey()
+        AND rb.scope_type = public.rbac_scope_org()
+        AND rb.org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid
+        AND ak.user_id IN ($2, $3)
+    ) AS principals
+  $sql_principals$ INTO apikey_principal_ids
+    USING p_app_id, user_id, admin_user_id, org_id <> '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid;
+
+  FOREACH apikey_principal_id IN ARRAY apikey_principal_ids LOOP
+    PERFORM public.lock_rbac_apikey_principal(apikey_principal_id);
+  END LOOP;
+
   PERFORM public.reset_app_data(p_app_id);
   -- Ensure the base Stripe customer and org exist so FK inserts are stable between tests
   INSERT INTO public.stripe_info (
@@ -1093,14 +1129,18 @@ BEGIN
     WHERE rb.principal_type = public.rbac_principal_apikey()
       AND rb.scope_type = public.rbac_scope_org()
       AND rb.org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid
-      AND ak.user_id IN ($2, $3)
+      -- Only principals locked up front, and only the seeded users' keys: the locked
+      -- set also holds keys bound to this app, which are not cloned.
+      AND rb.principal_id = ANY($2)
+      AND ak.user_id IN ($3, $4)
+      AND $1 <> '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid
       AND NOT EXISTS (
         SELECT 1 FROM public.orgs o
         WHERE o.id = $1
           AND (o.require_apikey_expiration OR o.max_apikey_expiration_days IS NOT NULL)
       )
     ON CONFLICT DO NOTHING
-  $sql3$ USING org_id, user_id, admin_user_id;
+  $sql3$ USING org_id, apikey_principal_ids, user_id, admin_user_id;
 
   INSERT INTO public.apps (created_at, app_id, icon_url, name, last_version, updated_at, owner_org, user_id)
   VALUES (NOW(), p_app_id, '', 'Seeded App', '1.0.0', NOW(), org_id, user_id);
