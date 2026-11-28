@@ -180,12 +180,22 @@ export function changedMessageKeys(base: Record<string, unknown>, head: Record<s
   return [...before].filter(([key, value]) => after.get(key) !== value).map(([key]) => key)
 }
 
-function usesKey(code: string, key: string) {
+/**
+ * Whether code can look up `key`: as a string literal, or built from a static prefix
+ * (t(`plans-${name}`), t('plans-' + name)).
+ */
+export function usesKey(code: string, key: string) {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)
-  return new RegExp(`['"\`]${escaped}['"\`]`).test(code)
+  if (new RegExp(`['"\`]${escaped}['"\`]`).test(code))
+    return true
+  for (const match of code.matchAll(/`([^`$\\]{2,})\$\{|(['"])([^'"\\\n]{2,})\2\s*\+/g)) {
+    if (key.startsWith(match[1] ?? match[3]))
+      return true
+  }
+  return false
 }
 
-/** Routes whose modules mention a changed key; null when some key is never used literally. */
+/** Routes whose modules can look up a changed key; null when no code anywhere can (a fully computed lookup). */
 export function routesUsingKeys(keys: string[], sides: Array<{ graph: ModuleGraph, modules: Map<string, Set<string>> }>) {
   const affected = new Set<string>()
   for (const key of keys) {

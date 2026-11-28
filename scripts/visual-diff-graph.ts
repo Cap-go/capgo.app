@@ -59,7 +59,8 @@ export function graphPlugin(root: string, onGraph: (graph: ModuleGraph) => void)
         // same rules, so hash the stylesheet source instead of the generated CSS.
         const plainStylesheet = !id.includes('?') && file.endsWith('.css') && existsSync(file)
         // Vue modules import their blocks by absolute path, which differs between two checkouts.
-        const code = (plainStylesheet ? readFileSync(file, 'utf8') : (info.code ?? '')).split(root).join('<root>')
+        // Its output also depends on the packages it loads (`@plugin "daisyui"`), so hash their versions too.
+        const code = (plainStylesheet ? stylesheetSource(root, file) : (info.code ?? '')).split(root).join('<root>')
         const firstParty = !key.startsWith('/') && !key.startsWith('\0') && !key.includes('node_modules/')
         modules[key] = {
           hash: sha(code),
@@ -71,6 +72,17 @@ export function graphPlugin(root: string, onGraph: (graph: ModuleGraph) => void)
       onGraph({ root, entries, modules })
     },
   }
+}
+
+/** A stylesheet's source plus the versions of the packages it imports or loads as plugins. */
+export function stylesheetSource(root: string, file: string) {
+  const source = readFileSync(file, 'utf8')
+  const packages = new Set<string>()
+  for (const match of source.matchAll(/@(?:import|plugin|reference)\s+['"]([^'"./][^'"]*)['"]/g)) {
+    const parts = match[1].split('/')
+    packages.add(parts[0].startsWith('@') ? parts.slice(0, 2).join('/') : parts[0])
+  }
+  return [source, ...[...packages].sort().map(name => `/* ${name}@${packageVersion(root, name)} */`)].join('\n')
 }
 
 function packageVersion(root: string, name: string) {

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import { fileRoutePattern } from '../scripts/console-route-patterns'
+import { stylesheetSource } from '../scripts/visual-diff-graph'
 import {
   changedMessageKeys,
   changedRouteDefinitions,
@@ -19,6 +20,7 @@ import {
   routeFingerprint,
   routesUsingKeys,
   shardCount,
+  usesKey,
   visitedPaths,
 } from '../scripts/visual-diff-plan'
 
@@ -119,6 +121,22 @@ describe('message keys', () => {
     expect([...routesUsingKeys(['sidebar-title'], sides)!]).toEqual(['a'])
   })
 
+  it('finds keys built from a static prefix', () => {
+    expect(usesKey('t(`plans-${name}`)', 'plans-pro')).toBe(true)
+    expect(usesKey(`t('plans-' + name)`, 'plans-pro')).toBe(true)
+    expect(usesKey('t(`${name}`)', 'plans-pro')).toBe(false)
+    expect(usesKey('t(`other-${name}`)', 'plans-pro')).toBe(false)
+  })
+
+  it('keeps computed consumers when another route uses the key literally', () => {
+    const base = graph({ 'src/components/B.vue': module('b', [], [], 't(`a-${suffix}`)') })
+    const modules = new Map([
+      ['a', new Set(['src/pages/a.vue', 'src/components/A.vue'])],
+      ['b', new Set(['src/pages/b.vue', 'src/components/B.vue'])],
+    ])
+    expect([...routesUsingKeys(['a-title'], [{ graph: base, modules }])!].sort()).toEqual(['a', 'b'])
+  })
+
   it('gives up when a key is never written literally (computed lookups)', () => {
     const base = graph()
     expect(routesUsingKeys(['plans.pro'], [{ graph: base, modules: new Map([['a', new Set(Object.keys(base.modules))]]) }])).toBeNull()
@@ -176,6 +194,25 @@ describe('route list sources', () => {
     expect(elements.filter(element => !/\bslug:/.test(element))).toEqual([])
     for (const match of source.matchAll(/\.goto\(\s*([^,)]*)/g))
       expect(match[1].trim(), 'a computed page.goto() target makes its route always captured').toMatch(/^(['"`])[^'"`$]*\1$/)
+  })
+})
+
+describe('stylesheetSource', () => {
+  it('includes the versions of the packages a stylesheet loads', () => {
+    const root = mkdtempSync(join(tmpdir(), 'visual-diff-css-'))
+    try {
+      writeFileSync(join(root, 'package.json'), '{}')
+      mkdirSync(join(root, 'node_modules/daisyui'), { recursive: true })
+      writeFileSync(join(root, 'node_modules/daisyui/package.json'), '{"name":"daisyui","version":"5.1.0"}')
+      writeFileSync(join(root, 'style.css'), `@import 'tailwindcss' source(none);\n@plugin "daisyui/index.js" {}\n@import './local.css';\n`)
+      const source = stylesheetSource(root, join(root, 'style.css'))
+      expect(source).toContain('/* daisyui@5.1.0 */')
+      expect(source).toContain('/* tailwindcss@missing */')
+      expect(source).not.toContain('local.css@')
+    }
+    finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
