@@ -1,5 +1,6 @@
 import { readServingPolicy, signServingIngress } from '../../supabase/functions/_backend/plugin_runtime/utils/servingPolicy.ts'
 import type { ExecutionContext, MessageBatch } from '@cloudflare/workers-types'
+import { timingSafeEqual } from 'hono/utils/buffer'
 import type { SnippetEdgeStatsEnv } from '../../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 import { app as channel_self } from '../../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts'
 import { app as stats } from '../../supabase/functions/_backend/plugin_runtime/plugins/stats.ts'
@@ -8,11 +9,11 @@ import { app as cache_purge_local } from '../../supabase/functions/_backend/plug
 import { app as latency } from '../../supabase/functions/_backend/plugin_runtime/private/latency.ts'
 import { app as plugin_state_prewarm } from '../../supabase/functions/_backend/plugin_runtime/private/plugin_state_prewarm.ts'
 import { app as ok } from '../../supabase/functions/_backend/plugin_runtime/public/ok.ts'
-import { createAllCatch, createHono, quickError, useCors } from '../../supabase/functions/_backend/plugin_runtime/utils/hono.ts'
+import { BRES, createAllCatch, createHono, quickError, useCors } from '../../supabase/functions/_backend/plugin_runtime/utils/hono.ts'
 import { cloudlog } from '../../supabase/functions/_backend/plugin_runtime/utils/logging.ts'
 import { startPluginStateReadMetrics } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts'
 import { isPluginStateShared, parsePluginStateShareBps, pluginStateBucket } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
-import { handleSnippetEdgeStatsMessage } from '../../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
+import { handleSnippetEdgeStatsMessage, relaySnippetEdgeStatsMessage, SNIPPET_EDGE_STATS_CONSUME_PATH } from '../../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 import { getEnv } from '../../supabase/functions/_backend/plugin_runtime/utils/utils.ts'
 import { version } from '../../supabase/functions/_backend/plugin_runtime/utils/version.ts'
 
@@ -107,13 +108,46 @@ app.route('/latency', latency)
 app.route('/plugin_state/prewarm', plugin_state_prewarm)
 // Local-only purge-by-tag emulation for the /updates edge cache.
 app.route('/cache_purge_local', cache_purge_local)
+// API-secret protected: a snippet edge stats queue message relayed by queue()
+// below, so it runs in this worker's placement data center.
+app.post(SNIPPET_EDGE_STATS_CONSUME_PATH, async (c) => {
+  const secret = getEnv(c, 'API_SECRET')
+  const provided = c.req.header('apisecret')
+  if (!secret || !provided || !await timingSafeEqual(provided, secret))
+    throw quickError(401, 'invalid_api_secret', 'Invalid API secret')
+  const payload: unknown = await c.req.raw.clone().json().catch(() => null)
+  const id = payload && typeof payload === 'object' ? (payload as { id?: unknown }).id : undefined
+  if (typeof id !== 'string' || !id)
+    throw quickError(400, 'invalid_body', 'Expected a relayed queue message')
+  // c.executionCtx throws when the runtime passed no context.
+  const ctx = (() => {
+    try {
+      return c.executionCtx
+    }
+    catch {
+      return undefined
+    }
+  })()
+  // A throw answers 5xx, so the relaying queue handler retries the message.
+  await handleSnippetEdgeStatsMessage(c.env, id, (payload as { body?: unknown }).body, request => app.fetch(request, c.env, ctx))
+  return c.json(BRES)
+})
 
 createAllCatch(app, functionName)
 
+/**
+ * Placement only moves fetch handlers, so a queue invocation runs away from
+ * the replica the replays read. With the PLACED_SELF binding each message runs
+ * in the placed fetch handler instead; without it (local), in process. Batches
+ * stay small: one invocation may call at most 32 workers through bindings.
+ */
 async function queue(batch: MessageBatch<unknown>, env: SnippetEdgeStatsEnv, ctx: ExecutionContext) {
   for (const message of batch.messages) {
     try {
-      await handleSnippetEdgeStatsMessage(env, message.id, message.body, request => app.fetch(request, env, ctx))
+      if (env.PLACED_SELF)
+        await relaySnippetEdgeStatsMessage(env, message.id, message.body)
+      else
+        await handleSnippetEdgeStatsMessage(env, message.id, message.body, request => app.fetch(request, env, ctx))
       message.ack()
     }
     catch (error) {

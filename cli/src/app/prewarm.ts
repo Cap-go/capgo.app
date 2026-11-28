@@ -9,7 +9,7 @@ export interface PrewarmRegion {
   region: string
   /** HTTP status of the regional call; null when it never answered. */
   status?: number | null
-  /** The call ran in the worker's placement data center (server-side cf-placement check). */
+  /** The call ran in the worker's placement data center (server-side placement check). */
   pinned?: boolean
   placement: string | null
   revision: string | null

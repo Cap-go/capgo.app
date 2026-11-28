@@ -467,6 +467,30 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
  * Run `run` over `items` with at most `limit` in flight, keeping the input
  * order in the results; the next item starts as soon as one finishes.
  */
+const TRACE_URL = 'https://cloudflare.com/cdn-cgi/trace'
+const TRACE_TIMEOUT_MS = 1000
+
+/**
+ * The data center this invocation runs in, or null when unknown. request.cf.colo
+ * names where the call entered Cloudflare, not where a placed worker runs, and a
+ * placed worker cannot see its own cf-placement. A subrequest leaves from the
+ * data center the worker runs in, and Cloudflare's trace names it. Uses one
+ * connection: the prewarm itself holds at most PREWARM_CONNECTIONS of six.
+ */
+export async function executionColo(): Promise<string | null> {
+  try {
+    const response = await fetch(TRACE_URL, { signal: AbortSignal.timeout(TRACE_TIMEOUT_MS) })
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => undefined)
+      return null
+    }
+    return /^colo=([A-Z]{3})$/m.exec(await response.text())?.[1] ?? null
+  }
+  catch {
+    return null
+  }
+}
+
 export function mapWithConcurrency<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = Array.from({ length: items.length })
   let next = 0

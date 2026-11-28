@@ -6,10 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app as prewarmRoute } from '../supabase/functions/_backend/plugin_runtime/private/plugin_state_prewarm.ts'
 import { resetPluginStateMemory, startPluginStateRequest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginState.ts'
 import { pluginStateAppKey, pluginStateImmutableKey, pluginStateManifestKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
-import { prewarmBundles, prewarmOperations, prewarmPluginStateApp, prewarmSlotsForTests, shouldReplaceCachedGeneration } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
+import { executionColo, prewarmBundles, prewarmOperations, prewarmPluginStateApp, prewarmSlotsForTests, shouldReplaceCachedGeneration } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStatePrewarm.ts'
 import { drainUpdatesCachePurge, app as purgeTrigger } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { PLUGIN_REGIONS } from '../supabase/functions/_backend/utils/pluginRegionTargets.ts'
-import { isPinnedPlacement, pluginStatePrewarmForwardUrl, pluginStatePrewarmTargets, PrewarmNotConfigured, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
+import { isPinnedPlacement, measuredPlacement, pluginStatePrewarmForwardUrl, pluginStatePrewarmTargets, PrewarmNotConfigured, prewarmPluginStateRegions, schedulePluginStatePrewarm } from '../supabase/functions/_backend/utils/pluginStatePrewarm.ts'
 
 // Node by default; a test sets 'workerd' to run as a Cloudflare worker.
 const runtime = vi.hoisted(() => ({ key: null as string | null }))
@@ -663,21 +663,45 @@ describe('plugin state prewarm (regional worker)', () => {
   })
 })
 
+describe('execution data center', () => {
+  it('reads the colo from Cloudflare\'s trace, and is null when it cannot', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('fl=1\nh=cloudflare.com\ncolo=NRT\nloc=JP\n')))
+    expect(await executionColo()).toBe('NRT')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('fl=1\nloc=JP\n')))
+    expect(await executionColo()).toBeNull()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('colo=NRT', { status: 503 })))
+    expect(await executionColo()).toBeNull()
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('timed out')
+    }))
+    expect(await executionColo()).toBeNull()
+  })
+})
+
 describe('plugin state prewarm route', () => {
+  // The route's only fetch: Cloudflare's trace, which names the data center it runs in.
+  const trace = vi.fn(async (url: string) => {
+    expect(url).toBe('https://cloudflare.com/cdn-cgi/trace')
+    return new Response('fl=1\nh=cloudflare.com\ncolo=CMH\nloc=US\n')
+  })
+
   async function call(body: unknown, secret?: string, extraEnv: Record<string, unknown> = {}) {
     vi.stubEnv('API_SECRET', 'prewarm-secret')
+    vi.stubGlobal('fetch', trace)
     const app = new Hono()
     app.route('/plugin_state/prewarm', prewarmRoute)
     return app.request('https://plugin.na.capgo.app/plugin_state/prewarm', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(secret ? { apisecret: secret } : {}), 'cf-placement': 'remote-CMH' },
+      headers: { 'content-type': 'application/json', ...(secret ? { apisecret: secret } : {}) },
       body: JSON.stringify(body),
     }, extraEnv)
   }
 
   it('requires the API secret', async () => {
+    trace.mockClear()
     expect((await call({ app_ids: [APP_ID] })).status).toBe(401)
     expect((await call({ app_ids: [APP_ID] }, 'wrong')).status).toBe(401)
+    expect(trace).not.toHaveBeenCalled()
   })
 
   it('rejects an empty, oversized or invalid app list, and a null body', async () => {
@@ -884,10 +908,11 @@ describe('plugin state prewarm route', () => {
     await publishApp(publish)
     const response = await call({ app_ids: [APP_ID, APP_ID, 'com.example.other'] }, 'prewarm-secret', env)
     expect(response.status).toBe(200)
+    // colo is where the call entered Cloudflare (none in tests), ran_in where it ran.
     expect(await response.json()).toEqual({
       status: 'ok',
-      placement: 'remote-CMH',
       colo: null,
+      ran_in: 'CMH',
       results: [
         { app_id: APP_ID, revision: '5', cached: 4 },
         { app_id: 'com.example.other', revision: null, cached: 1, skipped: 'unpublished' },
@@ -927,7 +952,7 @@ describe('plugin state prewarm fan-out (API worker)', () => {
       const appIds = JSON.parse(String(init.body)).app_ids as string[]
       if (url.includes('plugin.jp.'))
         return new Response('{}', { status: 503 })
-      return Response.json({ placement: `remote-${new URL(url).hostname.split('.')[1]}`, results: appIds.map(app_id => ({ app_id, revision: '1', cached: 1 })) })
+      return Response.json({ results: appIds.map(app_id => ({ app_id, revision: '1', cached: 1 })) }, { headers: { 'cf-placement': `remote-${new URL(url).hostname.split('.')[1]}` } })
     })
     vi.stubGlobal('fetch', fetchMock)
     const appIds = Array.from({ length: 25 }, (_, index) => `com.example.app${index}`)
@@ -985,6 +1010,36 @@ describe('plugin state prewarm fan-out (API worker)', () => {
     const results = await prewarmPluginStateRegions(context(), [APP_ID])
     expect(results.find(region => region.region === 'na')?.placement).toBe('remote-CMH')
     expect(results.find(region => region.region === 'jp')?.placement).toBeNull()
+  })
+
+  it('falls back to the data center the regional worker measured when Cloudflare sends no cf-placement', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    vi.stubEnv('API_SECRET', 'prewarm-secret')
+    const answers: Record<string, { body: Record<string, unknown>, header?: string }> = {
+      // Moved from where the call entered (LHR) to Tokyo: pinned.
+      jp: { body: { colo: 'LHR', ran_in: 'NRT' } },
+      // Ran where it entered: not pinned.
+      eu: { body: { colo: 'LHR', ran_in: 'LHR' } },
+      // The trace failed: unknown.
+      hk: { body: { colo: 'LHR', ran_in: null } },
+      // Not a data center code: ignored.
+      me: { body: { colo: 'LHR', ran_in: 'nope' } },
+      // Cloudflare's header wins over the measurement.
+      na: { body: { colo: 'LHR', ran_in: 'LHR' }, header: 'remote-CMH' },
+    }
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const answer = answers[new URL(url).hostname.split('.')[1]!] ?? { body: {} }
+      return Response.json({ ...answer.body, results: [] }, { headers: answer.header ? { 'cf-placement': answer.header } : {} })
+    }))
+    const results = await prewarmPluginStateRegions(context(), [APP_ID])
+    const placement = (name: string) => results.find(region => region.region === name)?.placement
+    expect(placement('jp')).toBe('remote-NRT')
+    expect(isPinnedPlacement(placement('jp')!)).toBe(true)
+    expect(placement('eu')).toBe('local-LHR')
+    expect(placement('hk')).toBeNull()
+    expect(placement('me')).toBeNull()
+    expect(placement('na')).toBe('remote-CMH')
+    expect(measuredPlacement(null, 'NRT')).toBeNull()
   })
 
   it('shares three connections across overlapping prewarm runs of one invocation', async () => {

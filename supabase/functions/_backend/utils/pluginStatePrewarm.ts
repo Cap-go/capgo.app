@@ -61,13 +61,30 @@ const PREWARM_TOTAL_BUDGET_MS = 20_000
 export const PREWARM_AFTER_PURGE_DELAY_MS = 1000
 
 /**
- * True when cf-placement shows the regional call was moved to the worker's
+ * True when the placement shows the regional call was moved to the worker's
  * placement data center (`remote-XXX`). `local-XXX` means it ran where the call
- * arrived, and no value means the worker is not placed: either way the cache
- * it warmed may not be the one its devices read.
+ * arrived, and no value means neither Cloudflare nor the worker could tell:
+ * either way the cache it warmed may not be the one its devices read.
  */
 export function isPinnedPlacement(placement: string | null) {
   return typeof placement === 'string' && placement.startsWith('remote-')
+}
+
+function isColo(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Z]{3}$/.test(value)
+}
+
+/**
+ * The placement a regional worker measured, in cf-placement form: `remote-XXX`
+ * when it ran in XXX (its trace) but the call entered Cloudflare elsewhere
+ * (request.cf.colo), `local-XXX` when both match, null when either is unknown.
+ * Cloudflare does not always send cf-placement (Japan answered without it on
+ * some paths) and documents the header as one it may remove.
+ */
+export function measuredPlacement(enteredAt: unknown, ranIn: unknown): string | null {
+  if (!isColo(enteredAt) || !isColo(ranIn))
+    return null
+  return `${ranIn === enteredAt ? 'local' : 'remote'}-${ranIn}`
 }
 
 export interface RegionPrewarmResult {
@@ -112,10 +129,10 @@ async function prewarmRegion(region: PluginRegion, secret: string, appIds: strin
       void response.body?.cancel().catch(() => undefined)
       return { ...base, status: response.status, error: 'http_error' }
     }
-    const body = await response.json() as { placement?: string | null, results?: RegionPrewarmResult['results'] }
-    // Cloudflare sets cf-placement on responses of placed workers. Without it the
-    // region is not pinned to one data center and its prewarm may miss device caches.
-    const placement = response.headers.get('cf-placement') ?? body.placement ?? null
+    const body = await response.json() as { colo?: unknown, ran_in?: unknown, results?: RegionPrewarmResult['results'] }
+    // Cloudflare's cf-placement first, else what the worker measured. Without
+    // either the region is not known to be pinned, and its prewarm may miss device caches.
+    const placement = response.headers.get('cf-placement') ?? measuredPlacement(body.colo, body.ran_in)
     const results = Array.isArray(body.results) ? body.results : []
     // A 2xx answer must account for every requested app: a missing one did not prewarm.
     const answered = new Set(results.map(result => result.app_id))

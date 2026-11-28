@@ -7,7 +7,7 @@ import type { PluginStatePrewarmResult } from '../utils/pluginStatePrewarm.ts'
 import { Hono } from 'hono/tiny'
 import { timingSafeEqual } from 'hono/utils/buffer'
 import { BRES, quickError } from '../utils/hono.ts'
-import { mapWithConcurrency, prewarmOperations, prewarmPluginStateApp } from '../utils/pluginStatePrewarm.ts'
+import { executionColo, mapWithConcurrency, prewarmOperations, prewarmPluginStateApp } from '../utils/pluginStatePrewarm.ts'
 import { PREWARM_CALL_BUDGET_MS, PREWARM_CLEANUP_RESERVE_MS, PREWARM_MAX_APPS } from '../utils/pluginStatePrewarmLimits.ts'
 import { getEnv, isValidAppId } from '../utils/utils.ts'
 
@@ -27,6 +27,8 @@ app.post('/', async (c) => {
     throw quickError(400, 'invalid_app_ids', `app_ids must list 1 to ${PREWARM_MAX_APPS} valid app ids`)
   const appIds = [...new Set(raw as string[])]
   const budgetEndsAt = Date.now() + PREWARM_CALL_BUDGET_MS
+  // Where this call runs, which is the cache it warms (read alongside the prewarm).
+  const ranIn = executionColo()
   // One operation budget for the whole call: every app and retry draws from it.
   const ops = prewarmOperations()
   const results = await mapWithConcurrency(appIds, PREWARM_CONCURRENCY, async (appId): Promise<PluginStatePrewarmResult> => {
@@ -35,6 +37,7 @@ app.post('/', async (c) => {
       return { app_id: appId, revision: null, cached: 0, skipped: 'budget' }
     return prewarmPluginStateApp(c, appId, budgetEndsAt, ops)
   })
-  // cf-placement names the data center a placed worker ran in (its cache).
-  return c.json({ ...BRES, placement: c.req.header('cf-placement') ?? null, colo: c.req.raw.cf?.colo ?? null, results })
+  // colo: where the call entered Cloudflare. ran_in: where it ran. The caller
+  // compares them when Cloudflare sends no cf-placement on the response.
+  return c.json({ ...BRES, colo: c.req.raw.cf?.colo ?? null, ran_in: await ranIn, results })
 })
