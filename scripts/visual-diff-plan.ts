@@ -193,7 +193,67 @@ function declarations(source: string) {
 }
 
 /** Routes whose capture steps changed in playwright/visual-diff.config.ts, including helpers they call. */
-export function changedRouteDefinitions(base: RouteDefinitions, head: RouteDefinitions) {
+/** The callback sources and fields of a serialized route, as plain text. */
+function definitionText(definition: string) {
+  return Object.values(JSON.parse(definition) as Record<string, unknown>).map(value => typeof value === 'string' ? value : JSON.stringify(value)).join('\n')
+}
+
+/** Top-level elements of the first array literal in `text`, skipping strings and comments. */
+export function arrayElements(text: string) {
+  const open = text.indexOf('[', text.indexOf('='))
+  if (open === -1)
+    return []
+  const elements: string[] = []
+  const closers: string[] = []
+  let start = open + 1
+  for (let index = open + 1; index < text.length; index++) {
+    const char = text[index]
+    if (char === '/' && text[index + 1] === '/') {
+      index = text.indexOf('\n', index)
+      if (index === -1)
+        break
+      continue
+    }
+    if (char === '/' && text[index + 1] === '*') {
+      index = text.indexOf('*/', index) + 1
+      continue
+    }
+    if (char === '\'' || char === '"' || char === '`') {
+      for (index++; index < text.length && text[index] !== char; index++) {
+        if (text[index] === '\\')
+          index++
+      }
+      continue
+    }
+    if (char === '(' || char === '[' || char === '{') {
+      closers.push(char === '(' ? ')' : char === '[' ? ']' : '}')
+      continue
+    }
+    if (closers.length && char === closers.at(-1)) {
+      closers.pop()
+      continue
+    }
+    if (closers.length === 0 && (char === ',' || char === ']')) {
+      const element = text.slice(start, index).trim()
+      if (element)
+        elements.push(element)
+      start = index + 1
+      if (char === ']')
+        break
+    }
+  }
+  return elements
+}
+
+function slugsIn(text: string) {
+  return [...text.matchAll(/\bslug:\s*['"`]([^'"`]+)['"`]/g)].map(match => match[1])
+}
+
+/**
+ * Routes whose capture steps changed in playwright/visual-diff.config.ts, including helpers they
+ * call. Returns null when a change cannot be tied to particular routes.
+ */
+export function changedRouteDefinitions(base: RouteDefinitions, head: RouteDefinitions): string[] | null {
   const baseDecls = declarations(base.source)
   const headDecls = declarations(head.source)
   const changed = new Set([...headDecls].filter(([name, text]) => name !== 'visualDiffRoutes' && baseDecls.get(name) !== text).map(([name]) => name))
@@ -212,10 +272,59 @@ export function changedRouteDefinitions(base: RouteDefinitions, head: RouteDefin
       }
     }
   }
-  const viewportChanged = changed.has('visualDiffViewport')
+  if (changed.has('visualDiffViewport'))
+    return head.routes.map(route => route.slug)
   const baseBySlug = new Map(base.routes.map(route => [route.slug, route.definition]))
-  return head.routes.filter(({ slug, definition }) => viewportChanged || baseBySlug.get(slug) !== definition
-    || [...changed].some(name => new RegExp(`\\b${name}\\b`).test(definition))).map(route => route.slug)
+  const affected = new Set(head.routes.filter(({ slug, definition }) => baseBySlug.get(slug) !== definition
+    || [...changed].some(name => new RegExp(`\\b${name}\\b`).test(definition))).map(route => route.slug))
+
+  // Callbacks serialize without the values they capture (routes built by mapping an array of
+  // fixtures), so also compare the source of each element of the route list, keyed by the slugs
+  // it declares. A changed element without slugs cannot be tied to routes.
+  const normalize = (text: string) => text.replace(/\s+/g, ' ')
+  const baseElements = new Map(arrayElements(baseDecls.get('visualDiffRoutes') ?? '').map(element => [slugsIn(element).sort().join(','), normalize(element)]))
+  for (const element of arrayElements(headDecls.get('visualDiffRoutes') ?? '')) {
+    const slugs = slugsIn(element)
+    if (baseElements.get(slugs.sort().join(',')) === normalize(element))
+      continue
+    if (slugs.length === 0)
+      return null
+    slugs.forEach(slug => affected.add(slug))
+  }
+  // Route lists declared outside visualDiffRoutes and spread into it.
+  for (const name of changed) {
+    for (const text of [headDecls.get(name) ?? '', baseDecls.get(name) ?? ''])
+      slugsIn(text).forEach(slug => affected.add(slug))
+  }
+  return head.routes.map(route => route.slug).filter(slug => affected.has(slug))
+}
+
+/**
+ * Paths a capture visits: its route, plus every page.goto() in its steps and the helpers they
+ * call. Null when a goto target is computed, so the capture's page cannot be known in advance.
+ */
+export function visitedPaths(route: { path: string, definition: string }, source: string): string[] | null {
+  const decls = declarations(source)
+  const texts = [definitionText(route.definition)]
+  const included = new Set<string>()
+  for (let index = 0; index < texts.length; index++) {
+    for (const [name, text] of decls) {
+      if (name !== 'visualDiffRoutes' && !included.has(name) && new RegExp(`\\b${name}\\b`).test(texts[index])) {
+        included.add(name)
+        texts.push(text)
+      }
+    }
+  }
+  const paths = [route.path]
+  for (const text of texts) {
+    for (const match of text.matchAll(/\.goto\(\s*([^,)]*)/g)) {
+      const literal = /^(['"`])([^'"`$]*)\1$/.exec(match[1].trim())
+      if (!literal)
+        return null
+      paths.push(literal[2])
+    }
+  }
+  return [...new Set(paths)]
 }
 
 export function shardCount(routes: number) {
@@ -291,17 +400,31 @@ export async function planVisualDiff(options: { repoRoot: string, base: string, 
       console.warn(`[visual-diff] could not read the base route definitions, capturing every route: ${error instanceof Error ? error.message : String(error)}`)
     }
 
-    const affected = new Set(baseRoutes ? changedRouteDefinitions(baseRoutes, headRoutes) : all)
+    const definitions = baseRoutes ? changedRouteDefinitions(baseRoutes, headRoutes) : all
+    if (!definitions)
+      return everything(['a change to playwright/visual-diff.config.ts could not be tied to particular routes'])
+    const affected = new Set(definitions)
     const sides = [{ graph: baseGraph, modules: new Map<string, Set<string>>() }, { graph: headGraph, modules: new Map<string, Set<string>>() }]
+    const baseBySlug = new Map(baseRoutes?.routes.map(route => [route.slug, route]))
     for (const route of headRoutes.routes) {
-      const before = resolveRoute(basePages, route.path)
-      const after = resolveRoute(headPages, route.path)
-      if (!before || !after || routeFingerprint(baseGraph, before) !== routeFingerprint(headGraph, after))
+      const baseRoute = baseBySlug.get(route.slug)
+      const beforePaths = baseRoute && baseRoutes ? visitedPaths(baseRoute, baseRoutes.source) : null
+      const afterPaths = visitedPaths(route, headRoutes.source)
+      if (!beforePaths || !afterPaths) {
         affected.add(route.slug)
-      if (before)
-        sides[0].modules.set(route.slug, routeModules(baseGraph, before))
-      if (after)
-        sides[1].modules.set(route.slug, routeModules(headGraph, after))
+        continue
+      }
+      const before = beforePaths.map(path => resolveRoute(basePages, path))
+      const after = afterPaths.map(path => resolveRoute(headPages, path))
+      if (before.some(page => !page) || after.some(page => !page)) {
+        affected.add(route.slug)
+        continue
+      }
+      const fingerprint = (graph: ModuleGraph, pages: Array<PageRoute | undefined>) => pages.map(page => routeFingerprint(graph, page!)).join(',')
+      if (fingerprint(baseGraph, before) !== fingerprint(headGraph, after))
+        affected.add(route.slug)
+      sides[0].modules.set(route.slug, new Set(before.flatMap(page => [...routeModules(baseGraph, page!)])))
+      sides[1].modules.set(route.slug, new Set(after.flatMap(page => [...routeModules(headGraph, page!)])))
     }
 
     const catalogs = new Set(Object.keys(headGraph.modules).concat(Object.keys(baseGraph.modules)).filter(key => MESSAGES_KEY.test(key)))

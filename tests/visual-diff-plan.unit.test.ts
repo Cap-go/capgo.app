@@ -13,9 +13,11 @@ import {
   pageRoutes,
   planSummary,
   resolveRoute,
+  arrayElements,
   routeFingerprint,
   routesUsingKeys,
   shardCount,
+  visitedPaths,
 } from '../scripts/visual-diff-plan'
 
 function module(hash: string, imports: string[] = [], dynamicImports: string[] = [], code?: string) {
@@ -141,6 +143,37 @@ describe('changedRouteDefinitions', () => {
   it('flags every route when the viewport changes', () => {
     const head = source('x').replace('1440', '1280')
     expect(changedRouteDefinitions({ source: source('x'), routes }, { source: head, routes })).toEqual(['plain', 'direct', 'indirect'])
+  })
+})
+
+describe('route list sources', () => {
+  const config = (fixtures: string, extra = '') => `async function helper(page) {\n  await page.goto('/app/com.demo.app/getting-started')\n}\n\nexport const visualDiffRoutes = [\n  { slug: 'plain', path: '/a' },\n  ...[\n    ${fixtures}\n  ].map(({ slug, progress }) => ({ slug, path: '/apps', prepare: page => helper(page, progress) })),\n  ${extra}\n]\n`
+  const routes = ['plain', 'mapped-a', 'mapped-b'].map(slug => ({ slug, path: slug === 'plain' ? '/a' : '/apps', definition: JSON.stringify({ path: '/apps', prepare: 'page => helper(page, progress)' }) }))
+  const fixtures = `{ slug: 'mapped-a', progress: 'none' },\n    { slug: 'mapped-b', progress: 'ota' },`
+
+  it('flags the routes of a mapped array when only a captured fixture value changes', () => {
+    const head = fixtures.replace(`'ota'`, `'builder'`)
+    expect(changedRouteDefinitions({ source: config(fixtures), routes }, { source: config(head), routes })).toEqual(['mapped-a', 'mapped-b'])
+  })
+
+  it('gives up on a changed list element that declares no slug', () => {
+    expect(changedRouteDefinitions({ source: config(fixtures), routes }, { source: config(fixtures, '...extraRoutes,'), routes })).toBeNull()
+  })
+
+  it('follows page.goto() through helpers, and gives up on computed targets', () => {
+    const [, mapped] = routes
+    expect(visitedPaths(mapped, config(fixtures))).toEqual(['/apps', '/app/com.demo.app/getting-started'])
+    expect(visitedPaths(mapped, config(fixtures).replace(`'/app/com.demo.app/getting-started'`, '`/app/${appId}`'))).toBeNull()
+  })
+
+  it('can attribute every route of the real config', () => {
+    const source = readFileSync(join(import.meta.dirname, '../playwright/visual-diff.config.ts'), 'utf8')
+    const elements = arrayElements(source.slice(source.indexOf('export const visualDiffRoutes')))
+    expect(elements.length).toBeGreaterThan(0)
+    // An element without a slug literal would make every config edit capture all routes.
+    expect(elements.filter(element => !/\bslug:/.test(element))).toEqual([])
+    for (const match of source.matchAll(/\.goto\(\s*([^,)]*)/g))
+      expect(match[1].trim(), 'a computed page.goto() target makes its route always captured').toMatch(/^(['"`])[^'"`$]*\1$/)
   })
 })
 
