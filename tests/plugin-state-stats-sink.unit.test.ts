@@ -6,6 +6,8 @@ import { app as statsApp } from '../supabase/functions/_backend/plugin_runtime/p
 import { pluginStateAppKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts', () => ({
+  // Pointer re-check after a cache write: unchanged, like the unversioned reads below.
+  readPublishedGeneration: async () => null,
   readPublishedPluginState: async (_context: unknown, store: { get: (key: string, options: object) => unknown }, key: string) => ({ value: await store.get(key, { type: 'json', cacheTtl: 30 }), revision: null }),
 }))
 

@@ -335,8 +335,6 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
     // No write starts once the budget is spent: it could only end as a timeout.
     if (workEndsAt - Date.now() <= 0)
       throw new PluginStateMiss('prewarm budget exhausted')
-    // Like a late refill, a prewarm can land after a purge: a miss gets the
-    // document TTL, never the longer negative TTL of an on-time miss.
     // Unbounded here: the race below keeps hold of a write that finishes late.
     const { running: put } = await startOperation(ops, workEndsAt, () => helper.putJson(request, { v: value }, target.layout.ttlSeconds, {
       tags,
@@ -426,8 +424,8 @@ export async function prewarmPluginStateApp(c: Context, appId: string, budgetEnd
       latest = await readPublishedGeneration(pointers, logicalKey, endsAt - PREWARM_CLEANUP_RESERVE_MS, ops)
     }
     catch {
-      // Neither the pointer nor the cache can be trusted: nothing else can
-      // repair the entry, so it lives until its TTL (30 s) at most.
+      // Neither the pointer nor the cache can be trusted: only the next
+      // publication's purge and prewarm, or the document TTL, repair the entry.
       warmed.delete(request.url)
       const removal = await remove(request, endsAt)
       throw new PluginStateMiss(`publication check after write unavailable${removalSuffix(removal)}`)

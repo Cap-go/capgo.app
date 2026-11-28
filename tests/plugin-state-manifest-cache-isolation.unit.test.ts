@@ -13,6 +13,8 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', async (impo
 }))
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts', () => ({
+  // Pointer re-check after a cache write: unchanged, like the unversioned reads below.
+  readPublishedGeneration: async () => null,
   readPublishedPluginState: async (_context: unknown, store: { get: (key: string) => unknown }, key: string) => ({ value: await store.get(key), revision: null }),
 }))
 
