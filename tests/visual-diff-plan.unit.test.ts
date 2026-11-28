@@ -204,16 +204,25 @@ describe('route list sources', () => {
     expect(changedRouteDefinitions({ source, routes }, { source, routes }, () => 'unknown')).toBeNull()
   })
 
-  it('compares a bundled config import by its whole closure, and an unbundled one conservatively', () => {
+  it('follows a config import through bundled and unbundled modules', () => {
     const base = graph({ 'src/services/steps.ts': module('steps', ['src/services/ids.ts']), 'src/services/ids.ts': module('ids') })
-    const transitive = graph({ 'src/services/steps.ts': module('steps', ['src/services/ids.ts']), 'src/services/ids.ts': module('ids-changed') })
-    expect(configImportState('../src/services/steps', base, base, [])).toBe('unchanged')
-    // Only a module it imports changed.
-    expect(configImportState('../src/services/steps', base, transitive, ['src/services/ids.ts'])).toBe('changed')
-    // Outside the bundle its imports are unknown: a change to any unbundled source counts.
-    expect(configImportState('../src/setup', base, base, ['src/effect.ts'])).toBe('unknown')
-    expect(configImportState('../src/setup', base, base, ['src/services/ids.ts', 'docs/x.md'])).toBe('unchanged')
-    expect(configImportState('@playwright/test', base, base, ['src/effect.ts'])).toBe('unchanged')
+    const head = graph({ 'src/services/steps.ts': module('steps', ['src/services/ids.ts']), 'src/services/ids.ts': module('ids-changed') })
+    const files = (overrides: Record<string, string> = {}) => ({
+      'playwright/support/query.ts': `import { setup } from '../../src/setup'\nexport const query = 1\n`,
+      'src/setup.ts': `import './effect'\nimport { STEPS } from './services/steps'\nexport const setup = STEPS\n`,
+      'src/effect.ts': `process.env.X = '1'\n`,
+      ...overrides,
+    } as Record<string, string | undefined>)
+    const read = (baseFiles: Record<string, string | undefined>, headFiles: Record<string, string | undefined>) => (side: 'base' | 'head', path: string) => (side === 'base' ? baseFiles : headFiles)[path]
+    const same = read(files(), files())
+    expect(configImportState('./support/query', { base, head: base }, same)).toBe('unchanged')
+    // A bundled module two imports away changed.
+    expect(configImportState('./support/query', { base, head }, same)).toBe('changed')
+    // An unbundled file two imports away changed (a side effect only).
+    expect(configImportState('./support/query', { base, head: base }, read(files(), files({ 'src/effect.ts': `process.env.X = '2'\n` })))).toBe('changed')
+    // A file that cannot be found at all leaves the effect unknown.
+    expect(configImportState('./support/missing', { base, head: base }, same)).toBe('unknown')
+    expect(configImportState('@playwright/test', { base, head: base }, same)).toBe('unchanged')
   })
 
   it('compares fixture strings verbatim, whitespace included', () => {

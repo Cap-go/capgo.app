@@ -13,7 +13,7 @@ import type { GraphModule, ModuleGraph } from './visual-diff-graph'
 import type { VisualDiffRoute } from '../playwright/visual-diff.config'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
@@ -126,28 +126,68 @@ export function finalPage(routes: PageRoute[], redirects: Redirect[], urlPath: s
 
 export type ImportState = 'unchanged' | 'changed' | 'unknown'
 
-/**
- * Whether a module the route config imports (specifier relative to playwright/) changed.
- * Inside the console bundle, its whole import closure is compared. Outside it, its imports are
- * not known, so any change to a file the bundle does not contain makes the effect unknown.
- */
-export function configImportState(specifier: string, baseGraph: ModuleGraph, headGraph: ModuleGraph, changedFiles: string[]): ImportState {
+const SOURCE_EXTENSIONS = ['', '.ts', '.mts', '.js', '.mjs', '.json', '.vue', '/index.ts', '/index.js']
+
+/** Repo-relative path of a relative or `~/` import, without resolving its extension. */
+function importTarget(fromFile: string, specifier: string) {
+  if (specifier.startsWith('~/'))
+    return `src/${specifier.slice(2)}`
   if (!specifier.startsWith('.'))
-    return 'unchanged'
-  const file = ['playwright', ...specifier.split('/')].reduce<string[]>((parts, part) => {
+    return undefined
+  return [...fromFile.split('/').slice(0, -1), ...specifier.split('/')].reduce<string[]>((parts, part) => {
     if (part === '..')
       parts.pop()
     else if (part !== '.')
       parts.push(part)
     return parts
   }, []).join('/')
-  const key = ['', '.ts', '.js', '/index.ts'].map(extension => file + extension).find(candidate => headGraph.modules[candidate] || baseGraph.modules[candidate])
-  if (key) {
-    const closureHash = (graph: ModuleGraph) => [...moduleClosure(graph, key)].sort().map(id => `${id}=${graph.modules[id]?.hash ?? 'missing'}`).join('\n')
-    return closureHash(baseGraph) === closureHash(headGraph) ? 'unchanged' : 'changed'
+}
+
+/**
+ * Whether a module the route config imports (specifier relative to playwright/) changed, with
+ * everything it imports. Modules the console bundles are compared through the module graphs;
+ * other files are read from both checkouts and followed by their relative and `~/` imports.
+ */
+export function configImportState(
+  specifier: string,
+  graphs: { base: ModuleGraph, head: ModuleGraph },
+  readSource: (side: 'base' | 'head', path: string) => string | undefined,
+): ImportState {
+  const start = importTarget('playwright/config.ts', specifier)
+  if (!start)
+    return 'unchanged'
+  const seen = new Set<string>()
+  const stack = [start]
+  while (stack.length) {
+    const target = stack.pop()!
+    const candidates = SOURCE_EXTENSIONS.map(extension => target + extension)
+    const bundled = candidates.find(path => graphs.head.modules[path] || graphs.base.modules[path])
+    if (bundled) {
+      if (seen.has(bundled))
+        continue
+      seen.add(bundled)
+      const closureHash = (graph: ModuleGraph) => [...moduleClosure(graph, bundled)].sort().map(id => `${id}=${graph.modules[id]?.hash ?? 'missing'}`).join('\n')
+      if (closureHash(graphs.base) !== closureHash(graphs.head))
+        return 'changed'
+      continue
+    }
+    const path = candidates.find(candidate => readSource('head', candidate) !== undefined || readSource('base', candidate) !== undefined)
+    if (!path)
+      return 'unknown'
+    if (seen.has(path))
+      continue
+    seen.add(path)
+    const before = readSource('base', path)
+    const after = readSource('head', path)
+    if (before !== after)
+      return 'changed'
+    for (const match of (after ?? '').matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)['"]([^'"]+)['"]/g)) {
+      const next = importTarget(path, match[1])
+      if (next)
+        stack.push(next)
+    }
   }
-  const bundled = (path: string) => Boolean(headGraph.modules[path] || baseGraph.modules[path])
-  return changedFiles.some(path => /\.(?:[cm]?[jt]sx?|json|vue)$/.test(path) && !bundled(path)) ? 'unknown' : 'unchanged'
+  return 'unchanged'
 }
 
 /** Every module `key` loads, statically or lazily. */
@@ -532,7 +572,11 @@ export async function planVisualDiff(options: { repoRoot: string, base: string, 
     }
 
     // An import from the app (constants the fixtures use) changed when anything it loads did.
-    const importChanged = (specifier: string) => configImportState(specifier, baseGraph, headGraph, changedFiles)
+    const readSource = (side: 'base' | 'head', path: string) => {
+      const file = resolve(side === 'base' ? baseRoot : repoRoot, path)
+      return existsSync(file) && !statSync(file).isDirectory() ? readFileSync(file, 'utf8') : undefined
+    }
+    const importChanged = (specifier: string) => configImportState(specifier, { base: baseGraph, head: headGraph }, readSource)
     const definitions = baseRoutes ? changedRouteDefinitions(baseRoutes, headRoutes, importChanged) : all
     if (!definitions)
       return everything(['a change to playwright/visual-diff.config.ts could not be tied to particular routes'])
