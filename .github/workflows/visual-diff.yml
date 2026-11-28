@@ -18,6 +18,9 @@ permissions:
   contents: read
 
 env:
+  # Keep Supabase ports below Linux's ephemeral range (32768-60999). The runner's own
+  # outbound sockets can already hold a port in it, and `docker` then fails to bind it.
+  SUPABASE_WORKTREE_PORT_BASE: '20321'
   # Pull Supabase CLI images from GHCR instead of the default public.ecr.aws,
   # whose anonymous pull quota fails CI with "toomanyrequests: Data limit exceeded".
   SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io

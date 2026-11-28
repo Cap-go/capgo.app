@@ -36,6 +36,9 @@ on:
 permissions: {}
 
 env:
+  # Keep Supabase ports below Linux's ephemeral range (32768-60999). The runner's own
+  # outbound sockets can already hold a port in it, and `docker` then fails to bind it.
+  SUPABASE_WORKTREE_PORT_BASE: '20321'
   DENO_DIR: my_cache_directory
   CLICOLOR: '1'
   # Intentionally pin Docker Hub: functions serve does not implement registry fallback.

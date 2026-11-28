@@ -60,6 +60,25 @@ function getConfiguredPortOffset(): number | undefined {
   return offset
 }
 
+const DEFAULT_API_PORT = 54321
+
+/**
+ * The API port of offset 0. CI moves it below Linux's ephemeral port range (32768-60999):
+ * an outbound socket the runner opened before the job (its own agent keeps one) can hold a
+ * port in that range, and reserving the port afterwards does not evict it, so `docker` failed
+ * with "address already in use" on every retry.
+ */
+function getConfiguredBasePort(): number {
+  const raw = process.env.SUPABASE_WORKTREE_PORT_BASE
+  if (!raw)
+    return DEFAULT_API_PORT
+  const port = Number(raw)
+  // Leaves room for the largest offset (11000) and the highest derived port (api + 8).
+  if (!/^\d+$/.test(raw) || port < 1024 || port + 11_008 > 65_535)
+    throw new Error('SUPABASE_WORKTREE_PORT_BASE must be an integer from 1024 to 54527.')
+  return port
+}
+
 /**
  * Returns a deterministic per-worktree Supabase configuration (unique project_id and ports)
  * derived from the git worktree path and, when supplied, a CI job instance.
@@ -80,14 +99,15 @@ export function getSupabaseWorktreeConfig(cwd: string = process.cwd()): Supabase
   const worktreeHash = createHash('sha256').update(identity).digest('hex').slice(0, 8)
   const offset = configuredOffset ?? (Number.parseInt(worktreeHash.slice(0, 6), 16) % 1000) * 10
 
+  const shift = getConfiguredBasePort() - DEFAULT_API_PORT
   const base = {
-    api: 54321,
-    db: 54322,
-    dbShadow: 54320,
-    dbPooler: 54329,
-    studio: 54323,
-    inbucket: 54324,
-    analytics: 54327,
+    api: 54321 + shift,
+    db: 54322 + shift,
+    dbShadow: 54320 + shift,
+    dbPooler: 54329 + shift,
+    studio: 54323 + shift,
+    inbucket: 54324 + shift,
+    analytics: 54327 + shift,
     edgeInspector: 8083,
   } satisfies SupabaseWorktreePorts
 
