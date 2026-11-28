@@ -4,6 +4,7 @@ import type { InvoiceDocument } from '../../supabase/functions/shared/invoice-do
 import { loadStripe } from '@stripe/stripe-js'
 import { toast } from 'vue-sonner'
 import { i18n } from '~/modules/i18n'
+import { getAffonsoReferral, getDatafastAttribution } from '~/services/attributionCookies'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { FunctionsHttpError } from '~/services/consoleClient'
 import { getFormatLocale } from '~/services/formatLocale'
@@ -47,36 +48,6 @@ export function getStripeJs(publishableKey: string) {
     stripeInstances.set(publishableKey, instance)
   }
   return instance
-}
-
-async function getCookieValue(name: string) {
-  if ('cookieStore' in globalThis && globalThis.cookieStore)
-    return (await globalThis.cookieStore.get(name))?.value
-
-  if (typeof document === 'undefined')
-    return undefined
-
-  const encodedName = `${encodeURIComponent(name)}=`
-  const cookie = document.cookie.split('; ').find(cookie => cookie.startsWith(encodedName))
-  return cookie ? decodeURIComponent(cookie.slice(encodedName.length)) : undefined
-}
-
-export async function getDatafastAttribution() {
-  return {
-    visitorId: await getCookieValue('datafast_visitor_id'),
-    sessionId: await getCookieValue('datafast_session_id'),
-  }
-}
-
-export async function getAffonsoReferral() {
-  try {
-    const referral = await getCookieValue('affonso_referral')
-    // Stripe metadata values are capped at 500 characters.
-    return referral && referral.length <= 500 ? referral : ''
-  }
-  catch {
-    return ''
-  }
 }
 
 export interface SubscriptionCheckoutRequest {

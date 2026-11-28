@@ -1,4 +1,5 @@
 import { app as accept_invitation } from '../_backend/private/accept_invitation.ts'
+import { app as affonso_signup } from '../_backend/private/affonso_signup.ts'
 import { app as assistant } from '../_backend/private/assistant.ts'
 import { app as billing_region } from '../_backend/private/billing_region.ts'
 import { app as plan_prices } from '../_backend/private/plan_prices.ts'
@@ -104,6 +105,7 @@ appGlobal.route('/log_as', log_as)
 appGlobal.route('/mcp_oauth', mcp_oauth)
 appGlobal.route('/agent_identity', agent_identity)
 appGlobal.route('/stats', stats_priv)
+appGlobal.route('/affonso_signup', affonso_signup)
 appGlobal.route('/stripe_checkout', stripe_checkout)
 appGlobal.route('/stripe_billing', stripe_billing)
 appGlobal.route('/simulator', simulator)

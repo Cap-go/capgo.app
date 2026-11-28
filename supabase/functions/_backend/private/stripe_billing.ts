@@ -1,3 +1,4 @@
+import { scheduleAffonsoSignup } from '../utils/affonso.ts'
 import { getInvoiceEmailPreferences, updateInvoiceEmailPreferences } from '../utils/invoice_email.ts'
 import { changeBillingCurrency, getBillingCurrencyState, getCurrencyTransitionPreview } from '../utils/stripe_billing_currency.ts'
 import type { Context } from 'hono'
@@ -176,6 +177,7 @@ function optionalString(value: unknown) {
 app.post('/trial-plan/schedule', middlewareAuth, async (c) => {
   const body = await parseBody<TrialPlanBody>(c)
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  scheduleAffonsoSignup(c, body.affonsoReferral)
   const plan = await scheduleTrialPlan(c, ctx, body.orgId!, {
     affonsoReferral: optionalString(body.affonsoReferral),
     datafastVisitorId: optionalString(body.datafastVisitorId),
@@ -188,6 +190,7 @@ app.post('/trial-plan/schedule', middlewareAuth, async (c) => {
 app.post('/trial-plan/start-now', middlewareAuth, async (c) => {
   const body = await parseBody<TrialPlanBody>(c)
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  scheduleAffonsoSignup(c, body.affonsoReferral)
   return c.json(await startTrialPlanNow(c, ctx, body.orgId!, {
     affonsoReferral: optionalString(body.affonsoReferral),
     datafastVisitorId: optionalString(body.datafastVisitorId),
