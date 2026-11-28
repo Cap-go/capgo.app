@@ -4,17 +4,12 @@
   "entries": {
     "supabase": {
       "success": {
-        "tag": "capgo-22.65.0",
-        "sha": "d44677992d114c6f09e7b2dbd8066107a047c496",
-        "runId": "44717491351",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.78.1",
         "sha": "71d052b8977202b04efe95e9f5735b03a1bc12e0",
         "runId": "46095967333",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "api": {
       "success": {
@@ -36,17 +31,12 @@
     },
     "translation": {
       "success": {
-        "tag": "capgo-22.77.4",
-        "sha": "e19935980d6aed28266d159d440e436a503e0ffc",
-        "runId": "46006114095",
-        "attempt": 1
-      },
-      "pending": {
         "tag": "capgo-22.78.1",
         "sha": "71d052b8977202b04efe95e9f5735b03a1bc12e0",
         "runId": "46095967333",
         "attempt": 1
-      }
+      },
+      "pending": null
     },
     "plugins_eu": {
       "success": {
