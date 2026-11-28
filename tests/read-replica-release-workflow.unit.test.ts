@@ -186,17 +186,21 @@ describe('production read-replica release gate', () => {
 })
 
 describe('deploy gate time budgets', () => {
-  it('lets every in-job wait outlast the jobs it waits for', async () => {
+  it('waits for the awaited jobs however late they start, and keeps the former step budgets', async () => {
     const workflow = parse(await readFile(new URL('../.github/workflows/build_and_deploy.yml', import.meta.url), 'utf8')) as {
       jobs: Record<string, { 'timeout-minutes': number, 'steps': Array<{ run?: string }> }>
     }
     const { supabase_deploy: supabase, read_replica_subscription: refresh, deploy_webapp: web } = workflow.jobs
     const waitMinutes = (job: typeof web) => Number(/wait-for-deploy-jobs\.ts .*--timeout-minutes (\d+)/.exec(job.steps.map(step => step.run ?? '').join('\n'))?.[1])
-    // The refresh waits for the Supabase deploy, then needs its own former 40 minutes.
-    expect(waitMinutes(refresh)).toBeGreaterThan(supabase['timeout-minutes'])
-    expect(refresh['timeout-minutes']).toBeGreaterThanOrEqual(waitMinutes(refresh) + 40)
-    // Both start together, so the web gate must outlast the refresh job; publishing needs 30.
-    expect(waitMinutes(web)).toBeGreaterThan(refresh['timeout-minutes'])
-    expect(web['timeout-minutes']).toBeGreaterThanOrEqual(waitMinutes(web) + 30)
+    // Queueing is unbounded, so no budget can be tuned to it. The awaited jobs always end on
+    // their own timeouts once they start, so each wait gets GitHub's maximum job time instead,
+    // minus what the job needs after it (refresh: former 40 min, publishing: former 30 min).
+    for (const [job, after] of [[refresh, 40], [web, 30]] as const) {
+      expect(job['timeout-minutes']).toBe(360)
+      expect(waitMinutes(job) + after).toBeLessThanOrEqual(job['timeout-minutes'])
+    }
+    // Even an awaited job queued for its whole budget and then run to its own limit fits.
+    expect(waitMinutes(refresh)).toBeGreaterThanOrEqual(4 * supabase['timeout-minutes'])
+    expect(waitMinutes(web)).toBeGreaterThan(waitMinutes(refresh))
   })
 })
