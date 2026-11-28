@@ -9,7 +9,12 @@
         "runId": "46097310625",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.78.3",
+        "sha": "ff99b67ae28e6674334f67f851ef897b29068def",
+        "runId": "46154141003",
+        "attempt": 1
+      }
     },
     "api": {
       "success": {
@@ -36,7 +41,12 @@
         "runId": "46095967333",
         "attempt": 1
       },
-      "pending": null
+      "pending": {
+        "tag": "capgo-22.78.3",
+        "sha": "ff99b67ae28e6674334f67f851ef897b29068def",
+        "runId": "46154141003",
+        "attempt": 1
+      }
     },
     "plugins_eu": {
       "success": {
