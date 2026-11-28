@@ -82,6 +82,48 @@ export function resolveRoute(routes: PageRoute[], urlPath: string) {
   return routes.find(route => new RegExp(route.pattern, 'i').test(pathname))
 }
 
+export interface Redirect {
+  pattern: RegExp
+  params: string[]
+  /** Target path with `:param` placeholders, or null when the router computes it. */
+  target: string | null
+}
+
+/**
+ * Redirects that src/main.ts registers (`{ path: '...', redirect: ... }`). Literal targets and
+ * `redirectAppPath('<suffix>')` resolve statically; any other function target is computed.
+ */
+export function parseRedirects(mainSource: string): Redirect[] {
+  return [...mainSource.matchAll(/\bpath:\s*['"`]([^'"`]+)['"`]\s*,\s*redirect:\s*([^\n]*)/g)].map(([, path, expression]) => {
+    const segments = path.split('/').filter(Boolean)
+    const params = segments.filter(segment => segment.startsWith(':')).map(segment => segment.slice(1).replace(/\(.*\)$/, ''))
+    const source = segments.map(segment => segment.startsWith(':') ? '([^/]+)' : segment.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)).join('/')
+    const literal = /^['"`]([^'"`$]+)['"`]/.exec(expression.trim())?.[1]
+    const appPaths = [...expression.matchAll(/redirectAppPath\(\s*['"`]([^'"`$]*)['"`]\s*\)/g)]
+    const target = literal ?? (appPaths.length === 1 && params.includes('app') ? `/app/:app${appPaths[0][1]}` : null)
+    return { pattern: new RegExp(`^/${source}/?$`, 'i'), params, target }
+  })
+}
+
+/**
+ * The page a capture path renders after redirects, or undefined when that is only known at
+ * runtime: a computed redirect target, or a URL only the catch-all page matches.
+ */
+export function finalPage(routes: PageRoute[], redirects: Redirect[], urlPath: string) {
+  let pathname = urlPath.split(/[?#]/)[0] || '/'
+  for (let hop = 0; hop < 5; hop++) {
+    const redirect = redirects.find(candidate => candidate.pattern.test(pathname))
+    if (!redirect)
+      break
+    if (!redirect.target)
+      return undefined
+    const values = redirect.pattern.exec(pathname)!.slice(1)
+    pathname = redirect.params.reduce((path, name, index) => path.replace(`:${name}`, values[index]), redirect.target)
+  }
+  const page = resolveRoute(routes, pathname)
+  return page && Number.isFinite(page.params) ? page : undefined
+}
+
 /** Modules a route can load: entry, page and layouts, not crossing into other pages or layouts. */
 export function routeModules(graph: ModuleGraph, route: PageRoute) {
   const boundary = (key: string) => PAGE_KEY.test(key) || LAYOUT_KEY.test(key)
@@ -406,6 +448,9 @@ export async function planVisualDiff(options: { repoRoot: string, base: string, 
     const affected = new Set(definitions)
     const sides = [{ graph: baseGraph, modules: new Map<string, Set<string>>() }, { graph: headGraph, modules: new Map<string, Set<string>>() }]
     const baseBySlug = new Map(baseRoutes?.routes.map(route => [route.slug, route]))
+    const readMain = (root: string) => existsSync(resolve(root, 'src/main.ts')) ? readFileSync(resolve(root, 'src/main.ts'), 'utf8') : ''
+    const baseRedirects = parseRedirects(readMain(baseRoot))
+    const headRedirects = parseRedirects(readMain(repoRoot))
     for (const route of headRoutes.routes) {
       const baseRoute = baseBySlug.get(route.slug)
       const beforePaths = baseRoute && baseRoutes ? visitedPaths(baseRoute, baseRoutes.source) : null
@@ -414,8 +459,9 @@ export async function planVisualDiff(options: { repoRoot: string, base: string, 
         affected.add(route.slug)
         continue
       }
-      const before = beforePaths.map(path => resolveRoute(basePages, path))
-      const after = afterPaths.map(path => resolveRoute(headPages, path))
+      // A redirect or an unknown URL: the rendered page is decided at runtime, so always capture.
+      const before = beforePaths.map(path => finalPage(basePages, baseRedirects, path))
+      const after = afterPaths.map(path => finalPage(headPages, headRedirects, path))
       if (before.some(page => !page) || after.some(page => !page)) {
         affected.add(route.slug)
         continue

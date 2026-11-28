@@ -9,8 +9,10 @@ import { fileRoutePattern } from '../scripts/console-route-patterns'
 import {
   changedMessageKeys,
   changedRouteDefinitions,
+  finalPage,
   fullCaptureReason,
   pageRoutes,
+  parseRedirects,
   planSummary,
   resolveRoute,
   arrayElements,
@@ -226,6 +228,22 @@ describe('pageRoutes and resolveRoute', () => {
     expect(resolveRoute(routes, '/app/com.demo.app')?.layouts).toEqual(['src/layouts/app.vue', 'src/layouts/default.vue'])
     expect(resolveRoute(routes, '/login')?.layouts).toEqual(['src/layouts/naked.vue'])
     expect(resolveRoute(routes, '/missing')?.layouts).toEqual(['src/layouts/404.vue'])
+  })
+
+  it('follows redirects to the page the router renders', () => {
+    const redirects = parseRedirects([
+      `{ path: '/app', redirect: '/app/new' },`,
+      `{ path: '/app/:app/channel-list', redirect: redirectAppPath('/channels') },`,
+      `{ path: '/app/:app/old', redirect: redirectAppPath('/channel-list') },`,
+      `{ path: '/p/:package', redirect: to => \`/app/\${to.params.package}\` },`,
+      `{\n  path: '/p/:package/logs',\n  redirect: (to) => {\n    return { path: '/x' }\n  },\n},`,
+    ].join('\n'))
+    expect(finalPage(routes, redirects, '/app')?.page).toBe('src/pages/app/new.vue')
+    expect(finalPage(routes, redirects, '/app/com.demo.app/old?x=1')?.page).toBe('src/pages/app/[app].channels.vue')
+    // Computed targets and catch-all URLs are only known at runtime.
+    expect(finalPage(routes, redirects, '/p/com.demo.app')).toBeUndefined()
+    expect(finalPage(routes, redirects, '/p/com.demo.app/logs')).toBeUndefined()
+    expect(finalPage(routes, redirects, '/app/com.demo.app/native')).toBeUndefined()
   })
 
   it('treats [...all] as a catch-all instead of splitting it on its dots', () => {
