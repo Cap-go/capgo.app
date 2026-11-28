@@ -19,6 +19,7 @@ const builderBody = {
   defaultXcodeMajor: '26',
   variants: [
     { platform: 'ios', id: 'xcode-27.1-linux', xcodeVersion: '27.1', macosVersion: null, backend: 'linux', runners: 1, online: 1, default: false },
+    { platform: 'ios', id: 'xcode-27.1-fast', xcodeVersion: '27.1', macosVersion: null, backend: 'fast', runners: 1, online: 1, default: false },
     { platform: 'ios', id: 'xcode-26.2-macos-26.1', xcodeVersion: '26.2', macosVersion: '26.1', backend: 'mac', runners: 3, online: 2, default: true },
   ],
 }
@@ -31,11 +32,12 @@ function context() {
 }
 
 describe('toBuildVariantsResponse', () => {
-  it('maps the builder body to snake_case', () => {
+  it('maps the builder body to snake_case and drops unknown machine types', () => {
+    expect(JSON.stringify(toBuildVariantsResponse(builderBody))).not.toMatch(/linux/i)
     expect(toBuildVariantsResponse(builderBody)).toEqual({
       default_xcode_major: '26',
       variants: [
-        { platform: 'ios', id: 'xcode-27.1-linux', xcode_version: '27.1', macos_version: null, backend: 'linux', runners: 1, online: 1, default: false },
+        { platform: 'ios', id: 'xcode-27.1-fast', xcode_version: '27.1', macos_version: null, backend: 'fast', runners: 1, online: 1, default: false },
         { platform: 'ios', id: 'xcode-26.2-macos-26.1', xcode_version: '26.2', macos_version: '26.1', backend: 'mac', runners: 3, online: 2, default: true },
       ],
     })

@@ -44,7 +44,7 @@ interface BuildVariant {
   id: string
   xcode_version: string
   macos_version: string | null
-  backend: 'mac' | 'linux'
+  backend?: 'mac' | 'fast'
   runners: number
   online: number
   default: boolean
@@ -139,8 +139,8 @@ const MACHINE_VERSION_RE = /^\d{1,3}(?:\.\d{1,3}){0,2}$/
 const buildVariants = ref<BuildVariant[]>([])
 const selectedXcodeVersion = ref('')
 function variantMachineLabel(variant: BuildVariant): string {
-  if (variant.backend === 'linux')
-    return t('build-variant-linux')
+  if (variant.backend === 'fast')
+    return t('build-variant-fast')
   return variant.macos_version ? `macOS ${variant.macos_version}` : 'macOS'
 }
 
