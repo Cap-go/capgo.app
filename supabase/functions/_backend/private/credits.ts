@@ -13,6 +13,7 @@ import {
   normalizeAutoTopUpThreshold,
   saveAutoTopUpSettings,
 } from '../utils/credit_auto_top_up.ts'
+import { scheduleAffonsoSignup } from '../utils/affonso.ts'
 import { getCreditQuote } from '../utils/credit_currency.ts'
 import { getFallbackCreditProductId, priceCreditTiers } from '../utils/credits.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
@@ -593,6 +594,7 @@ app.post('/start-top-up', middlewareAuth, async (c) => {
     productId,
   })
 
+  scheduleAffonsoSignup(c, body.affonsoReferral)
   const checkout = await createOneTimeCheckout(
     c,
     customerId,

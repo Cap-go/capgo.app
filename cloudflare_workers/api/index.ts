@@ -4,6 +4,7 @@ import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflar
 import { app as register } from '../../supabase/functions/_backend/auth/register.ts'
 import { createMcpApp } from '../../supabase/functions/_backend/mcp/index.ts'
 import { app as accept_invitation } from '../../supabase/functions/_backend/private/accept_invitation.ts'
+import { app as affonso_signup } from '../../supabase/functions/_backend/private/affonso_signup.ts'
 import { app as assistant } from '../../supabase/functions/_backend/private/assistant.ts'
 import { app as billing_region } from '../../supabase/functions/_backend/private/billing_region.ts'
 import { app as plan_prices } from '../../supabase/functions/_backend/private/plan_prices.ts'
@@ -209,6 +210,7 @@ appPrivate.route('/organization_invitation', organization_invitation)
 appPrivate.route('/update_delivery_stats', update_delivery_stats)
 appPrivate.route('/bundle_install_stats', bundle_install_stats)
 appPrivate.route('/release_live', release_live)
+appPrivate.route('/affonso_signup', affonso_signup)
 appPrivate.route('/stripe_checkout', stripe_checkout)
 appPrivate.route('/stripe_billing', stripe_billing)
 appPrivate.route('/simulator', simulator)

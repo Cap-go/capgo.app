@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import { stripeAmountToMajorUnits } from '../../shared/stripe-amount.ts'
+import { AFFONSO_API_URL, postBearerJson } from './affonso.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getStripe } from './stripe.ts'
 import { getStripeCustomerId } from './stripe_event.ts'
@@ -9,9 +10,7 @@ import { getEnv } from './utils.ts'
 // Affonso and DataFast connect natively to one Stripe account only (EE).
 // US account payments are pushed to their server-side APIs instead.
 
-const AFFONSO_API_URL = 'https://api.affonso.io/v1'
 const DATAFAST_API_URL = 'https://datafa.st/api/v1/payments'
-const REQUEST_TIMEOUT_MS = 10_000
 const MAX_CHECKOUT_SESSIONS_SCANNED = 20
 const AFFONSO_CONVERSION_METADATA_KEY = 'affonso_conversion_id'
 
@@ -61,22 +60,6 @@ async function resolveCustomerAttribution(c: Context, customerId: string): Promi
   return attribution
 }
 
-async function postJson(url: string, apiKey: string, body: Record<string, unknown>) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  })
-  const text = await response.text()
-  if (!response.ok)
-    throw new Error(`${url} responded ${response.status}: ${text.slice(0, 500)}`)
-  return text ? JSON.parse(text) as Record<string, any> : {}
-}
-
 function buildAffonsoConversion(charge: Stripe.Charge, referralId: string) {
   return {
     referral_id: referralId,
@@ -116,7 +99,7 @@ async function trackAffonsoSale(c: Context, charge: Stripe.Charge, referralId: s
   const apiKey = getEnv(c, 'AFFONSO_API_KEY')
   if (!apiKey)
     return
-  const result = await postJson(`${AFFONSO_API_URL}/conversions`, apiKey, buildAffonsoConversion(charge, referralId))
+  const result = await postBearerJson(`${AFFONSO_API_URL}/conversions`, apiKey, buildAffonsoConversion(charge, referralId))
   const conversionId = typeof result?.data?.id === 'string' ? result.data.id : null
   if (conversionId && charge.metadata?.[AFFONSO_CONVERSION_METADATA_KEY] !== conversionId) {
     // Kept on the charge so a later refund can find the Affonso conversion.
@@ -129,7 +112,7 @@ async function trackDatafastSale(c: Context, charge: Stripe.Charge, visitorId: s
   const apiKey = getEnv(c, 'DATAFAST_API_KEY')
   if (!apiKey)
     return
-  await postJson(DATAFAST_API_URL, apiKey, buildDatafastPayment(charge, visitorId))
+  await postBearerJson(DATAFAST_API_URL, apiKey, buildDatafastPayment(charge, visitorId))
   cloudlog({ requestId: c.get('requestId'), message: 'DataFast US payment tracked', chargeId: charge.id })
 }
 
@@ -180,7 +163,7 @@ export async function trackUsChargeRefunded(c: Context, charge: Stripe.Charge) {
     await Promise.all([
       affonsoKey && conversionId
         ? runTracker(c, 'Affonso', charge.id, async () => {
-            await postJson(`${AFFONSO_API_URL}/conversions/${encodeURIComponent(conversionId)}/refund`, affonsoKey, {
+            await postBearerJson(`${AFFONSO_API_URL}/conversions/${encodeURIComponent(conversionId)}/refund`, affonsoKey, {
               amount: stripeAmountToMajorUnits(refund.amount, refund.currency),
               currency: refund.currency.toUpperCase(),
               reason: refund.reason ?? undefined,
@@ -191,7 +174,7 @@ export async function trackUsChargeRefunded(c: Context, charge: Stripe.Charge) {
         : Promise.resolve(),
       datafastKey
         ? runTracker(c, 'DataFast', charge.id, async () => {
-            await postJson(DATAFAST_API_URL, datafastKey, buildDatafastRefund(charge, refund))
+            await postBearerJson(DATAFAST_API_URL, datafastKey, buildDatafastRefund(charge, refund))
           })
         : Promise.resolve(),
     ])

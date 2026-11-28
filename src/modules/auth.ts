@@ -2,6 +2,7 @@ import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { ConsoleClient } from '~/services/consoleClient'
 import type { UserModule } from '~/types'
 import { ADMIN_DASHBOARD_URL } from '~/constants/adminDashboard'
+import { sendAffonsoSignup } from '~/services/affonso'
 import { clearChartDataCache } from '~/services/chartDataCache'
 import { isAgentClaimPath, isCliLoginPath, isMcpAuthorizePath } from '~/services/cliLogin'
 import { getLocalConfig, useConsole } from '~/services/console'
@@ -100,6 +101,7 @@ async function updateUser(
 
     main.user = userRecord
     updatePosthogUser(userRecord.image_url)
+    void sendAffonsoSignup(userRecord.id)
 
     if (rawImageUrl && !immediateImageUrl) {
       void (async () => {
