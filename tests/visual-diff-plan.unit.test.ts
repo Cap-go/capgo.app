@@ -10,6 +10,7 @@ import { stylesheetSource } from '../scripts/visual-diff-graph'
 import {
   changedMessageKeys,
   changedRouteDefinitions,
+  configImportState,
   finalPage,
   fullCaptureReason,
   pageRoutes,
@@ -190,16 +191,29 @@ describe('route list sources', () => {
     const withImport = (line: string) => `${line}\n\n${config(fixtures)}`
     const source = withImport(`import { STEP_IDS } from '../src/services/steps'`)
     const usesSteps = routes.map(route => route.slug === 'plain' ? { ...route, definition: JSON.stringify({ path: '/a', prepare: 'page => STEP_IDS' }) } : route)
-    expect(changedRouteDefinitions({ source, routes: usesSteps }, { source, routes: usesSteps }, specifier => specifier === '../src/services/steps')).toEqual(['plain'])
-    expect(changedRouteDefinitions({ source, routes: usesSteps }, { source, routes: usesSteps }, () => false)).toEqual([])
+    expect(changedRouteDefinitions({ source, routes: usesSteps }, { source, routes: usesSteps }, specifier => specifier === '../src/services/steps' ? 'changed' : 'unchanged')).toEqual(['plain'])
+    expect(changedRouteDefinitions({ source, routes: usesSteps }, { source, routes: usesSteps }, () => 'unchanged')).toEqual([])
     expect(changedRouteDefinitions({ source, routes }, { source: withImport(`import { STEP_IDS } from '../src/services/other'`), routes })).toBeNull()
   })
 
   it('treats side-effect imports as imports: edited or changed, they capture everything', () => {
     const source = `import '../src/setup'\n\n${config(fixtures)}`
     expect(changedRouteDefinitions({ source: config(fixtures), routes }, { source, routes })).toBeNull()
-    expect(changedRouteDefinitions({ source, routes }, { source, routes }, specifier => specifier === '../src/setup')).toBeNull()
-    expect(changedRouteDefinitions({ source, routes }, { source, routes }, () => false)).toEqual([])
+    expect(changedRouteDefinitions({ source, routes }, { source, routes }, specifier => specifier === '../src/setup' ? 'changed' : 'unchanged')).toBeNull()
+    expect(changedRouteDefinitions({ source, routes }, { source, routes }, () => 'unchanged')).toEqual([])
+    expect(changedRouteDefinitions({ source, routes }, { source, routes }, () => 'unknown')).toBeNull()
+  })
+
+  it('compares a bundled config import by its whole closure, and an unbundled one conservatively', () => {
+    const base = graph({ 'src/services/steps.ts': module('steps', ['src/services/ids.ts']), 'src/services/ids.ts': module('ids') })
+    const transitive = graph({ 'src/services/steps.ts': module('steps', ['src/services/ids.ts']), 'src/services/ids.ts': module('ids-changed') })
+    expect(configImportState('../src/services/steps', base, base, [])).toBe('unchanged')
+    // Only a module it imports changed.
+    expect(configImportState('../src/services/steps', base, transitive, ['src/services/ids.ts'])).toBe('changed')
+    // Outside the bundle its imports are unknown: a change to any unbundled source counts.
+    expect(configImportState('../src/setup', base, base, ['src/effect.ts'])).toBe('unknown')
+    expect(configImportState('../src/setup', base, base, ['src/services/ids.ts', 'docs/x.md'])).toBe('unchanged')
+    expect(configImportState('@playwright/test', base, base, ['src/effect.ts'])).toBe('unchanged')
   })
 
   it('compares fixture strings verbatim, whitespace included', () => {
