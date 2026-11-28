@@ -302,6 +302,16 @@ async function writeAuditLog(c: Context, input: {
   }
 }
 
+function preserveExtensionProfiles(actor: AuditActor, base: CredentialRecord, incoming: CredentialRecord, normalized: CredentialRecord) {
+  // The console edits the main profile. Preserve extension profiles in the same version-checked write.
+  if (actor.apikeyId === null && base.CAPGO_IOS_PROVISIONING_MAP && incoming.CAPGO_IOS_PROVISIONING_MAP) {
+    normalized.CAPGO_IOS_PROVISIONING_MAP = JSON.stringify({
+      ...JSON.parse(base.CAPGO_IOS_PROVISIONING_MAP),
+      ...JSON.parse(normalized.CAPGO_IOS_PROVISIONING_MAP!),
+    })
+  }
+}
+
 /** Validate + encrypt + upsert. Shared by the API-key PUT and the token upload PUT. */
 async function storeBuildCredentials(c: Context, input: {
   appId: string
@@ -340,6 +350,7 @@ async function storeBuildCredentials(c: Context, input: {
   let normalized: CredentialRecord
   try {
     normalized = normalizeCredentialValues(platform, { ...base, ...incoming })
+    preserveExtensionProfiles(actor, base, incoming, normalized)
   }
   catch (error) {
     asValidationError(error)
@@ -452,13 +463,17 @@ export async function getBuildCredentialsStatus(c: Context): Promise<Response> {
   return c.json({ app_id: appId, platforms })
 }
 
-export async function putBuildCredentials(c: Context, apikey: ApikeyRow): Promise<Response> {
+export async function putBuildCredentials(c: Context, apikey?: ApikeyRow): Promise<Response> {
   const body = await readJsonBody(c)
   const appId = parseAppId(body.app_id)
   const platform = parsePlatform(body.platform)
   const mode = parseMode(body.mode)
   await requireAppPermission(c, WRITE_PERMISSION, appId)
-  const result = await storeBuildCredentials(c, { appId, platform, mode, incoming: body.credentials, actor: actorFromApikey(c, apikey) })
+  const auth = c.get('auth')
+  if (!apikey && (auth?.authType !== 'jwt' || !auth.userId))
+    throw quickError(401, 'unauthorized', 'A signed-in user is required')
+  const actor = apikey ? actorFromApikey(c, apikey) : { userId: auth.userId, apikeyId: null, apikeyName: null }
+  const result = await storeBuildCredentials(c, { appId, platform, mode, incoming: body.credentials, actor })
   return c.json(result)
 }
 

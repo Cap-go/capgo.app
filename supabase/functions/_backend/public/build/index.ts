@@ -12,7 +12,9 @@ import {
 } from '../../files/util.ts'
 import { recordCicdDeploy } from '../../utils/cicdDetection.ts'
 import { getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
+import { middlewareAuth as middlewareSession } from '../../utils/hono_jwt.ts'
 import { middlewareAuth, middlewareKey } from '../../utils/hono_middleware.ts'
+import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { apikeyPrincipal } from '../../utils/pg_rls.ts'
 import { aiAnalyzeDeprecated } from './ai_analyze.ts'
 import { aiAnalyzeStreamBuild } from './ai_analyze_stream.ts'
@@ -142,6 +144,14 @@ app.post('/upload_url/:jobId', middlewareKey(['all', 'write']), async (c) => {
 // GET /build/credentials?app_id= - Non-secret summary per platform (app.build_native)
 app.get('/credentials', middlewareKey(['all', 'write', 'read']), async (c) => {
   return getBuildCredentialsStatus(c)
+})
+
+app.put('/credentials/session', middlewareSession, async (c) => {
+  const auth = c.get('auth')
+  if (!auth)
+    throw simpleError('invalid_jwt', 'Invalid JWT')
+  await assertJwtMfaAssurance(c, auth)
+  return putBuildCredentials(c)
 })
 
 // PUT /build/credentials - Validate, encrypt and save credentials (app.update_settings)

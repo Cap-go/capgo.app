@@ -63,6 +63,20 @@ afterEach(async () => {
   await cleanupVerifiedMfaFactor()
 })
 
+describe('jwt MFA assurance on session build credentials', () => {
+  it('requires step-up before processing credential writes for an enrolled user', async () => {
+    const headers = await getAuthHeadersForCredentials(USER_EMAIL_JWT_MFA_EDGE, USER_PASSWORD)
+    await enrollVerifiedMfaFactor()
+    const response = await fetch(`${BASE_URL}/build/credentials/session`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ app_id: 'com.example.signing', platform: 'android', credentials: { KEYSTORE_KEY_ALIAS: 'test' } }),
+    })
+    expect(response.status).toBe(403)
+    expect(await response.json()).toMatchObject({ error: 'mfa_required' })
+  })
+})
+
 describe('jwt MFA assurance on /apikey create', () => {
   it('rejects MFA-enrolled users with password-only aal1 sessions', async () => {
     const headers = await getAuthHeadersForCredentials(USER_EMAIL_JWT_MFA_EDGE, USER_PASSWORD)
