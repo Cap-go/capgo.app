@@ -428,7 +428,9 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       const introduction = page.locator('[data-test="builder-introduction"]')
       if (process.env.VISUAL_DIFF_PHASE === 'after') {
         await introduction.waitFor({ state: 'visible' })
-        await page.getByText('Build signing credentials', { exact: true }).click()
+        const signing = page.locator('summary').filter({ hasText: 'Build signing credentials' })
+        await signing.getByText('Beta', { exact: true }).waitFor({ state: 'visible' })
+        await signing.click()
         await page.getByLabel('Distribution certificate (.p12)').waitFor({ state: 'visible' })
         return
       }
