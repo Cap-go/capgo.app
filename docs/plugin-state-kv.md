@@ -83,7 +83,11 @@ pointer again. R2 is strongly consistent and the purge only follows a visible
 pointer, so a moved pointer means the entry may be stale: it is deleted, as it
 is when the pointer cannot be read, and the next request reads the new
 publication. A late refill logs this as `plugin_state_refill` outcome
-`superseded`. The check costs one R2 Class B read per cache fill.
+`superseded`. A delete that fails is retried, three attempts in all; if every
+attempt fails, the entry stays until the next purge or the TTL, the error log
+`plugin state cache entry not removed after its publication check` names the
+document and both revisions, and a late refill reports outcome `stale`. The
+check costs one R2 Class B read per cache fill.
 
 Provider reads happen only on cache fills, so their cost follows the cache
 lifetime, not device traffic. Each fill reads the R2 pointer and the KV value,

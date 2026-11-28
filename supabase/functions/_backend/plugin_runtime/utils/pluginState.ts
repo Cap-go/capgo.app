@@ -5,7 +5,7 @@ import type { PluginStateAppDoc, PluginStateDeviceDoc, PluginStateManifestDoc, P
 import type { PluginStateQueries } from './pluginStateRegistry.ts'
 import type { PluginStatePublication } from './pluginStateStore.ts'
 import { CacheHelper } from './cache.ts'
-import { cloudlog } from './logging.ts'
+import { cloudlog, cloudlogErr } from './logging.ts'
 import { createLazyPgClient, getDrizzleClient } from './pg.ts'
 import {
   evalAppById,
@@ -274,8 +274,14 @@ async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLo
   return { revision, value }
 }
 
-/** cached: stored and still current. superseded: a newer publication replaced it, so it was removed. */
-type DocumentWrite = 'cached' | 'not_cached' | 'superseded'
+/**
+ * cached: stored and still current. superseded: a newer publication (or an
+ * unreadable pointer) made it untrusted, and it was removed. stale: it could
+ * not be removed either, and stays until the next purge or the TTL.
+ */
+type DocumentWrite = 'cached' | 'not_cached' | 'superseded' | 'stale'
+/** Delete attempts for an entry the publication check cannot vouch for. */
+const UNTRUSTED_ENTRY_DELETE_ATTEMPTS = 3
 
 /**
  * Store a document (or a miss) and check it is still the published one. It
@@ -290,7 +296,7 @@ async function putDocument<T>(c: AnyContext, helper: CacheHelper, request: Reque
   if (!stored)
     return 'not_cached'
   // Never rejects: the request that filled the cache must not fail on its check.
-  return await reconcileDocument(c, helper, request, options.kvKey, revision).catch(() => false) ? 'cached' : 'superseded'
+  return await reconcileDocument(c, helper, request, options.kvKey, revision).catch((): DocumentWrite => 'stale')
 }
 
 /** True when the generation published now is the stored one, or older. */
@@ -306,17 +312,29 @@ function isCurrentRevision(published: string | null, stored: string | null) {
  * the pointer again: R2 is strongly consistent, and the purge only follows a
  * pointer that is already visible. When the pointer moved past the stored
  * revision, or cannot be read, delete the entry: a cold miss is safe, a stale
- * entry is not. Resolves true when the entry stays.
+ * entry is not. A failed delete is retried a bounded number of times, then
+ * logged as an error: the entry then lives until the next purge or the TTL.
  */
-async function reconcileDocument(c: AnyContext, helper: CacheHelper, request: Request, kvKey: string, revision: string | null): Promise<boolean> {
+async function reconcileDocument(c: AnyContext, helper: CacheHelper, request: Request, kvKey: string, revision: string | null): Promise<DocumentWrite> {
   const published = await Promise.resolve()
     .then(() => readPublishedGeneration(c, kvKey))
     .then(generation => ({ generation }), () => null)
   if (published && isCurrentRevision(published.generation, revision))
-    return true
+    return 'cached'
   // Parsed memory is only reused for the revision the cache entry holds, so it needs no cleanup.
-  await helper.delete(request)
-  return false
+  for (let attempt = 0; attempt < UNTRUSTED_ENTRY_DELETE_ATTEMPTS; attempt++) {
+    if (await helper.delete(request))
+      return 'superseded'
+  }
+  cloudlogErr({
+    requestId: c.get('requestId'),
+    message: 'plugin state cache entry not removed after its publication check',
+    document: new URL(request.url).pathname,
+    stored_revision: revision,
+    published_revision: published ? published.generation : 'unreadable',
+    attempts: UNTRUSTED_ENTRY_DELETE_ATTEMPTS,
+  })
+  return 'stale'
 }
 
 /**
@@ -333,7 +351,7 @@ function refillDocument<T>(c: AnyContext, helper: CacheHelper, request: Request,
   let readEndedAt: number | null = null
   const now = () => sampledSince === null ? 0 : performance.now()
   // not_cached: the read finished, but the best-effort cache write failed.
-  // superseded: written, then removed because a newer publication replaced it.
+  // superseded / stale: written, then found untrusted, and removed / not removable (DocumentWrite).
   // write_pending: the write or its check was still running after LATE_READ_TIMEOUT_MS.
   const log = (outcome: DocumentWrite | 'write_pending' | 'failed') => {
     if (sampledSince === null)

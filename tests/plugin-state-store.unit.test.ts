@@ -671,6 +671,45 @@ describe('cache fill publication check', () => {
     expect(cache.revisions()).toEqual([])
   })
 
+  it('retries a failed removal of a superseded fill', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const cache = memoryCache()
+    const remove = cache.delete.getMockImplementation()!
+    cache.delete.mockRejectedValueOnce(new Error('cache busy')).mockImplementation(remove)
+    vi.stubGlobal('caches', { open: async () => cache })
+    const { pointer, getValue, app } = await fixture('com.example.retried-removal')
+    const getPointer = vi.fn().mockResolvedValueOnce(pointer('1')).mockResolvedValue(pointer('2'))
+    await app.request('/', undefined, { PLUGIN_STATE: { get: getValue }, PLUGIN_STATE_POINTERS: { get: getPointer } })
+    expect(cache.delete).toHaveBeenCalledTimes(2)
+    expect(cache.revisions()).toEqual([])
+  })
+
+  it('reports a superseded fill it cannot remove as stale, with an error, after bounded attempts', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const cache = memoryCache()
+    cache.delete.mockRejectedValue(new Error('cache unavailable'))
+    vi.stubGlobal('caches', { open: async () => cache })
+    const { pointer, getValue, app } = await fixture('com.example.stuck-fill')
+    const getPointer = vi.fn().mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      return pointer('1')
+    }).mockImplementation(async () => pointer('2'))
+    const request = app.request('/', undefined, { PLUGIN_STATE: { get: getValue }, PLUGIN_STATE_POINTERS: { get: getPointer } })
+    await vi.advanceTimersByTimeAsync(100)
+    expect((await request).headers.get('X-Plugin-State')).toBe('cold')
+    await vi.waitFor(() => expect(refillLogs(log)).toHaveLength(1))
+    expect(refillLogs(log)[0]).toMatchObject({ outcome: 'stale' })
+    expect(cache.delete).toHaveBeenCalledTimes(3)
+    expect(cache.revisions()).toEqual(['1'])
+    expect(errors.mock.calls.flat()).toContain('plugin state cache entry not removed after its publication check')
+  })
+
   it('logs a late refill that a publication superseded', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
