@@ -13,6 +13,7 @@ const fields = {
     ['BUILD_CERTIFICATE_BASE64', '.p12', 'signing-certificate'],
     ['P12_PASSWORD', 'password', 'signing-certificate-password'],
     ['profile', '.mobileprovision', 'signing-provision-profile'],
+    ['profileBundleId', 'text', 'signing-profile-bundle-id'],
     ['profileName', 'text', 'signing-profile-name'],
     ['APP_STORE_CONNECT_TEAM_ID', 'text', 'signing-team-id'],
     ['APPLE_KEY_ID', 'text', 'signing-apple-key-id'],
@@ -54,13 +55,15 @@ async function save(event: SubmitEvent) {
       else if (typeof value === 'string' && value)
         credentials[key] = value
     }))
-    if (credentials.profile || credentials.profileName) {
-      if (!credentials.profile || !credentials.profileName)
+    if (credentials.profile || credentials.profileName || credentials.profileBundleId) {
+      const bundleId = credentials.profileBundleId?.trim()
+      if (!credentials.profile || !credentials.profileName || !bundleId)
         throw new Error('incomplete-profile')
       credentials.CAPGO_IOS_PROVISIONING_MAP = JSON.stringify({
-        [props.appId]: { profile: credentials.profile, name: credentials.profileName },
+        [bundleId]: { profile: credentials.profile, name: credentials.profileName },
       })
       delete credentials.profile
+      delete credentials.profileBundleId
       delete credentials.profileName
     }
     const { error } = await invokeCapgoApi('build/credentials/session', {
