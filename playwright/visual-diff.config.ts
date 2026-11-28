@@ -1218,7 +1218,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.getByRole('heading', { name: /Start guided setup|Finish setup in your app/ }).waitFor()
     },
   },
-  // The seeded demo app has finished getting started, so the page sends it to the app overview.
+  // With the seeded demo data, this capture ends on the app overview (seen by the final-page check).
   { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', rendersPaths: ['/app/com.demo.app'], auth: true },
   {
     slug: 'app-settings',
