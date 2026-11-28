@@ -194,13 +194,14 @@ describe('deploy gate time budgets', () => {
     const waitMinutes = (job: typeof web) => Number(/wait-for-deploy-jobs\.ts .*--timeout-minutes (\d+)/.exec(job.steps.map(step => step.run ?? '').join('\n'))?.[1])
     // Queueing is unbounded, so no budget can be tuned to it. The gate's cap counts only time an
     // awaited job spends unstarted (a running one ends on its own timeout), and the jobs run at
-    // GitHub's maximum. Accepted limit: setup, queueing and the backend together must fit in 360
-    // minutes; the cap leaves at least the former 40 (refresh) and 30 (publishing) minutes.
+    // GitHub's maximum. Accepted limit: setup, queueing, the backend's runtime and the work after
+    // the gate all share those 360 minutes. These checks only keep the cap itself from using the
+    // former 40 (refresh) and 30 (publishing) minutes; they cannot reserve that time.
     for (const [job, after] of [[refresh, 40], [web, 30]] as const) {
       expect(job['timeout-minutes']).toBe(360)
       expect(waitMinutes(job) + after).toBeLessThanOrEqual(job['timeout-minutes'])
     }
-    // Even an awaited job queued for its whole budget and then run to its own limit fits.
+    // The queued-time cap is generous next to the Supabase job's own 60-minute limit.
     expect(waitMinutes(refresh)).toBeGreaterThanOrEqual(4 * supabase['timeout-minutes'])
     expect(waitMinutes(web)).toBeGreaterThan(waitMinutes(refresh))
   })
