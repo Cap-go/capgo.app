@@ -1083,6 +1083,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   {
     slug: 'security-updates-observe-desktop',
     path: '/app/com.demo.app/observe/errors',
+    // The security updates tab is its own route.
+    rendersPaths: ['/app/com.demo.app/observe/security'],
     auth: true,
     prepare: async (page) => {
       await prepareSecurityUpdatesObserveTab(page, { width: 1440, height: 900 })
@@ -1105,6 +1107,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   {
     slug: 'security-updates-observe-mobile',
     path: '/app/com.demo.app/observe/errors',
+    // The security updates tab is its own route.
+    rendersPaths: ['/app/com.demo.app/observe/security'],
     auth: true,
     prepare: async (page) => {
       await prepareSecurityUpdatesObserveTab(page, { width: 390, height: 844 })
@@ -1214,7 +1218,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.getByRole('heading', { name: /Start guided setup|Finish setup in your app/ }).waitFor()
     },
   },
-  { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },
+  // The seeded demo app has finished getting started, so the page sends it to the app overview.
+  { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', rendersPaths: ['/app/com.demo.app'], auth: true },
   {
     slug: 'app-settings',
     path: '/app/com.demo.app/settings',
