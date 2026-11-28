@@ -86,6 +86,7 @@ async function save(event: SubmitEvent) {
   <details class="mb-6 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
     <summary class="cursor-pointer font-medium">
       {{ t('signing-credentials') }}
+      <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
     </summary>
     <label class="mt-4 block">
       {{ t('platform') }}
