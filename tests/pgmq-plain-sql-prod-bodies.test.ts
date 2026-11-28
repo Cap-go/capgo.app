@@ -38,9 +38,9 @@ async function withProdLikePgmq<T>(run: (client: Client) => Promise<T>) {
   const database = `pgmq_prod_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   const admin = new Client({ connectionString: POSTGRES_URL })
   await admin.connect()
-  await admin.query(`CREATE DATABASE ${database}`)
   const client = new Client({ connectionString: databaseUrl(POSTGRES_URL, database) })
   try {
+    await admin.query(`CREATE DATABASE ${database}`)
     await client.connect()
     await client.query('CREATE SCHEMA pgmq; CREATE EXTENSION pgmq WITH SCHEMA pgmq;')
     await client.query(PROD_OLD_FUNCTIONS_SQL)
