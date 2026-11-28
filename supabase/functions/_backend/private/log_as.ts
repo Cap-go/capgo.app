@@ -105,7 +105,7 @@ async function getUserEmailByAuthEmail(c: Context<MiddlewareKeyVariables>, email
     const result = await pgClient.query<{ email: string | null }>(
       `
         SELECT email
-        FROM auth.users
+        FROM auth_cf.users
         WHERE email IS NOT NULL
           AND lower(email) = lower($1)
         ORDER BY created_at ASC, id ASC
@@ -138,7 +138,7 @@ async function getOrgOwner(c: Context<MiddlewareKeyVariables>, orgId: string): P
         current_admins AS (
           SELECT
             role_bindings.principal_id AS user_id,
-            auth.users.email,
+            auth_cf.users.email,
             role_bindings.granted_at
           FROM target_org
           JOIN public.role_bindings
@@ -150,9 +150,9 @@ async function getOrgOwner(c: Context<MiddlewareKeyVariables>, orgId: string): P
             ON roles.id = role_bindings.role_id
             AND roles.name = public.rbac_role_org_super_admin()
             AND roles.scope_type = public.rbac_scope_org()
-          JOIN auth.users
-            ON auth.users.id = role_bindings.principal_id
-            AND auth.users.email IS NOT NULL
+          JOIN auth_cf.users
+            ON auth_cf.users.id = role_bindings.principal_id
+            AND auth_cf.users.email IS NOT NULL
         )
         SELECT current_admins.user_id, current_admins.email
         FROM target_org

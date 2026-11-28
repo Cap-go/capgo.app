@@ -1,10 +1,9 @@
 # Self-hosted GoTrue on Cloudflare (auth migration, PR 2)
 
-GoTrue v2.197.0 (the release hosted Supabase Auth runs for our project) in a
+GoTrue v2.198.0 (the release hosted Supabase Auth runs for our project) in a
 Cloudflare container, on the production database in schema `auth_cf` as role
-`gotrue_cf`. Customers stay on hosted Supabase Auth: the GoTrue Worker has no
-route, and only the API's `local_gotrue` environment binds it. Routing the
-console and `sb.capgo.app` to it is PR 3.
+`gotrue_cf`. The GoTrue Worker has no route: the production API binds it, and
+`sb.capgo.app/auth/v1/*` reaches it through the API relay (see Cutover).
 
 ```
 console → API relay /private/console/auth/* → GOTRUE service binding
@@ -108,3 +107,39 @@ The CI token needs Containers write and Cloudchamber write permissions.
    Email links point at hosted Supabase: replace their host and path with
    `http://localhost:8787/private/console/auth/verify?...` by hand.
 5. Confirm the production API accepts the tokens (console data loads).
+
+## Cutover (PR 3)
+
+The cutover PR moves production onto this GoTrue in one release:
+
+- Migration `auth_cf_cutover`:
+  - copies users, identities, MFA factors, SSO providers and pending email tokens from
+    `auth` to `auth_cf`, keeping ids (sessions are not copied: everyone signs in again);
+  - points the `public` foreign keys and the two Capgo auth triggers at `auth_cf`;
+  - rewrites every `public` function that read `auth.*` tables to read `auth_cf`.
+  Where GoTrue never ran (local dev, CI, self-hosting), `auth_cf` gets views of `auth`
+  instead, so the same SQL works. Running our GoTrue against a local database therefore
+  needs those views dropped first.
+- `capgo_api-prod` gets the `GOTRUE` binding: the console relay, admin calls, SSO provider
+  management and JWT checks go to this GoTrue, and the API only trusts its JWKS, so tokens
+  issued by hosted Auth are refused.
+- `API_EXTERNAL_URL` becomes `https://sb.capgo.app/auth/v1`: email links and the SAML
+  entity ID and ACS URL stay the ones customers already use.
+
+Run it in a low-traffic slot. Between the migration and step 2, a sign-up on hosted Auth
+can fail and a password change there is lost.
+
+1. Before merging: push `SUPABASE_SERVICE_ROLE_KEY` to `capgo_gotrue-prod` (see Secrets).
+2. Right after the deploy: turn on the `sb.capgo.app` snippet
+   `cloudflare_workers/gotrue_auth_relay/index.js` (rule in its header): `/auth/v1/*` goes to
+   `https://api.capgo.app/private/console/auth/*` (same method, query and body).
+3. Catch-up for rows written on hosted Auth in between, from the SQL editor:
+   `SELECT public.copy_auth_to_auth_cf(false);` (adds only the accounts and SSO providers
+   created on hosted Auth since the copy, with their own rows; changes nothing else).
+4. Hosted Auth dashboard: turn off new sign-ups.
+5. Check: row counts of `auth` vs `auth_cf` (users, identities, mfa_factors, sso_providers),
+   login with TOTP, a password reset link from the email, one SSO login per provider, and a
+   token from hosted Auth (`kid` other than ours) refused by the API.
+
+The legacy Supabase Edge Functions still verify tokens against the hosted JWKS, so keep
+our key there until they are deleted.

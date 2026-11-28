@@ -105,7 +105,8 @@
           "service": "capgo-admin-dashboard-api",
           "entrypoint": "CliUsageIngest"
         },
-        { "binding": "API_SELF", "service": "capgo_api-prod" }
+        { "binding": "API_SELF", "service": "capgo_api-prod" },
+        { "binding": "GOTRUE", "service": "capgo_gotrue-prod" }
       ],
       "d1_databases": [
         {

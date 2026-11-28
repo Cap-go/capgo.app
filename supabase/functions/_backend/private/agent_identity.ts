@@ -62,7 +62,7 @@ async function findRegistration(pg: Pick<Pg, 'query'>, claimAttemptToken: string
 }
 
 async function getUserEmail(pg: Pick<Pg, 'query'>, userId: string): Promise<string> {
-  const { rows } = await pg.query<{ email: string | null }>('SELECT email FROM auth.users WHERE id = $1', [userId])
+  const { rows } = await pg.query<{ email: string | null }>('SELECT email FROM auth_cf.users WHERE id = $1', [userId])
   return (rows[0]?.email ?? '').trim().toLowerCase()
 }
 

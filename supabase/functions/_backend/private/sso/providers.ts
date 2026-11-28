@@ -177,7 +177,7 @@ async function revokeUnmappedSsoAccess(client: PgQueryClient, orgId: string, dom
     await client.query(
       `
         delete from public.role_bindings rb
-        using auth.users u
+        using auth_cf.users u
         where u.id = rb.principal_id
           and rb.principal_type = public.rbac_principal_user()
           and rb.scope_type = public.rbac_scope_app()
@@ -193,7 +193,7 @@ async function revokeUnmappedSsoAccess(client: PgQueryClient, orgId: string, dom
     await client.query(
       `
         delete from public.group_members gm
-        using auth.users u, public.groups g
+        using auth_cf.users u, public.groups g
         where u.id = gm.user_id
           and g.id = gm.group_id
           and g.org_id = $1
@@ -251,7 +251,7 @@ interface AuthChange {
 
 // Applies a PATCH as one unit per provider: the row is locked first, then
 // Supabase Auth is updated, then the row and (when the enforced state flips)
-// auth.users.is_sso_user are written. If the database write fails, Auth is
+// auth_cf.users.is_sso_user are written. If the database write fails, Auth is
 // restored while the lock is still held, so a concurrent PATCH can never have
 // its Auth state overwritten by a stale restore.
 async function applyProviderUpdate(
@@ -348,7 +348,7 @@ async function restoreAuthIfRolledBack(
 async function setDomainSsoOnly(client: PgQueryClient, domain: string, isSsoOnly: boolean) {
   await client.query(
     `
-      update auth.users
+      update auth_cf.users
       set is_sso_user = $1
       where email is not null
         and lower(split_part(email, '@', 2)) = lower($2)
@@ -838,7 +838,7 @@ app.get('/:orgId/managed', async (c) => {
       `
         select distinct ou.user_id, i.provider
         from public.org_users ou
-        join auth.identities i on i.user_id = ou.user_id
+        join auth_cf.identities i on i.user_id = ou.user_id
         where ou.org_id = $1 and i.provider = any($2::text[])
       `,
       [orgId, [...targetsByProvider.keys()]],
