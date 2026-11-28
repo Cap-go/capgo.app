@@ -60,7 +60,11 @@ export function graphPlugin(root: string, onGraph: (graph: ModuleGraph) => void)
         const plainStylesheet = !id.includes('?') && file.endsWith('.css') && existsSync(file)
         // Vue modules import their blocks by absolute path, which differs between two checkouts.
         // Its output also depends on the packages it loads (`@plugin "daisyui"`), so hash their versions too.
-        const code = (plainStylesheet ? stylesheetSource(root, file) : (info.code ?? '')).split(root).join('<root>')
+        // An HTML entry's transformed code keeps only its script and style imports, not the
+        // markup (a class on <body> styles every page), so hash the document too.
+        const document = !id.includes('?') && file.endsWith('.html') && existsSync(file)
+        const source = plainStylesheet ? stylesheetSource(root, file) : document ? `${readFileSync(file, 'utf8')}\n${info.code ?? ''}` : (info.code ?? '')
+        const code = source.split(root).join('<root>')
         const firstParty = !key.startsWith('/') && !key.startsWith('\0') && !key.includes('node_modules/')
         modules[key] = {
           hash: sha(code),

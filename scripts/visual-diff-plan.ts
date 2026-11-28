@@ -254,11 +254,14 @@ export function serializeRoute(route: VisualDiffRoute) {
 
 /** The config's import statements, in order. */
 function importStatements(source: string) {
-  return [...source.matchAll(/^import\s[^;]*?from\s+['"][^'"]+['"]/gm)].map(match => match[0].replace(/\s+/g, ' '))
+  // Includes side-effect imports (`import './setup'`), which bind no name.
+  return [...source.matchAll(/^import\s+(?:[^;'"]*?\sfrom\s+)?['"][^'"]+['"]/gm)].map(match => match[0].replace(/\s+/g, ' '))
 }
 
 /** Local names an import statement binds. */
 function importedNames(statement: string) {
+  if (!/\sfrom\s/.test(statement))
+    return []
   const clause = statement.replace(/^import\s+(?:type\s+)?/, '').replace(/\s+from\s+.*$/, '')
   return clause.replace(/[{}]/g, ',').split(',').map(part => part.trim().replace(/^type\s+/, '').split(/\s+as\s+/).pop()!.replace(/^\*\s*as\s+/, '')).filter(Boolean)
 }
@@ -346,9 +349,14 @@ export function changedRouteDefinitions(base: RouteDefinitions, head: RouteDefin
   if (baseImports.join('\n') !== headImports.join('\n'))
     return null
   for (const statement of headImports) {
-    const specifier = /from\s+['"]([^'"]+)['"]/.exec(statement)?.[1]
-    if (specifier && importChanged(specifier))
-      importedNames(statement).forEach(name => changed.add(name))
+    const specifier = /['"]([^'"]+)['"]$/.exec(statement)?.[1]
+    if (!specifier || !importChanged(specifier))
+      continue
+    const names = importedNames(statement)
+    // A changed side-effect import can alter anything the captures read (process.env, globals).
+    if (names.length === 0)
+      return null
+    names.forEach(name => changed.add(name))
   }
   for (const name of baseDecls.keys()) {
     if (!headDecls.has(name))

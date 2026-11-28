@@ -195,6 +195,13 @@ describe('route list sources', () => {
     expect(changedRouteDefinitions({ source, routes }, { source: withImport(`import { STEP_IDS } from '../src/services/other'`), routes })).toBeNull()
   })
 
+  it('treats side-effect imports as imports: edited or changed, they capture everything', () => {
+    const source = `import '../src/setup'\n\n${config(fixtures)}`
+    expect(changedRouteDefinitions({ source: config(fixtures), routes }, { source, routes })).toBeNull()
+    expect(changedRouteDefinitions({ source, routes }, { source, routes }, specifier => specifier === '../src/setup')).toBeNull()
+    expect(changedRouteDefinitions({ source, routes }, { source, routes }, () => false)).toEqual([])
+  })
+
   it('compares fixture strings verbatim, whitespace included', () => {
     const head = fixtures.replace(`'ota'`, `'ota '`)
     expect(changedRouteDefinitions({ source: config(fixtures), routes }, { source: config(head), routes })).toEqual(['mapped-a', 'mapped-b'])
