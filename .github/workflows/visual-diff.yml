@@ -193,6 +193,9 @@ jobs:
             exit 0
           fi
           bun scripts/visual-diff.ts diff --routes "$ROUTES"
+          # A capture that ended on a page the plan did not fingerprint would be skipped by later
+          # plans when that page changes; fail so its rendersPaths gets declared.
+          bun scripts/visual-diff-plan.ts --check-final-pages .context/visual-diff/after
           if [ "$CAPTURE_RESULT" != "success" ]; then
             echo "::error::At least one screenshot capture shard ended with '$CAPTURE_RESULT'; the report may be incomplete."
             exit 1

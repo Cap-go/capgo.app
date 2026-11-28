@@ -13,7 +13,7 @@ import type { GraphModule, ModuleGraph } from './visual-diff-graph'
 import type { VisualDiffRoute } from '../playwright/visual-diff.config'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
@@ -315,6 +315,7 @@ export function serializeRoute(route: VisualDiffRoute) {
     authCredentials: route.authCredentials ?? null,
     beforeNavigate: route.beforeNavigate?.toString() ?? null,
     prepare: route.prepare?.toString() ?? null,
+    rendersPaths: route.rendersPaths ?? [],
   })
 }
 
@@ -472,7 +473,8 @@ export function visitedPaths(route: { path: string, definition: string }, source
       }
     }
   }
-  const paths = [route.path]
+  const declared = (JSON.parse(route.definition) as { rendersPaths?: string[] }).rendersPaths ?? []
+  const paths = [route.path, ...declared]
   for (const text of texts) {
     for (const match of text.matchAll(/\.goto\(\s*([^,)]*)/g)) {
       const literal = /^(['"`])([^'"`$]*)\1$/.exec(match[1].trim())
@@ -613,6 +615,51 @@ export async function planVisualDiff(options: { repoRoot: string, base: string, 
   }
 }
 
+/**
+ * Routes whose capture ended on a page the plan did not fingerprint: in-app navigation the
+ * planner cannot see. `finalPaths` maps a slug to the pathname its screenshot was taken on.
+ */
+export function unplannedFinalPages(routes: RouteDefinitions, pages: PageRoute[], redirects: Redirect[], finalPaths: Map<string, string>) {
+  const problems: string[] = []
+  for (const route of routes.routes) {
+    const finalPath = finalPaths.get(route.slug)
+    const visited = visitedPaths(route, routes.source)
+    if (!finalPath || !visited)
+      continue
+    const planned = visited.map(path => finalPage(pages, redirects, path))
+    const actual = finalPage(pages, redirects, finalPath)
+    // Unresolvable pages are always captured, so they need no declaration.
+    if (!actual || planned.some(page => !page))
+      continue
+    if (!planned.some(page => page!.page === actual.page))
+      problems.push(`${route.slug} ended on ${finalPath} (${actual.page}); add '${finalPath}' to its rendersPaths in playwright/visual-diff.config.ts`)
+  }
+  return problems
+}
+
+function pageFiles(root: string, dir = 'src/pages'): string[] {
+  return readdirSync(resolve(root, dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory()
+    ? pageFiles(root, `${dir}/${entry.name}`)
+    : entry.name.endsWith('.vue') ? [`${dir}/${entry.name}`] : [])
+}
+
+/** Fails when a captured screenshot shows a page its route plan did not include. */
+function checkFinalPages(root: string, phaseDir: string) {
+  const routes = loadRoutes(root)
+  const pages = pageRoutes({ root, entries: [], modules: Object.fromEntries(pageFiles(root).map(file => [file, { hash: '', imports: [], dynamicImports: [] }])) })
+  const redirects = parseRedirects(readFileSync(resolve(root, 'src/main.ts'), 'utf8'))
+  const finalPaths = new Map(routes.routes.flatMap((route) => {
+    const file = resolve(phaseDir, `${route.slug}.url`)
+    return existsSync(file) ? [[route.slug, readFileSync(file, 'utf8').trim()] as const] : []
+  }))
+  const problems = unplannedFinalPages(routes, pages, redirects, finalPaths)
+  for (const problem of problems)
+    console.error(`::error::${problem}`)
+  if (problems.length)
+    throw new Error(`${problems.length} capture(s) ended on a page the visual diff plan does not track`)
+  console.log(`[visual-diff] ${finalPaths.size} capture(s) ended on planned pages`)
+}
+
 export function planSummary(plan: VisualDiffPlan) {
   if (plan.mode === 'all')
     return `Captured all ${plan.total} routes because ${plan.reasons.join('; ')}.`
@@ -623,6 +670,10 @@ export function planSummary(plan: VisualDiffPlan) {
 
 async function main() {
   const args = process.argv.slice(2)
+  if (args[0] === '--check-final-pages') {
+    checkFinalPages(process.cwd(), resolve(args[1] ?? '.context/visual-diff/after'))
+    return
+  }
   if (args[0] === '--dump-routes') {
     process.stdout.write(JSON.stringify(await readRouteDefinitions(process.cwd())))
     return

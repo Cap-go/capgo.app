@@ -21,6 +21,7 @@ import {
   routeFingerprint,
   routesUsingKeys,
   shardCount,
+  unplannedFinalPages,
   usesKey,
   visitedPaths,
 } from '../scripts/visual-diff-plan'
@@ -339,6 +340,20 @@ describe('pageRoutes and resolveRoute', () => {
     expect(finalPage(routes, redirects, '/p/com.demo.app')).toBeUndefined()
     expect(finalPage(routes, redirects, '/p/com.demo.app/logs')).toBeUndefined()
     expect(finalPage(routes, redirects, '/app/com.demo.app/native')).toBeUndefined()
+  })
+
+  it('flags a capture that ended on a page its plan does not include, unless declared', () => {
+    const source = 'export const visualDiffRoutes = []\n'
+    const definition = (rendersPaths: string[] = []) => JSON.stringify({ path: '/login', prepare: null, rendersPaths })
+    const plan = (rendersPaths?: string[]) => ({ source, routes: [{ slug: 'onboarding', path: '/login', definition: definition(rendersPaths) }] })
+    const ended = new Map([['onboarding', '/app/com.demo.app/channels']])
+    expect(unplannedFinalPages(plan(), routes, [], ended)).toEqual([
+      'onboarding ended on /app/com.demo.app/channels (src/pages/app/[app].channels.vue); add \'/app/com.demo.app/channels\' to its rendersPaths in playwright/visual-diff.config.ts',
+    ])
+    expect(unplannedFinalPages(plan(['/app/:app/channels'.replace(':app', 'x')]), routes, [], ended)).toEqual([])
+    // Ending on the declared path itself, or on a page only known at runtime, is fine.
+    expect(unplannedFinalPages(plan(), routes, [], new Map([['onboarding', '/login/']]))).toEqual([])
+    expect(unplannedFinalPages(plan(), routes, [], new Map([['onboarding', '/nowhere']]))).toEqual([])
   })
 
   it('treats [...all] as a catch-all instead of splitting it on its dots', () => {
