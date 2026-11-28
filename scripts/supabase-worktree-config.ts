@@ -111,19 +111,22 @@ export function getSupabaseWorktreeConfig(cwd: string = process.cwd()): Supabase
     edgeInspector: 8083,
   } satisfies SupabaseWorktreePorts
 
-  return {
-    repoRoot,
-    worktreeHash,
-    projectId: `capgo-app-${worktreeHash}`,
-    ports: {
-      api: base.api + offset,
-      db: base.db + offset,
-      dbShadow: base.dbShadow + offset,
-      dbPooler: base.dbPooler + offset,
-      studio: base.studio + offset,
-      inbucket: base.inbucket + offset,
-      analytics: base.analytics + offset,
-      edgeInspector: base.edgeInspector + (offset / 10),
-    },
+  const ports: SupabaseWorktreePorts = {
+    api: base.api + offset,
+    db: base.db + offset,
+    dbShadow: base.dbShadow + offset,
+    dbPooler: base.dbPooler + offset,
+    studio: base.studio + offset,
+    inbucket: base.inbucket + offset,
+    analytics: base.analytics + offset,
+    edgeInspector: base.edgeInspector + (offset / 10),
   }
+  // A base near the inspector band (8083 + offset / 10) could give two services one host port.
+  const seen = new Map<number, string>()
+  for (const [name, port] of Object.entries(ports)) {
+    if (seen.has(port))
+      throw new Error(`Supabase worktree ports collide: ${seen.get(port)} and ${name} both use ${port}. Change SUPABASE_WORKTREE_PORT_BASE or SUPABASE_WORKTREE_PORT_OFFSET.`)
+    seen.set(port, name)
+  }
+  return { repoRoot, worktreeHash, projectId: `capgo-app-${worktreeHash}`, ports }
 }

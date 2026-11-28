@@ -186,6 +186,20 @@ describe('route list sources', () => {
     expect(changedRouteDefinitions({ source: config(fixtures), routes }, { source: config(fixtures, '...extraRoutes,'), routes })).toBeNull()
   })
 
+  it('flags routes using an import whose module changed, and gives up on edited imports', () => {
+    const withImport = (line: string) => `${line}\n\n${config(fixtures)}`
+    const source = withImport(`import { STEP_IDS } from '../src/services/steps'`)
+    const usesSteps = routes.map(route => route.slug === 'plain' ? { ...route, definition: JSON.stringify({ path: '/a', prepare: 'page => STEP_IDS' }) } : route)
+    expect(changedRouteDefinitions({ source, routes: usesSteps }, { source, routes: usesSteps }, specifier => specifier === '../src/services/steps')).toEqual(['plain'])
+    expect(changedRouteDefinitions({ source, routes: usesSteps }, { source, routes: usesSteps }, () => false)).toEqual([])
+    expect(changedRouteDefinitions({ source, routes }, { source: withImport(`import { STEP_IDS } from '../src/services/other'`), routes })).toBeNull()
+  })
+
+  it('compares fixture strings verbatim, whitespace included', () => {
+    const head = fixtures.replace(`'ota'`, `'ota '`)
+    expect(changedRouteDefinitions({ source: config(fixtures), routes }, { source: config(head), routes })).toEqual(['mapped-a', 'mapped-b'])
+  })
+
   it('follows page.goto() through helpers, and gives up on computed targets', () => {
     const [, mapped] = routes
     expect(visitedPaths(mapped, config(fixtures))).toEqual(['/apps', '/app/com.demo.app/getting-started'])

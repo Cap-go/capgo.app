@@ -32,6 +32,9 @@ describe('SUPABASE_WORKTREE_PORT_BASE', () => {
   it('rejects a base that leaves no room for the offsets', () => {
     vi.stubEnv('SUPABASE_WORKTREE_PORT_BASE', '60000')
     expect(() => getSupabaseWorktreeConfig()).toThrow('SUPABASE_WORKTREE_PORT_BASE')
+    vi.stubEnv('SUPABASE_WORKTREE_PORT_OFFSET', '0')
+    vi.stubEnv('SUPABASE_WORKTREE_PORT_BASE', '8083')
+    expect(() => getSupabaseWorktreeConfig()).toThrow('ports collide: api and edgeInspector both use 8083')
     vi.stubEnv('SUPABASE_WORKTREE_PORT_BASE', 'abc')
     expect(() => getSupabaseWorktreeConfig()).toThrow('SUPABASE_WORKTREE_PORT_BASE')
   })

@@ -14,7 +14,7 @@ import type { VisualDiffRoute } from '../playwright/visual-diff.config'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { dirname, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { pageRoutePattern, routeLayouts } from './console-route-patterns'
@@ -122,6 +122,22 @@ export function finalPage(routes: PageRoute[], redirects: Redirect[], urlPath: s
   }
   const page = resolveRoute(routes, pathname)
   return page && Number.isFinite(page.params) ? page : undefined
+}
+
+/** Every module `key` loads, statically or lazily. */
+function moduleClosure(graph: ModuleGraph, key: string) {
+  const seen = new Set<string>()
+  const stack = [key]
+  while (stack.length) {
+    const id = stack.pop()!
+    if (seen.has(id))
+      continue
+    seen.add(id)
+    const module = graph.modules[id]
+    if (module)
+      stack.push(...module.imports, ...module.dynamicImports)
+  }
+  return seen
 }
 
 /** Modules a route can load: entry, page and layouts, not crossing into other pages or layouts. */
@@ -236,6 +252,17 @@ export function serializeRoute(route: VisualDiffRoute) {
   })
 }
 
+/** The config's import statements, in order. */
+function importStatements(source: string) {
+  return [...source.matchAll(/^import\s[^;]*?from\s+['"][^'"]+['"]/gm)].map(match => match[0].replace(/\s+/g, ' '))
+}
+
+/** Local names an import statement binds. */
+function importedNames(statement: string) {
+  const clause = statement.replace(/^import\s+(?:type\s+)?/, '').replace(/\s+from\s+.*$/, '')
+  return clause.replace(/[{}]/g, ',').split(',').map(part => part.trim().replace(/^type\s+/, '').split(/\s+as\s+/).pop()!.replace(/^\*\s*as\s+/, '')).filter(Boolean)
+}
+
 /** Top-level declarations of the config file, by name. */
 function declarations(source: string) {
   const out = new Map<string, string>()
@@ -309,10 +336,20 @@ function slugsIn(text: string) {
  * Routes whose capture steps changed in playwright/visual-diff.config.ts, including helpers they
  * call. Returns null when a change cannot be tied to particular routes.
  */
-export function changedRouteDefinitions(base: RouteDefinitions, head: RouteDefinitions): string[] | null {
+export function changedRouteDefinitions(base: RouteDefinitions, head: RouteDefinitions, importChanged: (specifier: string) => boolean = () => false): string[] | null {
   const baseDecls = declarations(base.source)
   const headDecls = declarations(head.source)
   const changed = new Set([...headDecls].filter(([name, text]) => name !== 'visualDiffRoutes' && baseDecls.get(name) !== text).map(([name]) => name))
+  // An edited import can rebind a name without changing any callback that uses it.
+  const baseImports = importStatements(base.source)
+  const headImports = importStatements(head.source)
+  if (baseImports.join('\n') !== headImports.join('\n'))
+    return null
+  for (const statement of headImports) {
+    const specifier = /from\s+['"]([^'"]+)['"]/.exec(statement)?.[1]
+    if (specifier && importChanged(specifier))
+      importedNames(statement).forEach(name => changed.add(name))
+  }
   for (const name of baseDecls.keys()) {
     if (!headDecls.has(name))
       changed.add(name)
@@ -337,7 +374,8 @@ export function changedRouteDefinitions(base: RouteDefinitions, head: RouteDefin
   // Callbacks serialize without the values they capture (routes built by mapping an array of
   // fixtures), so also compare the source of each element of the route list, keyed by the slugs
   // it declares. A changed element without slugs cannot be tied to routes.
-  const normalize = (text: string) => text.replace(/\s+/g, ' ')
+  // Compared verbatim: whitespace inside a fixture string can be rendered.
+  const normalize = (text: string) => text
   const baseElements = new Map(arrayElements(baseDecls.get('visualDiffRoutes') ?? '').map(element => [slugsIn(element).sort().join(','), normalize(element)]))
   for (const element of arrayElements(headDecls.get('visualDiffRoutes') ?? '')) {
     const slugs = slugsIn(element)
@@ -456,7 +494,18 @@ export async function planVisualDiff(options: { repoRoot: string, base: string, 
       console.warn(`[visual-diff] could not read the base route definitions, capturing every route: ${error instanceof Error ? error.message : String(error)}`)
     }
 
-    const definitions = baseRoutes ? changedRouteDefinitions(baseRoutes, headRoutes) : all
+    // An import from the app (constants the fixtures use) changed when anything it loads did.
+    const importChanged = (specifier: string) => {
+      if (!specifier.startsWith('.'))
+        return false
+      const file = relative(repoRoot, resolve(repoRoot, 'playwright', specifier)).split(sep).join('/')
+      const key = ['', '.ts', '.js', '/index.ts'].map(extension => file + extension).find(candidate => headGraph.modules[candidate] || baseGraph.modules[candidate])
+      if (!key)
+        return changedFiles.some(changedFile => changedFile.replace(/\.[cm]?[jt]s$/, '') === file.replace(/\.[cm]?[jt]s$/, ''))
+      const closureHash = (graph: ModuleGraph) => [...moduleClosure(graph, key)].sort().map(id => `${id}=${graph.modules[id]?.hash ?? 'missing'}`).join('\n')
+      return closureHash(baseGraph) !== closureHash(headGraph)
+    }
+    const definitions = baseRoutes ? changedRouteDefinitions(baseRoutes, headRoutes, importChanged) : all
     if (!definitions)
       return everything(['a change to playwright/visual-diff.config.ts could not be tied to particular routes'])
     const affected = new Set(definitions)

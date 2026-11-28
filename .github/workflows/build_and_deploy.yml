@@ -215,7 +215,7 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 105  # Supabase wait (up to 65) + the refresh itself (40)
     name: Refresh production read-replica subscription
     permissions:
       contents: read
@@ -259,7 +259,7 @@ jobs:
       - name: Wait for the Supabase deploy
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bun scripts/wait-for-deploy-jobs.ts --require-success --timeout-minutes 50 "Build code and deploy to Supabase"
+        run: bun scripts/wait-for-deploy-jobs.ts --require-success --timeout-minutes 65 "Build code and deploy to Supabase"
       - name: Assert deploy tag is current
         run: |
           bash .github/scripts/fetch-deploy-tags.sh
@@ -365,7 +365,7 @@ jobs:
     needs: [changes, build_webapp]
     if: ${{ needs.changes.result == 'success' && needs.build_webapp.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 140  # gate (up to 110) + publishing (30)
     permissions:
       contents: read
       actions: read # wait-for-deploy-jobs.ts reads this run's jobs
@@ -415,7 +415,7 @@ jobs:
       - name: Wait for the Supabase deploy and replica refresh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bun scripts/wait-for-deploy-jobs.ts --timeout-minutes 50 "Build code and deploy to Supabase" "Refresh production read-replica subscription"
+        run: bun scripts/wait-for-deploy-jobs.ts --timeout-minutes 110 "Build code and deploy to Supabase" "Refresh production read-replica subscription"
       - name: Set environment variable
         run: |
           if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then

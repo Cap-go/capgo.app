@@ -184,3 +184,19 @@ describe('production read-replica release gate', () => {
     30_000,
   )
 })
+
+describe('deploy gate time budgets', () => {
+  it('lets every in-job wait outlast the jobs it waits for', async () => {
+    const workflow = parse(await readFile(new URL('../.github/workflows/build_and_deploy.yml', import.meta.url), 'utf8')) as {
+      jobs: Record<string, { 'timeout-minutes': number, 'steps': Array<{ run?: string }> }>
+    }
+    const { supabase_deploy: supabase, read_replica_subscription: refresh, deploy_webapp: web } = workflow.jobs
+    const waitMinutes = (job: typeof web) => Number(/wait-for-deploy-jobs\.ts .*--timeout-minutes (\d+)/.exec(job.steps.map(step => step.run ?? '').join('\n'))?.[1])
+    // The refresh waits for the Supabase deploy, then needs its own former 40 minutes.
+    expect(waitMinutes(refresh)).toBeGreaterThan(supabase['timeout-minutes'])
+    expect(refresh['timeout-minutes']).toBeGreaterThanOrEqual(waitMinutes(refresh) + 40)
+    // Both start together, so the web gate must outlast the refresh job; publishing needs 30.
+    expect(waitMinutes(web)).toBeGreaterThan(refresh['timeout-minutes'])
+    expect(web['timeout-minutes']).toBeGreaterThanOrEqual(waitMinutes(web) + 30)
+  })
+})

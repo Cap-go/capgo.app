@@ -160,8 +160,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
+        # The merge commit, like plan and capture: its route list is the one they used.
 
       - name: Setup bun
         run: bash scripts/setup-bun.sh
