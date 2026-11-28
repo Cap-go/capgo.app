@@ -20,9 +20,41 @@ function usesLegacyManifestUpload(cliVersion) {
   return major < 8 || (major === 8 && minor < 30)
 }
 
+// Old CLIs (up to 8.32.7) call Supabase Edge Functions on sb.capgo.app. Serve those calls
+// from the Cloudflare Workers, which run the same backend routes.
+const LEGACY_FUNCTIONS_PREFIX = '/functions/v1'
+const LEGACY_UPLOAD_LINK_PATH = `${LEGACY_FUNCTIONS_PREFIX}/private/upload_link`
+const LEGACY_CLI_UNSUPPORTED = {
+  error: 'legacy_cli_unsupported',
+  message: 'This CLI version is no longer supported. Upgrade to the latest CLI by running the same command with npx @capgo/cli@latest.',
+}
+
+function legacyFunctionTarget(url) {
+  if (url.hostname !== 'sb.capgo.app' || !url.pathname.startsWith(`${LEGACY_FUNCTIONS_PREFIX}/`))
+    return null
+  const path = url.pathname.slice(LEGACY_FUNCTIONS_PREFIX.length)
+  if (path === '/bundle' || path.startsWith('/bundle/') || path === '/private/set_manifest')
+    return `https://api.capgo.app${path}${url.search}`
+  if (path.startsWith('/files/'))
+    return `https://files.capgo.app${path}${url.search}`
+  return null
+}
+
 const legacySnippet = {
   async handle(request) {
     const url = new URL(request.url)
+    // Only CLIs that no longer work call this path, so answer here instead of forwarding.
+    if (url.hostname === 'sb.capgo.app' && url.pathname === LEGACY_UPLOAD_LINK_PATH) {
+      return new Response(JSON.stringify(LEGACY_CLI_UNSUPPORTED), {
+        status: 410,
+        headers: { 'cache-control': 'no-store', 'content-type': 'application/json; charset=utf-8' },
+      })
+    }
+
+    const target = legacyFunctionTarget(url)
+    if (target)
+      return fetch(new Request(target, request))
+
     const isWarningsRpc = request.method === 'POST'
       && url.hostname === 'sb.capgo.app'
       && url.pathname === '/rest/v1/rpc/get_organization_cli_warnings'
