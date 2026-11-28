@@ -2,6 +2,7 @@ import { getAffonsoReferral } from '~/services/attributionCookies'
 import { invokeCapgoApi } from '~/services/capgoApi'
 
 const SENT_KEY_PREFIX = 'capgo_affonso_signup:'
+const FINAL_STATUSES = new Set(['tracked', 'account_too_old'])
 
 function sentKey(userId: string, clickId: string) {
   return `${SENT_KEY_PREFIX}${userId}:${clickId}`
@@ -38,10 +39,13 @@ export async function sendAffonsoSignup(userId: string | undefined) {
   const key = sentKey(userId, clickId)
   if (wasSent(key))
     return
-  const { error } = await invokeCapgoApi('private/affonso_signup', { body: JSON.stringify({ clickId }) })
+  const { data, error } = await invokeCapgoApi<{ status?: string }>('private/affonso_signup', { body: JSON.stringify({ clickId }) })
   if (error) {
     console.warn('Cannot record Affonso signup', error)
     return
   }
-  markSent(key)
+  // Only final answers are cached. A missing API key or user profile is retried on a later
+  // sign-in, so signups made before the key is configured are still sent.
+  if (data?.status && FINAL_STATUSES.has(data.status))
+    markSent(key)
 }
