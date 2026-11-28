@@ -1,9 +1,8 @@
 import { execFile } from 'node:child_process'
-import { env } from 'node:process'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { MIN_CLI_VERSION, MIN_CLI_VERSION_REASON } from '../supabase/functions/_backend/utils/cliMinVersion.ts'
-import { APIKEY_TEST_ALL, getEndpointUrl } from './test-utils'
+import { APIKEY_TEST_ALL, BASE_URL, getEndpointUrl } from './test-utils'
 
 const execFileAsync = promisify(execFile)
 
@@ -32,10 +31,8 @@ describe('CLI min-version compatibility', () => {
       '--output-text',
       '-a',
       APIKEY_TEST_ALL,
-      '--supa-host',
-      env.SUPABASE_URL || 'http://127.0.0.1:54321',
-      '--supa-anon',
-      env.SUPABASE_ANON_KEY || '',
+      '--api-host',
+      BASE_URL,
     ], {
       timeout: 120000,
     })
