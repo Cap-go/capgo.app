@@ -82,9 +82,8 @@ describe('production read-replica release gate', () => {
     async () => {
       const workflow = await readReleaseWorkflow()
 
-      expect(workflow).toMatch(
-        /\n  deploy_webapp:\n    needs: \[changes, build_webapp, supabase_deploy, read_replica_subscription\]/,
-      )
+      // deploy_webapp sets up early and waits for both jobs right before publishing.
+      expect(workflow).toMatch(/\n  deploy_webapp:\n(?:    #.*\n)*    needs: \[changes, build_webapp\]\n/)
       for (const job of [
         'deploy_api',
         'deploy_translation_worker',
@@ -102,17 +101,46 @@ describe('production read-replica release gate', () => {
         workflow.indexOf('\n  build_webapp:'),
       )
       expect(refreshJob).toContain(
-        githubExpression('needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && needs.changes.outputs.is_alpha != \'true\' && needs.supabase_deploy.result == \'success\''),
+        githubExpression('needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && needs.changes.outputs.is_alpha != \'true\''),
       )
       expect(workflow).not.toMatch(
         /deploy_(?:api|files|plugin_regions):\n    needs:.*read_replica_subscription/,
       )
 
-      interface Step { run?: string }
+      interface Step { name?: string, run?: string, parallel?: Step[] }
       const parsed = parse(workflow) as {
-        jobs?: Record<string, { if?: unknown, needs?: string[] | string, steps?: Step[] }>
+        jobs?: Record<string, { if?: unknown, needs?: string[] | string, permissions?: Record<string, string>, steps?: Step[] }>
       }
       const refreshDef = parsed.jobs?.read_replica_subscription
+      const flatSteps = (steps: Step[] = []) => steps.flatMap(step => [step, ...(step.parallel ?? [])])
+      const indexOfRun = (steps: Step[], text: string) => steps.findIndex(step => step.run?.includes(text))
+
+      // The refresh job must not touch the replica before supabase_deploy succeeded.
+      const refreshSteps = flatSteps(refreshDef?.steps)
+      const refreshGate = indexOfRun(refreshSteps, 'wait-for-deploy-jobs.ts')
+      expect(refreshDef?.needs).toEqual(['changes'])
+      expect(refreshDef?.permissions?.actions).toBe('read')
+      expect(refreshSteps[refreshGate]?.run).toContain('--require-success')
+      expect(refreshSteps[refreshGate]?.run).toContain('"Build code and deploy to Supabase"')
+      expect(refreshGate).toBeGreaterThan(-1)
+      expect(refreshGate).toBeLessThan(refreshSteps.findIndex(step => step.name === 'Assert deploy tag is current'))
+      expect(refreshGate).toBeLessThan(indexOfRun(refreshSteps, 'sync-read-replica-schema.ts --refresh-subscription'))
+
+      // deploy_webapp must not publish anything before both jobs ended as success or skipped.
+      const webappDef = parsed.jobs?.deploy_webapp
+      const webappSteps = flatSteps(webappDef?.steps)
+      const webappGate = indexOfRun(webappSteps, 'wait-for-deploy-jobs.ts')
+      expect(webappDef?.permissions?.actions).toBe('read')
+      expect(webappGate).toBeGreaterThan(-1)
+      expect(webappSteps[webappGate]?.run).not.toContain('--require-success')
+      expect(webappSteps[webappGate]?.run).toContain('"Build code and deploy to Supabase"')
+      expect(webappSteps[webappGate]?.run).toContain('"Refresh production read-replica subscription"')
+      for (const publish of ['deploy:cloudflare:console', 'bundle upload'])
+        expect(webappGate, `${publish} must run after the gate`).toBeLessThan(indexOfRun(webappSteps, publish))
+      expect(webappGate).toBeLessThan(webappSteps.findIndex(step => step.name === 'Create GitHub release'))
+      // The gate polls jobs by name, so those names must exist.
+      expect(workflow).toContain('    name: Build code and deploy to Supabase\n')
+      expect(workflow).toContain('    name: Refresh production read-replica subscription\n')
       expect(refreshDef, 'read_replica_subscription must exist in build_and_deploy.yml').toBeDefined()
       expect(refreshDef?.if, 'read_replica_subscription must keep a job-level if').toBeDefined()
       expect(refreshDef?.if, 'read_replica_subscription must not be disabled with if: false').not.toBe(false)

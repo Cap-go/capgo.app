@@ -53,13 +53,15 @@ jobs:
       - name: Reject stale queued deployment
         run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ steps.target.outputs.deploy_tag }}"
       - name: Checkout deployment target
+        # A first attempt deploys the pushed tag, which the first checkout already holds.
+        if: steps.target.outputs.deploy_sha != github.sha
         uses: actions/checkout@v6
         with:
           ref: ${{ steps.target.outputs.deploy_sha }}
           fetch-depth: 0
           filter: blob:none
       - name: Install deployment helper dependencies
-        run: bun install --frozen-lockfile
+        run: bash .github/scripts/install-deploy-helper-deps.sh
       - name: Resolve deploy scope
         id: scope
         env:
@@ -84,15 +86,17 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
+          # Only the target commit: a full blobless history cost a few seconds per job.
+          fetch-depth: 1
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - name: Reject stale deployment retry
         if: ${{ github.run_attempt > 1 }}
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+        run: |
+          bash .github/scripts/fetch-deploy-tags.sh
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Set environment variable
         run: |
           if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
@@ -110,17 +114,6 @@ jobs:
         run: |
           echo "SUPABASE_DB_PASSWORD=${{ secrets.SUPABASE_DB_PASS_PROD }}" >> $GITHUB_ENV
           echo "SUPABASE_PROJECT_ID=${{ secrets.SUPABASE_PROJECT_ID_PROD }}" >> $GITHUB_ENV
-      - parallel:
-          - name: Install dependencies
-            run: bun install
-          - name: Install Supabase CLI
-            uses: supabase/setup-cli@v2.0.0
-            with:
-              version: 2.109.1
-      - name: Prepare Supabase
-        run: supabase link --project-ref ${{ env.SUPABASE_PROJECT_ID }}
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
       - name: Check for preinstalled Google Cloud CLI
         if: env.SUPA_ENV == 'PROD'
         id: gcloud
@@ -129,19 +122,34 @@ jobs:
       - name: Setup Google Cloud CLI
         if: env.SUPA_ENV == 'PROD' && steps.gcloud.outputs.installed != 'true'
         uses: google-github-actions/setup-gcloud@v2
-      - name: Authenticate Google Cloud CLI
-        if: env.SUPA_ENV == 'PROD'
-        env:
-          GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-        run: |
-          credentials_file="$(mktemp)"
-          trap 'rm -f "$credentials_file"' EXIT
-          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
-          gcloud auth activate-service-account --key-file="$credentials_file"
-          gcloud config set project capgo-394818
-      - name: Reconcile the Google subscriber through server-side Cloud SQL import
-        if: env.SUPA_ENV == 'PROD'
-        run: bun scripts/sync-read-replica-schema.ts --apply --allow-drop
+      # Authentication only needs gcloud, so it runs alongside the installs (~8s off the path).
+      - parallel:
+          - name: Install dependencies
+            run: bun install
+          - name: Install Supabase CLI
+            uses: supabase/setup-cli@v2.0.0
+            with:
+              version: 2.109.1
+          - name: Authenticate Google Cloud CLI
+            if: env.SUPA_ENV == 'PROD'
+            env:
+              GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+            run: |
+              credentials_file="$(mktemp)"
+              trap 'rm -f "$credentials_file"' EXIT
+              printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
+              gcloud auth activate-service-account --key-file="$credentials_file"
+              gcloud config set project capgo-394818
+      # The reconcile only talks to Cloud SQL through gcloud; linking is needed by the function
+      # deploy, not by it. Both finish before the migrations start.
+      - parallel:
+          - name: Prepare Supabase
+            run: supabase link --project-ref ${{ env.SUPABASE_PROJECT_ID }}
+            env:
+              SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
+          - name: Reconcile the Google subscriber through server-side Cloud SQL import
+            if: env.SUPA_ENV == 'PROD'
+            run: bun scripts/sync-read-replica-schema.ts --apply --allow-drop
       - name: Apply Supabase Migrations
         env:
           # Each secret is gated on its own env, so a missing PROD secret never falls back to ALPHA.
@@ -203,27 +211,31 @@ jobs:
   # production release and must stay visible when it fails, and it holds web publishing,
   # but worker deploys do not wait on it (a new table's initial copy can take minutes).
   read_replica_subscription:
-    needs: [changes, supabase_deploy]
-    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' && needs.supabase_deploy.result == 'success' }}
+    # Sets up while supabase_deploy runs, then waits for it inside the job (gate below).
+    needs: [changes]
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     name: Refresh production read-replica subscription
     permissions:
       contents: read
+      actions: read # wait-for-deploy-jobs.ts reads this run's jobs
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
+          # Only the target commit: a full blobless history cost a few seconds per job.
+          fetch-depth: 1
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - name: Reject stale deployment retry
         if: ${{ github.run_attempt > 1 }}
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+        run: |
+          bash .github/scripts/fetch-deploy-tags.sh
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Check for preinstalled Google Cloud CLI
         id: gcloud
         # ubuntu-latest ships gcloud; setup-gcloud cost ~12s per job. Install only if the image drops it.
@@ -231,22 +243,29 @@ jobs:
       - name: Setup Google Cloud CLI
         if: steps.gcloud.outputs.installed != 'true'
         uses: google-github-actions/setup-gcloud@v2
-      - name: Install dependencies
-        run: bun install
+      - parallel:
+          - name: Install dependencies
+            run: bun install
+          - name: Authenticate Google Cloud CLI
+            env:
+              GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+            run: |
+              credentials_file="$(mktemp)"
+              trap 'rm -f "$credentials_file"' EXIT
+              printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
+              gcloud auth activate-service-account --key-file="$credentials_file"
+              gcloud config set project capgo-394818
+      # Same rule as `needs.supabase_deploy.result == 'success'`: the migrations must have applied.
+      - name: Wait for the Supabase deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/wait-for-deploy-jobs.ts --require-success --timeout-minutes 50 "Build code and deploy to Supabase"
       - name: Assert deploy tag is current
         run: |
-          git fetch --tags origin
+          bash .github/scripts/fetch-deploy-tags.sh
           bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Refresh subscription for newly published tables
-        env:
-          GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-        run: |
-          credentials_file="$(mktemp)"
-          trap 'rm -f "$credentials_file"' EXIT
-          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
-          gcloud auth activate-service-account --key-file="$credentials_file"
-          gcloud config set project capgo-394818
-          bun scripts/sync-read-replica-schema.ts --refresh-subscription
+        run: bun scripts/sync-read-replica-schema.ts --refresh-subscription
       - name: Explain how to retry
         if: failure()
         # changes recorded the deployment state OID for this attempt; a single-job rerun reuses
@@ -287,8 +306,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
+          # Only the target commit: a full blobless history cost a few seconds per job.
+          fetch-depth: 1
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -341,12 +360,15 @@ jobs:
           include-hidden-files: true
 
   deploy_webapp:
-    needs: [changes, build_webapp, supabase_deploy, read_replica_subscription]
-    if: ${{ always() && needs.changes.result == 'success' && needs.build_webapp.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
+    # Sets up while the backend deploys and publishes only after the gate below: a job-level
+    # `needs` on supabase_deploy and read_replica_subscription put ~40s of setup after them.
+    needs: [changes, build_webapp]
+    if: ${{ needs.changes.result == 'success' && needs.build_webapp.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
+      actions: read # wait-for-deploy-jobs.ts reads this run's jobs
     outputs:
       native_build_needed: ${{ needs.build_webapp.outputs.native_build_needed }}
     steps:
@@ -354,8 +376,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
+          # Only the target commit: a full blobless history cost a few seconds per job.
+          fetch-depth: 1
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -365,7 +387,9 @@ jobs:
           bun-version: latest
       - name: Reject stale deployment retry
         if: ${{ github.run_attempt > 1 }}
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+        run: |
+          bash .github/scripts/fetch-deploy-tags.sh
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - parallel:
           - name: Install dependencies
             run: bun install
@@ -377,6 +401,21 @@ jobs:
           # bunx spent ~17s fetching the CLI inside the upload step.
           - name: Warm Capgo CLI
             run: bunx @capgo/cli@latest --version
+          - name: Generate AI changelog
+            id: changelog
+            continue-on-error: true
+            env:
+              CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+              CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+            # The checkout is shallow; the changelog diffs against the previous tag.
+            run: |
+              git fetch --quiet --unshallow --filter=blob:none --tags origin
+              bun run changelog:ai
+      # Same rule as the old `needs` results: each job must end as success or skipped.
+      - name: Wait for the Supabase deploy and replica refresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/wait-for-deploy-jobs.ts --timeout-minutes 50 "Build code and deploy to Supabase" "Refresh production read-replica subscription"
       - name: Set environment variable
         run: |
           if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
@@ -398,13 +437,6 @@ jobs:
             run: bunx @capgo/cli@latest bundle upload --channel ${{ env.CHANNEL }} --delta --send-update-notification
             env:
               CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
-          - name: Generate AI changelog
-            id: changelog
-            continue-on-error: true
-            env:
-              CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-              CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-            run: bun run changelog:ai
       - name: Create GitHub release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -432,8 +464,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
+          # Only the target commit: a full blobless history cost a few seconds per job.
+          fetch-depth: 1
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -443,7 +475,9 @@ jobs:
           bun-version: latest
       - name: Reject stale deployment retry
         if: ${{ github.run_attempt > 1 }}
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+        run: |
+          bash .github/scripts/fetch-deploy-tags.sh
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Install dependencies
         run: bun install
       - name: Set environment variable
@@ -485,15 +519,17 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
+          # Only the target commit: a full blobless history cost a few seconds per job.
+          fetch-depth: 1
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - name: Reject stale deployment retry
         if: ${{ github.run_attempt > 1 }}
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+        run: |
+          bash .github/scripts/fetch-deploy-tags.sh
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Install dependencies
         run: bun install
       - name: Deploy CF Worker GoTrue
@@ -512,8 +548,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
+          # Only the target commit: a full blobless history cost a few seconds per job.
+          fetch-depth: 1
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -523,7 +559,9 @@ jobs:
           bun-version: latest
       - name: Reject stale deployment retry
         if: ${{ github.run_attempt > 1 }}
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+        run: |
+          bash .github/scripts/fetch-deploy-tags.sh
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Install dependencies
         run: bun install
       - name: Set environment variable
@@ -549,8 +587,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
+          # Only the target commit: a full blobless history cost a few seconds per job.
+          fetch-depth: 1
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -560,7 +598,9 @@ jobs:
           bun-version: latest
       - name: Reject stale deployment retry
         if: ${{ github.run_attempt > 1 }}
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+        run: |
+          bash .github/scripts/fetch-deploy-tags.sh
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Install dependencies
         run: bun install
       - name: Set environment variable
@@ -590,8 +630,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
+          # Only the target commit: a full blobless history cost a few seconds per job.
+          fetch-depth: 1
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -601,7 +641,9 @@ jobs:
           bun-version: latest
       - name: Reject stale deployment retry
         if: ${{ github.run_attempt > 1 }}
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+        run: |
+          bash .github/scripts/fetch-deploy-tags.sh
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Install dependencies
         run: bun install
       - name: Set environment variable
@@ -632,15 +674,17 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
+          # Only the target commit: a full blobless history cost a few seconds per job.
+          fetch-depth: 1
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - name: Reject stale deployment retry
         if: ${{ github.run_attempt > 1 }}
-        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+        run: |
+          bash .github/scripts/fetch-deploy-tags.sh
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Deploy and verify all production snippets
         run: bun run deploy:snippets
         env:
@@ -784,7 +828,7 @@ jobs:
         with:
           bun-version: latest
       - name: Install deployment helper dependencies
-        run: bun install --frozen-lockfile
+        run: bash .github/scripts/install-deploy-helper-deps.sh
       - name: Record actual attempt operations with CAS
         env:
           GH_TOKEN: ${{ github.token }}

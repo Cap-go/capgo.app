@@ -134,8 +134,10 @@ describe('native-aware Capgo release workflow', () => {
       const checkout = steps.find(step => step.uses?.startsWith('actions/checkout@'))
       const retryGuard = steps.find(step => step.name === 'Reject stale deployment retry')
 
-      expect(checkout?.with?.['fetch-depth'], `${jobName} must fetch tags for retry validation`).toBe(0)
       expect(retryGuard, `${jobName} must reject stale retries before mutation`).toBeDefined()
+      // A shallow checkout has no tags; the guard must fetch them before validating.
+      if (String(checkout?.with?.['fetch-depth']) !== '0')
+        expect(retryGuard?.run, `${jobName} must fetch tags for retry validation`).toContain('bash .github/scripts/fetch-deploy-tags.sh')
       expect(retryGuard?.if).toBe('${{ github.run_attempt > 1 }}')
       expect(retryGuard?.run).toContain('resolve-deploy-tag.ts --assert-current')
       expect(retryGuard?.run).toContain('needs.changes.outputs.deploy_tag')
