@@ -187,13 +187,21 @@ describe('route list sources', () => {
     expect(changedRouteDefinitions({ source: config(fixtures), routes }, { source: config(fixtures, '...extraRoutes,'), routes })).toBeNull()
   })
 
-  it('flags routes using an import whose module changed, and gives up on edited imports', () => {
+  it('captures everything when a config import, named or not, changed through any module it loads', () => {
     const withImport = (line: string) => `${line}\n\n${config(fixtures)}`
-    const source = withImport(`import { STEP_IDS } from '../src/services/steps'`)
+    const source = withImport(`import { STEP_IDS } from './support/steps'`)
     const usesSteps = routes.map(route => route.slug === 'plain' ? { ...route, definition: JSON.stringify({ path: '/a', prepare: 'page => STEP_IDS' }) } : route)
-    expect(changedRouteDefinitions({ source, routes: usesSteps }, { source, routes: usesSteps }, specifier => specifier === '../src/services/steps' ? 'changed' : 'unchanged')).toEqual(['plain'])
-    expect(changedRouteDefinitions({ source, routes: usesSteps }, { source, routes: usesSteps }, () => 'unchanged')).toEqual([])
-    expect(changedRouteDefinitions({ source, routes }, { source: withImport(`import { STEP_IDS } from '../src/services/other'`), routes })).toBeNull()
+    const files = (effect: string) => ({
+      'playwright/support/steps.ts': `import '../../src/effect'\nexport const STEP_IDS = ['a']\n`,
+      'src/effect.ts': effect,
+    } as Record<string, string | undefined>)
+    const graphs = { base: graph(), head: graph() }
+    const state = (baseEffect: string, headEffect: string) => (specifier: string) => configImportState(specifier, graphs, (side, path) => files(side === 'base' ? baseEffect : headEffect)[path])
+    // The real traversal result, through the planner: a side effect behind a named import.
+    expect(changedRouteDefinitions({ source, routes: usesSteps }, { source, routes: usesSteps }, state(`process.env.X = '1'`, `process.env.X = '2'`))).toBeNull()
+    expect(changedRouteDefinitions({ source, routes: usesSteps }, { source, routes: usesSteps }, state(`process.env.X = '1'`, `process.env.X = '1'`))).toEqual([])
+    // An edited import line captures everything too.
+    expect(changedRouteDefinitions({ source, routes }, { source: withImport(`import { STEP_IDS } from './support/other'`), routes })).toBeNull()
   })
 
   it('treats side-effect imports as imports: edited or changed, they capture everything', () => {

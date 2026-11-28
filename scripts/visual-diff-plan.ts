@@ -324,14 +324,6 @@ function importStatements(source: string) {
   return [...source.matchAll(/^import\s+(?:[^;'"]*?\sfrom\s+)?['"][^'"]+['"]/gm)].map(match => match[0].replace(/\s+/g, ' '))
 }
 
-/** Local names an import statement binds. */
-function importedNames(statement: string) {
-  if (!/\sfrom\s/.test(statement))
-    return []
-  const clause = statement.replace(/^import\s+(?:type\s+)?/, '').replace(/\s+from\s+.*$/, '')
-  return clause.replace(/[{}]/g, ',').split(',').map(part => part.trim().replace(/^type\s+/, '').split(/\s+as\s+/).pop()!.replace(/^\*\s*as\s+/, '')).filter(Boolean)
-}
-
 /** Top-level declarations of the config file, by name. */
 function declarations(source: string) {
   const out = new Map<string, string>()
@@ -416,16 +408,10 @@ export function changedRouteDefinitions(base: RouteDefinitions, head: RouteDefin
     return null
   for (const statement of headImports) {
     const specifier = /['"]([^'"]+)['"]$/.exec(statement)?.[1]
-    const state = specifier ? importChanged(specifier) : 'unchanged'
-    if (state === 'unknown')
+    // Any import, named or not, can load modules for their side effects (process.env, globals),
+    // which reach routes that never use its names, so a changed one captures everything.
+    if (specifier && importChanged(specifier) !== 'unchanged')
       return null
-    if (state === 'unchanged')
-      continue
-    const names = importedNames(statement)
-    // A changed side-effect import can alter anything the captures read (process.env, globals).
-    if (names.length === 0)
-      return null
-    names.forEach(name => changed.add(name))
   }
   for (const name of baseDecls.keys()) {
     if (!headDecls.has(name))
